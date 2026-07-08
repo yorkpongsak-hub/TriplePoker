@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "TriplePoker",
+    "slug": "triplepoker",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0a0a"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.sagunicorn.triplepoker"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0a0a0a"
+      },
+      "package": "com.sagunicorn.triplepoker"
+    },
+    "scheme": "triplepoker",
+    "plugins": [
+      "expo-router",
+      "expo-asset"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "f024f978-5c0b-44ad-a68e-9d30c4c1d459"
+      }
+    },
+    "owner": "the-sage-unicorn"
+  }
+}
