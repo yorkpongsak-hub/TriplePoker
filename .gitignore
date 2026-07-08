@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+.pnp/
+
+# Expo
+.expo/
+.expo-shared/
+dist/
+web-build/
+
+# Environment — ห้าม commit ความลับเด็ดขาด
+.env
+.env.*
+!.env.example
+
+# Build outputs
+*.apk
+*.aab
+android/app/build/
+ios/build/
+
+# Logs & temp
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Secrets & backups
+*AnonKey*.txt
+*_Url_and_*.txt
+*.bak_*
+expo-log.txt
