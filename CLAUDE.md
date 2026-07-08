@@ -87,7 +87,7 @@
 
 ## 📋 สถานะปัจจุบัน & งานคงค้าง
 
-**เสร็จแล้ว:** Tier C, B, A (core flow), A+ 100% | Auth Flow | Lock-up Token | Room Registry (Redis) | DB 4 migrations | Landing page
+**เสร็จแล้ว:** Tier C, B, A (core flow), A+ 100% | Auth Flow | Lock-up Token | Room Registry (Redis) | DB 4+1 migrations (002_name_protection รันแล้ว) | Landing page | Sprint 8: `nameValidator.ts` (3-layer) + `POST /auth/register`
 
 **Pending (เรียงตาม priority):**
 1. Profile screen — เชื่อม Supabase จริงแทน MOCK
@@ -95,9 +95,10 @@
 3. The Nine Sentinels (Boss Selection + aiEngine 9 personalities + `conquered_sentinels: string[]`)
 4. Auto Sort Fee system
 5. Monarch (รอชื่อไทย + storyline จากลุงก่อน — ห้ามเริ่มโค้ดเอง)
-6. Sprint 8 extra: `src/utils/nameValidator.ts` + แก้ `routes/auth.ts`
-7. Boss Card Counting AI Enhancement (Pile2 Winner Signal) สำหรับ Crag+Cipher
-8. Fan Hand View (VIP cosmetic, Reanimated 3) — Sprint 6-7
+6. Boss Card Counting AI Enhancement (Pile2 Winner Signal) สำหรับ Crag+Cipher
+7. Fan Hand View (VIP cosmetic, Reanimated 3) — Sprint 6-7
+8. **QA รวม:** 6 test suites เดิมพังอยู่ (พบตอนทำ nameValidator, ไม่เกี่ยวกับ feature นี้) — `foulChecker.test.ts`, `itemPhaseController.test.ts`, `pileResolution.test.ts`, `minionAI.test.ts`, `aiFillSystem.test.ts`, `blindAuction.test.ts` (ส่วนใหญ่เป็น TS type error เรื่อง `Tier` type) — เลขจริงไม่ตรง "197/197 PASS" ด้านล่าง ต้องไล่แก้รวดเดียวตอน QA รวม
+9. **ก่อน push ขึ้น GitHub ครั้งแรก:** ต้องล้าง GitHub token ที่หลุดใน git history ของ `server/jest.config.js` (commit `ec11cc4`) ก่อน — ใช้ `git filter-repo` หรือ BFG rewrite history (destructive, ต้องขอยืนยันลุงก่อนรันจริง)
 
 **Deferred to v1.1:** XP/Leveling, Last Boss UI, Social, Push Notifications, Lottie, iOS
 
