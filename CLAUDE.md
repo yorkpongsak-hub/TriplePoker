@@ -37,7 +37,7 @@
 
 ## 🛠️ Tech Stack
 
-- **Client:** React Native + Expo (Android only MVP) + Zustand + Reanimated 3
+- **Client:** React Native + Expo (Android only MVP) + Zustand + Reanimated 4
 - **Server:** Node.js + Fastify + Socket.IO + TypeScript
 - **DB:** Supabase PostgreSQL (project ref: `aeinnlaxscikarzupprn`) + Upstash Redis (REST client)
 - **Env:** WSL2 บน Windows | รัน Expo จาก `/client` ด้วย `npx expo start --tunnel --clear`
