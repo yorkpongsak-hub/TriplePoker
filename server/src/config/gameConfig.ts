@@ -22,7 +22,10 @@ export const gameConfig = {
   // ─── Token Economy (Daily) ──────────────────────────────────
   // ระบบ Token รายวัน — ปรับตาม burn ratio monitoring
   dailyEconomy: {
-    newUserBonus:      1_000,   // Token ที่ผู้สมัครใหม่ได้ทันที
+    newUserBonus:      3_000,   // Token ที่ผู้สมัครใหม่ได้ทันที — ⚠️ ค่านี้ยังไม่มีที่ไหนอ่านจริง
+                                 // ตัวที่มีผลจริงคือ users.token_balance DEFAULT บน Supabase (ดู
+                                 // supabase/migrations/003_starting_token_3000.sql) แก้ที่นี่ไว้เผื่อ
+                                 // อนาคตมีคนเอามาต่อยอด ไม่ให้เห็นเลขเก่าค้าง
     newUserXpBonus:    1,       // XP +1 เมื่อสมัครใหม่
     dailyRefill:       500,     // Token ฟรีต่อวัน (ทุกคน)
     minTokenToPlay:    100,     // Token ต่ำกว่านี้ → รอข้ามวัน หรือดู Ad

@@ -335,7 +335,9 @@ const GameTableLive: React.FC = () => {
       if (matchStarted) return
       matchStarted = true
       socket.emit('player_join_room', { roomId: ROOM_ID, playerId: PLAYER_ID, tokenBalance: 5000, isVip: false })
-      socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'beginner' })
+      // tier ต้องตรงกับ 'initiate' เป๊ะ — aiEngine.ts เช็ค tier === 'initiate' ตรงๆ (ไม่มี normalize)
+      // ของเดิมส่ง 'beginner' ทำให้ Beginner's Luck System (subOptimal/firstValid) ไม่เคย trigger เลย
+      socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'initiate' })
     })
 
     socket.on('connect_error', (err: any) => {
@@ -677,7 +679,7 @@ const GameTableLive: React.FC = () => {
   const handleRematch = () => {
     stopMatchEndAnimations()
     setMatchResult(null); setPhase('arrangement')
-    socketRef.current?.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'beginner' })
+    socketRef.current?.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'initiate' })
   }
 
   // ── Sub-components

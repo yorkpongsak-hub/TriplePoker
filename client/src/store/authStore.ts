@@ -71,16 +71,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   // ดึง profile จาก table users
   refreshProfile: async () => {
     const user = get().user
+    console.log('[authStore] refreshProfile called, get().user =', user?.id ?? null)
     if (!user) {
+      console.log('[authStore] refreshProfile: no user in store, bailing with profile=null')
       set({ profile: null })
       return
     }
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('users')
         .select('user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp')
         .eq('user_id', user.id)
         .maybeSingle()
+      console.log('[authStore] refreshProfile query result:', { data, error, queriedUserId: user.id })
       set({ profile: data as UserProfile | null })
     } catch (e) {
       console.error('[authStore] refreshProfile failed:', e)

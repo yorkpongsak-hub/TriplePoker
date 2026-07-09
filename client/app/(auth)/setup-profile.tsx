@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity, Image,
-  StyleSheet, Platform, StatusBar, ScrollView, ActivityIndicator,
+  StyleSheet, Platform, StatusBar, ScrollView, ActivityIndicator, Dimensions,
 } from 'react-native'
 import { router } from 'expo-router'
 import { supabase } from '../../src/services/supabaseService'
@@ -30,14 +30,13 @@ const C = {
   errorRed:    '#FF6B6B',
 }
 
-// ─── Emoji preset 30 ตัว: Grid 5 x 6 ─────────────────────
+// ─── Emoji preset 25 ตัว: Grid 5 x 5 ─────────────────────
 const AVATARS = [
   '🐱','🐶','🐺','🦊','🐯',
   '🦁','🐻','🐼','🦅','🐉',
   '🦄','🐢','🦉','🦍','🐲',
   '👑','🥷','🧙','🧝','🧛',
   '🦹','🤡','👻','💀','🤖',
-  '🛡️','⚔️','🃏','🔥','⭐',
 ]
 
 // ─── Validate display name (pattern + length) ─────────────
@@ -46,7 +45,7 @@ function validateNamePattern(name: string): string | null {
   if (t.length < 3) return 'Name must be at least 3 characters'
   if (t.length > 20) return 'Name must be at most 20 characters'
   // อนุญาต: A-Z a-z 0-9 ไทย _ -
-  if (!/^[A-Za-z0-9_\-\u0E00-\u0E7F]+$/.test(t)) {
+  if (!/^[A-Za-z0-9_\-฀-๿]+$/.test(t)) {
     return 'Only letters, numbers, Thai, _ and - are allowed'
   }
   return null
@@ -67,16 +66,11 @@ export default function SetupProfileScreen() {
       if (!session) return
       const { data } = await supabase
         .from('users')
-        .select('display_name, avatar_config')
+        .select('display_name, avatar_url')
         .eq('user_id', session.user.id)
         .maybeSingle()
       if (data?.display_name) setDisplayName(data.display_name)
-      if (data?.avatar_config) {
-        try {
-          const cfg = JSON.parse(data.avatar_config)
-          if (cfg?.value && AVATARS.includes(cfg.value)) setSelectedAvatar(cfg.value)
-        } catch {}
-      }
+      if (data?.avatar_url && AVATARS.includes(data.avatar_url)) setSelectedAvatar(data.avatar_url)
     })()
   }, [])
 
@@ -101,20 +95,29 @@ export default function SetupProfileScreen() {
         .maybeSingle()
       if (existing) { setError('This name is already taken'); return }
 
-      // 3) บันทึก display_name + avatar_config
-      const avatarConfig = JSON.stringify({ type: 'emoji', value: selectedAvatar })
-      const { error: updateErr } = await supabase
+      // 3) บันทึก display_name + avatar_url
+      const { data: updated, error: updateErr } = await supabase
         .from('users')
         .update({
-          display_name:  displayName.trim(),
-          avatar_config: avatarConfig,
+          display_name: displayName.trim(),
+          avatar_url:   selectedAvatar,
         })
         .eq('user_id', session.user.id)
+        .select('user_id, display_name, avatar_url')
+
+      console.log('[setup-profile] update result:', { updated, updateErr })
 
       if (updateErr) { setError(updateErr.message ?? 'Save failed'); return }
+      if (!updated || updated.length === 0) {
+        setError('Save did not affect any row — check RLS UPDATE policy on users table')
+        return
+      }
 
       // 4) refresh authStore profile cache + ไปหน้า Profile
+      console.log('[setup-profile] session.user.id used for save:', session.user.id,
+        '| authStore user.id before refresh:', useAuthStore.getState().user?.id ?? null)
       await refreshProfile()
+      console.log('[setup-profile] profile after refresh:', useAuthStore.getState().profile)
       router.replace('/(home)/profile')
 
     } catch (e: any) {
@@ -152,12 +155,6 @@ export default function SetupProfileScreen() {
               />
               <Text style={styles.charCount}>{displayName.length}/20</Text>
             </View>
-
-            <View style={styles.rulesBox}>
-              <Text style={styles.ruleText}>• 3–20 characters</Text>
-              <Text style={styles.ruleText}>• Letters, numbers, Thai, _ and -</Text>
-              <Text style={styles.ruleText}>• No offensive or reserved names</Text>
-            </View>
           </View>
 
           <View style={styles.nameRightCol}>
@@ -166,6 +163,13 @@ export default function SetupProfileScreen() {
             </View>
             <Text style={styles.previewLabel}>PREVIEW</Text>
           </View>
+        </View>
+
+        {/* คำอธิบายเกณฑ์ตั้งชื่อ — แยกออกมานอก row เพื่อกางเต็ม 95% ของจอ */}
+        <View style={styles.rulesBox}>
+          <Text style={styles.ruleText}>• 3–20 characters</Text>
+          <Text style={styles.ruleText}>• Letters, numbers, Thai, _ and -</Text>
+          <Text style={styles.ruleText}>• No offensive or reserved names</Text>
         </View>
 
         {error && (
@@ -211,8 +215,17 @@ export default function SetupProfileScreen() {
   )
 }
 
-const CELL_SIZE = 52
-const GRID_GAP  = 6
+// คำนวณ CELL_SIZE จากความกว้างจอเพื่อบังคับ 5 คอลัมน์เป๊ะทุกอุปกรณ์
+// (fixed pixel + flexWrap เดิม ทำให้จอกว้างพออาจ wrap เป็น 6 คอลัมน์แทน 5)
+const GRID_COLS  = 5
+const GRID_GAP   = 8
+const H_PADDING  = 20 // ต้องตรงกับ styles.scroll.paddingHorizontal ด้านล่าง
+const SCREEN_W   = Dimensions.get('window').width
+const CELL_SIZE  = Math.floor((SCREEN_W - H_PADDING * 2 - GRID_GAP * (GRID_COLS - 1)) / GRID_COLS)
+
+// rulesBox กาง 95% ของความกว้างจอจริง (ไม่ใช่แค่ความกว้าง column) — ใช้ width คงที่ +
+// alignSelf:'center' แทน percentage string เพราะต้อง bleed ออกนอก paddingHorizontal ของ ScrollView
+const RULES_BOX_W = Math.round(SCREEN_W * 0.95)
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
@@ -262,6 +275,7 @@ const styles = StyleSheet.create({
     width:          90,
     alignItems:     'center',
     justifyContent: 'center',
+    marginTop:      -50, // เลื่อน Preview Avatar ขึ้นด้านบนอีก 50px ตามที่ขอ
   },
 
   nameInputWrap: {
@@ -284,10 +298,12 @@ const styles = StyleSheet.create({
   charCount: { color: C.textDim, fontSize: 11, marginLeft: 8 },
 
   rulesBox: {
+    width:           RULES_BOX_W,
+    alignSelf:       'center',
     backgroundColor: C.surface,
     borderRadius:    8,
     padding:         10,
-    marginTop:       8,
+    marginTop:       10,
     gap:             3,
   },
   ruleText: { color: C.textSec, fontSize: 11 },
