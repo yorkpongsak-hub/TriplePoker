@@ -19,7 +19,7 @@ const cardBackImg = require('../../../assets/images/card_back_default.png')
 const tableImg = require('../../../assets/images/table_default.png')
 const studioLogo = require('../../../assets/images/sage_unicorn_logo_transparent.png')
 
-const SERVER_URL = 'http://localhost:3001'
+const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 const ROOM_ID = 'TierSPlusRoom1'
 const PLAYER_ID = 'Human1'
 

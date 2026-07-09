@@ -93,7 +93,7 @@ interface DealtPayload {
   timestamp: number;
 }
 
-const SERVER_URL = 'http://localhost:3001';
+const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001';
 const ROOM_ID    = 'Beginner1';
 const PLAYER_ID  = 'TestPlayer1';
 

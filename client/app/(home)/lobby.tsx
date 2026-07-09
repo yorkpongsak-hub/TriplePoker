@@ -92,7 +92,7 @@ export default function LobbyScreen() {
   const [showSkinModal, setShowSkinModal] = useState(false);
 
   // ── Multiplayer Matchmaking (Adept) ──────────────────────────
-  const SERVER_URL = 'http://localhost:3001';
+  const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001';
   const socketRef = useRef<Socket | null>(null);
   const userId = useUserStore(s => s.userId); // ต้อง login เสมอ — Lobby อยู่ใต้ auth guard แล้ว ไม่มี guest mode
   const displayName = useUserStore(s => s.displayName) || 'Player';
@@ -231,7 +231,12 @@ export default function LobbyScreen() {
     <View style={s.root}>
 
       {/* ─── Header (fixed) ─── */}
-      <Text style={s.header}>TriplePoker Lobby</Text>
+      <View style={s.headerRow}>
+        <Text style={s.header}>TriplePoker Lobby</Text>
+        <TouchableOpacity onPress={() => router.push('/(home)/profile')} style={s.profileBtn}>
+          <Text style={s.profileBtnTxt}>👤 Profile</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* ─── Table List — Scroll Zone (~75% สูง) ─── */}
       <View style={s.scrollZone}>
@@ -409,7 +414,10 @@ const s = StyleSheet.create({
     overflow: 'hidden',
     ...(Platform.OS === 'web' ? { height: '100vh' as any } : {}),
   },
-  header: { color: COLOR.goldPrimary, fontSize: 20, fontWeight: '800', marginBottom: 12, letterSpacing: 1, fontFamily: 'Cinzel' },
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
+  header: { color: COLOR.goldPrimary, fontSize: 20, fontWeight: '800', letterSpacing: 1, fontFamily: 'Cinzel' },
+  profileBtn: { borderWidth: 1, borderColor: COLOR.goldPrimary, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
+  profileBtnTxt: { color: COLOR.goldPrimary, fontSize: 12, fontWeight: '700' },
 
   // Scroll Zone กิน flex:3 ของพื้นที่ที่เหลือ (~75%), Fixed Bottom Block กิน flex:1 (~25%)
   scrollZone: { flex: 1, minHeight: 0, overflow: 'hidden' },
