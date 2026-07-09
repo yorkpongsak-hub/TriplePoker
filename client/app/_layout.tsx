@@ -22,6 +22,7 @@ export default function RootLayout() {
         userId: authProfile.user_id,
         displayName: authProfile.display_name ?? '',
         isVIP: authProfile.vip_status !== 'none',
+        tokenBalance: authProfile.token_balance ?? 0,
       })
     }
   }, [authUser, authProfile])

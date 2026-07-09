@@ -67,16 +67,11 @@ export default function SetupProfileScreen() {
       if (!session) return
       const { data } = await supabase
         .from('users')
-        .select('display_name, avatar_config')
+        .select('display_name, avatar_url')
         .eq('user_id', session.user.id)
         .maybeSingle()
       if (data?.display_name) setDisplayName(data.display_name)
-      if (data?.avatar_config) {
-        try {
-          const cfg = JSON.parse(data.avatar_config)
-          if (cfg?.value && AVATARS.includes(cfg.value)) setSelectedAvatar(cfg.value)
-        } catch {}
-      }
+      if (data?.avatar_url && AVATARS.includes(data.avatar_url)) setSelectedAvatar(data.avatar_url)
     })()
   }, [])
 
@@ -101,13 +96,12 @@ export default function SetupProfileScreen() {
         .maybeSingle()
       if (existing) { setError('This name is already taken'); return }
 
-      // 3) บันทึก display_name + avatar_config
-      const avatarConfig = JSON.stringify({ type: 'emoji', value: selectedAvatar })
+      // 3) บันทึก display_name + avatar_url
       const { error: updateErr } = await supabase
         .from('users')
         .update({
-          display_name:  displayName.trim(),
-          avatar_config: avatarConfig,
+          display_name: displayName.trim(),
+          avatar_url:   selectedAvatar,
         })
         .eq('user_id', session.user.id)
 
