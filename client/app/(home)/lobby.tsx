@@ -5,7 +5,7 @@
  * The Sage Unicorn Studio Co., Ltd.
  */
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Image, Platform, Modal } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Image, Platform, Modal } from 'react-native';
 import { io, Socket } from 'socket.io-client';
 import { useUserStore } from '../../src/store/userStore';
 import { router } from 'expo-router';
@@ -16,15 +16,6 @@ const studioLogo = require('../../assets/images/sage_unicorn_logo_transparent.pn
 
 type Tier = 'demo' | 'initiate' | 'adept' | 'mastermind' | 'high_noble' | 'last_boss';
 type Selection = Tier | 'all';
-
-interface SeatView { name: string; type: 'human' | 'bot' | 'ai' | 'empty'; }
-interface TableView {
-  tableId: string;
-  tier: Tier;
-  seats: SeatView[];
-  secondsLeft: number | null;
-  joinable: boolean;
-}
 
 const COLOR = {
   bgPrimary: '#0F2418',
@@ -50,32 +41,10 @@ const TIER_CONFIG: Record<Tier, { label: string; letter: string; minToken: numbe
   last_boss:   { label: 'The Last Boss', letter: 'S+', minToken: 0,       implemented: false, badgeColor: COLOR.goldDark },
 };
 
-const MOCK_USER_TOKEN = 25_000;
-
 function meetsLastBossCondition(_token: number): boolean { return false; }
 function isEligible(tier: Tier, token: number): boolean {
   if (tier === 'last_boss') return meetsLastBossCondition(token);
   return token >= TIER_CONFIG[tier].minToken;
-}
-
-function buildMockTables(tier: Tier, eligible: boolean): TableView[] {
-  const mockNames = ['ThaiDragon', 'WinWin99', 'PokerPro7', 'LuckyAce', 'KingCard'];
-  const count = 2 + Math.floor(Math.random() * 2);
-  return Array.from({ length: count }).map((_, i) => {
-    const seatCount = 1 + Math.floor(Math.random() * 2);
-    const seats: SeatView[] = Array.from({ length: 3 }).map((_, si) =>
-      si < seatCount
-        ? { name: mockNames[(i + si) % mockNames.length], type: 'human' }
-        : { name: '— waiting —', type: 'empty' }
-    );
-    return {
-      tableId: `mock_${tier}_${i + 1}`,
-      tier,
-      seats,
-      secondsLeft: 180 - i * 40,
-      joinable: false && eligible,
-    };
-  });
 }
 
 const TIER_ROWS: Tier[][] = [
@@ -87,8 +56,6 @@ const TIER_ROWS: Tier[][] = [
 
 export default function LobbyScreen() {
   const [selected, setSelected] = useState<Selection | null>(null);
-  const [tables, setTables] = useState<TableView[]>([]);
-  const [loading, setLoading] = useState(false);
   const [showSkinModal, setShowSkinModal] = useState(false);
 
   // ── Multiplayer Matchmaking (Adept) ──────────────────────────
@@ -96,6 +63,7 @@ export default function LobbyScreen() {
   const socketRef = useRef<Socket | null>(null);
   const userId = useUserStore(s => s.userId); // ต้อง login เสมอ — Lobby อยู่ใต้ auth guard แล้ว ไม่มี guest mode
   const displayName = useUserStore(s => s.displayName) || 'Player';
+  const tokenBalance = useUserStore(s => s.tokenBalance);
   type MatchmakingStatus = 'idle' | 'queued' | 'matched';
   const [mmStatus, setMmStatus] = useState<MatchmakingStatus>('idle');
   const [mmSeats, setMmSeats] = useState<Array<{ type: string; name: string }>>([]);
@@ -114,36 +82,7 @@ export default function LobbyScreen() {
   }, [mmStatus, mmTimeoutAt]);
   const { unlocked, active, loading: skinsLoading } = useUserSkins();
 
-  const lastBossVisible = useMemo(() => meetsLastBossCondition(MOCK_USER_TOKEN), []);
-
-  useEffect(() => {
-    if (!selected) return;
-    setLoading(true);
-
-    if (selected === 'all') {
-      const timer = setTimeout(() => {
-        const allTiers: Tier[] = ['initiate', 'adept', 'mastermind', 'high_noble', 'demo'];
-        setTables(allTiers.flatMap(t => buildMockTables(t, isEligible(t, MOCK_USER_TOKEN))));
-        setLoading(false);
-      }, 250);
-      return () => clearTimeout(timer);
-    }
-
-    if (selected === 'initiate') {
-      setTables(buildMockTables('initiate', true).map(t => ({ ...t, joinable: false })));
-      setLoading(false);
-    } else if (selected === 'adept') {
-      // Patch Multiplayer: Adept ไม่มี mock — real matchmaking ใช้ปุ่ม Auto-Match แทน
-      setTables([]);
-      setLoading(false);
-    } else {
-      const timer = setTimeout(() => {
-        setTables(buildMockTables(selected, isEligible(selected, MOCK_USER_TOKEN)));
-        setLoading(false);
-      }, 300);
-      return () => clearTimeout(timer);
-    }
-  }, [selected]);
+  const lastBossVisible = useMemo(() => meetsLastBossCondition(tokenBalance), [tokenBalance]);
 
   const handleEnterInitiate = () => router.push('/game/initiate');
   const handleEnterMastermind = () => router.push('/game/mastermind');
@@ -191,14 +130,10 @@ export default function LobbyScreen() {
   useEffect(() => {
     return () => { socketRef.current?.disconnect(); };
   }, []);
-  const handleEnterTable = (table: TableView) => {
-    if (!table.joinable) return;
-    router.push(`/game/${table.tier}` as any);
-  };
 
   const renderTierButton = (tier: Tier, fullWidth: boolean) => {
     const cfg = TIER_CONFIG[tier];
-    const locked = !isEligible(tier, MOCK_USER_TOKEN);
+    const locked = !isEligible(tier, tokenBalance);
     const isSelected = selected === tier;
     return (
       <TouchableOpacity
@@ -223,8 +158,8 @@ export default function LobbyScreen() {
   };
 
   const sectionTitle =
-    selected === 'all' ? 'All Tiers — Open Tables'
-    : selected ? `${TIER_CONFIG[selected].label} — Open Tables`
+    selected === 'all' ? 'All Tiers'
+    : selected ? TIER_CONFIG[selected].label
     : 'เลือก Tier ด้านล่างเพื่อดูโต๊ะ';
 
   return (
@@ -304,52 +239,21 @@ export default function LobbyScreen() {
             </View>
           )}
 
-          {loading && <ActivityIndicator color={COLOR.goldPrimary} style={{ marginVertical: 12 }} />}
-
-          {!loading && selected === 'adept' && tables.length === 0 && (
+          {selected === 'adept' && mmStatus === 'idle' && (
             <View style={{ paddingVertical: 24, paddingHorizontal: 16, alignItems: 'center' }}>
               <Text style={{ color: COLOR.textSecondary, fontSize: 12, textAlign: 'center', lineHeight: 18 }}>
                 ยังไม่มีห้องที่เปิดอยู่{'\n'}กด "เริ่มเล่น" เพื่อสร้างห้องใหม่
               </Text>
             </View>
           )}
-          {!loading && selected && tables.map(table => (
-            <View key={table.tableId} style={s.tableCard}>
-              <View style={{ flex: 1 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Text style={s.tableId}>{table.tableId}</Text>
-                  {selected === 'all' && (
-                    <View style={[s.tierTagSmall, { borderColor: TIER_CONFIG[table.tier].badgeColor }]}>
-                      <Text style={[s.tierTagSmallTxt, { color: TIER_CONFIG[table.tier].badgeColor }]}>
-                        [{TIER_CONFIG[table.tier].letter}] {TIER_CONFIG[table.tier].label}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-                <View style={{ flexDirection: 'row', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
-                  {table.seats.map((seat, i) => (
-                    <View key={i} style={s.seatChip}>
-                      <Text style={s.seatChipTxt}>P{i + 1}: {seat.type === 'empty' ? '— ' : ''}{seat.name}</Text>
-                    </View>
-                  ))}
-                </View>
-                {table.secondsLeft !== null && (
-                  <Text style={s.timeoutTxt}>⏱ {table.secondsLeft}s before timeout</Text>
-                )}
-              </View>
-              <TouchableOpacity
-                disabled={!table.joinable}
-                onPress={() => handleEnterTable(table)}
-                style={[s.joinIconBtn, { backgroundColor: table.joinable ? 'rgba(141,255,181,0.15)' : 'rgba(255,107,107,0.15)', borderColor: table.joinable ? COLOR.greenHighlight : COLOR.red }]}
-              >
-                <Text style={[s.joinIconTxt, { color: table.joinable ? COLOR.greenHighlight : COLOR.red }]}>
-                  {table.joinable ? '✓' : '✗'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          ))}
 
-          {!loading && !selected && (
+          {selected === 'all' && (
+            <Text style={{ color: COLOR.textTertiary, fontSize: 12, textAlign: 'center', paddingVertical: 24 }}>
+              เลือก Tier ด้านล่างเพื่อเริ่มเล่น
+            </Text>
+          )}
+
+          {!selected && (
             <Text style={{ color: COLOR.textTertiary, fontSize: 12 }}>— ยังไม่ได้เลือก Tier —</Text>
           )}
         </ScrollView>
@@ -425,17 +329,6 @@ const s = StyleSheet.create({
 
   enterBtn: { backgroundColor: COLOR.goldPrimary, borderRadius: 8, paddingVertical: 12, alignItems: 'center', marginBottom: 12 },
   enterBtnTxt: { color: COLOR.bgPrimary, fontWeight: '700', fontSize: 13 },
-
-  tableCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLOR.bgSecondary, borderRadius: 10, padding: 12, borderWidth: 1, borderColor: COLOR.borderPrimary, marginBottom: 10 },
-  tableId: { color: COLOR.textTertiary, fontSize: 10, fontFamily: 'JetBrains Mono' },
-  tierTagSmall: { borderWidth: 1, borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 },
-  tierTagSmallTxt: { fontSize: 8, fontWeight: '700' },
-  seatChip: { backgroundColor: COLOR.bgTertiary, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
-  seatChipTxt: { color: COLOR.textSecondary, fontSize: 9 },
-  timeoutTxt: { color: COLOR.goldPrimary, fontSize: 9, marginTop: 4, fontFamily: 'JetBrains Mono' },
-
-  joinIconBtn: { width: 40, height: 40, borderRadius: 20, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
-  joinIconTxt: { fontSize: 18, fontWeight: '800' },
 
   fixedBottomBlock: { paddingTop: 10, flexShrink: 0 },
 

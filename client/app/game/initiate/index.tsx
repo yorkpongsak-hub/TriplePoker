@@ -13,6 +13,7 @@ import {
   Text, TouchableOpacity, View,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { router } from 'expo-router'
 import { io, Socket } from 'socket.io-client'
 import { autoSort } from '../../../src/utils/autoSort'
 import { useAuthStore } from '../../../src/store/authStore'
@@ -172,6 +173,7 @@ const GameTableLive: React.FC = () => {
   const isWeb  = Platform.OS === 'web'
   const socketRef = useRef<Socket | null>(null)
   const myAvatarEmoji = useAuthStore(s => s.profile?.avatar_url) || '👤'
+  const myDisplayName = useAuthStore(s => s.profile?.display_name) || 'You'
 
   // ── Timer ref (ไม่ trigger re-render)
   const timerValRef = useRef({ val: 90, max: 90 })
@@ -239,6 +241,9 @@ const GameTableLive: React.FC = () => {
   // ── Triple Sweep Jackpot VFX — ใครก็ได้ (human/AI) ชนะครบ 3 กอง
   const [jackpotWinner, setJackpotWinner] = useState<string | null>(null)
   const jackpotTimeoutRef = useRef<any>(null)
+  useEffect(() => {
+    console.log('[JACKPOT] jackpotWinner state changed ->', jackpotWinner, 'at', Date.now())
+  }, [jackpotWinner])
 
   // ── Result
   const [tokenBalance, setTokenBalance] = useState<Record<string, number>>({})
@@ -292,6 +297,7 @@ const GameTableLive: React.FC = () => {
 
   // Triple Sweep Jackpot — burst ครั้งเดียว ไม่วนซ้ำ โชว์ไม่เกิน 5 วิ แล้วปิดเอง
   const triggerJackpot = (winnerId: string) => {
+    console.log('[JACKPOT] triggerJackpot called, winnerId=', winnerId, 'at', Date.now())
     if (jackpotTimeoutRef.current) clearTimeout(jackpotTimeoutRef.current)
     setJackpotWinner(winnerId)
 
@@ -311,7 +317,10 @@ const GameTableLive: React.FC = () => {
       ]).start()
     })
 
-    jackpotTimeoutRef.current = setTimeout(() => setJackpotWinner(null), 5000)
+    jackpotTimeoutRef.current = setTimeout(() => {
+      console.log('[JACKPOT] 5s timeout fired, clearing at', Date.now())
+      setJackpotWinner(null)
+    }, 5000)
   }
 
   useEffect(() => {
@@ -810,7 +819,7 @@ const GameTableLive: React.FC = () => {
   // Pile Reveal Overlay — Tab mode ผู้เล่นเลือกดูได้ + Continue button
   const PileRevealOverlay: React.FC<{ pileNum: 1|2|3 }> = ({ pileNum }) => {
     const players = [
-      { id: PLAYER_ID, label: 'You', emoji: myAvatarEmoji },
+      { id: PLAYER_ID, label: myDisplayName, emoji: myAvatarEmoji },
       ...(aiList.map(a => ({ id: a.id, label: a.name, emoji: a.emoji }))),
     ]
     const commMap: Record<number, string[]> = { 1: comm.p1, 2: comm.p2, 3: comm.p3 }
@@ -869,7 +878,7 @@ const GameTableLive: React.FC = () => {
                 <View style={{ width: 56, alignItems: 'center', marginRight: 8 }}>
                   <Text style={{ fontSize: 20 }}>{p.emoji}</Text>
                   <Text style={{ fontSize: 10, color: isUser ? '#FFD76A' : '#F5F2E8', fontWeight: '800', marginTop: 2 }} numberOfLines={1}>
-                    {isUser ? 'You' : p.label.split(' ')[0]}
+                    {isUser ? myDisplayName : p.label.split(' ')[0]}
                   </Text>
                   {isWinner && <Text style={{ fontSize: 9, color: '#8DFFB5', fontWeight: '900' }}>🏆 WIN</Text>}
                 </View>
@@ -931,7 +940,7 @@ const GameTableLive: React.FC = () => {
     const allPlayerIds = [PLAYER_ID, ...Object.keys(allCards).filter(id => id !== PLAYER_ID)]
     const aiData = aiListRef.current.length > 0 ? aiListRef.current : aiList
     const players = allPlayerIds.map(id => {
-      if (id === PLAYER_ID) return { id, label: 'You', emoji: myAvatarEmoji }
+      if (id === PLAYER_ID) return { id, label: myDisplayName, emoji: myAvatarEmoji }
       const ai = aiData.find(a => a.id === id)
       return { id, label: ai?.name ?? id, emoji: ai?.emoji ?? '🤖' }
     })
@@ -1055,7 +1064,7 @@ const GameTableLive: React.FC = () => {
                   <View style={{ width: 64, alignItems: 'center', marginRight: 8 }}>
                     <Text style={{ fontSize: 18 }}>{p.emoji}</Text>
                     <Text style={{ fontSize: 10, color: isUser ? '#FFD76A' : '#F5F2E8', fontWeight: '800' }} numberOfLines={1}>
-                      {isUser ? 'You' : p.label.split(' ')[0]}
+                      {isUser ? myDisplayName : p.label.split(' ')[0]}
                     </Text>
                     {isWinner && <Text style={{ fontSize: 9, color: '#8DFFB5', fontWeight: '900' }}>🏆 WIN</Text>}
                   </View>
@@ -1237,7 +1246,7 @@ const GameTableLive: React.FC = () => {
                 return (
                   <View key={pid} style={s.matchEndRow}>
                     <Text style={[s.matchEndName, pid === PLAYER_ID && { color: '#c9a84c' }]}>
-                      {pid === PLAYER_ID ? `${myAvatarEmoji} You` : `${ai?.emoji} ${ai?.name}`}
+                      {pid === PLAYER_ID ? `${myAvatarEmoji} ${myDisplayName}` : `${ai?.emoji} ${ai?.name}`}
                     </Text>
                     <Text style={[s.matchEndBal, { color: bal >= 5000 ? '#4ade80' : '#f87171' }]}>🪙 {bal}</Text>
                   </View>
@@ -1246,6 +1255,9 @@ const GameTableLive: React.FC = () => {
               <TouchableOpacity style={s.rematchBtn} onPress={handleRematch}>
                 <Text style={s.rematchTxt}>🔄 PLAY AGAIN</Text>
               </TouchableOpacity>
+              <TouchableOpacity style={s.lobbyBtn} onPress={() => router.replace('/(home)/lobby')}>
+                <Text style={s.lobbyBtnTxt}>🏠 BACK TO LOBBY</Text>
+              </TouchableOpacity>
             </View>
           )}
 
@@ -1253,7 +1265,7 @@ const GameTableLive: React.FC = () => {
           {jackpotWinner && (() => {
             const isMe = jackpotWinner === PLAYER_ID
             const winAI = aiList.find(a => a.id === jackpotWinner)
-            const label = isMe ? 'You' : (winAI?.name ?? jackpotWinner)
+            const label = isMe ? myDisplayName : (winAI?.name ?? jackpotWinner)
             const emoji = isMe ? myAvatarEmoji : (winAI?.emoji ?? '🤖')
             return (
               <View style={[s.overlay, { backgroundColor: 'rgba(0,0,0,0.55)', zIndex: 300 }]} pointerEvents="none">
@@ -1720,6 +1732,8 @@ const s = StyleSheet.create({
   matchEndBal:   { fontSize: 13, fontWeight: '800' },
   rematchBtn:    { marginTop: 20, backgroundColor: '#1a5e20', borderRadius: 12, paddingVertical: 13, paddingHorizontal: 36 },
   rematchTxt:    { color: '#fff', fontSize: 13, fontWeight: '800', letterSpacing: 2 },
+  lobbyBtn:      { marginTop: 10, backgroundColor: 'transparent', borderWidth: 1.5, borderColor: '#c9a84c', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 36 },
+  lobbyBtnTxt:   { color: '#c9a84c', fontSize: 13, fontWeight: '800', letterSpacing: 2 },
 
   // Server log
   logZone:   { flex: 10, backgroundColor: '#080808', borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,.12)' },
