@@ -189,6 +189,10 @@ const GameTableLive: React.FC = () => {
 
   // ── Game state
   const [phase, setPhase]             = useState<'dealing'|'arrangement'|'countdown'|'showdown'|'result'|'end'>('dealing')
+  // phase เริ่มต้นเป็น 'dealing' อยู่แล้ว (โชว์ loading animation ระหว่างรอ connect) ทำให้ setPhase('dealing')
+  // จาก round_start เป็น no-op ตอนรอบแรก (ค่าไม่เปลี่ยน useEffect([phase]) เลยไม่ trigger ซ้ำ) ใช้ตัวนับนี้
+  // แทนเพื่อบังคับ trigger startDealAnimation ทุกครั้งที่ round_start มาถึงจริง ไม่ว่าค่า phase จะซ้ำเดิมหรือไม่
+  const [dealTrigger, setDealTrigger] = useState(0)
   const [connectionError, setConnectionError] = useState<string | null>(null)
   const [dealDone, setDealDone]         = useState(false)
   const [dealCount, setDealCount]       = useState(0)
@@ -394,6 +398,7 @@ const GameTableLive: React.FC = () => {
 
       // เริ่ม deal animation
       setPhase('dealing')
+      setDealTrigger(t => t + 1)
       setDealDone(false)
 
       const myCards: string[] = data.cards[PLAYER_ID] ?? []
@@ -599,13 +604,14 @@ const GameTableLive: React.FC = () => {
     })
   }
 
-  // เริ่ม deal เมื่อ phase เปลี่ยนเป็น dealing
+  // เริ่ม deal เมื่อ phase เปลี่ยนเป็น dealing — ใช้ dealTrigger คู่กับ phase กัน round_start
+  // แรกสุดที่ setPhase('dealing') เป็น no-op (phase เป็น 'dealing' อยู่แล้วตั้งแต่ initial state)
   useEffect(() => {
     if (phase === 'dealing') {
       const t = setTimeout(() => startDealAnimation(), 300)
       return () => clearTimeout(t)
     }
-  }, [phase])
+  }, [phase, dealTrigger])
 
   // ── Card swap
   const handleCardPress = useCallback((pi: number, ci: number) => {

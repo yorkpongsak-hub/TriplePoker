@@ -17,6 +17,7 @@ interface UserProfile {
   token_balance: number | null
   crown_balance: number | null
   xp: number | null
+  streak_count: number | null
 }
 
 interface AuthState {
@@ -80,7 +81,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const { data, error } = await supabase
         .from('users')
-        .select('user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp')
+        .select('user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp, streak_count')
         .eq('user_id', user.id)
         .maybeSingle()
       console.log('[authStore] refreshProfile query result:', { data, error, queriedUserId: user.id })

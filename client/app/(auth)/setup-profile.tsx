@@ -216,7 +216,7 @@ export default function SetupProfileScreen() {
 }
 
 // คำนวณ CELL_SIZE จากความกว้างจอเพื่อบังคับ 5 คอลัมน์เป๊ะทุกอุปกรณ์
-// (fixed pixel + flexWrap เดิม ทำให้จอกว้างพออาจ wrap เป็น 6 คอลัมน์แทน 5)
+// (ของเดิมใช้ fixed pixel + flexWrap ทำให้จอกว้างพออาจ wrap เป็น 6 คอลัมน์แทน 5)
 const GRID_COLS  = 5
 const GRID_GAP   = 8
 const H_PADDING  = 20 // ต้องตรงกับ styles.scroll.paddingHorizontal ด้านล่าง

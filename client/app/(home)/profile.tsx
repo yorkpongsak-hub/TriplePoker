@@ -31,45 +31,15 @@ const C = {
   white:       '#0F2418',
 }
 
-// ─── Mock data (เปลี่ยนเป็น real data ตอนเชื่อม DB) ──────────
+// ─── Fallback ก่อน profile จาก Supabase โหลดเสร็จ ─────────────
 const MOCK = {
-  name:           'York',
-  avatar:         '🐉',
-  tier:           'S' as 'D' | 'C' | 'B' | 'A' | 'S',
-  vipStatus:      'pro' as 'free' | 'vip' | 'pro',
-  token:          425_000,
-  crown:          12,
-  streakDays:     7,
-  rank:           12,
-  debt:           0,
-  xpNow:          15_400,
-  xpNext:         18_000,
-  winRate:        68,
-  totalMatches:   142,
-  bestHand:       'Royal Flush',
-  recentMatches: [
-    { id: 1, result: 'win',  opponent: 'Reaper',     delta: +850,  ago: '5m ago'     },
-    { id: 2, result: 'lose', opponent: 'Crag',       delta: -200,  ago: '1h ago'     },
-    { id: 3, result: 'win',  opponent: 'Adept Bot',  delta: +1200, ago: 'yesterday'  },
-  ],
-  achievements: [
-    { id: 1, icon: '🏆', name: 'First Win',       date: 'May 12, 2026' },
-    { id: 2, icon: '🃏', name: 'Royal Flush',     date: 'Jun 03, 2026' },
-    { id: 3, icon: '🔥', name: '30-day Streak',   date: 'Jun 15, 2026' },
-  ],
-  bossesConquered: [
-    { id: 'iron_wall',   name: 'Iron Wall',   icon: '🛡️', conquered: true  },
-    { id: 'chivalry',    name: 'Chivalry',    icon: '⚔️', conquered: true  },
-    { id: 'war_lord',    name: 'War Lord',    icon: '👹', conquered: true  },
-    { id: 'phantom',     name: 'Phantom',     icon: '👤', conquered: false },
-    { id: 'dark_shark',  name: 'Dark Shark',  icon: '🦈', conquered: false },
-    { id: 'oracle',      name: 'Oracle',      icon: '🔮', conquered: false },
-    { id: 'jester',      name: 'Jester',      icon: '🃏', conquered: false },
-    { id: 'phoenix',     name: 'Phoenix',     icon: '🔥', conquered: false },
-    { id: 'black_magic', name: 'Black Magic', icon: '🧙', conquered: false },
-  ],
-  following: 24,
-  followers: 8,
+  name:       'York',
+  avatar:     '🐉',
+  tier:       'S' as 'D' | 'C' | 'B' | 'A' | 'S',
+  token:      425_000,
+  crown:      12,
+  streakDays: 7,
+  xpNow:      15_400,
 }
 
 // ─── Tier / VIP config ────────────────────────────────────────
@@ -99,20 +69,17 @@ export default function ProfileScreen() {
   const [activeTab, setActiveTab] = useState<TabKey>('stats')
 
   // ─── Real data จาก authStore (fallback MOCK เผื่อ profile ยังโหลดไม่เสร็จ) ───
-  const displayName = profile?.display_name || MOCK.name
-  const avatar      = profile?.avatar_url   || MOCK.avatar
-  const tier        = profile?.tier         || MOCK.tier
-  const vipStatus   = profile?.vip_status   || 'none'
+  const displayName = profile?.display_name  || MOCK.name
+  const avatar      = profile?.avatar_url    || MOCK.avatar
+  const tier        = profile?.tier          || MOCK.tier
+  const vipStatus   = profile?.vip_status    || 'none'
   const token       = profile?.token_balance ?? MOCK.token
   const crown       = profile?.crown_balance ?? MOCK.crown
-  const xpNow       = profile?.xp           ?? MOCK.xpNow
-
-  const pct = Math.round((xpNow / MOCK.xpNext) * 100)
+  const xpNow       = profile?.xp            ?? MOCK.xpNow
+  const streakDays  = profile?.streak_count  ?? MOCK.streakDays
 
   const tierInfo = TIER_INFO[tier] ?? TIER_INFO['C']
   const vipInfo  = VIP_INFO[vipStatus]
-  const isVip    = vipStatus !== 'none'
-  const conqueredCount = MOCK.bossesConquered.filter(b => b.conquered).length
 
   const handleLogout = async () => {
     await signOut()
@@ -180,17 +147,7 @@ export default function ProfileScreen() {
                 </View>
               )}
             </View>
-
-            <View style={s.rankRow}>
-              <Text style={s.rankIcon}>🏆</Text>
-              <Text style={s.rankLabel}>GLOBAL RANK</Text>
-              <Text style={s.rankValue}>#{MOCK.rank}</Text>
-            </View>
-
-            <View style={s.progressTrack}>
-              <View style={[s.progressFill, { width: `${pct}%` }]} />
-            </View>
-            <Text style={s.progressSub}>{fmt(xpNow)} / {fmt(MOCK.xpNext)} XP to Mythic</Text>
+            <Text style={s.xpLine}>⭐ {fmt(xpNow)} XP</Text>
           </View>
         </GoldCard>
 
@@ -202,17 +159,6 @@ export default function ProfileScreen() {
           <View style={s.vLine} />
           <ResourceBox icon="💎" label="VIP STATUS" value={vipInfo?.label ?? 'FREE'} valueColor={vipInfo?.color ?? C.textPrimary} />
         </GoldCard>
-
-        {/* ═══════════════ DEBT BADGE ═══════════════ */}
-        {MOCK.debt > 0 && (
-          <View style={s.debtBadge}>
-            <Text style={s.debtTitle}>⚠ DEBT {fmt(MOCK.debt)} TOKEN</Text>
-            <Text style={s.debtSub}>Auto-deduct 20% from pot wins</Text>
-            <TouchableOpacity style={s.debtBtn}>
-              <Text style={s.debtBtnText}>PAY</Text>
-            </TouchableOpacity>
-          </View>
-        )}
 
         {/* ═══════════════ MAIN ACTIONS ═══════════════ */}
         <View style={s.actionRow}>
@@ -229,21 +175,15 @@ export default function ProfileScreen() {
           <TabButton label="SOCIAL" active={activeTab === 'social'} onPress={() => setActiveTab('social')} />
         </View>
 
-        {activeTab === 'stats' && (
-          isVip ? <StatsPanel /> : <VipLockedPanel onUpgrade={() => router.push('/(home)/shop')} />
+        {activeTab === 'stats' && <StatsPanel streakDays={streakDays} />}
+        {activeTab === 'bosses' && (
+          <ComingSoonPanel icon="🗿" title="HALL OF BOSSES" sub="The Nine Sentinels are coming in a future update" />
         )}
-        {activeTab === 'bosses' && <BossesPanel conqueredCount={conqueredCount} />}
-        {activeTab === 'history' && <RecentActivityPanel />}
-        {activeTab === 'social' && <SocialPanel />}
-
-        {activeTab === 'stats' && isVip && (
-          <>
-            <View style={s.twoColumnRow}>
-              <RecentActivityPanel />
-              <AchievementsPanel />
-            </View>
-            <BossesPanel compact conqueredCount={conqueredCount} />
-          </>
+        {activeTab === 'history' && (
+          <ComingSoonPanel icon="📜" title="MATCH HISTORY" sub="Your recent matches will appear here soon" />
+        )}
+        {activeTab === 'social' && (
+          <ComingSoonPanel icon="👥" title="SOCIAL" sub="Following & followers are coming in a future update" />
         )}
       </ScrollView>
     </View>
@@ -284,29 +224,27 @@ function TabButton({ label, active, onPress }: { label: string; active: boolean;
   )
 }
 
-function VipLockedPanel({ onUpgrade }: { onUpgrade: () => void }) {
+// ── ที่ยังไม่มีระบบหลังบ้านจริง (match history, achievements, bosses conquered, social) ──
+function ComingSoonPanel({ icon, title, sub }: { icon: string; title: string; sub: string }) {
   return (
-    <GoldCard style={s.vipLockedPanel}>
-      <Text style={s.vipLockedIcon}>🔒</Text>
-      <Text style={s.vipLockedTitle}>MATCH STATS — VIP ONLY</Text>
-      <Text style={s.vipLockedSub}>Unlock win rate, match history, and best hand tracking</Text>
-      <TouchableOpacity style={s.unlockVipBtn} onPress={onUpgrade}>
-        <Text style={s.unlockVipText}>UNLOCK WITH VIP →</Text>
-      </TouchableOpacity>
+    <GoldCard style={s.comingSoonPanel}>
+      <Text style={s.comingSoonIcon}>{icon}</Text>
+      <Text style={s.comingSoonTitle}>{title}</Text>
+      <Text style={s.comingSoonSub}>{sub}</Text>
     </GoldCard>
   )
 }
 
-function StatsPanel() {
+function StatsPanel({ streakDays }: { streakDays: number }) {
   return (
     <GoldCard style={s.statsPanel}>
-      <StatItem icon="🎯" label="WIN RATE" value={`${MOCK.winRate}%`} sub="TOP 22%" />
+      <StatItem icon="🎯" label="WIN RATE" value="—" sub="COMING SOON" small />
       <View style={s.vLine} />
-      <StatItem icon="⚔️" label="MATCHES" value={`${MOCK.totalMatches}`} sub="TOTAL PLAYED" />
+      <StatItem icon="⚔️" label="MATCHES" value="—" sub="COMING SOON" small />
       <View style={s.vLine} />
-      <StatItem icon="♠" label="BEST HAND" value={MOCK.bestHand} sub="HIGHEST" small />
+      <StatItem icon="♠" label="BEST HAND" value="—" sub="COMING SOON" small />
       <View style={s.vLine} />
-      <StatItem icon="🔥" label="STREAK" value={`${MOCK.streakDays} Days`} sub="CURRENT" small />
+      <StatItem icon="🔥" label="STREAK" value={`${streakDays} Days`} sub="CURRENT" small />
     </GoldCard>
   )
 }
@@ -319,83 +257,6 @@ function StatItem({ icon, label, value, sub, small }: { icon: string; label: str
       <Text style={[s.statValue, small && s.statValueSmall]} numberOfLines={1}>{value}</Text>
       <Text style={s.statSub}>{sub}</Text>
     </View>
-  )
-}
-
-function RecentActivityPanel() {
-  return (
-    <GoldCard style={s.listPanel}>
-      <View style={s.panelHeader}>
-        <Text style={s.panelTitle}>RECENT ACTIVITY</Text>
-        <Text style={s.viewAll}>VIEW ALL ›</Text>
-      </View>
-      {MOCK.recentMatches.map(m => (
-        <View key={m.id} style={s.activityRow}>
-          <View style={s.enemyCircle}><Text style={s.enemyIcon}>{m.result === 'win' ? '☠️' : '👹'}</Text></View>
-          <View style={{ flex: 1 }}>
-            <Text style={s.activityTitle}>vs {m.opponent}</Text>
-            <Text style={s.activityTime}>{m.ago}</Text>
-          </View>
-          <View style={{ alignItems: 'flex-end' }}>
-            <Text style={[s.resultText, { color: m.result === 'win' ? C.green : C.red }]}>{m.result.toUpperCase()}</Text>
-            <Text style={[s.deltaText, { color: m.delta > 0 ? C.green : C.red }]}>{m.delta > 0 ? '+' : ''}{fmt(m.delta)}</Text>
-          </View>
-        </View>
-      ))}
-    </GoldCard>
-  )
-}
-
-function AchievementsPanel() {
-  return (
-    <GoldCard style={s.listPanel}>
-      <View style={s.panelHeader}>
-        <Text style={s.panelTitle}>ACHIEVEMENTS</Text>
-        <Text style={s.viewAll}>VIEW ALL ›</Text>
-      </View>
-      {MOCK.achievements.map(a => (
-        <View key={a.id} style={s.achievementRow}>
-          <Text style={s.achievementIcon}>{a.icon}</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={s.achievementName}>{a.name}</Text>
-            <Text style={s.achievementDate}>{a.date}</Text>
-          </View>
-          <Text style={s.checkIcon}>✓</Text>
-        </View>
-      ))}
-    </GoldCard>
-  )
-}
-
-function BossesPanel({ compact, conqueredCount }: { compact?: boolean; conqueredCount: number }) {
-  return (
-    <GoldCard style={compact ? s.bossPanelCompact : s.bossPanel}>
-      <View style={s.panelHeader}>
-        <Text style={s.panelTitle}>HALL OF BOSSES</Text>
-        <Text style={s.conqueredText}>{conqueredCount} / {MOCK.bossesConquered.length} CONQUERED</Text>
-      </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.bossScroll}>
-        {MOCK.bossesConquered.map(b => (
-          <View key={b.id} style={[s.bossCard, !b.conquered && s.bossLocked]}>
-            <Text style={s.bossIcon}>{b.conquered ? b.icon : '🗿'}</Text>
-            <View style={[s.bossStatus, b.conquered ? s.bossStatusWin : s.bossStatusLock]}>
-              <Text style={s.bossStatusText}>{b.conquered ? '✓' : '🔒'}</Text>
-            </View>
-            <Text style={s.bossName} numberOfLines={1}>{b.name}</Text>
-          </View>
-        ))}
-      </ScrollView>
-    </GoldCard>
-  )
-}
-
-function SocialPanel() {
-  return (
-    <GoldCard style={s.socialPanel}>
-      <StatItem icon="👥" label="FOLLOWING" value={`${MOCK.following}`} sub="PLAYERS" />
-      <View style={s.vLine} />
-      <StatItem icon="🌟" label="FOLLOWERS" value={`${MOCK.followers}`} sub="FANS" />
-    </GoldCard>
   )
 }
 
@@ -468,18 +329,7 @@ const s = StyleSheet.create({
     borderRadius: 6, borderWidth: 1.5,
   },
   vipBadgeText: { fontSize: 9, fontWeight: '900', letterSpacing: 1 },
-  rankRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  rankIcon: { fontSize: 14 },
-  rankLabel: { color: C.textSec, fontSize: 10, fontWeight: '800', letterSpacing: 1 },
-  rankValue: { color: C.gold, fontSize: 15, fontWeight: '900', marginLeft: 2 },
-  progressTrack: {
-    height: 8, borderRadius: 4,
-    borderWidth: 1, borderColor: C.border,
-    backgroundColor: C.bg,
-    overflow: 'hidden',
-  },
-  progressFill: { height: '100%', backgroundColor: C.gold, borderRadius: 4 },
-  progressSub: { color: C.textDim, fontSize: 10, marginTop: 5, fontWeight: '600' },
+  xpLine: { color: C.textSec, fontSize: 11, fontWeight: '800' },
 
   resourceCard: {
     marginTop: 12,
@@ -493,22 +343,6 @@ const s = StyleSheet.create({
   resourceLabel: { color: C.textSec, fontSize: 9, fontWeight: '800', letterSpacing: 1 },
   resourceValue: { color: C.textPrimary, fontSize: 15, fontWeight: '900', marginTop: 2 },
   vLine: { width: 1, minHeight: 36, backgroundColor: C.border },
-
-  debtBadge: {
-    marginTop: 10,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,107,107,0.12)',
-    borderWidth: 1.5,
-    borderColor: C.red,
-    padding: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  debtTitle: { color: C.red, fontWeight: '900', fontSize: 11 },
-  debtSub: { color: C.textSec, flex: 1, fontSize: 10 },
-  debtBtn: { backgroundColor: C.red, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6 },
-  debtBtnText: { color: '#fff', fontWeight: '900', fontSize: 10 },
 
   actionRow: { flexDirection: 'row', gap: 8, marginTop: 14 },
   actionBtn: {
@@ -541,19 +375,13 @@ const s = StyleSheet.create({
   tabText: { color: C.textDim, fontSize: 11, fontWeight: '900' },
   tabTextActive: { color: C.gold },
 
-  vipLockedPanel: {
+  comingSoonPanel: {
     borderTopLeftRadius: 0, borderTopRightRadius: 0,
-    padding: 20, alignItems: 'center', borderColor: C.gold,
+    padding: 24, alignItems: 'center',
   },
-  vipLockedIcon: { fontSize: 28, marginBottom: 6 },
-  vipLockedTitle: { color: C.gold, fontSize: 12, fontWeight: '900', letterSpacing: 1, marginBottom: 4 },
-  vipLockedSub: { color: C.textSec, fontSize: 10, textAlign: 'center', marginBottom: 12 },
-  unlockVipBtn: {
-    backgroundColor: 'rgba(255,215,106,0.10)',
-    borderWidth: 1.5, borderColor: C.gold, borderStyle: 'dashed',
-    borderRadius: 8, paddingVertical: 10, paddingHorizontal: 20,
-  },
-  unlockVipText: { color: C.gold, fontSize: 11, fontWeight: '800', letterSpacing: 1 },
+  comingSoonIcon: { fontSize: 28, marginBottom: 8, opacity: 0.6 },
+  comingSoonTitle: { color: C.textSec, fontSize: 12, fontWeight: '900', letterSpacing: 1, marginBottom: 4 },
+  comingSoonSub: { color: C.textDim, fontSize: 10, textAlign: 'center' },
 
   statsPanel: {
     borderTopLeftRadius: 0, borderTopRightRadius: 0,
@@ -566,64 +394,4 @@ const s = StyleSheet.create({
   statValue: { color: C.textPrimary, fontSize: 16, fontWeight: '900', marginTop: 3, textAlign: 'center' },
   statValueSmall: { fontSize: 11 },
   statSub: { color: C.textDim, fontSize: 8, fontWeight: '700', marginTop: 4, textAlign: 'center' },
-
-  twoColumnRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
-  listPanel: { flex: 1, padding: 12 },
-  panelHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  panelTitle: { flex: 1, color: C.textPrimary, fontSize: 11, fontWeight: '900' },
-  viewAll: { color: C.gold, fontSize: 10, fontWeight: '900' },
-  activityRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingVertical: 8, borderTopWidth: 1, borderTopColor: C.border,
-  },
-  enemyCircle: {
-    width: 34, height: 34, borderRadius: 17,
-    backgroundColor: C.card, borderWidth: 1, borderColor: C.border,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  enemyIcon: { fontSize: 16 },
-  activityTitle: { color: C.textPrimary, fontSize: 11, fontWeight: '800' },
-  activityTime: { color: C.textDim, fontSize: 9, marginTop: 2 },
-  resultText: { fontSize: 9, fontWeight: '900' },
-  deltaText: { fontSize: 11, fontWeight: '900', marginTop: 3 },
-  achievementRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingVertical: 8, borderTopWidth: 1, borderTopColor: C.border,
-  },
-  achievementIcon: { fontSize: 22 },
-  achievementName: { color: C.textPrimary, fontSize: 11, fontWeight: '900' },
-  achievementDate: { color: C.textDim, fontSize: 9, marginTop: 2 },
-  checkIcon: {
-    width: 22, height: 22, borderRadius: 11,
-    backgroundColor: 'rgba(141,255,181,0.15)',
-    color: C.green, borderWidth: 1, borderColor: C.green,
-    textAlign: 'center', lineHeight: 20, fontSize: 14, fontWeight: '900',
-  },
-
-  bossPanel: { marginTop: 12, padding: 14 },
-  bossPanelCompact: { marginTop: 12, padding: 14 },
-  conqueredText: { color: C.textSec, fontSize: 10, fontWeight: '900' },
-  bossScroll: { gap: 8, paddingTop: 4, paddingRight: 8 },
-  bossCard: {
-    width: 70, minHeight: 88,
-    backgroundColor: C.card,
-    borderRadius: 10, borderWidth: 1.5, borderColor: C.border,
-    alignItems: 'center', paddingTop: 8, paddingHorizontal: 4,
-  },
-  bossLocked: { opacity: 0.45 },
-  bossIcon: { fontSize: 28 },
-  bossStatus: {
-    position: 'absolute', right: 4, top: 4,
-    width: 18, height: 18, borderRadius: 9,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  bossStatusWin: { backgroundColor: C.green },
-  bossStatusLock: { backgroundColor: C.textDim },
-  bossStatusText: { color: C.bg, fontSize: 9, fontWeight: '900' },
-  bossName: { color: C.textPrimary, fontSize: 9, fontWeight: '800', marginTop: 6, textAlign: 'center' },
-
-  socialPanel: {
-    borderTopLeftRadius: 0, borderTopRightRadius: 0,
-    padding: 16, flexDirection: 'row', alignItems: 'center',
-  },
 })
