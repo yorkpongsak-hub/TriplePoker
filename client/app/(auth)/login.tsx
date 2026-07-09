@@ -2,7 +2,7 @@
 // Login Screen -- TriplePoker (Minimal version)
 // The Sage Unicorn Studio Co., Ltd.
 
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import {
   View,
   Text,
@@ -40,13 +40,6 @@ export default function LoginScreen() {
   const [devEmail, setDevEmail]       = useState('')
   const [devPassword, setDevPassword] = useState('')
 
-  // DEV ONLY -- auto logout ทุกครั้งที่เปิดหน้า login เพื่อเทส flow ตั้งแต่ต้น
-  useEffect(() => {
-    if (__DEV__) {
-      supabase.auth.signOut().catch(() => {})
-    }
-  }, [])
-
   // Google OAuth Sign In
   const handleGoogleSignIn = async () => {
     setIsLoading(true)
@@ -77,7 +70,7 @@ export default function LoginScreen() {
         password: devPassword,
       })
       if (authError) throw authError
-      router.replace('/(home)/lobby')
+      router.replace('/(home)/profile')
     } catch (e: any) {
       setError('Dev login failed: ' + (e?.message ?? 'unknown error'))
     } finally {

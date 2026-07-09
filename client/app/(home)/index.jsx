@@ -1,4 +1,4 @@
-import GameTable from '../../src/screens/GameTable';
+import { Redirect } from 'expo-router';
 export default function HomeScreen() {
-  return <GameTable />;
+  return <Redirect href="/(home)/profile" />;
 }

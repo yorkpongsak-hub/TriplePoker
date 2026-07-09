@@ -46,7 +46,7 @@ const CARD_IMG: Record<string, any> = {
 
 const CW = 44; const CH = 63; const OVERLAP = -30
 
-const SERVER_URL = 'http://localhost:3001'
+const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 const ROOM_ID    = 'Beginner1'
 const PLAYER_ID  = 'Human1'
 
