@@ -587,7 +587,10 @@ const GameTableLive: React.FC = () => {
     })
 
     dealAnimCompositeRef.current = Animated.parallel(anims)
-    dealAnimCompositeRef.current.start(() => {
+    dealAnimCompositeRef.current.start(({ finished }) => {
+      // ถ้าโดน .stop() ตัดกลางคัน (finished=false) เพราะรอบใหม่มาแทรก ห้ามทำ reveal logic นี้
+      // ไม่งั้น phase/fadeCards จะเพี้ยนไปตามข้อมูล deal รอบเก่าที่ถูกยกเลิกไปแล้ว
+      if (!finished) return
       setDealDone(true)
       setShowLockup(false)
       setPhase('arrangement')

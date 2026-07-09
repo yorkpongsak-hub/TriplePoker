@@ -76,7 +76,9 @@ export default function ProfileScreen() {
   const token       = profile?.token_balance ?? MOCK.token
   const crown       = profile?.crown_balance ?? MOCK.crown
   const xpNow       = profile?.xp            ?? MOCK.xpNow
-  const streakDays  = profile?.streak_count  ?? MOCK.streakDays
+  // streak_count ยังไม่มีคอลัมน์จริงบน Supabase (live schema ไม่มี แม้ migration file จะ define ไว้)
+  // ใช้ MOCK จนกว่าจะรัน migration เพิ่มคอลัมน์ — ดู supabase/migrations/004_add_streak_count.sql
+  const streakDays  = MOCK.streakDays
 
   const tierInfo = TIER_INFO[tier] ?? TIER_INFO['C']
   const vipInfo  = VIP_INFO[vipStatus]

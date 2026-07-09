@@ -358,6 +358,7 @@ const GameTableLive: React.FC = () => {
     })
 
     socket.on('round_start', (data: any) => {
+      console.log('[DEAL] round_start received, roundNumber=', data.roundNumber, 'at', Date.now())
       setPhase('arrangement')
       setRoundNumber(data.roundNumber)
       setIsReady(false); setSortDone(false); setSelected(null)
@@ -397,6 +398,7 @@ const GameTableLive: React.FC = () => {
       }
 
       // เริ่ม deal animation
+      console.log('[DEAL] round_start setting phase=dealing + dealTrigger++ at', Date.now())
       setPhase('dealing')
       setDealTrigger(t => t + 1)
       setDealDone(false)
@@ -554,6 +556,7 @@ const GameTableLive: React.FC = () => {
 
   // ── Deal Animation
   const startDealAnimation = () => {
+    console.log('[DEAL] startDealAnimation() called at', Date.now(), 'had previous composite:', !!dealAnimCompositeRef.current)
     // กันรอบใหม่เริ่ม deal ทับรอบเก่าที่ยังเล่นไม่จบ (native driver ชนกันถ้าปล่อยให้วิ่งพร้อมกัน)
     if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop()
     // ตำแหน่งปลายทาง: Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย
@@ -594,7 +597,11 @@ const GameTableLive: React.FC = () => {
     })
 
     dealAnimCompositeRef.current = Animated.parallel(anims)
-    dealAnimCompositeRef.current.start(() => {
+    dealAnimCompositeRef.current.start(({ finished }) => {
+      console.log('[DEAL] composite.start callback fired, finished=', finished, 'at', Date.now())
+      // ถ้าโดน .stop() ตัดกลางคัน (finished=false) เพราะรอบใหม่มาแทรก ห้ามทำ reveal logic นี้
+      // ไม่งั้น phase/fadeCards จะเพี้ยนไปตามข้อมูล deal รอบเก่าที่ถูกยกเลิกไปแล้ว
+      if (!finished) return
       setDealDone(true)
       setShowLockup(false)
       setPhase('arrangement')
@@ -607,9 +614,10 @@ const GameTableLive: React.FC = () => {
   // เริ่ม deal เมื่อ phase เปลี่ยนเป็น dealing — ใช้ dealTrigger คู่กับ phase กัน round_start
   // แรกสุดที่ setPhase('dealing') เป็น no-op (phase เป็น 'dealing' อยู่แล้วตั้งแต่ initial state)
   useEffect(() => {
+    console.log('[DEAL] dealing-effect ran, phase=', phase, 'dealTrigger=', dealTrigger, 'at', Date.now())
     if (phase === 'dealing') {
       const t = setTimeout(() => startDealAnimation(), 300)
-      return () => clearTimeout(t)
+      return () => { console.log('[DEAL] dealing-effect cleanup, clearing pending timeout at', Date.now()); clearTimeout(t) }
     }
   }, [phase, dealTrigger])
 
