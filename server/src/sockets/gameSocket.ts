@@ -277,7 +277,7 @@ export function registerGameSocket(io: Server): void {
 
   // Room Registry (ใหม่): เช็คห้องที่หมดเวลา → AI-fill ที่นั่งที่เหลือ ทุก 10 วิ
   setInterval(async () => {
-    const tiers: RoomTier[] = ['adept', 'mastermind', 'highNoble'];
+    const tiers: RoomTier[] = ['adept', 'mastermind', 'highNoble', 'monarch'];
     for (const tier of tiers) {
       const timedOut = await getTimedOutRooms(tier);
       for (const room of timedOut) {
@@ -292,7 +292,7 @@ export function registerGameSocket(io: Server): void {
           await markInProgress(room.roomId);
           if (tier === 'adept') {
             await startMultiplayerMatch(io, room.roomId, filled.seats, 'adept');
-          } else if (tier === 'highNoble') {
+          } else if (tier === 'highNoble' || tier === 'monarch') {
             await startHighNobleMultiMatch(io, room.roomId, filled.seats);
           }
         }
@@ -666,7 +666,7 @@ export function registerGameSocket(io: Server): void {
           // Patch Multiplayer: เริ่มเกมทันทีเมื่อห้องเต็ม
           if (tier === 'adept') {
             await startMultiplayerMatch(io, result.room.roomId, result.room.seats, 'adept');
-          } else if (tier === 'highNoble') {
+          } else if (tier === 'highNoble' || tier === 'monarch') {
             await startHighNobleMultiMatch(io, result.room.roomId, result.room.seats);
           }
         }
@@ -708,7 +708,7 @@ export function registerGameSocket(io: Server): void {
           io.to(roomId).emit("room_ready", { roomId, seats: result.room.seats });
           if (result.room.tier === 'adept') {
             await startMultiplayerMatch(io, roomId, result.room.seats, 'adept');
-          } else if (result.room.tier === 'highNoble') {
+          } else if (result.room.tier === 'highNoble' || result.room.tier === 'monarch') {
             await startHighNobleMultiMatch(io, roomId, result.room.seats);
           }
         }
@@ -729,7 +729,7 @@ export function registerGameSocket(io: Server): void {
       socket.join(roomId);
       socket.join(userId);
       socketUserMap.set(socket.id, { userId, roomId, tier: tier ?? 'adept' });
-      if (tier === 'highNoble') {
+      if (tier === 'highNoble' || tier === 'monarch') {
         resendHNRoundStartToPlayer(io, roomId, userId);
       } else {
         await resendRoundStartToPlayer(io, roomId, userId);
@@ -813,7 +813,7 @@ export function registerGameSocket(io: Server): void {
         console.log('[DISCONNECT]', info.userId, 'from room', info.roomId);
         if (info.tier === 'adept') {
           await replaceMultiPlayerWithAI(io, info.roomId, info.userId);
-        } else if (info.tier === 'highNoble') {
+        } else if (info.tier === 'highNoble' || info.tier === 'monarch') {
           await replaceHNPlayerWithAI(io, info.roomId, info.userId);
         }
         socketUserMap.delete(socket.id);

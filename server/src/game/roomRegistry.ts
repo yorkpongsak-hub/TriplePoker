@@ -11,7 +11,7 @@ import { redis } from '../config/redis'
 import { FOUR_GODS, AIConfig } from './aiEngine'
 
 // ─── Types ───────────────────────────────────────────────────────
-export type Tier = 'adept' | 'mastermind' | 'highNoble'
+export type Tier = 'adept' | 'mastermind' | 'highNoble' | 'monarch'
 export type SeatType = 'human' | 'ai' | 'empty'
 
 export interface Seat {
@@ -22,6 +22,7 @@ export interface Seat {
   joinedAt: number
   aiConfigId?: string   // Patch Multiplayer HighNoble: เก็บ AIConfig.id ของที่นั่ง AI ไว้ (boss = Four Gods id, filler = generic AI_CONFIGS id)
   isBoss?: boolean      // Patch Multiplayer HighNoble: true เฉพาะที่นั่ง Boss (seat index 0, Four Gods, ห้าม Human เข้าตลอดกาล)
+  isMonarch?: boolean   // Patch Monarch: true เฉพาะที่นั่ง Boss ของห้อง tier 'monarch' — engine จะสลับบุคลิกใหม่ทุก Round แทนที่จะคงที่ทั้งแมตช์
 }
 
 export interface GameRoom {
@@ -42,6 +43,7 @@ export const TIER_ROOM_CONFIG: Record<Tier, { waitTimeoutMs: number; humanSeatsR
   adept:      { waitTimeoutMs: 90_000,  humanSeatsRequired: 2 }, // 2H + 2AI — AI เต็มทันทีที่ Human ครบ 2
   mastermind: { waitTimeoutMs: 120_000, humanSeatsRequired: 3 }, // 3H + 1AI
   highNoble:  { waitTimeoutMs: 180_000, humanSeatsRequired: 3 }, // 3H + 1AI
+  monarch:    { waitTimeoutMs: 180_000, humanSeatsRequired: 3 }, // 3H + 1AI (Boss = Monarch, สลับบุคลิกจตุรเทพทุก Round)
 }
 
 // ─── Redis Key Helpers ──────────────────────────────────────────
@@ -65,6 +67,12 @@ function bossSeat(): Seat {
   return { type: 'ai', name: god.name, joinedAt: Date.now(), aiConfigId: god.id, isBoss: true }
 }
 
+// Patch Monarch: ที่นั่ง Boss ของห้อง tier 'monarch' — ชื่อ/บุคลิกเริ่มต้นไม่สำคัญ เพราะ engine
+// จะสุ่มสลับเป็นหนึ่งใน Four Gods ใหม่ทุก Round ให้ครบทั้ง 4 คนก่อนจบแมตช์ (ดู highNobleMultiEngine.ts)
+function monarchSeat(): Seat {
+  return { type: 'ai', name: 'Monarch', joinedAt: Date.now(), isBoss: true, isMonarch: true }
+}
+
 function makeRoomId(tier: Tier): string {
   return `${tier}_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e4)}`
 }
@@ -75,8 +83,10 @@ function buildInitialSeats(tier: Tier): [Seat, Seat, Seat, Seat] {
   const seats: Seat[] = []
   for (let i = 0; i < 4; i++) {
     if (i >= aiCount) { seats.push(emptySeat()); continue }
-    // Patch Multiplayer HighNoble: seat 0 = Boss (Four Gods, fixed, never human-joinable) — seat 1+ (ถ้ามี) = generic AI filler
-    seats.push(i === 0 && tier === 'highNoble' ? bossSeat() : aiSeat(i))
+    // Patch Multiplayer HighNoble/Monarch: seat 0 = Boss (fixed, never human-joinable) — seat 1+ (ถ้ามี) = generic AI filler
+    seats.push(i === 0 && tier === 'highNoble' ? bossSeat()
+      : i === 0 && tier === 'monarch' ? monarchSeat()
+      : aiSeat(i))
   }
   return seats as [Seat, Seat, Seat, Seat]
 }

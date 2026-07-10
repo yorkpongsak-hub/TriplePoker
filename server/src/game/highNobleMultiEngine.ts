@@ -119,6 +119,7 @@ export interface HNSeat {
   name: string
   emoji: string
   personality?: AIPersonality  // เฉพาะ AI seat
+  isMonarch?: boolean          // Patch Monarch: true เฉพาะที่นั่ง Boss ของห้อง tier 'monarch'
 }
 
 interface HNGrandFinaleState {
@@ -161,6 +162,7 @@ interface HNMatchState {
   finalPile3?: Record<string, Card[]>
   pendingPile12?: { pile1Winner: string; pile2Winner: string; allArrangements: Record<string, PlayerArrangement>; community: CommunityCards; fouled: Record<string, boolean>; playerIds: string[] }
   grandFinale?: HNGrandFinaleState
+  monarchSchedule?: AIPersonality[]  // Patch Monarch: บุคลิก Four Gods ที่ Boss จะใช้ต่อ Round (index = roundNumber-1) — undefined = แมตช์ปกติไม่ใช่ Monarch
 }
 
 const hnMatchStates = new Map<string, HNMatchState>()
@@ -223,6 +225,10 @@ export async function startHighNobleMultiMatch(
       return { id: rs.userId, role, isHuman: true, name: rs.name, emoji: '👤' }
     }
     if (role === 'boss') {
+      if (rs.isMonarch) {
+        // Patch Monarch: personality เริ่มต้นไม่สำคัญ — startHNRound จะ set ให้ตรง schedule ก่อน deal ทุก Round
+        return { id: 'AI_BOSS', role, isHuman: false, name: 'Monarch', emoji: '👑', personality: FOUR_GODS[0].personality, isMonarch: true }
+      }
       const god = FOUR_GODS.find(g => g.id === rs.aiConfigId) ?? FOUR_GODS[0]
       return { id: 'AI_BOSS', role, isHuman: false, name: god.name, emoji: god.emoji, personality: god.personality }
     }
@@ -243,6 +249,17 @@ export async function startHighNobleMultiMatch(
   }))
   seats.filter(s => !s.isHuman).forEach(s => tokenBalance[s.id] = 5000)
 
+  // Patch Monarch: สุ่มลำดับบุคลิก Four Gods ครั้งเดียวตอนเริ่มแมตช์ — สลับกันครบ 4 คนใน 4 Round แรก
+  // Round 5 (ถ้ามี) สุ่มอีกครั้งจาก 4 คน (อาจซ้ำกับ Round ก่อนหน้า)
+  let monarchSchedule: AIPersonality[] | undefined
+  if (seats[0].isMonarch) {
+    const shuffled = [...FOUR_GODS].sort(() => Math.random() - 0.5).map(g => g.personality)
+    monarchSchedule = []
+    for (let r = 0; r < totalRounds; r++) {
+      monarchSchedule.push(r < FOUR_GODS.length ? shuffled[r] : FOUR_GODS[Math.floor(Math.random() * FOUR_GODS.length)].personality)
+    }
+  }
+
   const state: HNMatchState = {
     roomId, seats,
     roundNumber: 1, totalRounds,
@@ -252,6 +269,7 @@ export async function startHighNobleMultiMatch(
     submittedArrangement: new Set(),
     submittedAuctionBid: new Set(),
     submittedDiscard: new Set(),
+    monarchSchedule,
   }
   hnMatchStates.set(roomId, state)
 
@@ -286,6 +304,16 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
   state.finalPile3 = {}
   state.pendingPile12 = undefined
   state.grandFinale = undefined
+
+  // Patch Monarch: สลับบุคลิก Boss ตาม schedule ก่อนแจกไพ่ทุก Round (ชื่อ/emoji เปลี่ยนตามบุคลิกที่ใช้ Round นี้)
+  if (state.monarchSchedule) {
+    const personality = state.monarchSchedule[state.roundNumber - 1] ?? state.monarchSchedule[0]
+    const god = FOUR_GODS.find(g => g.personality === personality) ?? FOUR_GODS[0]
+    const boss = state.seats[0]
+    boss.personality = god.personality
+    boss.name = god.name
+    boss.emoji = god.emoji
+  }
 
   const dealt = dealCards()
   const playerIds = state.seats.map(s => s.id)
