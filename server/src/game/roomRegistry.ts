@@ -8,6 +8,7 @@
  */
 
 import { redis } from '../config/redis'
+import { FOUR_GODS, AIConfig } from './aiEngine'
 
 // ─── Types ───────────────────────────────────────────────────────
 export type Tier = 'adept' | 'mastermind' | 'highNoble'
@@ -19,6 +20,8 @@ export interface Seat {
   name: string
   avatarUrl?: string
   joinedAt: number
+  aiConfigId?: string   // Patch Multiplayer HighNoble: เก็บ AIConfig.id ของที่นั่ง AI ไว้ (boss = Four Gods id, filler = generic AI_CONFIGS id)
+  isBoss?: boolean      // Patch Multiplayer HighNoble: true เฉพาะที่นั่ง Boss (seat index 0, Four Gods, ห้าม Human เข้าตลอดกาล)
 }
 
 export interface GameRoom {
@@ -56,6 +59,12 @@ function aiSeat(idx: number): Seat {
   return { type: 'ai', name: `Minion-${idx + 1}`, joinedAt: Date.now() }
 }
 
+// Patch Multiplayer HighNoble: ที่นั่ง Boss (index 0) ต้องเป็นหนึ่งใน Four Gods เสมอ — สุ่มครั้งเดียวตอนสร้างห้อง แล้วคงไว้ทั้งแมตช์
+function bossSeat(): Seat {
+  const god: AIConfig = FOUR_GODS[Math.floor(Math.random() * FOUR_GODS.length)]
+  return { type: 'ai', name: god.name, joinedAt: Date.now(), aiConfigId: god.id, isBoss: true }
+}
+
 function makeRoomId(tier: Tier): string {
   return `${tier}_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e4)}`
 }
@@ -65,7 +74,9 @@ function buildInitialSeats(tier: Tier): [Seat, Seat, Seat, Seat] {
   const aiCount = 4 - cfg.humanSeatsRequired
   const seats: Seat[] = []
   for (let i = 0; i < 4; i++) {
-    seats.push(i < aiCount ? aiSeat(i) : emptySeat())
+    if (i >= aiCount) { seats.push(emptySeat()); continue }
+    // Patch Multiplayer HighNoble: seat 0 = Boss (Four Gods, fixed, never human-joinable) — seat 1+ (ถ้ามี) = generic AI filler
+    seats.push(i === 0 && tier === 'highNoble' ? bossSeat() : aiSeat(i))
   }
   return seats as [Seat, Seat, Seat, Seat]
 }
