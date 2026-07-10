@@ -778,12 +778,12 @@ export function registerGameSocket(io: Server): void {
       socket.emit("hn_discard_submit_ack", result);
     });
 
-    // Multiplayer HighNoble: Human Call/Fold ใน Grand Finale
+    // Multiplayer HighNoble: Human Call/Fold ใน Grand Finale (revealedCardKey = ใบที่เลือกหงายเอง ถ้ามี)
     socket.on("hn_grand_finale_action", (data: {
-      roomId: string; userId: string; action: "call" | "fold";
+      roomId: string; userId: string; action: "call" | "fold"; revealedCardKey?: string;
     }) => {
-      const { roomId, userId, action } = data;
-      const result = submitHNGrandFinaleAction(io, roomId, userId, action);
+      const { roomId, userId, action, revealedCardKey } = data;
+      const result = submitHNGrandFinaleAction(io, roomId, userId, action, revealedCardKey);
       socket.emit("hn_grand_finale_action_ack", result);
     });
 

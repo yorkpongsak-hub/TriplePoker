@@ -841,7 +841,9 @@ function pickHNRevealCard(state: HNMatchState, playerId: string, hand: Card[], a
   return remaining.reduce((min, c) => c.value < min.value ? c : min, remaining[0])
 }
 
-function applyHNGrandFinaleAction(io: Server, roomId: string, playerId: string, action: 'call' | 'fold'): void {
+function applyHNGrandFinaleAction(
+  io: Server, roomId: string, playerId: string, action: 'call' | 'fold', chosenCardKey?: string,
+): void {
   const state = hnMatchStates.get(roomId)
   if (!state) return
   const gf = state.grandFinale
@@ -857,7 +859,11 @@ function applyHNGrandFinaleAction(io: Server, roomId: string, playerId: string, 
     gf.pile3Pot += callAmount
     const hand = (state.finalPile3 ?? {})[playerId] ?? []
     const already = gf.revealedCards[playerId] ?? []
-    const card = pickHNRevealCard(state, playerId, hand, already)
+    // Human เลือกใบเองได้ (ตรงกับ single-player) — ใช้ถ้าถูกต้อง ไม่งั้น fallback ไป pickHNRevealCard
+    let card = chosenCardKey
+      ? hand.find(c => cardKey(c) === chosenCardKey && !already.some(r => r.rank === c.rank && r.suit === c.suit))
+      : undefined
+    if (!card) card = pickHNRevealCard(state, playerId, hand, already)
     if (card) {
       gf.revealedCards[playerId] = [...already, card]
       revealedCardKey = cardKey(card)
@@ -866,6 +872,7 @@ function applyHNGrandFinaleAction(io: Server, roomId: string, playerId: string, 
 
   io.to(roomId).emit('grand_finale_action', {
     roomId, playerId, action, revealedCard: revealedCardKey,
+    roundNumber: gf.roundNumber,
     pile3Pot: gf.pile3Pot, tokenBalance: state.tokenBalance,
   })
 
@@ -873,12 +880,14 @@ function applyHNGrandFinaleAction(io: Server, roomId: string, playerId: string, 
   startHNNextTurn(io, roomId)
 }
 
-export function submitHNGrandFinaleAction(io: Server, roomId: string, playerId: string, action: 'call' | 'fold'): { ok: boolean; reason?: string } {
+export function submitHNGrandFinaleAction(
+  io: Server, roomId: string, playerId: string, action: 'call' | 'fold', revealedCardKey?: string,
+): { ok: boolean; reason?: string } {
   const state = hnMatchStates.get(roomId)
   if (!state || state.phase !== 'grand_finale') return { ok: false, reason: 'not_in_grand_finale' }
   const gf = state.grandFinale
   if (!gf || gf.turnOrder[gf.currentTurnIdx] !== playerId) return { ok: false, reason: 'not_your_turn' }
-  applyHNGrandFinaleAction(io, roomId, playerId, action)
+  applyHNGrandFinaleAction(io, roomId, playerId, action, revealedCardKey)
   return { ok: true }
 }
 

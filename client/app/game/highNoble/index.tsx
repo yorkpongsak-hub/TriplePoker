@@ -1,9 +1,7 @@
 /**
- * live.tsx — GameTable Live v5 (Clean)
- * - TimerDisplay แยก component ไม่กะพริบ
- * - Showdown หงายพร้อมกันทันที
- * - Winner แสดงกลางจอ 3 แถว
- * - CONTINUE emit player_continue รอ server
+ * index.tsx — High Noble Multiplayer (3 real Human + Four Gods Boss)
+ * Patch Multiplayer: เชื่อมกับ highNobleMultiEngine.ts ฝั่ง server ผ่าน room registry
+ * (roomId/userId มาจาก route param — matchmaking เกิดที่ lobby.tsx ก่อนเข้าหน้านี้)
  * The Sage Unicorn Studio Co., Ltd.
  */
 
@@ -14,7 +12,7 @@ import {
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { io, Socket } from 'socket.io-client'
-import { router } from 'expo-router'
+import { router, useLocalSearchParams } from 'expo-router'
 import { autoSort } from '../../../src/utils/autoSort'
 
 // ── Assets
@@ -95,8 +93,6 @@ const CARD_IMG: Record<string, any> = {
 const CW = 62; const CH = 90; const OVERLAP = -38
 const SIDE_COL_W = 72
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
-const ROOM_ID    = 'Beginner1'
-const PLAYER_ID  = 'Human1'
 
 interface CardData { id: string; key: string }
 interface AIInfo   { id: string; name: string; emoji: string }
@@ -209,6 +205,10 @@ const GameTableLive: React.FC = () => {
   const insets = useSafeAreaInsets()
   const isWeb  = Platform.OS === 'web'
   const socketRef = useRef<Socket | null>(null)
+  // Patch Multiplayer: roomId/userId มาจาก matchmaking ที่ lobby.tsx (room_auto_match -> room_ready) — ไม่ hardcode อีกต่อไป
+  const params   = useLocalSearchParams<{ roomId?: string; userId?: string }>()
+  const ROOM_ID  = params.roomId ?? 'HighNoble1'
+  const PLAYER_ID = params.userId ?? 'Human1'
 
   // ── Timer ref (ไม่ trigger re-render)
   const timerValRef = useRef({ val: 90, max: 90 })
@@ -265,11 +265,6 @@ const GameTableLive: React.FC = () => {
   const [revealPile, setRevealPile] = useState<0|1|2|3>(0) // 0=ไม่แสดง 1/2/3=Pile นั้น
   const [showTierInfo, setShowTierInfo] = useState(false)
   const [activeTierTab, setActiveTierTab] = useState('MASTERMIND')
-  // Patch High Noble: Dev Boss Selector (__DEV__ only) — เลือกจตุรเทพให้นั่ง P3 เพื่อทดสอบ
-  const [devBossId, setDevBossId] = useState<string | undefined>(undefined) // Patch: default undefined ให้ backend สุ่มจตุรเทพจริง (ไม่ล็อก Cipher) — กดเลือกเองได้ผ่าน Dev Boss Selector
-  // Patch: ใช้ ref เก็บค่าล่าสุดของ devBossId เพื่อเลี่ยง stale closure ใน useEffect ที่รันครั้งเดียว (connect)
-  const devBossIdRef = useRef<string | undefined>(undefined)
-  useEffect(() => { devBossIdRef.current = devBossId }, [devBossId])
   // Patch High Noble: เก็บ round_start data ไว้รอ — จะ process จริงตอนปิด Boss Intro Popup (Round แรกเท่านั้น)
   const pendingRoundDataRef = useRef<any>(null)
   const processRoundStartRef = useRef<((data: any) => void) | null>(null)
@@ -399,8 +394,8 @@ const GameTableLive: React.FC = () => {
     socket.on('connect', () => {
       if (matchStarted) return
       matchStarted = true
-      socket.emit('player_join_room', { roomId: ROOM_ID, playerId: PLAYER_ID, tokenBalance: 5000, isVip: false })
-      socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'highNoble', devBossId: devBossIdRef.current })
+      // Patch Multiplayer: ห้องเริ่มแมตช์ไปแล้วตั้งแต่ room_ready (lobby.tsx) — หน้านี้แค่ join กลับเข้าไปรับไพ่ของตัวเอง
+      socket.emit('game_join', { roomId: ROOM_ID, userId: PLAYER_ID, tier: 'highNoble' })
     })
 
     // Patch High Noble: แยก logic จริงของ round_start ออกมาเป็นฟังก์ชัน — defer ตอน Round แรก (รอปิด Boss Intro Popup ก่อนแจกไพ่)
@@ -421,12 +416,17 @@ const GameTableLive: React.FC = () => {
       fadeCards.setValue(1)
       setBlind([]); setDealCount(0)
       setTokenBalance(data.tokenBalance ?? {})
-      const aiNames = data.aiNames ?? []
+      // Patch Multiplayer: server ส่ง seats ทั้ง 4 ที่นั่ง (boss เสมอ + อีก 3 ที่อาจเป็น Human หรือ AI)
+      // แปลงเป็น aiList แบบเดิม [boss, ...อีก 2 คนที่ไม่ใช่ฉัน] — โครง bossAI/p2AI/p4AI ด้านล่างใช้ index เดิมได้เลย
+      const seats = data.seats ?? []
+      const bossSeat = seats.find((s: any) => s.role === 'boss')
+      const otherSeats = seats.filter((s: any) => s.id !== PLAYER_ID && s.role !== 'boss')
+      const aiNames = [bossSeat, ...otherSeats].filter(Boolean)
       setAiList(aiNames)
       aiListRef.current = aiNames
 
       const init: Record<string, string> = {}
-      data.aiNames?.forEach((a: any) => { init[a.id] = 'Arranging...' })
+      aiNames.forEach((a: any) => { init[a.id] = 'Arranging...' })
       setAiStatus(init)
 
       setComm({
@@ -460,8 +460,8 @@ const GameTableLive: React.FC = () => {
         if (next <= 0) {
           clearInterval(timerRef.current)
           setPiles(cur => {
-            socket.emit('player_ready', {
-              roomId: ROOM_ID, playerId: PLAYER_ID,
+            socket.emit('hn_player_ready', {
+              roomId: ROOM_ID, userId: PLAYER_ID,
               arrangement: {
                 pile1: cur[0].map((c: CardData) => c.key),
                 pile2: cur[1].map((c: CardData) => c.key),
@@ -478,7 +478,7 @@ const GameTableLive: React.FC = () => {
     socket.on('round_start', (data: any) => {
       // Patch High Noble: Round แรกของ Match — โชว์ Boss Intro Popup ก่อน แล้วค่อยแจกไพ่ตอนปิด popup
       if (data.roundNumber === 1) {
-        const bossName = data.aiNames?.[0]?.name
+        const bossName = (data.seats ?? []).find((s: any) => s.role === 'boss')?.name
         if (bossName && BOSS_INTRO[bossName]) {
           setBossIntroName(bossName)
           setShowBossIntro(true)
@@ -619,8 +619,8 @@ const GameTableLive: React.FC = () => {
         if (next <= 0) {
           clearInterval(timerRef.current)
           setPiles(cur => {
-            socket.emit('submit_arrangement_2', {
-              roomId: ROOM_ID, playerId: PLAYER_ID,
+            socket.emit('hn_arrangement_2', {
+              roomId: ROOM_ID, userId: PLAYER_ID,
               arrangement: {
                 pile1: cur[0].map((c: CardData) => c.key),
                 pile2: cur[1].map((c: CardData) => c.key),
@@ -920,10 +920,10 @@ const GameTableLive: React.FC = () => {
     if (isReady || (phase !== 'arrangement' && phase !== 'arrangement_2')) return
     setIsReady(true)
     if (timerRef.current) clearInterval(timerRef.current)
-    // Patch High Noble: arrangement_2 ส่งไป submit_arrangement_2 แทน player_ready
-    const eventName = phase === 'arrangement_2' ? 'submit_arrangement_2' : 'player_ready'
+    // Patch Multiplayer: arrangement_2 ส่งไป hn_arrangement_2 แทน hn_player_ready
+    const eventName = phase === 'arrangement_2' ? 'hn_arrangement_2' : 'hn_player_ready'
     socketRef.current?.emit(eventName, {
-      roomId: ROOM_ID, playerId: PLAYER_ID,
+      roomId: ROOM_ID, userId: PLAYER_ID,
       arrangement: {
         pile1: piles[0].map(c => c.key),
         pile2: piles[1].map(c => c.key),
@@ -937,7 +937,7 @@ const GameTableLive: React.FC = () => {
     if (discardSelected.length !== maxDiscard) return
     if (discardTimerRef.current) clearInterval(discardTimerRef.current)
     const keepKeys = discardHandKeys.filter((_, i) => !discardSelected.includes(i))
-    socketRef.current?.emit('discard_submit', { roomId: ROOM_ID, playerId: PLAYER_ID, keepKeys })
+    socketRef.current?.emit('hn_discard_submit', { roomId: ROOM_ID, userId: PLAYER_ID, keepKeys })
     setShowDiscard(false)
   }
 
@@ -958,7 +958,7 @@ const GameTableLive: React.FC = () => {
     const keepFrom = (pile: 'pile1' | 'pile2' | 'pile3') =>
       discardPiles[pile].filter((_, i) => !discardSelByPile[pile].includes(i))
     const keepKeys = [...keepFrom('pile1'), ...keepFrom('pile2'), ...keepFrom('pile3')]
-    socketRef.current?.emit('discard_submit', { roomId: ROOM_ID, playerId: PLAYER_ID, keepKeys })
+    socketRef.current?.emit('hn_discard_submit', { roomId: ROOM_ID, userId: PLAYER_ID, keepKeys })
     setShowDiscard(false)
     setIsHNDiscard(false)
   }
@@ -973,7 +973,7 @@ const GameTableLive: React.FC = () => {
   const handleAuctionBid = (cardIndex: 0 | 1, level: number) => {
     if (auctionMyBid) return
     setAuctionMyBid({ cardIndex, level })
-    socketRef.current?.emit('auction_bid', { roomId: ROOM_ID, playerId: PLAYER_ID, cardIndex, level })
+    socketRef.current?.emit('hn_auction_bid', { roomId: ROOM_ID, userId: PLAYER_ID, cardIndex, level })
   }
 
   // ── Continue → emit player_continue รอ server (Mastermind: ไม่ fade ออก เพราะต่อ Flow ใน Round เดียวกัน)
@@ -988,10 +988,8 @@ const GameTableLive: React.FC = () => {
 
   // auto continue ย้ายไปทำใน startContinueCountdown interval แทน (เลี่ยง re-render)
 
-  const handleRematch = () => {
-    setMatchResult(null); setPhase('arrangement')
-    socketRef.current?.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'highNoble', devBossId: devBossIdRef.current })
-  }
+  // Patch Multiplayer: ไม่มี "Play Again" ในที่เดิม — ผู้เล่นอีก 2 คนอาจไม่อยากเล่นซ้ำทันที
+  // ต้อง re-queue ผ่าน lobby.tsx ใหม่เสมอ (ตรงกับ pattern เดียวกับ Adept multiplayer)
 
   // ── Sub-components
   const CardBack: React.FC<{ w: number; h: number; ml?: number }> = ({ w, h, ml = 0 }) => (
@@ -1933,14 +1931,11 @@ const GameTableLive: React.FC = () => {
                   </View>
                 )
               })}
-              <TouchableOpacity style={s.rematchBtn} onPress={handleRematch}>
-                <Text style={s.rematchTxt}>🔄 PLAY AGAIN</Text>
-              </TouchableOpacity>
               <TouchableOpacity
-                style={{ marginTop: 10, borderWidth: 1.5, borderColor: '#FFD76A', borderRadius: 10, paddingVertical: 12, alignItems: 'center' }}
+                style={[s.rematchBtn, { alignItems: 'center' }]}
                 onPress={() => router.push('/lobby')}
               >
-                <Text style={{ color: '#FFD76A', fontWeight: '700', fontSize: 14 }}>♣♦ Back to Lobby ♥♠</Text>
+                <Text style={s.rematchTxt}>🏠 BACK TO LOBBY</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -2446,7 +2441,7 @@ const GameTableLive: React.FC = () => {
                       onMoveShouldSetPanResponder: (_, g) => g.dy > 20 && Math.abs(g.dy) > Math.abs(g.dx),
                       onPanResponderRelease: (_, g) => {
                         if (g.dy > 50) {
-                          socketRef.current?.emit('grand_finale_action', { roomId: ROOM_ID, playerId: PLAYER_ID, action: 'fold' })
+                          socketRef.current?.emit('hn_grand_finale_action', { roomId: ROOM_ID, userId: PLAYER_ID, action: 'fold' })
                         }
                       },
                     })
@@ -2459,8 +2454,8 @@ const GameTableLive: React.FC = () => {
                       const isSelected = isMyTurn && !isCalled && c.key === effectiveSelected
                       const handlePress = !isMyTurn || isCalled ? undefined : () => {
                         if (effectiveSelected === c.key) {
-                          socketRef.current?.emit('grand_finale_action', {
-                            roomId: ROOM_ID, playerId: PLAYER_ID, action: 'call', revealedCardKey: c.key,
+                          socketRef.current?.emit('hn_grand_finale_action', {
+                            roomId: ROOM_ID, userId: PLAYER_ID, action: 'call', revealedCardKey: c.key,
                           })
                         } else {
                           setGfSelectedCardKey(c.key)
@@ -2604,7 +2599,7 @@ const GameTableLive: React.FC = () => {
                 </Text>
               </View>
               <TouchableOpacity
-                onPress={() => socketRef.current?.emit('grand_finale_action', { roomId: ROOM_ID, playerId: PLAYER_ID, action: 'fold' })}
+                onPress={() => socketRef.current?.emit('hn_grand_finale_action', { roomId: ROOM_ID, userId: PLAYER_ID, action: 'fold' })}
                 style={{ backgroundColor: '#5e1a1a', borderWidth: 1.5, borderColor: '#f87171', borderRadius: 10, paddingVertical: 12, paddingHorizontal: 18, justifyContent: 'center' }}>
                 <Text style={{ color: '#fff', fontWeight: '900', fontSize: 13, letterSpacing: 1 }}>FOLD ✗</Text>
               </TouchableOpacity>
