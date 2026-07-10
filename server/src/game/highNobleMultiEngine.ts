@@ -909,35 +909,52 @@ function finalizeHNGrandFinale(
   if (!state) return
 
   const allPlayerIds = state.seats.map(s => s.id)
+  const stakes = gameConfig.tokenPot.tiers.highNoble
+  const rake = gameConfig.tokenPot.rake
   const deltas: Record<string, number> = {}
   allPlayerIds.forEach(id => deltas[id] = 0)
 
-  if (!burned && winnerId) {
-    allPlayerIds.forEach(id => { if (id !== winnerId) deltas[id] = 0 }) // Call cost ถูกหักไปแล้วตอน apply action
-    deltas[winnerId] = (deltas[winnerId] ?? 0) + pile3Pot
-    state.tokenBalance[winnerId] = (state.tokenBalance[winnerId] ?? 0) + pile3Pot
+  // ทุกคนจ่าย ante Pile3 ไปแล้วตั้งแต่ต้น Round — Burn ถ้าทุกคน Foul, ไม่งั้น Winner ได้ Pot คืน (หัก rake)
+  allPlayerIds.forEach(id => deltas[id] += -stakes.pile3)
+  if (winnerId && !burned) {
+    const net = Math.floor(pile3Pot * (1 - rake))
+    deltas[winnerId] += net
   }
 
   const pendingP12 = state.pendingPile12
   let jackpotWinner: string | null = null
+  let pile1Pot = 0, pile2Pot = 0
   if (pendingP12) {
     const p1w = pendingP12.pile1Winner, p2w = pendingP12.pile2Winner
     const p12Deltas = calcDeltas(p1w, p2w, '', allPlayerIds)
-    allPlayerIds.forEach(id => {
-      state.tokenBalance[id] = (state.tokenBalance[id] ?? 0) + (p12Deltas[id] ?? 0)
-      deltas[id] = (deltas[id] ?? 0) + (p12Deltas[id] ?? 0)
-    })
-    if (winnerId && p1w === winnerId && p2w === winnerId) jackpotWinner = winnerId // Triple Sweep (Pile1+2+3 คนเดียว)
+    allPlayerIds.forEach(id => { deltas[id] = (deltas[id] ?? 0) + (p12Deltas[id] ?? 0) })
+    pile1Pot = Math.floor(stakes.pile1 * allPlayerIds.length * (1 - rake))
+    pile2Pot = Math.floor(stakes.pile2 * allPlayerIds.length * (1 - rake))
+    if (winnerId && !burned && p1w === winnerId && p2w === winnerId) jackpotWinner = winnerId // Triple Sweep (Pile1+2+3 คนเดียว)
   }
+
+  // Triple Sweep Jackpot: bonus = pile3 ante × (n-1) จากผู้แพ้ทุกคน, rake 10% จากยอดรวม
+  let jackpotBonus = 0, jackpotRake = 0
+  if (jackpotWinner) {
+    const rakeJackpot = gameConfig.tokenPot.rakeJackpot ?? 0.10
+    jackpotBonus = stakes.pile3 * (allPlayerIds.length - 1)
+    const jackpotSubtotal = pile1Pot + pile2Pot + Math.floor(pile3Pot * (1 - rake)) + jackpotBonus
+    jackpotRake = Math.floor(jackpotSubtotal * rakeJackpot)
+    deltas[jackpotWinner] += (jackpotBonus - jackpotRake)
+    allPlayerIds.forEach(id => { if (id !== jackpotWinner) deltas[id] += -stakes.pile3 })
+  }
+
+  allPlayerIds.forEach(id => {
+    state.tokenBalance[id] = (state.tokenBalance[id] ?? 0) + (deltas[id] ?? 0)
+  })
 
   io.to(roomId).emit('grand_finale_result', {
     roomId, winnerId, burned, pile3Pot,
     winnerRank: null,
     pile1Winner: pendingP12?.pile1Winner ?? null,
     pile2Winner: pendingP12?.pile2Winner ?? null,
-    pile1Pot: pendingP12 ? gameConfig.tokenPot.tiers.highNoble.pile1 * allPlayerIds.length : 0,
-    pile2Pot: pendingP12 ? gameConfig.tokenPot.tiers.highNoble.pile2 * allPlayerIds.length : 0,
-    jackpotWinner,
+    pile1Pot, pile2Pot,
+    jackpotWinner, jackpotBonus, jackpotRake,
     tokenBalance: state.tokenBalance,
     tokenDeltas: deltas,
   })
