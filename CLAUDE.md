@@ -93,7 +93,7 @@
 1. Profile screen — เชื่อม Supabase จริงแทน MOCK
 2. Auth Guard fix — display names `^user_[a-f0-9]{8}$`
 3. **ก่อนเทส Nine Sentinels:** รัน `supabase/migrations/005_nine_sentinels.sql` บน Supabase dashboard เอง + `NOTIFY pgrst, 'reload schema';`
-4. **ก่อนเทส Nine Sentinels:** เพิ่มไฟล์ `boss_[id]_avatar.png` (square-crop) ให้ครบ 9 ตัวใน `client/assets/bosses/` (ลุงเยาะทำคู่ขนานอยู่) — ไม่งั้น Metro build พังตอนเปิดหน้า mastermind/index.tsx
+4. Nine Sentinels asset อยู่ที่ `client/assets/sentinels/boss_[id].png` (แยกจาก Four Gods/Monarch ใน `bosses/`) — ใช้รูปเดียวกันทั้ง portrait (select/story) และ avatar ในเกม ไม่มี square-crop แยก (ต่างจาก Four Gods ที่มี `_avatar.png` แยก) — ถ้าจะทำ crop จริงทีหลัง ต้องแก้ path ใน 3 ไฟล์: select.tsx, story.tsx, mastermind/index.tsx (BOSS_AVATAR map)
 5. Motto ของ Chivalry / War Lord ยังเป็น placeholder ("Motto coming soon.") ใน `client/app/game/mastermind/story.tsx` — รอ MasterPlan v1.1 เติมของจริง
 6. Auction bid style ตัวเลข (willBid %/level) ของ 9 Sentinels ใน `gameLoop.ts` เป็นการตีความจากคำอธิบายเชิงคุณภาพใน MasterPlan (canon ให้แค่คำบรรยาย ไม่ใช่ตัวเลข) — ควรปรับจูนหลัง playtest จริง
 7. Auto Sort Fee system
