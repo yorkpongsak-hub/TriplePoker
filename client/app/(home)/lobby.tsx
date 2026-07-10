@@ -65,7 +65,9 @@ export default function LobbyScreen() {
   const displayName = useUserStore(s => s.displayName) || 'Player';
   const tokenBalance = useUserStore(s => s.tokenBalance);
   type MatchmakingStatus = 'idle' | 'queued' | 'matched';
+  type MatchmakingTier = 'adept' | 'highNoble';
   const [mmStatus, setMmStatus] = useState<MatchmakingStatus>('idle');
+  const [mmTier, setMmTier] = useState<MatchmakingTier>('adept');
   const [mmSeats, setMmSeats] = useState<Array<{ type: string; name: string }>>([]);
   const [mmTimeoutAt, setMmTimeoutAt] = useState<number | null>(null);
   const [mmSecondsLeft, setMmSecondsLeft] = useState(0);
@@ -86,16 +88,17 @@ export default function LobbyScreen() {
 
   const handleEnterInitiate = () => router.push('/game/initiate');
   const handleEnterMastermind = () => router.push('/game/mastermind/select');
-  const handleEnterHighNoble = () => router.push('/game/highNoble');
 
-  const handleAutoMatchAdept = () => {
+  // ── Multiplayer Matchmaking (Adept / High Noble ใช้ pattern เดียวกัน) ─────
+  const handleAutoMatch = (tier: MatchmakingTier) => {
     setMmStatus('queued');
+    setMmTier(tier);
     setMmSeats([]);
     const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: false });
     socketRef.current = socket;
 
     socket.on('connect', () => {
-      socket.emit('room_auto_match', { tier: 'adept', userId, userName: displayName });
+      socket.emit('room_auto_match', { tier, userId, userName: displayName });
     });
 
     socket.on('room_matched', (data: { room: any; seatIndex: number }) => {
@@ -110,7 +113,8 @@ export default function LobbyScreen() {
     socket.on('room_ready', (data: { roomId: string; seats: any[] }) => {
       setMmStatus('matched');
       socket.disconnect();
-      router.push(`/game/adept?roomId=${data.roomId}&userId=${userId}` as any);
+      const route = tier === 'highNoble' ? '/game/highNoble' : '/game/adept';
+      router.push(`${route}?roomId=${data.roomId}&userId=${userId}` as any);
     });
 
     socket.on('room_error', (data: { message: string }) => {
@@ -118,6 +122,9 @@ export default function LobbyScreen() {
       socket.disconnect();
     });
   };
+
+  const handleAutoMatchAdept = () => handleAutoMatch('adept');
+  const handleEnterHighNoble = () => handleAutoMatch('highNoble');
 
   const handleCancelMatchmaking = () => {
     socketRef.current?.disconnect();
@@ -190,9 +197,9 @@ export default function LobbyScreen() {
             </TouchableOpacity>
           )}
 
-          {selected === 'high_noble' && (
+          {selected === 'high_noble' && mmStatus === 'idle' && (
             <TouchableOpacity style={s.enterBtn} onPress={handleEnterHighNoble}>
-              <Text style={s.enterBtnTxt}>▶ เริ่มเล่น (1 Human + จตุรเทพ AI)</Text>
+              <Text style={s.enterBtnTxt}>▶ เริ่มเล่น (Auto-Match 3 Human + จตุรเทพ AI)</Text>
             </TouchableOpacity>
           )}
 
@@ -202,7 +209,7 @@ export default function LobbyScreen() {
             </TouchableOpacity>
           )}
 
-          {selected === 'adept' && mmStatus === 'queued' && (
+          {(selected === 'adept' || selected === 'high_noble') && mmStatus === 'queued' && mmTier === (selected === 'high_noble' ? 'highNoble' : 'adept') && (
             <View style={{
               backgroundColor: COLOR.bgSecondary, borderRadius: 12, borderWidth: 1.5,
               borderColor: COLOR.goldPrimary, padding: 16, alignItems: 'center', marginBottom: 12,
@@ -239,7 +246,7 @@ export default function LobbyScreen() {
             </View>
           )}
 
-          {selected === 'adept' && mmStatus === 'idle' && (
+          {(selected === 'adept' || selected === 'high_noble') && mmStatus === 'idle' && (
             <View style={{ paddingVertical: 24, paddingHorizontal: 16, alignItems: 'center' }}>
               <Text style={{ color: COLOR.textSecondary, fontSize: 12, textAlign: 'center', lineHeight: 18 }}>
                 ยังไม่มีห้องที่เปิดอยู่{'\n'}กด "เริ่มเล่น" เพื่อสร้างห้องใหม่
