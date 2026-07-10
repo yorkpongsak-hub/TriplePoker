@@ -25,15 +25,15 @@ const SENTINEL_STORY: Record<string, SentinelStory> = {
 }
 
 const SENTINEL_PORTRAIT: Record<string, any> = {
-  iron_wall:   require('../../../assets/bosses/boss_iron_wall.png'),
-  chivalry:    require('../../../assets/bosses/boss_chivalry.png'),
-  war_lord:    require('../../../assets/bosses/boss_war_lord.png'),
-  phantom:     require('../../../assets/bosses/boss_phantom.png'),
-  dark_shark:  require('../../../assets/bosses/boss_dark_shark.png'),
-  oracle:      require('../../../assets/bosses/boss_oracle.png'),
-  jester:      require('../../../assets/bosses/boss_jester.png'),
-  phoenix:     require('../../../assets/bosses/boss_phoenix.png'),
-  black_magic: require('../../../assets/bosses/boss_black_magic.png'),
+  iron_wall:   require('../../../assets/sentinels/boss_iron_wall.png'),
+  chivalry:    require('../../../assets/sentinels/boss_chivalry.png'),
+  war_lord:    require('../../../assets/sentinels/boss_war_lord.png'),
+  phantom:     require('../../../assets/sentinels/boss_phantom.png'),
+  dark_shark:  require('../../../assets/sentinels/boss_dark_shark.png'),
+  oracle:      require('../../../assets/sentinels/boss_oracle.png'),
+  jester:      require('../../../assets/sentinels/boss_jester.png'),
+  phoenix:     require('../../../assets/sentinels/boss_phoenix.png'),
+  black_magic: require('../../../assets/sentinels/boss_black_magic.png'),
 }
 
 const MastermindStory: React.FC = () => {

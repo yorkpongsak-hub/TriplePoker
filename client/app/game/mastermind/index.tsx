@@ -19,15 +19,15 @@ const studioLogo  = require('../../../assets/images/sage_unicorn_logo_transparen
 // Patch Mastermind Conquest: ไม่มี Boss Intro Popup ในเกม — เรื่องราว/motto แสดงที่หน้า story.tsx ก่อนเข้าห้องแล้ว
 // รูป Avatar Nine Sentinels (square crop หน้าชิด ใช้กับ AvatarBubble ของ P3 เท่านั้น) — key ตรงกับ aiNames[0].name จาก server
 const BOSS_AVATAR: Record<string, any> = {
-  'Iron Wall':   require('../../../assets/bosses/boss_iron_wall_avatar.png'),
-  'Chivalry':    require('../../../assets/bosses/boss_chivalry_avatar.png'),
-  'War Lord':    require('../../../assets/bosses/boss_war_lord_avatar.png'),
-  'Phantom':     require('../../../assets/bosses/boss_phantom_avatar.png'),
-  'Dark Shark':  require('../../../assets/bosses/boss_dark_shark_avatar.png'),
-  'Oracle':      require('../../../assets/bosses/boss_oracle_avatar.png'),
-  'Jester':      require('../../../assets/bosses/boss_jester_avatar.png'),
-  'Phoenix':     require('../../../assets/bosses/boss_phoenix_avatar.png'),
-  'Black Magic': require('../../../assets/bosses/boss_black_magic_avatar.png'),
+  'Iron Wall':   require('../../../assets/sentinels/boss_iron_wall.png'),
+  'Chivalry':    require('../../../assets/sentinels/boss_chivalry.png'),
+  'War Lord':    require('../../../assets/sentinels/boss_war_lord.png'),
+  'Phantom':     require('../../../assets/sentinels/boss_phantom.png'),
+  'Dark Shark':  require('../../../assets/sentinels/boss_dark_shark.png'),
+  'Oracle':      require('../../../assets/sentinels/boss_oracle.png'),
+  'Jester':      require('../../../assets/sentinels/boss_jester.png'),
+  'Phoenix':     require('../../../assets/sentinels/boss_phoenix.png'),
+  'Black Magic': require('../../../assets/sentinels/boss_black_magic.png'),
 }
 const cardBackImg = require('../../../assets/images/card_back_default.png')
 const tableImg    = require('../../../assets/images/table_default.png')
