@@ -9,7 +9,7 @@ import { Server } from 'socket.io'
 import { dealCards } from './cardEngine'
 import { evaluateHand, compareHands, handRankLabel } from './handEvaluator'
 import { checkFoul, PlayerArrangement, CommunityCards } from './foulChecker'
-import { aiDecideArrangement, AI_CONFIGS, AIConfig, FOUR_GODS } from './aiEngine'
+import { aiDecideArrangement, AI_CONFIGS, AIConfig, FOUR_GODS, NINE_SENTINELS } from './aiEngine'
 import { Card } from './deck'
 import { gameConfig } from '../config/gameConfig'
 import { supabase } from '../config/supabase'
@@ -121,6 +121,7 @@ export async function startMatch(
   humanPlayerId: string,
   tier: string,
   devBossId?: string, // Patch High Noble: Dev Boss Selector (__DEV__ only) — เลือกจตุรเทพให้นั่ง P3
+  bossId?: string,    // Patch Mastermind Conquest: Sentinel ที่ผู้เล่นเลือกเองจาก select.tsx/story.tsx (บังคับสำหรับ tier mastermind)
 ): Promise<void> {
 
   const initBalance: Record<string, number> = { [humanPlayerId]: 5000 }
@@ -175,15 +176,22 @@ export async function startMatch(
       || FOUR_GODS[Math.floor(Math.random() * FOUR_GODS.length)]
     ;(state as any)._bossOverride = chosenGod
   }
+  // Patch Mastermind Conquest: Boss (P3) = Sentinel ที่ผู้เล่นเลือกจริง (ไม่สุ่ม) — fallback Iron Wall ถ้า bossId ไม่ตรงตัวไหนเลย
+  if (tier === 'mastermind') {
+    const chosenSentinel = NINE_SENTINELS.find(s => s.bossId === bossId) ?? NINE_SENTINELS[0]
+    ;(state as any)._bossOverride = chosenSentinel
+    ;(state as any)._bossId = chosenSentinel.bossId // เก็บไว้ใช้ตอน match_end เขียน conquered_sentinels
+  }
   matchStates.set(roomId, state)
 
   await startRound(io, roomId)
 }
 
-// Patch High Noble: คืน AIConfig ที่ใช้จริง — ถ้าเป็น Boss (AI_CONFIGS[0]) + highNoble + มี override ให้ใช้จตุรเทพแทน
+// Patch High Noble / Mastermind Conquest: คืน AIConfig ที่ใช้จริง — ถ้าเป็น Boss (AI_CONFIGS[0]) + มี override ให้ใช้ Boss แทน
 function getEffectiveAIConfig(state: MatchState, ai: AIConfig): AIConfig {
   const override = (state as any)._bossOverride as AIConfig | undefined
-  if (override && ai.id === AI_CONFIGS[0].id && state.tier === 'highNoble') return override
+  const isBossSeat = ai.id === AI_CONFIGS[0].id && (state.tier === 'highNoble' || state.tier === 'mastermind')
+  if (override && isBossSeat) return override
   return ai
 }
 
@@ -469,10 +477,10 @@ function startBlindAuction(io: Server, roomId: string, state: MatchState): void 
   })
 
   // AI bid ทันที (สุ่มแบบง่าย — ปรับ logic ฉลาดขึ้นได้ทีหลังตาม AI tier)
-  // Patch High Noble: Boss ที่เป็นจตุรเทพ มีสไตล์ประมูลตาม personality
+  // Patch High Noble / Mastermind Conquest: Boss (จตุรเทพ หรือ Sentinel) มีสไตล์ประมูลตาม personality
   const bossOverride = (state as any)._bossOverride as AIConfig | undefined
   AI_CONFIGS.forEach(ai => {
-    const isBoss = bossOverride && ai.id === AI_CONFIGS[0].id && state.tier === 'highNoble'
+    const isBoss = bossOverride && ai.id === AI_CONFIGS[0].id && (state.tier === 'highNoble' || state.tier === 'mastermind')
     if (isBoss) {
       const cardIndex: 0 | 1 = Math.random() < 0.5 ? 0 : 1
       let willBid: boolean
@@ -489,6 +497,45 @@ function startBlindAuction(io: Server, roomId: string, state: MatchState): void 
         case 'cortex': // คำนวณ EV เย็นชา — bid แค่พอประมาณ ไม่ทุ่มเกินจำเป็น
           willBid = Math.random() < 0.6
           level = Math.floor(Math.random() * Math.ceil(bidLevels.length / 2))
+          break
+        // ── The Nine Sentinels — ตัวเลขตีความจาก MasterPlan v1.1 (คำอธิบายเชิงคุณภาพ ไม่ใช่ตัวเลขตรงๆ)
+        case 'iron_wall': // ต่ำ-กลาง ระมัดระวัง
+          willBid = Math.random() < 0.5
+          level = Math.floor(Math.random() * Math.ceil(bidLevels.length / 2))
+          break
+        case 'chivalry': // กลาง สม่ำเสมอ — level คงที่ ไม่สุ่ม
+          willBid = Math.random() < 0.65
+          level = Math.floor(bidLevels.length / 2)
+          break
+        case 'war_lord': // สูง บุกไม่หยุด
+          willBid = Math.random() < 0.95
+          level = bidLevels.length - 1
+          break
+        case 'phantom': // กลาง variance สูง — สุ่มเต็ม range
+          willBid = Math.random() < 0.6
+          level = Math.floor(Math.random() * bidLevels.length)
+          break
+        case 'dark_shark': // สูงสุดในกลุ่ม — ประมูลทุกครั้งด้วยราคาสูงสุด
+          willBid = true
+          level = bidLevels.length - 1
+          break
+        case 'oracle': // ตาม EV คำนวณ — deterministic ไม่มี randomness เลย
+          willBid = true
+          level = Math.max(0, Math.ceil(bidLevels.length * 0.65) - 1)
+          break
+        case 'phoenix': // กลาง-สูง คงที่ — level คงที่ ไม่สุ่ม
+          willBid = Math.random() < 0.8
+          level = Math.floor(bidLevels.length * 0.7)
+          break
+        case 'black_magic': { // กลาง ปรับตาม pot size — ใช้ tokenBalance ของตัวเองเป็น proxy (ยังไม่มีตัวแปร pot size ณ จุดนี้)
+          willBid = Math.random() < 0.65
+          const myBalance = state.tokenBalance[ai.id] ?? 5000
+          level = myBalance > 6000 ? bidLevels.length - 1 : myBalance > 4000 ? Math.floor(bidLevels.length / 2) : 0
+          break
+        }
+        case 'jester': // สุ่มทุกครั้ง — สุ่มกว้างกว่า Cipher (เต็ม range ไม่ใช่แค่หัว-ท้าย)
+          willBid = Math.random() < 0.7
+          level = Math.floor(Math.random() * bidLevels.length)
           break
         case 'cipher': // คาดเดาไม่ได้ — สุ่มทุกอย่างแบบสุดขั้ว (เสี่ยงสูงหรือไม่เล่นเลย)
         default:
@@ -1174,9 +1221,9 @@ function decideAIGrandFinaleAction(state: MatchState, aiId: string): 'call' | 'f
   else if (result.rankIndex === 1) callProb = 0.80 // One Pair: Call 80%
   else callProb = 0.40                              // High Card: Call 40%
 
-  // Patch High Noble: จตุรเทพที่นั่ง Boss ใช้ Card Counting ประเมิน winrate + ปรับตาม personality
+  // Patch High Noble / Mastermind Conquest: Boss ที่นั่ง P3 ใช้ Card Counting ประเมิน winrate + ปรับตาม personality
   const bossOverride = (state as any)._bossOverride as AIConfig | undefined
-  if (bossOverride && aiId === AI_CONFIGS[0].id && state.tier === 'highNoble') {
+  if (bossOverride && aiId === AI_CONFIGS[0].id && (state.tier === 'highNoble' || state.tier === 'mastermind')) {
     const winrate = estimateBossWinrate(state, aiId) // 0.0 - 1.0 (worst case ของคู่ต่อสู้)
     switch (bossOverride.personality) {
       case 'reaper': // ดุที่สุด — ใช้ winrate แต่ bias +0.2 ให้ Call ง่ายขึ้น (กดดัน)
@@ -1188,6 +1235,29 @@ function decideAIGrandFinaleAction(state: MatchState, aiId: string): 'call' | 'f
       case 'cortex': // คำนวณเย็นชา — ตัดสินตาม winrate ตรงๆ ไม่มี randomness
         return winrate >= 0.5 ? 'call' : 'fold'
       case 'cipher': // คาดเดาไม่ได้ — 30% เมิน winrate สุ่มล้วน ที่เหลือใช้ winrate ตรงๆ
+        if (Math.random() < 0.3) return Math.random() < 0.5 ? 'call' : 'fold'
+        callProb = winrate
+        break
+      // ── The Nine Sentinels — Threshold canon จาก MasterPlan v1.1 (ห้ามแก้ค่า)
+      case 'iron_wall': // Fold ถ้า winrate < 60%
+        return winrate >= 0.6 ? 'call' : 'fold'
+      case 'chivalry': // Call ที่ winrate >= 50%
+        return winrate >= 0.5 ? 'call' : 'fold'
+      case 'war_lord': // Call แม้ winrate ~35% — บุกไม่หยุด
+        return winrate >= 0.35 ? 'call' : 'fold'
+      case 'phantom': // 40% บลัฟล้วน + 60% ใช้ winrate ตรงๆ
+        if (Math.random() < 0.4) return Math.random() < 0.5 ? 'call' : 'fold'
+        return winrate >= 0.5 ? 'call' : 'fold'
+      case 'dark_shark': // Call ที่ winrate >= 50%
+        return winrate >= 0.5 ? 'call' : 'fold'
+      case 'oracle': // Deterministic: >=50% → Call
+        return winrate >= 0.5 ? 'call' : 'fold'
+      case 'phoenix': // winrate +15% (แบบ Reaper แต่เบากว่า)
+        callProb = Math.min(0.99, winrate + 0.15)
+        break
+      case 'black_magic': // Call ที่ winrate >= 45-50% — ใช้ค่ากลาง 47.5%
+        return winrate >= 0.475 ? 'call' : 'fold'
+      case 'jester': // 30% random ล้วน + 70% ใช้ winrate ตรงๆ
         if (Math.random() < 0.3) return Math.random() < 0.5 ? 'call' : 'fold'
         callProb = winrate
         break
@@ -1206,9 +1276,10 @@ function pickRevealCard(state: MatchState, playerId: string, hand: Card[], alrea
   if (remaining.length === 0) return undefined
 
   const bossOverride = (state as any)._bossOverride as AIConfig | undefined
-  const isBoss = bossOverride && playerId === AI_CONFIGS[0].id && state.tier === 'highNoble'
+  const isBoss = bossOverride && playerId === AI_CONFIGS[0].id && (state.tier === 'highNoble' || state.tier === 'mastermind')
 
-  if (isBoss && bossOverride!.personality !== 'cipher') {
+  // Patch Mastermind Conquest: Jester คาดเดาไม่ได้เหมือน Cipher — ไม่ใช้กลยุทธ์หลอกลวง
+  if (isBoss && bossOverride!.personality !== 'cipher' && bossOverride!.personality !== 'jester') {
     // กลยุทธ์หลอกลวง: ดู rank ของมือ + community Row3 → หาใบ "ไม่ใช่ส่วนของชุดแข็ง" หงาย
     const community: CommunityCards = (state as any)._community
     const fullHand = [...hand, ...community.row3]
@@ -1455,12 +1526,43 @@ function finalizeGrandFinale(
       // ── คืน Lock-up Token ──────────────────────────────────
       await returnLockedTokens(state)
 
+      // Patch Mastermind Conquest: ผู้เล่นได้อันดับ 1 → บันทึก conquered_sentinels (กันซ้ำ)
+      let sentinelConquered = false
+      let allSentinelsConquered = false
+      if (state.tier === 'mastermind' && finalWinner === state.humanPlayerId) {
+        const conqueredBossId = (state as any)._bossId as string | undefined
+        if (conqueredBossId) {
+          try {
+            const { data: userData } = await supabase
+              .from('users')
+              .select('conquered_sentinels')
+              .eq('user_id', state.humanPlayerId)
+              .single()
+            const current: string[] = userData?.conquered_sentinels ?? []
+            const updated = current.includes(conqueredBossId) ? current : [...current, conqueredBossId]
+            if (!current.includes(conqueredBossId)) {
+              await supabase
+                .from('users')
+                .update({ conquered_sentinels: updated })
+                .eq('user_id', state.humanPlayerId)
+            }
+            sentinelConquered = true
+            allSentinelsConquered = updated.length >= 9
+          } catch (err) {
+            // Patch: ถ้า migration 005_nine_sentinels.sql ยังไม่ได้รันบน Supabase คอลัมน์นี้จะยังไม่มี — log ไว้เฉยๆ ไม่ throw
+            console.error('[CONQUEST] Error updating conquered_sentinels:', err)
+          }
+        }
+      }
+
       io.to(roomId).emit('match_end', {
         roomId,
         finalWinner,
         tokenBalance: state.tokenBalance,
         results: state.results,
         totalRounds: state.totalRounds,
+        sentinelConquered,
+        allSentinelsConquered,
       })
     } else {
       state.roundNumber++

@@ -506,11 +506,11 @@ export function registerGameSocket(io: Server): void {
 
     // start_match — Human เริ่ม Match ใหม่
     socket.on("start_match", async (data: {
-      roomId: string; playerId: string; tier: string; devBossId?: string;
+      roomId: string; playerId: string; tier: string; devBossId?: string; bossId?: string;
     }) => {
-      const { roomId, playerId, tier, devBossId } = data;
+      const { roomId, playerId, tier, devBossId, bossId } = data;
       socket.join(roomId);
-      await startMatch(io, roomId, playerId, tier, devBossId);
+      await startMatch(io, roomId, playerId, tier, devBossId, bossId);
     });
 
     // player_ready — Human ส่ง arrangement
