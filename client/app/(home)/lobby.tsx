@@ -85,7 +85,7 @@ export default function LobbyScreen() {
   const lastBossVisible = useMemo(() => meetsLastBossCondition(tokenBalance), [tokenBalance]);
 
   const handleEnterInitiate = () => router.push('/game/initiate');
-  const handleEnterMastermind = () => router.push('/game/mastermind');
+  const handleEnterMastermind = () => router.push('/game/mastermind/select');
   const handleEnterHighNoble = () => router.push('/game/highNoble');
 
   const handleAutoMatchAdept = () => {
