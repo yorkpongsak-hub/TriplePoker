@@ -10,7 +10,9 @@ import { evaluateHand, compareHands, HandResult } from './handEvaluator'
 import { checkFoul, PlayerArrangement, CommunityCards } from './foulChecker'
 
 // ── Types ────────────────────────────────────────────────────
-export type AIPersonality = 'sage' | 'reckless' | 'ghost' | 'reaper' | 'crag' | 'cortex' | 'cipher'
+export type AIPersonality =
+  | 'sage' | 'reckless' | 'ghost' | 'reaper' | 'crag' | 'cortex' | 'cipher'
+  | 'iron_wall' | 'chivalry' | 'war_lord' | 'phantom' | 'dark_shark' | 'oracle' | 'jester' | 'phoenix' | 'black_magic'
 
 export interface AIConfig {
   id: string
@@ -32,6 +34,21 @@ export const FOUR_GODS: AIConfig[] = [
   { id: 'AI_CRAG',   name: 'The Crag',  emoji: '🗿', personality: 'crag'   },
   { id: 'AI_CORTEX', name: 'Cortex',    emoji: '🤖', personality: 'cortex' },
   { id: 'AI_CIPHER', name: 'Cipher',    emoji: '🎭', personality: 'cipher' },
+]
+
+// Patch Mastermind Conquest: The Nine Sentinels — ผู้เล่นเลือกเองจาก select.tsx (ไม่สุ่มแบบ Four Gods)
+// bossId (key) ต้องตรงกับชื่อไฟล์ asset boss_[key].png และ route param จาก client ทุกจุด
+// P2/P4 ยังใช้ AI_CONFIGS (Sage/Reckless/Ghost) เดิมไม่เปลี่ยน — Sentinel แทนที่นั่ง Boss (P3) เท่านั้น
+export const NINE_SENTINELS: (AIConfig & { bossId: string })[] = [
+  { id: 'AI_IRON_WALL',   bossId: 'iron_wall',   name: 'Iron Wall',   emoji: '🛡️', personality: 'iron_wall'   },
+  { id: 'AI_CHIVALRY',    bossId: 'chivalry',    name: 'Chivalry',    emoji: '⚔️', personality: 'chivalry'    },
+  { id: 'AI_WAR_LORD',    bossId: 'war_lord',    name: 'War Lord',    emoji: '🪓', personality: 'war_lord'    },
+  { id: 'AI_PHANTOM',     bossId: 'phantom',     name: 'Phantom',     emoji: '🌫️', personality: 'phantom'     },
+  { id: 'AI_DARK_SHARK',  bossId: 'dark_shark',  name: 'Dark Shark',  emoji: '🦈', personality: 'dark_shark'  },
+  { id: 'AI_ORACLE',      bossId: 'oracle',      name: 'Oracle',      emoji: '🔮', personality: 'oracle'      },
+  { id: 'AI_JESTER',      bossId: 'jester',      name: 'Jester',      emoji: '🤡', personality: 'jester'      },
+  { id: 'AI_PHOENIX',     bossId: 'phoenix',     name: 'Phoenix',     emoji: '🔥', personality: 'phoenix'     },
+  { id: 'AI_BLACK_MAGIC', bossId: 'black_magic', name: 'Black Magic', emoji: '🪄', personality: 'black_magic' },
 ]
 
 // ── Helper: First-Valid Arrangement (สำหรับ Initiate) ─────────
@@ -257,6 +274,24 @@ function arrangeByPersonality(
       const w1 = Math.floor(Math.random() * 5) + 1
       const w2 = Math.floor(Math.random() * 5) + 1
       const w3 = Math.floor(Math.random() * 5) + 1
+      return bestArrangement(cards, community, { w1, w2, w3 })
+    }
+
+    // ── The Nine Sentinels (Mastermind Conquest Boss เท่านั้น) ──────
+    // Weight canon จาก MasterPlan v1.1 — ห้ามแก้ค่า (ยกเว้น Jester ที่สุ่มใหม่ทุกครั้งตามสเปค)
+    case 'iron_wall':   return bestArrangement(cards, community, { w1: 4, w2: 4, w3: 2 })
+    case 'chivalry':    return bestArrangement(cards, community, { w1: 2, w2: 3, w3: 5 })
+    case 'war_lord':    return bestArrangement(cards, community, { w1: 1, w2: 2, w3: 7 })
+    case 'phantom':     return bestArrangement(cards, community, { w1: 2, w2: 3, w3: 5 })
+    case 'dark_shark':  return bestArrangement(cards, community, { w1: 2, w2: 4, w3: 4 })
+    case 'oracle':      return bestArrangement(cards, community, { w1: 2, w2: 3, w3: 5 })
+    case 'phoenix':     return bestArrangement(cards, community, { w1: 2, w2: 3, w3: 5 })
+    case 'black_magic': return bestArrangement(cards, community, { w1: 3, w2: 3, w3: 4 })
+
+    case 'jester': { // ตัวตลก — สุ่ม weight 1-10 ใหม่ทุกเกม (pattern เดียวกับ Cipher แต่ range กว้างกว่า)
+      const w1 = Math.floor(Math.random() * 10) + 1
+      const w2 = Math.floor(Math.random() * 10) + 1
+      const w3 = Math.floor(Math.random() * 10) + 1
       return bestArrangement(cards, community, { w1, w2, w3 })
     }
   }
