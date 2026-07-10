@@ -1717,7 +1717,7 @@ interface MultiMatchState {
 
 const multiMatchStates = new Map<string, MultiMatchState>()
 
-async function lockPlayerTokens(userId: string, tier: string, totalRounds: number): Promise<number> {
+export async function lockPlayerTokens(userId: string, tier: string, totalRounds: number): Promise<number> {
   const { supabase } = await import('../config/supabase')
   type TierKey = 'initiate' | 'adept' | 'mastermind' | 'highNoble' | 'lastBoss'
   const validTier = (['initiate','adept','mastermind','highNoble','lastBoss'].includes(tier) ? tier : 'adept') as TierKey
@@ -1736,7 +1736,7 @@ async function lockPlayerTokens(userId: string, tier: string, totalRounds: numbe
   return amount
 }
 
-async function returnPlayerLockedTokens(userId: string, amount: number): Promise<void> {
+export async function returnPlayerLockedTokens(userId: string, amount: number): Promise<void> {
   if (!amount || amount <= 0) return
   const { supabase } = await import('../config/supabase')
   try {
