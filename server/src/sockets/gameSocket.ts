@@ -11,6 +11,10 @@ import { Server, Socket } from "socket.io";
 import { dealCards, validateDeal } from "../game/cardEngine";
 import { startMatch, submitArrangement, submitArrangementRound2, resolveContinue, submitAuctionBid, submitDiscard, submitGrandFinaleAction, burnLockedTokens } from "../game/gameLoop";
 import { startMultiplayerMatch, submitMultiArrangement, replaceMultiPlayerWithAI, resendRoundStartToPlayer } from "../game/gameLoop";
+import {
+  startHighNobleMultiMatch, submitHNArrangement, submitHNAuctionBid, submitHNArrangementRound2,
+  submitHNDiscard, submitHNGrandFinaleAction, replaceHNPlayerWithAI, resendHNRoundStartToPlayer,
+} from "../game/highNobleMultiEngine";
 import { gameConfig, getMechanics, getTierFromToken, type Tier } from "../config/gameConfig";
 import { registerLobbySocket } from "./lobbySocket";
 import { supabase } from "../config/supabase";
@@ -22,6 +26,18 @@ import {
   type Tier as RoomTier,
 } from "../game/roomRegistry";
 import { broadcastTableUpdate } from "./lobbySocket";
+
+// แปลง card key string (เช่น "10s", "jh") → Card object — ใช้ร่วมกันทุก handler ที่รับไพ่จาก client
+function toCards(keys: string[]) {
+  return keys.map(k => {
+    const suitMap: Record<string, string> = { s: 'spades', h: 'hearts', d: 'diamonds', c: 'clubs' };
+    const rankMap: Record<string, number> = { '2':2,'3':3,'4':4,'5':5,'6':6,'7':7,'8':8,'9':9,'10':10,'j':11,'q':12,'k':13,'a':14 };
+    const suit = suitMap[k[k.length - 1]] ?? 'spades';
+    const rank = k.slice(0, -1).toUpperCase();
+    const value = rankMap[k.slice(0, -1).toLowerCase()] ?? 0;
+    return { suit, rank, value } as any;
+  });
+}
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -276,6 +292,8 @@ export function registerGameSocket(io: Server): void {
           await markInProgress(room.roomId);
           if (tier === 'adept') {
             await startMultiplayerMatch(io, room.roomId, filled.seats, 'adept');
+          } else if (tier === 'highNoble') {
+            await startHighNobleMultiMatch(io, room.roomId, filled.seats);
           }
         }
       }
@@ -645,9 +663,11 @@ export function registerGameSocket(io: Server): void {
         if (result.room.status === 'full') {
           await markInProgress(result.room.roomId);
           io.to(result.room.roomId).emit("room_ready", { roomId: result.room.roomId, seats: result.room.seats });
-          // Patch Multiplayer: เริ่มเกมทันทีเมื่อห้องเต็ม (Adept เท่านั้นตอนนี้)
+          // Patch Multiplayer: เริ่มเกมทันทีเมื่อห้องเต็ม
           if (tier === 'adept') {
             await startMultiplayerMatch(io, result.room.roomId, result.room.seats, 'adept');
+          } else if (tier === 'highNoble') {
+            await startHighNobleMultiMatch(io, result.room.roomId, result.room.seats);
           }
         }
       } catch (err: any) {
@@ -688,6 +708,8 @@ export function registerGameSocket(io: Server): void {
           io.to(roomId).emit("room_ready", { roomId, seats: result.room.seats });
           if (result.room.tier === 'adept') {
             await startMultiplayerMatch(io, roomId, result.room.seats, 'adept');
+          } else if (result.room.tier === 'highNoble') {
+            await startHighNobleMultiMatch(io, roomId, result.room.seats);
           }
         }
       }
@@ -702,12 +724,67 @@ export function registerGameSocket(io: Server): void {
     // Multiplayer: Human ส่ง arrangement (Adept — 1-3 Human ในห้องเดียวกัน)
     // Multiplayer: Client เข้ามาถึง game screen แล้ว → join user room + ขอไพ่ปัจจุบัน
     // (แก้ race: server อาจ emit round_start ก่อน client พร้อม)
-    socket.on("game_join", async (data: { roomId: string; userId: string }) => {
-      const { roomId, userId } = data;
+    socket.on("game_join", async (data: { roomId: string; userId: string; tier?: RoomTier }) => {
+      const { roomId, userId, tier } = data;
       socket.join(roomId);
       socket.join(userId);
-      socketUserMap.set(socket.id, { userId, roomId, tier: 'adept' });
-      await resendRoundStartToPlayer(io, roomId, userId);
+      socketUserMap.set(socket.id, { userId, roomId, tier: tier ?? 'adept' });
+      if (tier === 'highNoble') {
+        resendHNRoundStartToPlayer(io, roomId, userId);
+      } else {
+        await resendRoundStartToPlayer(io, roomId, userId);
+      }
+    });
+
+    // Multiplayer HighNoble: Human ส่ง arrangement รอบ 1
+    socket.on("hn_player_ready", async (data: {
+      roomId: string; userId: string;
+      arrangement: { pile1: string[]; pile2: string[]; pile3: string[] };
+    }) => {
+      const { roomId, userId, arrangement } = data;
+      const result = await submitHNArrangement(io, roomId, userId, {
+        pile1: toCards(arrangement.pile1), pile2: toCards(arrangement.pile2), pile3: toCards(arrangement.pile3),
+      });
+      socket.emit("hn_player_ready_ack", result);
+    });
+
+    // Multiplayer HighNoble: Human ประมูล
+    socket.on("hn_auction_bid", (data: {
+      roomId: string; userId: string; cardIndex: 0 | 1; level: number;
+    }) => {
+      const { roomId, userId, cardIndex, level } = data;
+      const result = submitHNAuctionBid(roomId, userId, cardIndex, level);
+      socket.emit("hn_auction_bid_ack", result);
+    });
+
+    // Multiplayer HighNoble: Human ส่ง arrangement รอบ 2 (รวมไพ่ประมูล)
+    socket.on("hn_arrangement_2", async (data: {
+      roomId: string; userId: string;
+      arrangement: { pile1: string[]; pile2: string[]; pile3: string[] };
+    }) => {
+      const { roomId, userId, arrangement } = data;
+      const result = await submitHNArrangementRound2(io, roomId, userId, {
+        pile1: toCards(arrangement.pile1), pile2: toCards(arrangement.pile2), pile3: toCards(arrangement.pile3),
+      });
+      socket.emit("hn_arrangement_2_ack", result);
+    });
+
+    // Multiplayer HighNoble: Human เลือกเก็บไพ่ 9 ใบ (3/3/3)
+    socket.on("hn_discard_submit", (data: {
+      roomId: string; userId: string; keepKeys: string[];
+    }) => {
+      const { roomId, userId, keepKeys } = data;
+      const result = submitHNDiscard(io, roomId, userId, keepKeys);
+      socket.emit("hn_discard_submit_ack", result);
+    });
+
+    // Multiplayer HighNoble: Human Call/Fold ใน Grand Finale
+    socket.on("hn_grand_finale_action", (data: {
+      roomId: string; userId: string; action: "call" | "fold";
+    }) => {
+      const { roomId, userId, action } = data;
+      const result = submitHNGrandFinaleAction(io, roomId, userId, action);
+      socket.emit("hn_grand_finale_action_ack", result);
     });
 
     socket.on("player_ready_multi", async (data: {
@@ -736,6 +813,8 @@ export function registerGameSocket(io: Server): void {
         console.log('[DISCONNECT]', info.userId, 'from room', info.roomId);
         if (info.tier === 'adept') {
           await replaceMultiPlayerWithAI(io, info.roomId, info.userId);
+        } else if (info.tier === 'highNoble') {
+          await replaceHNPlayerWithAI(io, info.roomId, info.userId);
         }
         socketUserMap.delete(socket.id);
       } else {

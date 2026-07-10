@@ -169,6 +169,35 @@ export function getHNMatchState(roomId: string): HNMatchState | undefined {
   return hnMatchStates.get(roomId)
 }
 
+// Client เข้ามาถึง game screen แล้ว (socket ใหม่คนละอันจาก queueing socket) → join user room + ขอไพ่ปัจจุบัน
+// mirror ของ resendRoundStartToPlayer เดิม (Adept) — ช่วยแก้ race ที่ round_start ถูก emit ไปแล้ว
+// ก่อน client จะ join ห้อง userId ทัน (ครอบคลุมเฉพาะตอน phase ยังเป็น 'arrangement' เหมือนต้นแบบ)
+export function resendHNRoundStartToPlayer(io: Server, roomId: string, userId: string): void {
+  const state = hnMatchStates.get(roomId)
+  if (!state) return
+  const seat = seatById(state, userId)
+  if (!seat || !seat.isHuman) return
+  if (state.phase !== 'arrangement') return
+  if (!state.community || !state.cardsMap) return
+
+  const timer = gameConfig.arrangementTimer.highNoble
+  io.to(userId).emit('round_start', {
+    roomId,
+    roundNumber: state.roundNumber,
+    totalRounds: state.totalRounds,
+    cards: { [userId]: state.cardsMap[userId].map(cardKey) },
+    communityCards: {
+      pile1: state.community.row1.map(cardKey),
+      pile2: state.community.row2.map(cardKey),
+      pile3: state.community.row3.map(cardKey),
+    },
+    seats: state.seats.map(s => ({ id: s.id, name: s.name, emoji: s.emoji, role: s.role, isHuman: s.isHuman })),
+    tokenBalance: state.tokenBalance,
+    timer,
+    ...(state.roundNumber === 1 ? { lockedTokens: state.lockedTokens[userId] } : {}),
+  })
+}
+
 // ── AI seat naming (filler, ไม่ใช่ Boss) ──────────────────────
 const FILLER_PERSONALITIES: AIPersonality[] = ['sage', 'reckless', 'ghost']
 const FILLER_NAMES: Record<AIPersonality, { name: string; emoji: string }> = {
