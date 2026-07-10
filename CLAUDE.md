@@ -87,18 +87,21 @@
 
 ## 📋 สถานะปัจจุบัน & งานคงค้าง
 
-**เสร็จแล้ว:** Tier C, B, A (core flow), A+ 100% | Auth Flow | Lock-up Token | Room Registry (Redis) | DB 4+1 migrations (002_name_protection รันแล้ว) | Landing page | Sprint 8: `nameValidator.ts` (3-layer) + `POST /auth/register`
+**เสร็จแล้ว:** Tier C, B, A (core flow), A+ 100% | Auth Flow | Lock-up Token | Room Registry (Redis) | DB 4+1 migrations (002_name_protection รันแล้ว) | Landing page | Sprint 8: `nameValidator.ts` (3-layer) + `POST /auth/register` | **The Nine Sentinels (Boss Selection + aiEngine 9 personalities + `conquered_sentinels`)** — select.tsx/story.tsx/index.tsx + gameLoop.ts wiring เสร็จ, รอ migration 005 + avatar assets ก่อนเทสจริง (ดู pending #3-4 ด้านล่าง)
 
 **Pending (เรียงตาม priority):**
 1. Profile screen — เชื่อม Supabase จริงแทน MOCK
 2. Auth Guard fix — display names `^user_[a-f0-9]{8}$`
-3. The Nine Sentinels (Boss Selection + aiEngine 9 personalities + `conquered_sentinels: string[]`)
-4. Auto Sort Fee system
-5. Monarch (รอชื่อไทย + storyline จากลุงก่อน — ห้ามเริ่มโค้ดเอง)
-6. Boss Card Counting AI Enhancement (Pile2 Winner Signal) สำหรับ Crag+Cipher
-7. Fan Hand View (VIP cosmetic, Reanimated 3) — Sprint 6-7
-8. **QA รวม:** 6 test suites เดิมพังอยู่ (พบตอนทำ nameValidator, ไม่เกี่ยวกับ feature นี้) — `foulChecker.test.ts`, `itemPhaseController.test.ts`, `pileResolution.test.ts`, `minionAI.test.ts`, `aiFillSystem.test.ts`, `blindAuction.test.ts` (ส่วนใหญ่เป็น TS type error เรื่อง `Tier` type) — เลขจริงไม่ตรง "197/197 PASS" ด้านล่าง ต้องไล่แก้รวดเดียวตอน QA รวม
-9. **ก่อน push ขึ้น GitHub ครั้งแรก:** ต้องล้าง GitHub token ที่หลุดใน git history ของ `server/jest.config.js` (commit `ec11cc4`) ก่อน — ใช้ `git filter-repo` หรือ BFG rewrite history (destructive, ต้องขอยืนยันลุงก่อนรันจริง)
+3. **ก่อนเทส Nine Sentinels:** รัน `supabase/migrations/005_nine_sentinels.sql` บน Supabase dashboard เอง + `NOTIFY pgrst, 'reload schema';`
+4. **ก่อนเทส Nine Sentinels:** เพิ่มไฟล์ `boss_[id]_avatar.png` (square-crop) ให้ครบ 9 ตัวใน `client/assets/bosses/` (ลุงเยาะทำคู่ขนานอยู่) — ไม่งั้น Metro build พังตอนเปิดหน้า mastermind/index.tsx
+5. Motto ของ Chivalry / War Lord ยังเป็น placeholder ("Motto coming soon.") ใน `client/app/game/mastermind/story.tsx` — รอ MasterPlan v1.1 เติมของจริง
+6. Auction bid style ตัวเลข (willBid %/level) ของ 9 Sentinels ใน `gameLoop.ts` เป็นการตีความจากคำอธิบายเชิงคุณภาพใน MasterPlan (canon ให้แค่คำบรรยาย ไม่ใช่ตัวเลข) — ควรปรับจูนหลัง playtest จริง
+7. Auto Sort Fee system
+8. Monarch (รอชื่อไทย + storyline จากลุงก่อน — ห้ามเริ่มโค้ดเอง)
+9. Boss Card Counting AI Enhancement (Pile2 Winner Signal) สำหรับ Crag+Cipher
+10. Fan Hand View (VIP cosmetic, Reanimated 3) — Sprint 6-7
+11. **QA รวม:** 6 test suites เดิมพังอยู่ (พบตอนทำ nameValidator, ไม่เกี่ยวกับ feature นี้) — `foulChecker.test.ts`, `itemPhaseController.test.ts`, `pileResolution.test.ts`, `minionAI.test.ts`, `aiFillSystem.test.ts`, `blindAuction.test.ts` (ส่วนใหญ่เป็น TS type error เรื่อง `Tier` type) — เลขจริงไม่ตรง "197/197 PASS" ด้านล่าง ต้องไล่แก้รวดเดียวตอน QA รวม + เพิ่ม QA flow ของ Mastermind Conquest (select→story→5 รอบ→conquest overlay→9/9 message) เข้าไปในรอบ QA รวมนี้ด้วย
+12. **ก่อน push ขึ้น GitHub ครั้งแรก:** ต้องล้าง GitHub token ที่หลุดใน git history ของ `server/jest.config.js` (commit `ec11cc4`) ก่อน — ใช้ `git filter-repo` หรือ BFG rewrite history (destructive, ต้องขอยืนยันลุงก่อนรันจริง)
 
 **Deferred to v1.1:** XP/Leveling, Last Boss UI, Social, Push Notifications, Lottie, iOS
 
