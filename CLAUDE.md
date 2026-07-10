@@ -87,7 +87,7 @@
 
 ## 📋 สถานะปัจจุบัน & งานคงค้าง
 
-**เสร็จแล้ว:** Tier C, B, A (core flow), A+ 100% | Auth Flow | Lock-up Token | Room Registry (Redis) | DB 4+1 migrations (002_name_protection รันแล้ว) | Landing page | Sprint 8: `nameValidator.ts` (3-layer) + `POST /auth/register` | **The Nine Sentinels (Boss Selection + aiEngine 9 personalities + `conquered_sentinels`)** — select.tsx/story.tsx/index.tsx + gameLoop.ts wiring เสร็จ, รอ migration 005 + avatar assets ก่อนเทสจริง (ดู pending #3-4 ด้านล่าง)
+**เสร็จแล้ว:** Tier C, B, A (core flow), A+ 100% | Auth Flow | Lock-up Token | Room Registry (Redis) | DB 4+1 migrations (002_name_protection รันแล้ว) | Landing page | Sprint 8: `nameValidator.ts` (3-layer) + `POST /auth/register` | **The Nine Sentinels (Boss Selection + aiEngine 9 personalities + `conquered_sentinels`)** — select.tsx/story.tsx/index.tsx + gameLoop.ts wiring เสร็จ, รอ migration 005 + avatar assets ก่อนเทสจริง (ดู pending #3-4 ด้านล่าง) | **High Noble Multiplayer (3 Human จริง + Four Gods Boss)** — `highNobleMultiEngine.ts` ใหม่ทั้งไฟล์ (ไม่แตะ gameLoop.ts เดิม), `roomRegistry.ts` ผูก Boss seat เป็น Four Gods จริง, `gameSocket.ts`/`lobby.tsx`/`highNoble/index.tsx` ต่อครบ — เทสผ่านสคริปต์ 3-socket จริง (5 รอบเต็ม + disconnect mid-arrangement) ดู pending #13-15 ก่อนขึ้นจริง | **Monarch (mechanic เท่านั้น)** — `app/game/monarch/index.tsx` (copy จาก High Noble multiplayer) + `monarchSchedule` ใน engine สลับบุคลิก Four Gods ครบ 4 คนใน 4 Round แรก เทสผ่านสคริปต์แล้ว (เห็นครบ 4 ชื่อ) — ชื่อ/story ยังเป็น placeholder "Monarch" ดู pending #8
 
 **Pending (เรียงตาม priority):**
 1. Profile screen — เชื่อม Supabase จริงแทน MOCK
@@ -97,11 +97,14 @@
 5. Motto ของ Chivalry / War Lord ยังเป็น placeholder ("Motto coming soon.") ใน `client/app/game/mastermind/story.tsx` — รอ MasterPlan v1.1 เติมของจริง
 6. Auction bid style ตัวเลข (willBid %/level) ของ 9 Sentinels ใน `gameLoop.ts` เป็นการตีความจากคำอธิบายเชิงคุณภาพใน MasterPlan (canon ให้แค่คำบรรยาย ไม่ใช่ตัวเลข) — ควรปรับจูนหลัง playtest จริง
 7. Auto Sort Fee system
-8. Monarch (รอชื่อไทย + storyline จากลุงก่อน — ห้ามเริ่มโค้ดเอง)
+8. Monarch ชื่อไทย + storyline จริง — ตอนนี้ mechanic (สลับบุคลิก Four Gods ทุก Round) เสร็จแล้ว แต่ตัวละครยังใช้ placeholder name "Monarch" + emoji 👑 ไม่มี asset/motto จริง (ดู `app/game/monarch/index.tsx`, `highNobleMultiEngine.ts` monarchSchedule) — ห้ามใส่ชื่อ/เนื้อเรื่องเองจนกว่าลุงจะให้มา
 9. Boss Card Counting AI Enhancement (Pile2 Winner Signal) สำหรับ Crag+Cipher
 10. Fan Hand View (VIP cosmetic, Reanimated 3) — Sprint 6-7
 11. **QA รวม:** 6 test suites เดิมพังอยู่ (พบตอนทำ nameValidator, ไม่เกี่ยวกับ feature นี้) — `foulChecker.test.ts`, `itemPhaseController.test.ts`, `pileResolution.test.ts`, `minionAI.test.ts`, `aiFillSystem.test.ts`, `blindAuction.test.ts` (ส่วนใหญ่เป็น TS type error เรื่อง `Tier` type) — เลขจริงไม่ตรง "197/197 PASS" ด้านล่าง ต้องไล่แก้รวดเดียวตอน QA รวม + เพิ่ม QA flow ของ Mastermind Conquest (select→story→5 รอบ→conquest overlay→9/9 message) เข้าไปในรอบ QA รวมนี้ด้วย
 12. **ก่อน push ขึ้น GitHub ครั้งแรก:** ต้องล้าง GitHub token ที่หลุดใน git history ของ `server/jest.config.js` (commit `ec11cc4`) ก่อน — ใช้ `git filter-repo` หรือ BFG rewrite history (destructive, ต้องขอยืนยันลุงก่อนรันจริง)
+13. **High Noble Multiplayer — ยังไม่เทสผ่าน UI จริง:** สร้าง/เทสผ่านสคริปต์ socket.io-client ล้วน (bypass เบราว์เซอร์) เพราะ Dev Login ใช้ไม่ได้ (`test1@triplepoker.dev`/`password` ขึ้น "Invalid login credentials" จริงจาก Supabase) — ต้องหา dev account ที่ใช้ได้ หรือปิด email confirmation ชั่วคราวใน Supabase dashboard ก่อนเทส 3 เบราว์เซอร์จริง
+14. **Monarch ยังไม่มีทางเข้าจาก Lobby:** `lobby.tsx` ไม่มีปุ่ม/route สำหรับ tier `'monarch'` เลย (ตอนนี้เข้าถึงได้แค่ผ่าน socket event `room_auto_match`/`room_create_private` กับ `tier:'monarch'` ตรงๆ) — รอลุงตัดสินใจว่าจะให้เข้าทางไหน (สุ่ม 3% ใน High Noble ตาม CLAUDE.md เดิม หรือปุ่มแยก)
+15. **High Noble Multiplayer Grand Finale reconnect:** `resendHNRoundStartToPlayer` (ใช้ตอน client เปิด socket ใหม่หลัง matchmaking) รองรับแค่ phase `'arrangement'` เหมือนต้นแบบ Adept เดิม — ถ้า client หลุดแล้วต่อกลับระหว่าง auction/discard/grand_finale จะไม่ได้ state คืน (ต้องรอ disconnect handler แทนที่ด้วย AI แทน ไม่ true-reconnect)
 
 **Deferred to v1.1:** XP/Leveling, Last Boss UI, Social, Push Notifications, Lottie, iOS
 
