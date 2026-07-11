@@ -8,7 +8,7 @@
 // The Sage Unicorn Studio Co., Ltd.
 // ============================================================
 
-import { supabase } from '../config/supabase'
+import { supabaseAdmin } from '../config/supabase'
 import { gameConfig } from '../config/gameConfig'
 
 export interface AwardPerformanceScoreInput {
@@ -31,7 +31,7 @@ export async function awardPerformanceScore(input: AwardPerformanceScoreInput): 
   const currentCareer: Record<string, number> = {}
   const currentSeason: Record<string, number> = {}
   try {
-    const { data } = await supabase
+    const { data } = await supabaseAdmin
       .from('users')
       .select('user_id, performance_score, ps_season')
       .in('user_id', userIds)
@@ -57,7 +57,7 @@ export async function awardPerformanceScore(input: AwardPerformanceScoreInput): 
   })
 
   try {
-    await supabase.from('users').upsert(rows, { onConflict: 'user_id' })
+    await supabaseAdmin.from('users').upsert(rows, { onConflict: 'user_id' })
   } catch (err) {
     console.error('[PS] Error updating performance_score/ps_season batch:', err)
   }

@@ -4,7 +4,7 @@
 // The Sage Unicorn Studio Co., Ltd.
 // ============================================================
 
-import { supabase } from '../config/supabase'
+import { supabaseAdmin } from '../config/supabase'
 import { gameConfig } from '../config/gameConfig'
 import { FOUR_GODS, AIConfig } from './aiEngine'
 
@@ -45,7 +45,7 @@ export async function rollHighNobleBoss(humanUserIds: string[]): Promise<Monarch
 
   if (uniqueIds.length > 0) {
     try {
-      const { data } = await supabase
+      const { data } = await supabaseAdmin
         .from('users')
         .select('user_id, monarch_pity_counter, monarch_encounters')
         .in('user_id', uniqueIds)
@@ -71,7 +71,7 @@ export async function rollHighNobleBoss(humanUserIds: string[]): Promise<Monarch
       ? { user_id: uid, monarch_pity_counter: 0, monarch_encounters: (encountersByUser[uid] ?? 0) + 1 }
       : { user_id: uid, monarch_pity_counter: (pityByUser[uid] ?? 0) + 1 })
     try {
-      await supabase.from('users').upsert(rows, { onConflict: 'user_id' })
+      await supabaseAdmin.from('users').upsert(rows, { onConflict: 'user_id' })
     } catch (err) {
       console.error('[MONARCH] Error updating pity/encounters batch:', err)
     }
@@ -84,13 +84,13 @@ export async function rollHighNobleBoss(humanUserIds: string[]): Promise<Monarch
 // เรียกเฉพาะผู้ชนะ human 1 คนต่อแมตช์ ณ จุด settlement ของ finalizeHNGrandFinale
 export async function recordMonarchVictory(userId: string): Promise<void> {
   try {
-    const { data } = await supabase
+    const { data } = await supabaseAdmin
       .from('users')
       .select('monarch_victories')
       .eq('user_id', userId)
       .single()
     const current = data?.monarch_victories ?? 0
-    await supabase.from('users').update({ monarch_victories: current + 1 }).eq('user_id', userId)
+    await supabaseAdmin.from('users').update({ monarch_victories: current + 1 }).eq('user_id', userId)
   } catch (err) {
     console.error('[MONARCH] Error recording victory for', userId, err)
   }

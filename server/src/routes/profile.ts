@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { supabase } from '../config/supabase'
+import { supabase, supabaseAdmin } from '../config/supabase'
 
 const VALID_TIERS = ['initiate', 'adept', 'mastermind', 'high_noble', 'last_boss'] as const
 
@@ -23,7 +23,8 @@ export async function profileRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'INVALID_TIER', message: 'tier must be one of: ' + VALID_TIERS.join(', ') })
     }
 
-    const { data: userData, error: readError } = await supabase
+    // ใช้ supabaseAdmin เพราะ RLS ของ public.users จำกัดแค่ auth.uid() = user_id — anon client เดิมมองไม่เห็นแถวเลย
+    const { data: userData, error: readError } = await supabaseAdmin
       .from('users')
       .select('tier_unlock_celebrated')
       .eq('user_id', authData.user.id)
@@ -40,7 +41,7 @@ export async function profileRoutes(app: FastifyInstance) {
     const updated = current.includes(tier) ? current : [...current, tier]
 
     if (updated.length !== current.length) {
-      const { error: updateError } = await supabase
+      const { error: updateError } = await supabaseAdmin
         .from('users')
         .update({ tier_unlock_celebrated: updated })
         .eq('user_id', authData.user.id)

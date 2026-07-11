@@ -18,6 +18,7 @@ const mockFrom = jest.fn(() => currentBuilder)
 
 jest.mock('../../src/config/supabase', () => ({
   supabase: { from: mockFrom },
+  supabaseAdmin: { from: mockFrom },
 }))
 
 jest.mock('../../src/config/gameConfig', () => ({

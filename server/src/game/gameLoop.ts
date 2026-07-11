@@ -12,7 +12,7 @@ import { checkFoul, PlayerArrangement, CommunityCards } from './foulChecker'
 import { aiDecideArrangement, AI_CONFIGS, AIConfig, AIPersonality, FOUR_GODS, NINE_SENTINELS, greedyArrangement, pickRandomMinions } from './aiEngine'
 import { Card } from './deck'
 import { gameConfig } from '../config/gameConfig'
-import { supabase } from '../config/supabase'
+import { supabaseAdmin } from '../config/supabase'
 
 // ── Types ────────────────────────────────────────────────────
 export interface RoundResult {
@@ -136,7 +136,7 @@ export async function startMatch(
 
   // หัก lock-up จาก users.token_balance ใน DB
   try {
-    const { data: userData } = await supabase
+    const { data: userData } = await supabaseAdmin
       .from('users')
       .select('token_balance')
       .eq('user_id', humanPlayerId)
@@ -144,13 +144,13 @@ export async function startMatch(
 
     if (userData) {
       const newBalance = (userData.token_balance ?? 0) - lockupAmount
-      await supabase
+      await supabaseAdmin
         .from('users')
         .update({ token_balance: newBalance })
         .eq('user_id', humanPlayerId)
 
       // บันทึก locked_tokens ใน room_players
-      await supabase
+      await supabaseAdmin
         .from('room_players')
         .update({ locked_tokens: lockupAmount })
         .eq('user_id', humanPlayerId)
@@ -1564,7 +1564,7 @@ function finalizeGrandFinale(
         const conqueredBossId = (state as any)._bossId as string | undefined
         if (conqueredBossId) {
           try {
-            const { data: userData } = await supabase
+            const { data: userData } = await supabaseAdmin
               .from('users')
               .select('conquered_sentinels')
               .eq('user_id', state.humanPlayerId)
@@ -1572,7 +1572,7 @@ function finalizeGrandFinale(
             const current: string[] = userData?.conquered_sentinels ?? []
             const updated = current.includes(conqueredBossId) ? current : [...current, conqueredBossId]
             if (!current.includes(conqueredBossId)) {
-              await supabase
+              await supabaseAdmin
                 .from('users')
                 .update({ conquered_sentinels: updated })
                 .eq('user_id', state.humanPlayerId)
@@ -1673,7 +1673,7 @@ function waitForContinue(roomId: string): Promise<void> {
 async function returnLockedTokens(state: MatchState): Promise<void> {
   if (!state.lockedTokens || state.lockedTokens <= 0) return
   try {
-    const { data: userData } = await supabase
+    const { data: userData } = await supabaseAdmin
       .from('users')
       .select('token_balance')
       .eq('user_id', state.humanPlayerId)
@@ -1681,13 +1681,13 @@ async function returnLockedTokens(state: MatchState): Promise<void> {
 
     if (userData) {
       const newBalance = (userData.token_balance ?? 0) + state.lockedTokens
-      await supabase
+      await supabaseAdmin
         .from('users')
         .update({ token_balance: newBalance })
         .eq('user_id', state.humanPlayerId)
 
       // Reset locked_tokens ใน room_players
-      await supabase
+      await supabaseAdmin
         .from('room_players')
         .update({ locked_tokens: 0 })
         .eq('user_id', state.humanPlayerId)
@@ -1703,7 +1703,7 @@ async function returnLockedTokens(state: MatchState): Promise<void> {
 // Burn Lock-up Token เมื่อผู้เล่น Disconnect (Penalty 100%)
 export async function burnLockedTokens(humanPlayerId: string, roomId: string): Promise<void> {
   try {
-    const { data } = await supabase
+    const { data } = await supabaseAdmin
       .from('room_players')
       .select('locked_tokens')
       .eq('user_id', humanPlayerId)
@@ -1713,7 +1713,7 @@ export async function burnLockedTokens(humanPlayerId: string, roomId: string): P
     if (lockedAmount <= 0) return
 
     // Burn = ไม่คืน lock-up → แค่ reset เป็น 0
-    await supabase
+    await supabaseAdmin
       .from('room_players')
       .update({ locked_tokens: 0 })
       .eq('user_id', humanPlayerId)
@@ -1749,17 +1749,17 @@ interface MultiMatchState {
 const multiMatchStates = new Map<string, MultiMatchState>()
 
 export async function lockPlayerTokens(userId: string, tier: string, totalRounds: number): Promise<number> {
-  const { supabase } = await import('../config/supabase')
+  const { supabaseAdmin } = await import('../config/supabase')
   type TierKey = 'initiate' | 'adept' | 'mastermind' | 'highNoble' | 'lastBoss'
   const validTier = (['initiate','adept','mastermind','highNoble','lastBoss'].includes(tier) ? tier : 'adept') as TierKey
   const stakes = gameConfig.tokenPot.tiers[validTier]
   const amount = (stakes.pile1 + stakes.pile2 + stakes.pile3) * totalRounds
   try {
-    const { data: userData } = await supabase.from('users').select('token_balance').eq('user_id', userId).single()
+    const { data: userData } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
     if (userData) {
       const newBalance = (userData.token_balance ?? 0) - amount
-      await supabase.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
-      await supabase.from('room_players').update({ locked_tokens: amount }).eq('user_id', userId)
+      await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
+      await supabaseAdmin.from('room_players').update({ locked_tokens: amount }).eq('user_id', userId)
     }
   } catch (err) {
     console.error('[LOCKUP-MULTI] Error locking tokens for', userId, err)
@@ -1769,13 +1769,13 @@ export async function lockPlayerTokens(userId: string, tier: string, totalRounds
 
 export async function returnPlayerLockedTokens(userId: string, amount: number): Promise<void> {
   if (!amount || amount <= 0) return
-  const { supabase } = await import('../config/supabase')
+  const { supabaseAdmin } = await import('../config/supabase')
   try {
-    const { data: userData } = await supabase.from('users').select('token_balance').eq('user_id', userId).single()
+    const { data: userData } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
     if (userData) {
       const newBalance = (userData.token_balance ?? 0) + amount
-      await supabase.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
-      await supabase.from('room_players').update({ locked_tokens: 0 }).eq('user_id', userId)
+      await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
+      await supabaseAdmin.from('room_players').update({ locked_tokens: 0 }).eq('user_id', userId)
     }
   } catch (err) {
     console.error('[LOCKUP-MULTI] Error returning tokens for', userId, err)
@@ -1789,12 +1789,12 @@ export async function returnPlayerLockedTokens(userId: string, amount: number): 
 // netDelta = tokenBalance สุดท้ายของผู้เล่น ณ match_end ลบด้วย baseline เริ่มต้น 5000 ของ HN multiplayer
 export async function persistHNNetTokenResult(userId: string, netDelta: number): Promise<void> {
   if (!netDelta) return
-  const { supabase } = await import('../config/supabase')
+  const { supabaseAdmin } = await import('../config/supabase')
   try {
-    const { data: userData } = await supabase.from('users').select('token_balance').eq('user_id', userId).single()
+    const { data: userData } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
     if (userData) {
       const newBalance = (userData.token_balance ?? 0) + netDelta
-      await supabase.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
+      await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
     }
   } catch (err) {
     console.error('[HN-SETTLE] Error persisting net token result for', userId, err)
@@ -1991,12 +1991,12 @@ export async function replaceMultiPlayerWithAI(io: Server, roomId: string, userI
   if (!state) return
   if (!state.humanPlayerIds.includes(userId)) return
 
-  const { supabase } = await import('../config/supabase')
+  const { supabaseAdmin } = await import('../config/supabase')
   try {
-    const { data } = await supabase.from('room_players').select('locked_tokens').eq('user_id', userId).single()
+    const { data } = await supabaseAdmin.from('room_players').select('locked_tokens').eq('user_id', userId).single()
     const remain = data?.locked_tokens ?? 0
     if (remain > 0) {
-      await supabase.from('room_players').update({ locked_tokens: 0 }).eq('user_id', userId)
+      await supabaseAdmin.from('room_players').update({ locked_tokens: 0 }).eq('user_id', userId)
       console.log('[LOCKUP-MULTI] BURNED', remain, 'from disconnected', userId)
     }
   } catch (err) {

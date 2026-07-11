@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { supabase } from '../config/supabase'
+import { supabase, supabaseAdmin } from '../config/supabase'
 import { validateDisplayName } from '../utils/nameValidator'
 
 export async function authRoutes(app: FastifyInstance) {
@@ -47,7 +47,8 @@ export async function authRoutes(app: FastifyInstance) {
     }
 
     // ผ่านทุก layer แล้ว — บันทึกชื่อลง users table (row ถูกสร้างไว้แล้วตอน Supabase Auth signup)
-    const { data: updated, error: updateError } = await supabase
+    // ใช้ supabaseAdmin เพราะ RLS ของ public.users จำกัดแค่ auth.uid() = user_id — anon client เดิมมองไม่เห็นแถวเลย
+    const { data: updated, error: updateError } = await supabaseAdmin
       .from('users')
       .update({ display_name: displayName.trim() })
       .eq('user_id', authData.user.id)
