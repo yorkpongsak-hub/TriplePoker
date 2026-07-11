@@ -20,9 +20,11 @@ import { aiDecideArrangement, AIConfig, AIPersonality, FOUR_GODS } from './aiEng
 import { Card } from './deck'
 import { gameConfig } from '../config/gameConfig'
 import { supabase } from '../config/supabase'
-import { lockPlayerTokens, returnPlayerLockedTokens } from './gameLoop'
+import { lockPlayerTokens, returnPlayerLockedTokens, persistHNNetTokenResult } from './gameLoop'
 import { Seat as RoomSeat } from './roomRegistry'
 import { lockMonarchPersonality } from './monarchAI'
+import { recordMonarchVictory } from './monarchSpawn'
+import { awardPerformanceScore } from './psEngine'
 
 // ── Local copies of small pure helpers (ตั้งใจ duplicate จาก gameLoop.ts แทนการ import
 //    เพื่อไม่ให้ engine ใหม่นี้ผูกกับการแก้ไขไฟล์เดิมในอนาคต — ของเดิมพิสูจน์แล้วว่าถูกต้อง) ──
@@ -989,7 +991,40 @@ function finalizeHNGrandFinale(
     if (state.roundNumber >= state.totalRounds) {
       state.phase = 'match_end'
       const finalWinner = allPlayerIds.reduce((a, b) => (state.tokenBalance[a] ?? 0) > (state.tokenBalance[b] ?? 0) ? a : b)
-      await Promise.all(humanSeats(state).map(s => returnPlayerLockedTokens(s.id, state.lockedTokens[s.id] ?? 0)))
+
+      // ── Settlement จริง: คืน lock-up ante + persist ผลแพ้/ชนะสุทธิของแมตช์ลง token_balance ──
+      // (ของเดิมคืนแค่ locked ante เฉยๆ ไม่เคย persist ผลเล่นจริง — แก้เป็น prerequisite ก่อน Monarch payout)
+      // Monarch Spec v1.2 §3: ผู้ชนะ human ที่เจอ Monarch (กำไรสุทธิ > 0) ได้ Pot ×2.0 ระดับ "ทั้งแมตช์" —
+      // ส่วนต่างที่เพิ่ม (อีก 1x) เป็น House mint ไม่หักจากผู้เล่นอื่น (ยืนยันขอบเขตกับลุงเยาะแล้ว — ระดับ match ไม่ใช่ต่อ pile/round)
+      const HN_BASELINE = 5000
+      const bossSeatFinal = state.seats[0]
+      const winnerSeat = seatById(state, finalWinner)
+      const isMonarchMatch = bossSeatFinal.isMonarch === true
+      const isHumanWinner = !!winnerSeat?.isHuman
+
+      const humanNetDeltas: Record<string, number> = {}
+      await Promise.all(humanSeats(state).map(async s => {
+        await returnPlayerLockedTokens(s.id, state.lockedTokens[s.id] ?? 0)
+        const netDelta = (state.tokenBalance[s.id] ?? HN_BASELINE) - HN_BASELINE
+        humanNetDeltas[s.id] = netDelta
+        const isMonarchWinner = isMonarchMatch && isHumanWinner && s.id === finalWinner && netDelta > 0
+        const payout = isMonarchWinner ? netDelta * gameConfig.monarchConfig.potMultiplier : netDelta
+        if (payout !== 0) await persistHNNetTokenResult(s.id, payout)
+      }))
+
+      // Badge "Monarch Slayer" + เงื่อนไข Ascendant Gate (Spec v1.2 §5)
+      if (isMonarchMatch && isHumanWinner) {
+        await recordMonarchVictory(finalWinner)
+      }
+
+      // Performance Score — active ตั้งแต่ Tier A+ (Spec v1.2 §4)
+      await awardPerformanceScore({
+        tier: 'highNoble',
+        finalWinnerId: isHumanWinner ? finalWinner : null,
+        isMonarchMatch,
+        humanNetDeltas,
+      })
+
       io.to(roomId).emit('match_end', { roomId, finalWinner, tokenBalance: state.tokenBalance, results: state.results, totalRounds: state.totalRounds })
       hnMatchStates.delete(roomId)
     } else {

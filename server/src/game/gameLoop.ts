@@ -1751,6 +1751,25 @@ export async function returnPlayerLockedTokens(userId: string, amount: number): 
   }
 }
 
+// Patch Monarch prerequisite: returnPlayerLockedTokens() ข้างบนคืนแค่ locked-up ante เดิม (buy-in) —
+// ไม่เคย persist ผลแพ้/ชนะจริงของแมตช์ (state.tokenBalance) ลง token_balance เลยทั้งระบบ (พบว่าเป็น gap เดิม
+// ทั้ง single-player และ Adept ด้วย แต่ตาม CLAUDE.md ห้ามแตะ tier อื่น จึงแก้เฉพาะ High Noble ในฟังก์ชันนี้
+// เพิ่มใหม่ ไม่แก้ returnPlayerLockedTokens เดิม เรียกใช้เฉพาะจาก highNobleMultiEngine.ts)
+// netDelta = tokenBalance สุดท้ายของผู้เล่น ณ match_end ลบด้วย baseline เริ่มต้น 5000 ของ HN multiplayer
+export async function persistHNNetTokenResult(userId: string, netDelta: number): Promise<void> {
+  if (!netDelta) return
+  const { supabase } = await import('../config/supabase')
+  try {
+    const { data: userData } = await supabase.from('users').select('token_balance').eq('user_id', userId).single()
+    if (userData) {
+      const newBalance = (userData.token_balance ?? 0) + netDelta
+      await supabase.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
+    }
+  } catch (err) {
+    console.error('[HN-SETTLE] Error persisting net token result for', userId, err)
+  }
+}
+
 // เรียกจาก gameSocket.ts ตอน room เต็ม (room_ready)
 export async function startMultiplayerMatch(
   io: Server,

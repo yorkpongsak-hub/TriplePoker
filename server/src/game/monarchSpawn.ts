@@ -79,3 +79,19 @@ export async function rollHighNobleBoss(humanUserIds: string[]): Promise<Monarch
 
   return { isMonarch, boss, effectiveRate, maxPity, guaranteed }
 }
+
+// บันทึกชัยชนะเหนือ Monarch — ใช้แสดง Badge "Monarch Slayer" (monarch_victories >= 1) และเป็นเงื่อนไข Ascendant Gate
+// เรียกเฉพาะผู้ชนะ human 1 คนต่อแมตช์ ณ จุด settlement ของ finalizeHNGrandFinale
+export async function recordMonarchVictory(userId: string): Promise<void> {
+  try {
+    const { data } = await supabase
+      .from('users')
+      .select('monarch_victories')
+      .eq('user_id', userId)
+      .single()
+    const current = data?.monarch_victories ?? 0
+    await supabase.from('users').update({ monarch_victories: current + 1 }).eq('user_id', userId)
+  } catch (err) {
+    console.error('[MONARCH] Error recording victory for', userId, err)
+  }
+}
