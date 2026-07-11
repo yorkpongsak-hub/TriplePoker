@@ -17,6 +17,8 @@ interface UserProfile {
   token_balance: number | null
   crown_balance: number | null
   xp: number | null
+  performance_score: number | null    // Monarch_Spec_v1_2 §4 — active ตั้งแต่ Tier A+ ขึ้นไป
+  monarch_victories: number | null    // Monarch_Spec_v1_2 §3/§5 — Badge "Monarch Slayer" (>=1) + เงื่อนไข Ascendant Gate
 }
 
 interface AuthState {
@@ -80,7 +82,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const { data, error } = await supabase
         .from('users')
-        .select('user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp')
+        .select('user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp, performance_score, monarch_victories')
         .eq('user_id', user.id)
         .maybeSingle()
       console.log('[authStore] refreshProfile query result:', { data, error, queriedUserId: user.id })

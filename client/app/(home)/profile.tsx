@@ -61,6 +61,11 @@ const VIP_INFO: Record<string, { label: string; color: string } | null> = {
 
 const fmt = (n: number) => n.toLocaleString('en-US')
 
+// Monarch_Spec_v1_2 §4/§5 — Performance Score + Ascendant Gate ปลดล็อคตั้งแต่ Tier A+ ขึ้นไปเท่านั้น
+const PS_UNLOCKED_TIERS = new Set(['A+', 'S', 'S+'])
+const ASCENDANT_TOKEN_MIN = 600_000
+const ASCENDANT_TOKEN_MAX = 999_999
+
 type TabKey = 'stats' | 'bosses' | 'history' | 'social'
 
 export default function ProfileScreen() {
@@ -79,6 +84,13 @@ export default function ProfileScreen() {
   // streak_count ยังไม่มีคอลัมน์จริงบน Supabase (live schema ไม่มี แม้ migration file จะ define ไว้)
   // ใช้ MOCK จนกว่าจะรัน migration เพิ่มคอลัมน์ — ดู supabase/migrations/004_add_streak_count.sql
   const streakDays  = MOCK.streakDays
+
+  // Monarch_Spec_v1_2 §4/§5 — ต้องรัน supabase/migrations/006_monarch_spawn_reward.sql ก่อน คอลัมน์นี้ถึงจะมีค่าจริง
+  const performanceScore = profile?.performance_score ?? 0
+  const monarchVictories = profile?.monarch_victories ?? 0
+  const isPSUnlocked     = PS_UNLOCKED_TIERS.has(tier)
+  const isMonarchSlayer  = monarchVictories >= 1
+  const showAscendantHint = isPSUnlocked && !isMonarchSlayer && token >= ASCENDANT_TOKEN_MIN && token <= ASCENDANT_TOKEN_MAX
 
   const tierInfo = TIER_INFO[tier] ?? TIER_INFO['C']
   const vipInfo  = VIP_INFO[vipStatus]
@@ -148,6 +160,11 @@ export default function ProfileScreen() {
                   <Text style={[s.vipBadgeText, { color: vipInfo.color }]}>{vipInfo.label} ♛</Text>
                 </View>
               )}
+              {isMonarchSlayer && (
+                <View style={[s.vipBadge, { borderColor: C.purple, backgroundColor: `${C.purple}22` }]}>
+                  <Text style={[s.vipBadgeText, { color: C.purple }]}>MONARCH SLAYER 👑</Text>
+                </View>
+              )}
             </View>
             <Text style={s.xpLine}>⭐ {fmt(xpNow)} XP</Text>
           </View>
@@ -161,6 +178,20 @@ export default function ProfileScreen() {
           <View style={s.vLine} />
           <ResourceBox icon="💎" label="VIP STATUS" value={vipInfo?.label ?? 'FREE'} valueColor={vipInfo?.color ?? C.textPrimary} />
         </GoldCard>
+
+        {/* ═══════════════ PERFORMANCE SCORE (Tier A+ ขึ้นไปเท่านั้น — Monarch_Spec_v1_2 §4) ═══════════════ */}
+        {isPSUnlocked && (
+          <GoldCard style={s.psCard}>
+            <ResourceBox icon="📊" label="PERFORMANCE SCORE" value={fmt(performanceScore)} valueColor={C.purple} />
+          </GoldCard>
+        )}
+
+        {/* ═══════════════ ASCENDANT HINT (token 600k-999,999 ผ่าน A+ แต่ยังไม่ชนะ Monarch) ═══════════════ */}
+        {showAscendantHint && (
+          <View style={s.ascendantHint}>
+            <Text style={s.ascendantHintText}>Defeat the Monarch to unlock Ascendant</Text>
+          </View>
+        )}
 
         {/* ═══════════════ MAIN ACTIONS ═══════════════ */}
         <View style={s.actionRow}>
@@ -345,6 +376,22 @@ const s = StyleSheet.create({
   resourceLabel: { color: C.textSec, fontSize: 9, fontWeight: '800', letterSpacing: 1 },
   resourceValue: { color: C.textPrimary, fontSize: 15, fontWeight: '900', marginTop: 2 },
   vLine: { width: 1, minHeight: 36, backgroundColor: C.border },
+
+  psCard: {
+    marginTop: 10,
+    padding: 12,
+    borderColor: C.purple,
+  },
+  ascendantHint: {
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: C.gold,
+    backgroundColor: 'rgba(255,215,106,0.08)',
+    alignItems: 'center',
+  },
+  ascendantHintText: { color: C.gold, fontSize: 11, fontWeight: '800', letterSpacing: 0.3, textAlign: 'center' },
 
   actionRow: { flexDirection: 'row', gap: 8, marginTop: 14 },
   actionBtn: {
