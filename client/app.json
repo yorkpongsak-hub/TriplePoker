@@ -23,7 +23,8 @@
     "scheme": "triplepoker",
     "plugins": [
       "expo-router",
-      "expo-asset"
+      "expo-asset",
+      "expo-audio"
     ],
     "extra": {
       "router": {},
