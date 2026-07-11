@@ -74,6 +74,10 @@ export default function LobbyScreen() {
   const [mmSeats, setMmSeats] = useState<Array<{ type: string; name: string }>>([]);
   const [mmTimeoutAt, setMmTimeoutAt] = useState<number | null>(null);
   const [mmSecondsLeft, setMmSecondsLeft] = useState(0);
+  const [mmRoomId, setMmRoomId] = useState<string | null>(null);
+  // §4.4: Waiting Timeout Dialog — โชว์ตอนรอบแรก (3 นาที) หมด, มี toast ตอนถูกลบโต๊ะ
+  const [mmTimeoutDialog, setMmTimeoutDialog] = useState(false);
+  const [mmDeletedMessage, setMmDeletedMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (mmStatus !== 'queued' || !mmTimeoutAt) return;
@@ -150,6 +154,7 @@ export default function LobbyScreen() {
     });
 
     socket.on('room_matched', (data: { room: any; seatIndex: number }) => {
+      setMmRoomId(data.room.roomId);
       setMmSeats(data.room.seats);
       setMmTimeoutAt(data.room.timeoutAt);
     });
@@ -170,6 +175,36 @@ export default function LobbyScreen() {
       setMmStatus('idle');
       socket.disconnect();
     });
+
+    // §4.4: รอบแรก (3 นาที) หมด — โชว์ dialog ให้เลือก
+    socket.on('room_wait_timeout_choice', () => {
+      setMmTimeoutDialog(true);
+    });
+
+    // เลือก "Wait 2 More Minutes" สำเร็จ — ต่อเวลา ปิด dialog
+    socket.on('room_wait_extended', (data: { roomId: string; timeoutAt: number }) => {
+      setMmTimeoutDialog(false);
+      setMmTimeoutAt(data.timeoutAt);
+    });
+
+    // รอบขยายหมดเวลาแบบไม่มีใครตอบ dialog ทัน หรือเลือก "Delete Table" — โต๊ะถูกลบ กลับ Lobby
+    const handleRoomRemoved = (data: { roomId: string; message?: string }) => {
+      setMmDeletedMessage(data.message ?? 'Table has been deleted.');
+      setMmTimeoutDialog(false);
+      setMmStatus('idle');
+      setMmSeats([]);
+      setMmTimeoutAt(null);
+      setMmRoomId(null);
+      socket.disconnect();
+    };
+    socket.on('room_wait_timeout_expired', handleRoomRemoved);
+    socket.on('room_deleted', handleRoomRemoved);
+  };
+
+  const handleTimeoutChoice = (choice: 'wait_2_more' | 'delete') => {
+    if (!mmRoomId) return;
+    socketRef.current?.emit('room_timeout_choice', { roomId: mmRoomId, choice });
+    if (choice === 'delete') setMmTimeoutDialog(false); // room_deleted handler ข้างบนจะเคลียร์ state ที่เหลือ
   };
 
   const handleAutoMatchAdept = () => handleAutoMatch('adept');
@@ -181,7 +216,16 @@ export default function LobbyScreen() {
     setMmStatus('idle');
     setMmSeats([]);
     setMmTimeoutAt(null);
+    setMmRoomId(null);
+    setMmTimeoutDialog(false);
   };
+
+  // Toast แจ้งโต๊ะถูกลบ (timeout expired / delete) — auto-dismiss เอง
+  useEffect(() => {
+    if (!mmDeletedMessage) return;
+    const id = setTimeout(() => setMmDeletedMessage(null), 4000);
+    return () => clearTimeout(id);
+  }, [mmDeletedMessage]);
 
   useEffect(() => {
     return () => { socketRef.current?.disconnect(); };
@@ -235,6 +279,32 @@ export default function LobbyScreen() {
               <Text style={s.celebrateBtnTxt}>Continue</Text>
             </TouchableOpacity>
           </View>
+        </View>
+      )}
+
+      {/* ─── Adept Waiting Timeout Dialog (§4.4) ─── */}
+      {mmTimeoutDialog && (
+        <View style={s.celebrateOverlay}>
+          <View style={s.celebrateCard}>
+            <Text style={s.celebrateIcon}>⏱️</Text>
+            <Text style={s.celebrateTitle}>STILL WAITING</Text>
+            <Text style={[s.celebrateTierName, { textAlign: 'center', marginBottom: 20 }]}>
+              No player has joined yet. Keep waiting a bit longer, or delete this table?
+            </Text>
+            <TouchableOpacity onPress={() => handleTimeoutChoice('wait_2_more')} style={[s.celebrateBtn, { marginBottom: 10 }]}>
+              <Text style={s.celebrateBtnTxt}>Wait 2 More Minutes</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => handleTimeoutChoice('delete')} style={[s.celebrateBtn, { borderColor: COLOR.red }]}>
+              <Text style={[s.celebrateBtnTxt, { color: COLOR.red }]}>Delete Table</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* ─── Toast: Table deleted / timeout expired ─── */}
+      {mmDeletedMessage && (
+        <View style={s.toastBanner}>
+          <Text style={s.toastText}>{mmDeletedMessage}</Text>
         </View>
       )}
 
@@ -448,7 +518,14 @@ const s = StyleSheet.create({
   celebrateIcon: { fontSize: 48, marginBottom: 10 },
   celebrateTitle: { color: COLOR.goldPrimary, fontSize: 20, fontWeight: '900', letterSpacing: 2 },
   celebrateTierName: { color: COLOR.textPrimary, fontSize: 15, fontWeight: '700', marginTop: 8, marginBottom: 22 },
-  celebrateBtn: { borderWidth: 1.5, borderColor: COLOR.goldPrimary, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 28 },
+  celebrateBtn: { borderWidth: 1.5, borderColor: COLOR.goldPrimary, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 28, alignItems: 'center' },
   celebrateBtnTxt: { color: COLOR.goldPrimary, fontWeight: '800', letterSpacing: 1 },
+
+  toastBanner: {
+    position: 'absolute', top: 60, left: 16, right: 16, zIndex: 1000,
+    backgroundColor: COLOR.bgSecondary, borderWidth: 1.5, borderColor: COLOR.red, borderRadius: 10,
+    paddingVertical: 10, paddingHorizontal: 16,
+  },
+  toastText: { color: COLOR.textPrimary, fontSize: 12, fontWeight: '700', textAlign: 'center' },
 
 });
