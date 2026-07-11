@@ -38,7 +38,8 @@ export const FOUR_GODS: AIConfig[] = [
 
 // Patch Mastermind Conquest: The Nine Sentinels — ผู้เล่นเลือกเองจาก select.tsx (ไม่สุ่มแบบ Four Gods)
 // bossId (key) ต้องตรงกับชื่อไฟล์ asset boss_[key].png และ route param จาก client ทุกจุด
-// P2/P4 ยังใช้ AI_CONFIGS (Sage/Reckless/Ghost) เดิมไม่เปลี่ยน — Sentinel แทนที่นั่ง Boss (P3) เท่านั้น
+// P2/P4: LobbyMatchmaking_Spec_v1_0 §5 เปลี่ยนจาก AI_CONFIGS (Sage/Reckless/Ghost) เดิม → Minion สุ่ม 2 ใน 25
+// (ดู MINION_NAMES/pickRandomMinions ด้านล่าง + getEffectiveAIConfig ใน gameLoop.ts) — Sentinel แทนที่นั่ง Boss (P3) เท่านั้น ไม่เปลี่ยน
 export const NINE_SENTINELS: (AIConfig & { bossId: string })[] = [
   { id: 'AI_IRON_WALL',   bossId: 'iron_wall',   name: 'Iron Wall',   emoji: '🛡️', personality: 'iron_wall'   },
   { id: 'AI_CHIVALRY',    bossId: 'chivalry',    name: 'Chivalry',    emoji: '⚔️', personality: 'chivalry'    },
@@ -50,6 +51,27 @@ export const NINE_SENTINELS: (AIConfig & { bossId: string })[] = [
   { id: 'AI_PHOENIX',     bossId: 'phoenix',     name: 'Phoenix',     emoji: '🔥', personality: 'phoenix'     },
   { id: 'AI_BLACK_MAGIC', bossId: 'black_magic', name: 'Black Magic', emoji: '🪄', personality: 'black_magic' },
 ]
+
+// LobbyMatchmaking_Spec_v1_0 §5: Minion Avatars 25 ตัว (bot_adept_[nn]_[name].png ที่ client/assets/minions/)
+// ใช้เป็น P2/P4 filler ของ Mastermind — ชื่อต้องตรงกับ suffix ไฟล์เป๊ะ (ตัวพิมพ์เล็ก) ห้ามลบชื่อกลุ่ม pride flag
+// (Prim, Xander, Yuri) ออกจาก roster นี้เด็ดขาด
+export const MINION_NAMES: string[] = [
+  'Alex', 'Bella', 'Charlie', 'Diana', 'Edward', 'Fiona', 'Gabriel', 'Hana', 'Ivan', 'Julia',
+  'Kevin', 'Lily', 'Max', 'Natalie', 'Oliver', 'Prim', 'Queenie', 'Ryan', 'Sophia', 'Tom',
+  'Uma', 'Vincent', 'Willow', 'Xander', 'Yuri',
+]
+
+// สุ่ม Minion `count` ตัวแบบไม่ซ้ำกันจาก MINION_NAMES (Fisher-Yates แบบย่อ)
+export function pickRandomMinions(count: number): string[] {
+  const pool = [...MINION_NAMES]
+  const picked: string[] = []
+  for (let i = 0; i < count && pool.length > 0; i++) {
+    const idx = Math.floor(Math.random() * pool.length)
+    picked.push(pool[idx])
+    pool.splice(idx, 1)
+  }
+  return picked
+}
 
 // ── Helper: First-Valid Arrangement (สำหรับ Initiate) ─────────
 // สุ่มจัดไพ่จนผ่าน Foul → ใช้เลย (ไม่ optimize) — AI อ่อนมาก เหมาะกับผู้เล่นใหม่
@@ -69,10 +91,10 @@ function firstValidArrangement(cards: Card[], community: CommunityCards): Player
   return bestArrangement(cards, community)
 }
 
-// ── Helper: Greedy Arrangement (สำหรับ Adept) ─────────────
+// ── Helper: Greedy Arrangement (สำหรับ Adept + Mastermind Minions) ─────────────
 // เลือกทีละกอง: กอง 3 ดีสุดก่อน → กอง 2 จากที่เหลือ → กอง 1 ที่เหลือทั้งหมด
 // ดีกว่า First-Valid แต่พลาดกรณีที่ต้อง swap ข้ามกอง
-function greedyArrangement(cards: Card[], community: CommunityCards): PlayerArrangement {
+export function greedyArrangement(cards: Card[], community: CommunityCards): PlayerArrangement {
   const n = cards.length
   let bestP3Score = -Infinity
   let bestP3: Card[] = cards.slice(n - 5) // fallback

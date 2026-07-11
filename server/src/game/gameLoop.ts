@@ -9,7 +9,7 @@ import { Server } from 'socket.io'
 import { dealCards } from './cardEngine'
 import { evaluateHand, compareHands, handRankLabel } from './handEvaluator'
 import { checkFoul, PlayerArrangement, CommunityCards } from './foulChecker'
-import { aiDecideArrangement, AI_CONFIGS, AIConfig, FOUR_GODS, NINE_SENTINELS } from './aiEngine'
+import { aiDecideArrangement, AI_CONFIGS, AIConfig, AIPersonality, FOUR_GODS, NINE_SENTINELS, greedyArrangement, pickRandomMinions } from './aiEngine'
 import { Card } from './deck'
 import { gameConfig } from '../config/gameConfig'
 import { supabase } from '../config/supabase'
@@ -181,6 +181,20 @@ export async function startMatch(
     const chosenSentinel = NINE_SENTINELS.find(s => s.bossId === bossId) ?? NINE_SENTINELS[0]
     ;(state as any)._bossOverride = chosenSentinel
     ;(state as any)._bossId = chosenSentinel.bossId // เก็บไว้ใช้ตอน match_end เขียน conquered_sentinels
+
+    // LobbyMatchmaking_Spec_v1_0 §5: P2/P4 = Minion สุ่ม 2 ใน 25 (แทน Sage/Reckless/Ghost เดิม) —
+    // สุ่มครั้งเดียวตอนเริ่มแมตช์ ไม่สุ่มใหม่ทุก Round, personality สุ่ม 1 ใน 3 แบบ Tier C (ไม่ผูกกับชื่อ)
+    const minionPersonalities: AIPersonality[] = ['sage', 'reckless', 'ghost']
+    const minionNames = pickRandomMinions(2)
+    const fillerIds = [AI_CONFIGS[1].id, AI_CONFIGS[2].id]
+    const minionOverrides: Record<string, { name: string; personality: AIPersonality }> = {}
+    fillerIds.forEach((id, i) => {
+      minionOverrides[id] = {
+        name: minionNames[i],
+        personality: minionPersonalities[Math.floor(Math.random() * minionPersonalities.length)],
+      }
+    })
+    ;(state as any)._minionOverrides = minionOverrides
   }
   matchStates.set(roomId, state)
 
@@ -188,10 +202,18 @@ export async function startMatch(
 }
 
 // Patch High Noble / Mastermind Conquest: คืน AIConfig ที่ใช้จริง — ถ้าเป็น Boss (AI_CONFIGS[0]) + มี override ให้ใช้ Boss แทน
+// LobbyMatchmaking_Spec_v1_0 §5: Mastermind P2/P4 (AI_CONFIGS[1]/[2]) ใช้ Minion override (ชื่อ+personality สุ่ม) ถ้ามี
 function getEffectiveAIConfig(state: MatchState, ai: AIConfig): AIConfig {
-  const override = (state as any)._bossOverride as AIConfig | undefined
+  const bossOverride = (state as any)._bossOverride as AIConfig | undefined
   const isBossSeat = ai.id === AI_CONFIGS[0].id && (state.tier === 'highNoble' || state.tier === 'mastermind')
-  if (override && isBossSeat) return override
+  if (bossOverride && isBossSeat) return bossOverride
+
+  const minionOverrides = (state as any)._minionOverrides as Record<string, { name: string; personality: AIPersonality }> | undefined
+  const minionOverride = minionOverrides?.[ai.id]
+  if (state.tier === 'mastermind' && minionOverride) {
+    return { ...ai, name: minionOverride.name, emoji: '🤖', personality: minionOverride.personality }
+  }
+
   return ai
 }
 
@@ -221,17 +243,22 @@ export async function startRound(io: Server, roomId: string): Promise<void> {
 
   // AI decide arrangement ทันที (ซ่อนไว้ก่อน)
   // Patch High Noble: Boss (AI_CONFIGS[0]) ใช้ personality จตุรเทพที่เลือกไว้ (ถ้ามี)
+  // LobbyMatchmaking_Spec_v1_0 §5: Mastermind Minion (P2/P4) ใช้ greedyArrangement เสมอ ไม่ผ่าน aiDecideArrangement
+  // (tier='mastermind' จะเข้า arrangeByPersonality ปกติ ซึ่งไม่ใช่ greedy — ต้องเรียกตรงสำหรับ 2 ที่นั่งนี้)
+  const minionOverrides = (state as any)._minionOverrides as Record<string, unknown> | undefined
   const aiArrangements: Record<string, PlayerArrangement> = {}
   AI_CONFIGS.forEach((ai, i) => {
     const effectiveAI = getEffectiveAIConfig(state, ai)
-    aiArrangements[ai.id] = aiDecideArrangement(
-      effectiveAI,
-      cardsMap[ai.id],
-      community,
-      state.roundNumber,
-      state.tier,
-      state.humanWinStreak,
-    )
+    aiArrangements[ai.id] = (state.tier === 'mastermind' && minionOverrides?.[ai.id])
+      ? greedyArrangement(cardsMap[ai.id], community)
+      : aiDecideArrangement(
+          effectiveAI,
+          cardsMap[ai.id],
+          community,
+          state.roundNumber,
+          state.tier,
+          state.humanWinStreak,
+        )
   })
 
   // เก็บ ai arrangements ใน state ชั่วคราว
@@ -631,11 +658,15 @@ async function resolveBlindAuctionTimeout(io: Server, roomId: string): Promise<v
 
     // AI ที่ชนะประมูล — จัดไพ่ใหม่ด้วยมือ 12 ใบ (เหมือนผู้เล่นจริง ไม่บังคับลง pile3)
     // Patch High Noble: Boss ใช้ personality จตุรเทพที่เลือกไว้ (ถ้ามี) ตอนจัดไพ่รอบ2 ด้วย
+    // LobbyMatchmaking_Spec_v1_0 §5: Mastermind Minion ใช้ greedyArrangement รอบ 2 เหมือนกัน
+    const minionOverridesR2 = (state as any)._minionOverrides as Record<string, unknown> | undefined
     AI_CONFIGS.forEach(ai => {
       if (auctionWonCards[ai.id]) {
         const effectiveAI = getEffectiveAIConfig(state, ai)
         const fullHand = [...cardsMap[ai.id], auctionWonCards[ai.id]]
-        aiArrangements[ai.id] = aiDecideArrangement(effectiveAI, fullHand, community, state.roundNumber, state.tier, state.humanWinStreak)
+        aiArrangements[ai.id] = (state.tier === 'mastermind' && minionOverridesR2?.[ai.id])
+          ? greedyArrangement(fullHand, community)
+          : aiDecideArrangement(effectiveAI, fullHand, community, state.roundNumber, state.tier, state.humanWinStreak)
       }
     })
     ;(state as any)._aiArrangements = aiArrangements
