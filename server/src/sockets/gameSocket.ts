@@ -283,7 +283,7 @@ export function registerGameSocket(io: Server): void {
       for (const room of timedOut) {
         let filled = await fillRemainingWithAI(room.roomId);
         if (filled) {
-          // Monarch Spec v1.2: สุ่ม Boss จริง (weighted + pity) ตอนรู้ user_id Human ครบแล้ว ก่อนแจ้ง client
+          // Monarch Spec v1.3: สุ่ม Boss จริง (weighted + pity) ตอนรู้ user_id Human ครบแล้ว ก่อนแจ้ง client
           if (tier === 'highNoble') filled = await finalizeBossSeat(filled);
           io.to(room.roomId).emit("room_ai_filled", {
             roomId: room.roomId,
@@ -663,7 +663,7 @@ export function registerGameSocket(io: Server): void {
         io.to(result.room.roomId).emit("room_status", { room: result.room });
 
         if (result.room.status === 'full') {
-          // Monarch Spec v1.2: สุ่ม Boss จริง (weighted + pity) ตอนรู้ user_id Human ครบ 3 คนแล้ว
+          // Monarch Spec v1.3: สุ่ม Boss จริง (weighted + pity) ตอนรู้ user_id Human ครบ 3 คนแล้ว
           const finalRoom = tier === 'highNoble' ? await finalizeBossSeat(result.room) : result.room;
           await markInProgress(finalRoom.roomId);
           io.to(finalRoom.roomId).emit("room_ready", { roomId: finalRoom.roomId, seats: finalRoom.seats });
@@ -708,7 +708,7 @@ export function registerGameSocket(io: Server): void {
         io.to(roomId).emit("room_status", { room: result.room });
 
         if (result.room.status === 'full') {
-          // Monarch Spec v1.2: สุ่ม Boss จริง (weighted + pity) ตอนรู้ user_id Human ครบ 3 คนแล้ว
+          // Monarch Spec v1.3: สุ่ม Boss จริง (weighted + pity) ตอนรู้ user_id Human ครบ 3 คนแล้ว
           const finalRoom = result.room.tier === 'highNoble' ? await finalizeBossSeat(result.room) : result.room;
           await markInProgress(roomId);
           io.to(roomId).emit("room_ready", { roomId, seats: finalRoom.seats });

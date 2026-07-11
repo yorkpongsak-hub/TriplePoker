@@ -23,7 +23,7 @@ export interface Seat {
   joinedAt: number
   aiConfigId?: string   // Patch Multiplayer HighNoble: เก็บ AIConfig.id ของที่นั่ง AI ไว้ (boss = Four Gods id, filler = generic AI_CONFIGS id)
   isBoss?: boolean      // Patch Multiplayer HighNoble: true เฉพาะที่นั่ง Boss (seat index 0, Four Gods, ห้าม Human เข้าตลอดกาล)
-  isMonarch?: boolean   // Monarch Spec v1.2: true เฉพาะที่นั่ง Boss ที่สุ่มโดน Monarch (บุคลิกล็อคครั้งเดียวตอนแจกไพ่ ไม่สลับกลางเกม — ดู monarchAI.ts)
+  isMonarch?: boolean   // Monarch Spec v1.3: true เฉพาะที่นั่ง Boss ที่สุ่มโดน Monarch (บุคลิกล็อคครั้งเดียวตอนแจกไพ่ ไม่สลับกลางเกม — ดู monarchAI.ts)
 }
 
 export interface GameRoom {
@@ -251,7 +251,7 @@ export async function markInProgress(roomId: string): Promise<void> {
   await saveRoom(room)
 }
 
-// ─── Monarch Boss Finalize (Spec v1.2) ──────────────────────────
+// ─── Monarch Boss Finalize (Spec v1.3) ──────────────────────────
 // เรียกตอนห้อง highNoble เต็ม (รู้ user_id ของ Human ครบ 3 คนแล้ว) — สุ่มทับที่นั่ง Boss (seat 0)
 // ด้วย weighted random + pity จริง (bossSeat() ตอนสร้างห้องเป็นแค่ placeholder ระหว่างรอ Human เข้า)
 export async function finalizeBossSeat(room: GameRoom): Promise<GameRoom> {

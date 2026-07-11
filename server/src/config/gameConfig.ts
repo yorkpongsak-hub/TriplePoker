@@ -289,7 +289,7 @@ export const gameConfig = {
     4: { id: 4, name: 'Bamboo Rice Field', tiers: ['highNoble'], assetPath: 'assets/tables/skin_4_bamboo.png' }
   },
 
-  // ─── Monarch (TriplePoker_Monarch_Spec_v1_2) ──────────────────
+  // ─── Monarch (TriplePoker_Monarch_Spec_v1_3) ──────────────────
   // บอสลับตัวที่ 5 ของ Tier A+ (High Noble) — สุ่ม Base 3% + Pity Counter ต่อผู้เล่น (max ของโต๊ะ)
   monarchConfig: {
     spawnRateBase:   0.03,   // 3% พื้นฐาน
@@ -299,7 +299,7 @@ export const gameConfig = {
     // น้ำหนักสุ่ม Boss ปกติของ High Noble (รวม Monarch, รวมกัน = 100) — ไม่ใช่ Monarch → normalize 4 ตัวที่เหลือตามสัดส่วนเดิม
     bossWeights: { reaper: 28, crag: 25, cortex: 25, cipher: 19, monarch: 3 },
     // Personality Lock ของ Monarch — แบ่ง Total Hand Strength (bestArrangement) เป็น 4 ช่วงด้วย quartile threshold
-    // (Spec v1.2 ให้แค่คำบรรยายเชิงคุณภาพ "แข็งมาก/ปานกลาง/ปานกลางค่อนอ่อน/อ่อน" — ตัวเลขนี้เป็นค่าเริ่มต้นที่ปรับจูนได้หลัง playtest จริง)
+    // (Spec v1.3 ให้แค่คำบรรยายเชิงคุณภาพ "แข็งมาก/ปานกลาง/ปานกลางค่อนอ่อน/อ่อน" — ตัวเลขนี้เป็นค่าเริ่มต้นที่ปรับจูนได้หลัง playtest จริง)
     handStrengthQuartile: { veryStrong: 0.75, medium: 0.5, mediumWeak: 0.25 },
   },
 
@@ -326,7 +326,7 @@ export const gameConfig = {
     assetAvatar: 'boss_Monarch_avatar.png',
   },
 
-  // ─── Ascendant Gate (Monarch_Spec_v1_2 §5 — ทับ MasterPlan §5 เดิม) ─
+  // ─── Ascendant Gate (Monarch_Spec_v1_3 §5 — ทับ MasterPlan §5 เดิม) ─
   // Ascendant ยังไม่ใช่ tier เต็มรูปแบบใน tierRanges/getTierFromToken() — ใช้ค่านี้ตรงใน ascendantGate.ts เท่านั้น
   ascendantConfig: {
     tokenMin:              600_000,

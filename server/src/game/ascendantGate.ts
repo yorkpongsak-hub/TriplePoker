@@ -1,5 +1,5 @@
 // ============================================================
-// ascendantGate.ts — Ascendant Tier Entry Gate (Monarch_Spec_v1_2 §5)
+// ascendantGate.ts — Ascendant Tier Entry Gate (Monarch_Spec_v1_3 §5)
 // STUB: ยังไม่ถูกเรียกจาก promotion flow จริง (ยังไม่มี Ascendant tier promotion
 // logic อยู่ในโค้ดเดิมเลยตอนสำรวจ — ไม่มีจุดใดใน repo คำนวณ/เช็คการเลื่อนขึ้น Ascendant)
 // TODO: wire เข้ากับ tier promotion flow จริงตอน Ascendant Tier ถูก implement เต็มรูปแบบ
@@ -21,7 +21,7 @@ export interface AscendantEligibilityResult {
   reason: AscendantEligibilityReason
 }
 
-// เช็คเงื่อนไขเข้า Ascendant Tier: token 600k-999,999 + monarch_victories >= 1 (Spec v1.2 §5 ทับ MasterPlan §5 เดิม)
+// เช็คเงื่อนไขเข้า Ascendant Tier: token 600k-999,999 + monarch_victories >= 1 (Spec v1.3 §5 ทับ MasterPlan §5 เดิม)
 // หมายเหตุ: ยังไม่เช็ค "ผ่าน Tier A+" ตรงๆ เพราะไม่มี field/flag นั้นในโค้ดปัจจุบัน (เดา token >= highNoble.min
 // จาก gameConfig.tierRanges แทนไปก่อน) — TODO ทบทวนตอน wire จริง ถ้ามี field อื่นที่ authoritative กว่า
 export async function checkAscendantEligibility(userId: string): Promise<AscendantEligibilityResult> {

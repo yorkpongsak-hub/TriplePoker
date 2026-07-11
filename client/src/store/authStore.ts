@@ -17,8 +17,9 @@ interface UserProfile {
   token_balance: number | null
   crown_balance: number | null
   xp: number | null
-  performance_score: number | null    // Monarch_Spec_v1_2 §4 — active ตั้งแต่ Tier A+ ขึ้นไป
-  monarch_victories: number | null    // Monarch_Spec_v1_2 §3/§5 — Badge "Monarch Slayer" (>=1) + เงื่อนไข Ascendant Gate
+  performance_score: number | null    // Monarch_Spec_v1_3 §4 — Career PS (lifetime, ห้ามรีเซ็ต) active ตั้งแต่ Tier A+ ขึ้นไป
+  ps_season: number | null            // Monarch_Spec_v1_3 §4.2 — Season PS (เกณฑ์แข่งขัน/Ascendant Star, รีเซ็ตตาม tournament)
+  monarch_victories: number | null    // Monarch_Spec_v1_3 §3/§5 — Badge "Monarch Slayer" (>=1) + เงื่อนไข Ascendant Gate
 }
 
 interface AuthState {
@@ -82,7 +83,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const { data, error } = await supabase
         .from('users')
-        .select('user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp, performance_score, monarch_victories')
+        .select('user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp, performance_score, ps_season, monarch_victories')
         .eq('user_id', user.id)
         .maybeSingle()
       console.log('[authStore] refreshProfile query result:', { data, error, queriedUserId: user.id })

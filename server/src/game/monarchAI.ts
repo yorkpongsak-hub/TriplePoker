@@ -1,5 +1,5 @@
 // ============================================================
-// monarchAI.ts — Monarch Adaptive Personality Lock (Monarch_Spec_v1_2 §1)
+// monarchAI.ts — Monarch Adaptive Personality Lock (Monarch_Spec_v1_3 §1)
 // ล็อคบุคลิกตาม Hand Strength ทันทีที่แจกไพ่เสร็จ (Round 1 เท่านั้น) แล้วคงไว้ทั้งแมตช์
 // ไม่มี logic การตัดสินใจเอง — delegate ทุกอย่าง (arrangement/auction/grand finale) ไปยัง
 // personality logic ของจตุรเทพที่มีอยู่แล้วใน aiEngine.ts ผ่าน AIPersonality ปกติ

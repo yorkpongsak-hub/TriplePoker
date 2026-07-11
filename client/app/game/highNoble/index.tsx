@@ -47,7 +47,7 @@ const BOSS_INTRO: Record<string, { image: any; quotes: string[] }> = {
       "There is no pattern to crack. There is only luck — and how well you bear it.",
     ],
   },
-  // Monarch Spec v1.2: บอสลับ — ผู้เล่นเห็นแค่ชื่อ "Monarch" ไม่รู้ว่าสวมบุคลิกจตุรเทพใด (ล็อคไว้ฝั่ง server)
+  // Monarch Spec v1.3: บอสลับ — ผู้เล่นเห็นแค่ชื่อ "Monarch" ไม่รู้ว่าสวมบุคลิกจตุรเทพใด (ล็อคไว้ฝั่ง server)
   'Monarch': {
     image: require('../../../assets/bosses/boss_Monarch.png'),
     quotes: [

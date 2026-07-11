@@ -114,6 +114,13 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+// Monarch Spec v1.3 §3 — Pot ×2.0 ระดับ "ทั้งแมตช์": ถ้าเป็นผู้ชนะ human ที่เจอ Monarch และกำไรสุทธิของ
+// แมตช์เป็นบวก ได้รับ mint ส่วนต่างเพิ่มอีกเท่าตัว (ไม่หักจากผู้เล่นอื่น) — แยกเป็น pure function เพื่อเทสได้ตรงๆ
+export function computeHNHumanPayout(netDelta: number, isMonarchWinnerCandidate: boolean, potMultiplier: number): number {
+  const isMonarchWinner = isMonarchWinnerCandidate && netDelta > 0
+  return isMonarchWinner ? netDelta * potMultiplier : netDelta
+}
+
 // ── Types ────────────────────────────────────────────────────
 export interface HNSeat {
   id: string            // human: real userId | AI: stable instance id เช่น 'AI_BOSS', 'AI_FILL_1'
@@ -122,7 +129,7 @@ export interface HNSeat {
   name: string
   emoji: string
   personality?: AIPersonality  // เฉพาะ AI seat — สำหรับ Monarch คือบุคลิกที่ล็อคไว้ (client ไม่เห็นค่านี้ เห็นแค่ name="Monarch")
-  isMonarch?: boolean          // Monarch Spec v1.2: true เฉพาะที่นั่ง Boss ที่สุ่มโดน Monarch — บุคลิกล็อคครั้งเดียวตอนแจกไพ่ ไม่สลับกลางเกม
+  isMonarch?: boolean          // Monarch Spec v1.3: true เฉพาะที่นั่ง Boss ที่สุ่มโดน Monarch — บุคลิกล็อคครั้งเดียวตอนแจกไพ่ ไม่สลับกลางเกม
 }
 
 interface HNGrandFinaleState {
@@ -228,7 +235,7 @@ export async function startHighNobleMultiMatch(
     }
     if (role === 'boss') {
       if (rs.isMonarch) {
-        // Monarch Spec v1.2: personality ยังไม่ล็อค ณ จุดนี้ — startHNRound (Round 1) จะล็อคตาม hand strength
+        // Monarch Spec v1.3: personality ยังไม่ล็อค ณ จุดนี้ — startHNRound (Round 1) จะล็อคตาม hand strength
         // ทันทีที่แจกไพ่เสร็จ (ดู monarchAI.ts) แล้วคงบุคลิกนั้นตลอดแมตช์ ไม่สลับอีก
         return { id: 'AI_BOSS', role, isHuman: false, name: gameConfig.monarchIdentity.name, emoji: gameConfig.monarchIdentity.emoji, personality: FOUR_GODS[0].personality, isMonarch: true }
       }
@@ -306,7 +313,7 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
   state.cardsMap = cardsMap
   state.blindAuctionCards = dealt.blindAuction
 
-  // Monarch Spec v1.2: ล็อคบุคลิกตาม hand strength ทันทีที่แจกไพ่เสร็จ — เฉพาะ Round 1 เท่านั้น
+  // Monarch Spec v1.3: ล็อคบุคลิกตาม hand strength ทันทีที่แจกไพ่เสร็จ — เฉพาะ Round 1 เท่านั้น
   // (ล็อคครั้งเดียวทั้งแมตช์ ไม่สลับอีก, client ไม่เห็นค่า personality — เห็นแค่ name="Monarch")
   const boss = state.seats[0]
   if (boss.isMonarch && state.roundNumber === 1) {
@@ -994,7 +1001,7 @@ function finalizeHNGrandFinale(
 
       // ── Settlement จริง: คืน lock-up ante + persist ผลแพ้/ชนะสุทธิของแมตช์ลง token_balance ──
       // (ของเดิมคืนแค่ locked ante เฉยๆ ไม่เคย persist ผลเล่นจริง — แก้เป็น prerequisite ก่อน Monarch payout)
-      // Monarch Spec v1.2 §3: ผู้ชนะ human ที่เจอ Monarch (กำไรสุทธิ > 0) ได้ Pot ×2.0 ระดับ "ทั้งแมตช์" —
+      // Monarch Spec v1.3 §3: ผู้ชนะ human ที่เจอ Monarch (กำไรสุทธิ > 0) ได้ Pot ×2.0 ระดับ "ทั้งแมตช์" —
       // ส่วนต่างที่เพิ่ม (อีก 1x) เป็น House mint ไม่หักจากผู้เล่นอื่น (ยืนยันขอบเขตกับลุงเยาะแล้ว — ระดับ match ไม่ใช่ต่อ pile/round)
       const HN_BASELINE = 5000
       const bossSeatFinal = state.seats[0]
@@ -1007,17 +1014,16 @@ function finalizeHNGrandFinale(
         await returnPlayerLockedTokens(s.id, state.lockedTokens[s.id] ?? 0)
         const netDelta = (state.tokenBalance[s.id] ?? HN_BASELINE) - HN_BASELINE
         humanNetDeltas[s.id] = netDelta
-        const isMonarchWinner = isMonarchMatch && isHumanWinner && s.id === finalWinner && netDelta > 0
-        const payout = isMonarchWinner ? netDelta * gameConfig.monarchConfig.potMultiplier : netDelta
+        const payout = computeHNHumanPayout(netDelta, isMonarchMatch && isHumanWinner && s.id === finalWinner, gameConfig.monarchConfig.potMultiplier)
         if (payout !== 0) await persistHNNetTokenResult(s.id, payout)
       }))
 
-      // Badge "Monarch Slayer" + เงื่อนไข Ascendant Gate (Spec v1.2 §5)
+      // Badge "Monarch Slayer" + เงื่อนไข Ascendant Gate (Spec v1.3 §5)
       if (isMonarchMatch && isHumanWinner) {
         await recordMonarchVictory(finalWinner)
       }
 
-      // Performance Score — active ตั้งแต่ Tier A+ (Spec v1.2 §4)
+      // Performance Score — active ตั้งแต่ Tier A+ (Spec v1.3 §4)
       await awardPerformanceScore({
         tier: 'highNoble',
         finalWinnerId: isHumanWinner ? finalWinner : null,

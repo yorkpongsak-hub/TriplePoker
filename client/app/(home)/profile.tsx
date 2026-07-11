@@ -61,7 +61,7 @@ const VIP_INFO: Record<string, { label: string; color: string } | null> = {
 
 const fmt = (n: number) => n.toLocaleString('en-US')
 
-// Monarch_Spec_v1_2 §4/§5 — Performance Score + Ascendant Gate ปลดล็อคตั้งแต่ Tier A+ ขึ้นไปเท่านั้น
+// Monarch_Spec_v1_3 §4/§5 — Performance Score + Ascendant Gate ปลดล็อคตั้งแต่ Tier A+ ขึ้นไปเท่านั้น
 const PS_UNLOCKED_TIERS = new Set(['A+', 'S', 'S+'])
 const ASCENDANT_TOKEN_MIN = 600_000
 const ASCENDANT_TOKEN_MAX = 999_999
@@ -85,8 +85,9 @@ export default function ProfileScreen() {
   // ใช้ MOCK จนกว่าจะรัน migration เพิ่มคอลัมน์ — ดู supabase/migrations/004_add_streak_count.sql
   const streakDays  = MOCK.streakDays
 
-  // Monarch_Spec_v1_2 §4/§5 — ต้องรัน supabase/migrations/006_monarch_spawn_reward.sql ก่อน คอลัมน์นี้ถึงจะมีค่าจริง
-  const performanceScore = profile?.performance_score ?? 0
+  // Monarch_Spec_v1_3 §4/§5 — ต้องรัน supabase/migrations/006_monarch_spawn_reward.sql ก่อน คอลัมน์นี้ถึงจะมีค่าจริง
+  const careerPS = profile?.performance_score ?? 0   // Career PS — lifetime, ห้ามรีเซ็ต
+  const seasonPS = profile?.ps_season ?? 0            // Season PS — เกณฑ์แข่งขัน/Ascendant Star, รีเซ็ตตาม tournament
   const monarchVictories = profile?.monarch_victories ?? 0
   const isPSUnlocked     = PS_UNLOCKED_TIERS.has(tier)
   const isMonarchSlayer  = monarchVictories >= 1
@@ -179,10 +180,15 @@ export default function ProfileScreen() {
           <ResourceBox icon="💎" label="VIP STATUS" value={vipInfo?.label ?? 'FREE'} valueColor={vipInfo?.color ?? C.textPrimary} />
         </GoldCard>
 
-        {/* ═══════════════ PERFORMANCE SCORE (Tier A+ ขึ้นไปเท่านั้น — Monarch_Spec_v1_2 §4) ═══════════════ */}
+        {/* ═══════════════ PERFORMANCE SCORE — Dual-Track (Tier A+ ขึ้นไปเท่านั้น — Monarch_Spec_v1_3 §4) ═══════════════ */}
+        {/* Season PS เด่น (เกณฑ์แข่งขัน/Ascendant Star) + Career PS รอง (lifetime, ห้ามรีเซ็ต) — TODO: font JetBrains Mono ตาม spec ยังไม่ได้ load เข้า expo-font ในโปรเจกต์ */}
         {isPSUnlocked && (
           <GoldCard style={s.psCard}>
-            <ResourceBox icon="📊" label="PERFORMANCE SCORE" value={fmt(performanceScore)} valueColor={C.purple} />
+            <View style={s.psSeasonRow}>
+              <Text style={s.psSeasonLabel}>📊 SEASON PS</Text>
+              <Text style={s.psSeasonValue}>{fmt(seasonPS)}</Text>
+            </View>
+            <Text style={s.psCareerValue}>Career PS (lifetime): {fmt(careerPS)}</Text>
           </GoldCard>
         )}
 
@@ -382,6 +388,10 @@ const s = StyleSheet.create({
     padding: 12,
     borderColor: C.purple,
   },
+  psSeasonRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  psSeasonLabel: { color: C.textSec, fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  psSeasonValue: { color: C.purple, fontSize: 20, fontWeight: '900' },
+  psCareerValue: { color: C.textDim, fontSize: 10, fontWeight: '700', marginTop: 4, textAlign: 'right' },
   ascendantHint: {
     marginTop: 10,
     padding: 12,

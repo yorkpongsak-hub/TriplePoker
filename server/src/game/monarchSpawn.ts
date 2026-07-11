@@ -1,5 +1,5 @@
 // ============================================================
-// monarchSpawn.ts — Monarch Boss Selection + Pity Counter (Monarch_Spec_v1_2 §2)
+// monarchSpawn.ts — Monarch Boss Selection + Pity Counter (Monarch_Spec_v1_3 §2)
 // ใช้เฉพาะโต๊ะ High Noble ตอนห้องเต็ม (รู้ user_id ของ Human ทั้ง 3 คนแล้ว)
 // The Sage Unicorn Studio Co., Ltd.
 // ============================================================
