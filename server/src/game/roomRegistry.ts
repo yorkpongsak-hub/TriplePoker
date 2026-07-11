@@ -9,6 +9,7 @@
 
 import { redis } from '../config/redis'
 import { FOUR_GODS, AIConfig } from './aiEngine'
+import { rollHighNobleBoss } from './monarchSpawn'
 
 // ─── Types ───────────────────────────────────────────────────────
 export type Tier = 'adept' | 'mastermind' | 'highNoble'
@@ -248,4 +249,20 @@ export async function markInProgress(roomId: string): Promise<void> {
   if (!room) return
   room.status = 'in_progress'
   await saveRoom(room)
+}
+
+// ─── Monarch Boss Finalize (Spec v1.2) ──────────────────────────
+// เรียกตอนห้อง highNoble เต็ม (รู้ user_id ของ Human ครบ 3 คนแล้ว) — สุ่มทับที่นั่ง Boss (seat 0)
+// ด้วย weighted random + pity จริง (bossSeat() ตอนสร้างห้องเป็นแค่ placeholder ระหว่างรอ Human เข้า)
+export async function finalizeBossSeat(room: GameRoom): Promise<GameRoom> {
+  if (room.tier !== 'highNoble') return room
+  const humanUserIds = room.seats.filter(s => s.type === 'human' && s.userId).map(s => s.userId!)
+  const result = await rollHighNobleBoss(humanUserIds)
+
+  room.seats[0] = result.isMonarch
+    ? { type: 'ai', name: 'Monarch', joinedAt: Date.now(), isBoss: true, isMonarch: true }
+    : { type: 'ai', name: result.boss!.name, joinedAt: Date.now(), aiConfigId: result.boss!.id, isBoss: true }
+
+  await saveRoom(room)
+  return room
 }

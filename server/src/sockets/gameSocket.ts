@@ -22,7 +22,7 @@ import { createTableWithId, setSeat, deleteTable } from "../game/tableRegistry";
 import { createAdeptTable, joinAdeptTable, getTimedOutAdeptTables } from "../game/tableRegistry";
 import {
   findOrCreateRoom, createPrivateRoom, joinRoom, getRoom as getRoomFromRegistry,
-  fillRemainingWithAI, getTimedOutRooms, markInProgress,
+  fillRemainingWithAI, getTimedOutRooms, markInProgress, finalizeBossSeat,
   type Tier as RoomTier,
 } from "../game/roomRegistry";
 import { broadcastTableUpdate } from "./lobbySocket";
@@ -281,8 +281,10 @@ export function registerGameSocket(io: Server): void {
     for (const tier of tiers) {
       const timedOut = await getTimedOutRooms(tier);
       for (const room of timedOut) {
-        const filled = await fillRemainingWithAI(room.roomId);
+        let filled = await fillRemainingWithAI(room.roomId);
         if (filled) {
+          // Monarch Spec v1.2: สุ่ม Boss จริง (weighted + pity) ตอนรู้ user_id Human ครบแล้ว ก่อนแจ้ง client
+          if (tier === 'highNoble') filled = await finalizeBossSeat(filled);
           io.to(room.roomId).emit("room_ai_filled", {
             roomId: room.roomId,
             seats: filled.seats,
@@ -661,13 +663,15 @@ export function registerGameSocket(io: Server): void {
         io.to(result.room.roomId).emit("room_status", { room: result.room });
 
         if (result.room.status === 'full') {
-          await markInProgress(result.room.roomId);
-          io.to(result.room.roomId).emit("room_ready", { roomId: result.room.roomId, seats: result.room.seats });
+          // Monarch Spec v1.2: สุ่ม Boss จริง (weighted + pity) ตอนรู้ user_id Human ครบ 3 คนแล้ว
+          const finalRoom = tier === 'highNoble' ? await finalizeBossSeat(result.room) : result.room;
+          await markInProgress(finalRoom.roomId);
+          io.to(finalRoom.roomId).emit("room_ready", { roomId: finalRoom.roomId, seats: finalRoom.seats });
           // Patch Multiplayer: เริ่มเกมทันทีเมื่อห้องเต็ม
           if (tier === 'adept') {
-            await startMultiplayerMatch(io, result.room.roomId, result.room.seats, 'adept');
+            await startMultiplayerMatch(io, finalRoom.roomId, finalRoom.seats, 'adept');
           } else if (tier === 'highNoble') {
-            await startHighNobleMultiMatch(io, result.room.roomId, result.room.seats);
+            await startHighNobleMultiMatch(io, finalRoom.roomId, finalRoom.seats);
           }
         }
       } catch (err: any) {
@@ -704,12 +708,14 @@ export function registerGameSocket(io: Server): void {
         io.to(roomId).emit("room_status", { room: result.room });
 
         if (result.room.status === 'full') {
+          // Monarch Spec v1.2: สุ่ม Boss จริง (weighted + pity) ตอนรู้ user_id Human ครบ 3 คนแล้ว
+          const finalRoom = result.room.tier === 'highNoble' ? await finalizeBossSeat(result.room) : result.room;
           await markInProgress(roomId);
-          io.to(roomId).emit("room_ready", { roomId, seats: result.room.seats });
-          if (result.room.tier === 'adept') {
-            await startMultiplayerMatch(io, roomId, result.room.seats, 'adept');
-          } else if (result.room.tier === 'highNoble') {
-            await startHighNobleMultiMatch(io, roomId, result.room.seats);
+          io.to(roomId).emit("room_ready", { roomId, seats: finalRoom.seats });
+          if (finalRoom.tier === 'adept') {
+            await startMultiplayerMatch(io, roomId, finalRoom.seats, 'adept');
+          } else if (finalRoom.tier === 'highNoble') {
+            await startHighNobleMultiMatch(io, roomId, finalRoom.seats);
           }
         }
       }
