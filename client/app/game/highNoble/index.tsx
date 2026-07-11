@@ -15,6 +15,7 @@ import { io, Socket } from 'socket.io-client'
 import { router, useLocalSearchParams } from 'expo-router'
 import { autoSort } from '../../../src/utils/autoSort'
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
+import { MINION_AVATAR } from '../../../src/constants/minionAvatars'
 
 // ── Assets
 const studioLogo  = require('../../../assets/images/sage_unicorn_logo_transparent.png')
@@ -2215,7 +2216,7 @@ const GameTableLive: React.FC = () => {
             <View style={[s.sideCol, { paddingLeft: 10 }]}>
               <Text style={s.sideName}>{p2AI?.emoji ?? 'P2'}</Text>
               <View style={{ marginTop: 4, marginBottom: 60 }}>
-                <AvatarBubble emoji={p2AI?.emoji ?? '👤'} size={36} />
+                <AvatarBubble emoji={p2AI?.emoji ?? '👤'} size={36} image={p2AI?.name ? MINION_AVATAR[p2AI.name] : undefined} />
                 {p2AI && <GFStatusBadge playerId={p2AI.id} />}
                 {p2AI && <GFHealthBar playerId={p2AI.id} />}
               </View>
@@ -2299,7 +2300,7 @@ const GameTableLive: React.FC = () => {
             <View style={[s.sideCol, { paddingRight: 10 }]}>
               <Text style={s.sideName}>{p4AI?.emoji ?? 'P4'}</Text>
               <View style={{ marginTop: 4, marginBottom: 60 }}>
-                <AvatarBubble emoji={p4AI?.emoji ?? '👤'} size={36} />
+                <AvatarBubble emoji={p4AI?.emoji ?? '👤'} size={36} image={p4AI?.name ? MINION_AVATAR[p4AI.name] : undefined} />
                 {p4AI && <GFStatusBadge playerId={p4AI.id} />}
                 {p4AI && <GFHealthBar playerId={p4AI.id} />}
               </View>
@@ -2563,13 +2564,13 @@ const GameTableLive: React.FC = () => {
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginTop: 14, paddingHorizontal: 4 }}>
                   {p2AI && (
                     <View style={{ alignItems: 'flex-start', gap: 4 }}>
-                      <SeatHeader pid={p2AI.id} emoji={p2AI.emoji} name={p2AI.name} />
+                      <SeatHeader pid={p2AI.id} emoji={p2AI.emoji} name={p2AI.name} image={MINION_AVATAR[p2AI.name]} />
                       <GFPile3Row playerId={p2AI.id} />
                     </View>
                   )}
                   {p4AI && (
                     <View style={{ alignItems: 'flex-end', gap: 4 }}>
-                      <SeatHeader pid={p4AI.id} emoji={p4AI.emoji} name={p4AI.name} />
+                      <SeatHeader pid={p4AI.id} emoji={p4AI.emoji} name={p4AI.name} image={MINION_AVATAR[p4AI.name]} />
                       <GFPile3Row playerId={p4AI.id} />
                     </View>
                   )}
