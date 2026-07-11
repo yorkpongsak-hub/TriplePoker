@@ -8,7 +8,7 @@
  */
 
 import { redis } from '../config/redis'
-import { FOUR_GODS, AI_CONFIGS, AIConfig } from './aiEngine'
+import { FOUR_GODS, AI_CONFIGS, AIConfig, pickRandomMinions } from './aiEngine'
 import { rollHighNobleBoss } from './monarchSpawn'
 
 // ─── Types ───────────────────────────────────────────────────────
@@ -24,6 +24,7 @@ export interface Seat {
   aiConfigId?: string   // Patch Multiplayer HighNoble: เก็บ AIConfig.id ของที่นั่ง AI ไว้ (boss = Four Gods id, filler = generic AI_CONFIGS id)
   isBoss?: boolean      // Patch Multiplayer HighNoble: true เฉพาะที่นั่ง Boss (seat index 0, Four Gods, ห้าม Human เข้าตลอดกาล)
   isMonarch?: boolean   // Monarch Spec v1.3: true เฉพาะที่นั่ง Boss ที่สุ่มโดน Monarch (บุคลิกล็อคครั้งเดียวตอนแจกไพ่ ไม่สลับกลางเกม — ดู monarchAI.ts)
+  isMinion?: boolean    // LobbyMatchmaking_Spec_v1_0 §6.1: true เฉพาะที่นั่งที่เติมด้วย Minion ตอนเลือก "Start Now" ใน Deadlock dialog
 }
 
 export interface GameRoom {
@@ -36,9 +37,10 @@ export interface GameRoom {
   isPrivate: boolean
   pin?: string
   hostUserId?: string
-  // LobbyMatchmaking_Spec_v1_0 §4.4: waiting timeout เป็น 2 stage — 'waiting' (รอบแรก 3 นาที) จบแล้วต้องถาม
-  // ผู้เล่นก่อนว่าจะรอต่อหรือลบโต๊ะ ('awaiting_choice') → เลือก "รอต่อ" แล้วเข้า 'extended' (2 นาที ไม่ถามซ้ำ หมดแล้วลบทันที)
-  timeoutStage?: 'waiting' | 'awaiting_choice' | 'extended'
+  // LobbyMatchmaking_Spec_v1_0 §4.4/§6.1: waiting timeout — 'waiting' (รอบแรก 3 นาที) จบแล้วถามผู้เล่น
+  // ('awaiting_choice') → เลือก "รอต่อ" เข้า 'extended' (2 นาที) → หมดแล้ว: Adept ลบทันที, High Noble
+  // เช็ค Human count ก่อน — ถ้า >=2 เข้า 'awaiting_deadlock_choice' (Host เลือก Start Now/Delete) ถ้า =1 ลบทันที
+  timeoutStage?: 'waiting' | 'awaiting_choice' | 'extended' | 'awaiting_deadlock_choice'
 }
 
 // ─── Config ต่อ Tier ────────────────────────────────────────────
@@ -111,7 +113,7 @@ function buildInitialSeats(tier: Tier): [Seat, Seat, Seat, Seat] {
   return seats as [Seat, Seat, Seat, Seat]
 }
 
-function humanCount(room: GameRoom): number {
+export function humanCount(room: GameRoom): number {
   return room.seats.filter(s => s.type === 'human').length
 }
 
@@ -311,6 +313,14 @@ export async function markAwaitingTimeoutChoice(roomId: string): Promise<void> {
   await saveRoom(room)
 }
 
+// High Noble §6.1: mark ว่ากำลังถาม Deadlock choice (Start Now/Delete) — กัน interval ถัดไปยิงซ้ำจนกว่า Host จะตอบ
+export async function markAwaitingDeadlockChoice(roomId: string): Promise<void> {
+  const room = await getRoom(roomId)
+  if (!room) return
+  room.timeoutStage = 'awaiting_deadlock_choice'
+  await saveRoom(room)
+}
+
 // Client เลือก "Wait 2 More Minutes" — ต่อเวลาอีก 2 นาที เข้าสถานะ 'extended' (หมดแล้วลบทันที ไม่ถามซ้ำ)
 export async function extendRoomWait(roomId: string): Promise<GameRoom | null> {
   const room = await getRoom(roomId)
@@ -350,6 +360,24 @@ export async function markInProgress(roomId: string): Promise<void> {
   if (!room) return
   room.status = 'in_progress'
   await saveRoom(room)
+}
+
+// ─── Deadlock Prevention "Start Now" (LobbyMatchmaking_Spec_v1_0 §6.1) ──────
+// เติมที่นั่งว่างที่เหลือ (ปกติแค่ 1 ที่สำหรับ High Noble 3H+1Boss) ด้วย Minion สุ่มจาก 25 roster
+// (ใช้ pool เดียวกับ Mastermind Phase 3 — greedyArrangement ถูกกำหนดต่อที่ highNobleMultiEngine.ts)
+export async function fillWithMinion(roomId: string): Promise<GameRoom | null> {
+  const room = await getRoom(roomId)
+  if (!room || room.status !== 'waiting') return null
+
+  const emptyIdxs = room.seats.map((s, i) => (s.type === 'empty' ? i : -1)).filter(i => i !== -1)
+  const minionNames = pickRandomMinions(emptyIdxs.length)
+  emptyIdxs.forEach((idx, i) => {
+    room.seats[idx] = { type: 'ai', name: minionNames[i], joinedAt: Date.now(), isMinion: true }
+  })
+
+  room.status = 'full'
+  await saveRoom(room)
+  return room
 }
 
 // ─── Monarch Boss Finalize (Spec v1.3) ──────────────────────────

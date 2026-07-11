@@ -16,7 +16,7 @@ import { Server } from 'socket.io'
 import { dealCards } from './cardEngine'
 import { evaluateHand, compareHands, handRankLabel, HandResult } from './handEvaluator'
 import { checkFoul, PlayerArrangement, CommunityCards } from './foulChecker'
-import { aiDecideArrangement, AIConfig, AIPersonality, FOUR_GODS } from './aiEngine'
+import { aiDecideArrangement, AIConfig, AIPersonality, FOUR_GODS, greedyArrangement, pickRandomMinions } from './aiEngine'
 import { Card } from './deck'
 import { gameConfig } from '../config/gameConfig'
 import { supabase } from '../config/supabase'
@@ -130,6 +130,7 @@ export interface HNSeat {
   emoji: string
   personality?: AIPersonality  // เฉพาะ AI seat — สำหรับ Monarch คือบุคลิกที่ล็อคไว้ (client ไม่เห็นค่านี้ เห็นแค่ name="Monarch")
   isMonarch?: boolean          // Monarch Spec v1.3: true เฉพาะที่นั่ง Boss ที่สุ่มโดน Monarch — บุคลิกล็อคครั้งเดียวตอนแจกไพ่ ไม่สลับกลางเกม
+  isMinion?: boolean           // LobbyMatchmaking_Spec_v1_0 §6.1: true เฉพาะที่นั่งเติมด้วย Minion (Deadlock "Start Now") — ใช้ greedyArrangement เสมอ
 }
 
 interface HNGrandFinaleState {
@@ -242,7 +243,14 @@ export async function startHighNobleMultiMatch(
       const god = FOUR_GODS.find(g => g.id === rs.aiConfigId) ?? FOUR_GODS[0]
       return { id: 'AI_BOSS', role, isHuman: false, name: god.name, emoji: god.emoji, personality: god.personality }
     }
-    // AI filler (seat ว่างที่ถูก fillRemainingWithAI เติมให้ หรือกรณี AI-fill อื่นๆ)
+    // LobbyMatchmaking_Spec_v1_0 §6.1: Deadlock "Start Now" เติมที่นั่งด้วย Minion (roomRegistry.fillWithMinion
+    // ตั้งชื่อจริงไว้แล้วใน rs.name) — personality สุ่มอิสระ 1 ใน 3 (แยกจากชื่อ แบบเดียวกับ Mastermind Phase 3)
+    // ใช้ greedyArrangement เสมอตอนจัดไพ่ (ดู startHNRound ด้านล่าง) ไม่ผ่าน arrangeByPersonality
+    if (rs.isMinion) {
+      const p = FILLER_PERSONALITIES[Math.floor(Math.random() * FILLER_PERSONALITIES.length)]
+      return { id: `AI_FILL_${i}`, role, isHuman: false, name: rs.name, emoji: '🤖', personality: p, isMinion: true }
+    }
+    // Fallback AI filler (เผื่อ path อื่นในอนาคตที่ยังไม่ผ่าน fillWithMinion) — ของเดิม Sage/Reckless/Ghost วน index
     const p = FILLER_PERSONALITIES[fillerIdx % FILLER_PERSONALITIES.length]
     fillerIdx++
     return { id: `AI_FILL_${i}`, role, isHuman: false, name: FILLER_NAMES[p].name, emoji: FILLER_NAMES[p].emoji, personality: p }
@@ -320,8 +328,12 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
     boss.personality = lockMonarchPersonality(cardsMap[boss.id], community)
   }
 
-  // AI/Boss ตัดสินใจจัดไพ่ทันที
+  // AI/Boss ตัดสินใจจัดไพ่ทันที — Minion (§6.1) ใช้ greedyArrangement เสมอ ไม่ผ่าน personality dispatch
   aiSeats(state).forEach(seat => {
+    if (seat.isMinion) {
+      state.arrangements![seat.id] = greedyArrangement(cardsMap[seat.id], community)
+      return
+    }
     const config: AIConfig = { id: seat.id, name: seat.name, emoji: seat.emoji, personality: seat.personality! }
     state.arrangements![seat.id] = aiDecideArrangement(config, cardsMap[seat.id], community, state.roundNumber, 'highNoble', 0)
   })
@@ -502,8 +514,12 @@ function startHNArrangementRound2(io: Server, roomId: string): void {
 
   aiSeats(state).forEach(seat => {
     if (!state.auctionWonCards![seat.id]) return
-    const config: AIConfig = { id: seat.id, name: seat.name, emoji: seat.emoji, personality: seat.personality! }
     const fullHand = [...state.cardsMap![seat.id], state.auctionWonCards![seat.id]]
+    if (seat.isMinion) {
+      state.arrangements![seat.id] = greedyArrangement(fullHand, state.community!)
+      return
+    }
+    const config: AIConfig = { id: seat.id, name: seat.name, emoji: seat.emoji, personality: seat.personality! }
     state.arrangements![seat.id] = aiDecideArrangement(config, fullHand, state.community!, state.roundNumber, 'highNoble', 0)
   })
 
@@ -1055,26 +1071,28 @@ export async function replaceHNPlayerWithAI(io: Server, roomId: string, userId: 
   const { burnLockedTokens } = await import('./gameLoop')
   try { await burnLockedTokens(userId, roomId) } catch (err) { console.error('[HN-DISCONNECT] burn error:', err) }
 
+  // LobbyMatchmaking_Spec_v1_0 §6.1: filler ใน High Noble = Minion ทั้งระบบแล้ว (ไม่ใช่แค่ตอน Deadlock "Start Now")
+  // — ตอน Human หลุดกลางเกมก็แทนที่ด้วย Minion สุ่มเช่นกัน เพื่อความสอดคล้อง (personality สุ่มอิสระ 1 ใน 3 เหมือนเดิม)
   const p = FILLER_PERSONALITIES[Math.floor(Math.random() * FILLER_PERSONALITIES.length)]
+  const [minionName] = pickRandomMinions(1)
   seat.isHuman = false
-  seat.name = FILLER_NAMES[p].name
-  seat.emoji = FILLER_NAMES[p].emoji
+  seat.name = minionName
+  seat.emoji = '🤖'
   seat.personality = p
+  seat.isMinion = true
 
   io.to(roomId).emit('player_disconnected_replaced', { roomId, userId, replacementName: seat.name })
 
-  // Auto-ตัดสินใจแทนตำแหน่งที่ค้างอยู่ ณ phase ปัจจุบัน กันเกม stall
+  // Auto-ตัดสินใจแทนตำแหน่งที่ค้างอยู่ ณ phase ปัจจุบัน กันเกม stall — Minion ใช้ greedyArrangement เสมอ
   if (state.phase === 'arrangement' && !state.submittedArrangement.has(userId)) {
-    const config: AIConfig = { id: userId, name: seat.name, emoji: seat.emoji, personality: p }
-    state.arrangements![userId] = aiDecideArrangement(config, state.cardsMap![userId], state.community!, state.roundNumber, 'highNoble', 0)
+    state.arrangements![userId] = greedyArrangement(state.cardsMap![userId], state.community!)
     state.submittedArrangement.add(userId)
     if (allHumansSubmitted(state, state.submittedArrangement)) await resolveHNArrangementPhaseComplete(io, roomId)
   } else if (state.phase === 'arrangement_2' && !state.submittedArrangement.has(userId)) {
-    const config: AIConfig = { id: userId, name: seat.name, emoji: seat.emoji, personality: p }
     const fullHand = state.auctionWonCards?.[userId]
       ? [...state.cardsMap![userId], state.auctionWonCards[userId]]
       : state.cardsMap![userId]
-    state.arrangements![userId] = aiDecideArrangement(config, fullHand, state.community!, state.roundNumber, 'highNoble', 0)
+    state.arrangements![userId] = greedyArrangement(fullHand, state.community!)
     state.submittedArrangement.add(userId)
     if (allHumansSubmitted(state, state.submittedArrangement)) startHNDiscardPhase(io, roomId)
   } else if (state.phase === 'discard' && !state.submittedDiscard.has(userId)) {
