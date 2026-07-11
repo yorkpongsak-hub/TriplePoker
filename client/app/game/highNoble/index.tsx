@@ -47,6 +47,13 @@ const BOSS_INTRO: Record<string, { image: any; quotes: string[] }> = {
       "There is no pattern to crack. There is only luck — and how well you bear it.",
     ],
   },
+  // Monarch Spec v1.2: บอสลับ — ผู้เล่นเห็นแค่ชื่อ "Monarch" ไม่รู้ว่าสวมบุคลิกจตุรเทพใด (ล็อคไว้ฝั่ง server)
+  'Monarch': {
+    image: require('../../../assets/bosses/boss_Monarch.png'),
+    quotes: [
+      "My mask is the hand I am dealt.",
+    ],
+  },
 }
 // Patch High Noble: รูป Avatar จตุรเทพ (square crop หน้าชิด ใช้กับ AvatarBubble ของ P3 เท่านั้น)
 const BOSS_AVATAR: Record<string, any> = {
@@ -54,6 +61,7 @@ const BOSS_AVATAR: Record<string, any> = {
   'The Crag': require('../../../assets/bosses/boss_crag_avatar.png'),
   'Cortex':   require('../../../assets/bosses/boss_cortex_avatar.png'),
   'Cipher':   require('../../../assets/bosses/boss_cipher_avatar.png'),
+  'Monarch':  require('../../../assets/bosses/boss_Monarch_avatar.png'),
 }
 const cardBackImg = require('../../../assets/images/card_back_default.png')
 const tableImg    = require('../../../assets/images/table_default.png')
@@ -2132,6 +2140,9 @@ const GameTableLive: React.FC = () => {
                 <View style={{ width: '100%', maxWidth: 340, alignItems: 'center' }}>
                   <Image source={intro.image} style={{ width: 220, height: 275, borderRadius: 14, borderWidth: 2.5, borderColor: '#FFD76A' }} resizeMode="cover" />
                   <Text style={{ fontSize: 20, color: '#FFD76A', fontWeight: '900', letterSpacing: 2, marginTop: 14 }}>{bossIntroName.toUpperCase()}</Text>
+                  {bossIntroName === 'Monarch' && (
+                    <Text style={{ fontSize: 12, color: '#C8C4B0', letterSpacing: 1.5, marginTop: 2 }}>THE FACELESS KING</Text>
+                  )}
                   <Text style={{ fontSize: 13, color: '#F5F2E8', lineHeight: 20, textAlign: 'center', marginTop: 16, minHeight: 110 }}>
                     {typedText}
                   </Text>
