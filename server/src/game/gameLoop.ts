@@ -1774,14 +1774,16 @@ export async function persistHNNetTokenResult(userId: string, netDelta: number):
 export async function startMultiplayerMatch(
   io: Server,
   roomId: string,
-  seats: Array<{ type: 'human' | 'ai' | 'empty'; userId?: string; name: string }>,
+  seats: Array<{ type: 'human' | 'ai' | 'empty'; userId?: string; name: string; aiConfigId?: string }>,
   tier: 'adept',
 ): Promise<void> {
   const humanSeats = seats.filter(s => s.type === 'human' && s.userId)
-  const aiSeatsCount = seats.filter(s => s.type === 'ai').length
+  const aiSeatsFromRoom = seats.filter(s => s.type === 'ai')
 
   const humanPlayerIds = humanSeats.map(s => s.userId!)
-  const aiPlayerIds = Array.from({ length: aiSeatsCount }, (_, i) => AI_CONFIGS[i % AI_CONFIGS.length].id)
+  // LobbyMatchmaking_Spec_v1_0 §4.2-4.3: ใช้ aiConfigId จริงที่ roomRegistry เลือกไว้ (Sage เข้ารอทันที
+  // + สุ่ม Ghost/Reckless ตอน Human คนที่ 2) แทน index 0,1 แบบเดิมซึ่งได้ Sage+Reckless คงที่ทุกเกม ไม่เคยสุ่มได้ Ghost
+  const aiPlayerIds = aiSeatsFromRoom.map((s, i) => s.aiConfigId ?? AI_CONFIGS[i % AI_CONFIGS.length].id)
 
   const totalRounds = 5
   const tokenBalance: Record<string, number> = {}

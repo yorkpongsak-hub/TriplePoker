@@ -8,7 +8,7 @@
  */
 
 import { redis } from '../config/redis'
-import { FOUR_GODS, AIConfig } from './aiEngine'
+import { FOUR_GODS, AI_CONFIGS, AIConfig } from './aiEngine'
 import { rollHighNobleBoss } from './monarchSpawn'
 
 // ─── Types ───────────────────────────────────────────────────────
@@ -36,15 +36,21 @@ export interface GameRoom {
   isPrivate: boolean
   pin?: string
   hostUserId?: string
+  // LobbyMatchmaking_Spec_v1_0 §4.4: waiting timeout เป็น 2 stage — 'waiting' (รอบแรก 3 นาที) จบแล้วต้องถาม
+  // ผู้เล่นก่อนว่าจะรอต่อหรือลบโต๊ะ ('awaiting_choice') → เลือก "รอต่อ" แล้วเข้า 'extended' (2 นาที ไม่ถามซ้ำ หมดแล้วลบทันที)
+  timeoutStage?: 'waiting' | 'awaiting_choice' | 'extended'
 }
 
 // ─── Config ต่อ Tier ────────────────────────────────────────────
 // humanSeatsRequired: จำนวนที่นั่ง Human ที่ต้องการ — ที่เหลือ (4 - จำนวนนี้) = AI fix ตั้งแต่สร้างห้อง
 export const TIER_ROOM_CONFIG: Record<Tier, { waitTimeoutMs: number; humanSeatsRequired: number }> = {
-  adept:      { waitTimeoutMs: 90_000,  humanSeatsRequired: 2 }, // 2H + 2AI — AI เต็มทันทีที่ Human ครบ 2
-  mastermind: { waitTimeoutMs: 120_000, humanSeatsRequired: 3 }, // 3H + 1AI
-  highNoble:  { waitTimeoutMs: 180_000, humanSeatsRequired: 3 }, // 3H + 1AI (Boss = Four Gods ปกติ 97% / Monarch ลับ 3%+pity — ดู monarchSpawn.ts)
+  adept:      { waitTimeoutMs: 3 * 60_000, humanSeatsRequired: 2 }, // 2H + 2AI — Sage เข้ารอทันที, Ghost/Reckless สุ่มตอน Human คนที่ 2 (§4.2-4.3)
+  mastermind: { waitTimeoutMs: 120_000,    humanSeatsRequired: 3 }, // 3H + 1AI
+  highNoble:  { waitTimeoutMs: 3 * 60_000, humanSeatsRequired: 3 }, // 3H + 1AI (Boss = Four Gods ปกติ 97% / Monarch ลับ 3%+pity — ดู monarchSpawn.ts)
 }
+
+// §4.4: รอบขยายเวลาหลัง Dialog เลือก "Wait 2 More Minutes"
+export const WAIT_EXTENSION_MS = 2 * 60_000
 
 // ─── Redis Key Helpers ──────────────────────────────────────────
 const metaKey = (roomId: string) => `room:${roomId}:meta`
@@ -61,6 +67,24 @@ function aiSeat(idx: number): Seat {
   return { type: 'ai', name: `Minion-${idx + 1}`, joinedAt: Date.now() }
 }
 
+// LobbyMatchmaking_Spec_v1_0 §4.2: The Sage เข้ารอทันทีตอนสร้างโต๊ะ Adept
+function sageSeat(): Seat {
+  const sage = AI_CONFIGS.find(a => a.personality === 'sage')!
+  return { type: 'ai', name: sage.name, joinedAt: Date.now(), aiConfigId: sage.id }
+}
+
+// §4.3: Human คนที่ 2 join → สุ่ม Bot อีก 1 ตัว (The Ghost หรือ The Reckless)
+function secondAdeptBotSeat(): Seat {
+  const pool = AI_CONFIGS.filter(a => a.personality === 'ghost' || a.personality === 'reckless')
+  const pick = pool[Math.floor(Math.random() * pool.length)]
+  return { type: 'ai', name: pick.name, joinedAt: Date.now(), aiConfigId: pick.id }
+}
+
+// §4.2: seat 0 = The Sage ทันที, seat 1 ว่างไว้ก่อน (เติมสุ่มตอน Human คนที่ 2 join ใน joinRoom())
+function buildAdeptInitialSeats(): [Seat, Seat, Seat, Seat] {
+  return [sageSeat(), emptySeat(), emptySeat(), emptySeat()]
+}
+
 // Patch Multiplayer HighNoble: ที่นั่ง Boss (index 0) — สุ่ม placeholder ตอนสร้างห้อง (ยังไม่รู้ว่าใครจะมานั่ง Human บ้าง)
 // ตัวจริงจะถูกสุ่มใหม่ทับด้วย finalizeBossSeat() ตอนห้องเต็ม (รู้ user_id ครบ 3 คนแล้ว ใช้คำนวณ Monarch pity ได้)
 function bossSeat(): Seat {
@@ -73,6 +97,9 @@ function makeRoomId(tier: Tier): string {
 }
 
 function buildInitialSeats(tier: Tier): [Seat, Seat, Seat, Seat] {
+  // §4.2: Adept มี seat layout พิเศษ — bot ตัวที่ 2 ไม่ fix ตั้งแต่สร้างห้อง (ดู buildAdeptInitialSeats)
+  if (tier === 'adept') return buildAdeptInitialSeats()
+
   const cfg = TIER_ROOM_CONFIG[tier]
   const aiCount = 4 - cfg.humanSeatsRequired
   const seats: Seat[] = []
@@ -82,6 +109,10 @@ function buildInitialSeats(tier: Tier): [Seat, Seat, Seat, Seat] {
     seats.push(i === 0 && tier === 'highNoble' ? bossSeat() : aiSeat(i))
   }
   return seats as [Seat, Seat, Seat, Seat]
+}
+
+function humanCount(room: GameRoom): number {
+  return room.seats.filter(s => s.type === 'human').length
 }
 
 function isRoomFull(room: GameRoom): boolean {
@@ -114,13 +145,16 @@ export async function getRoom(roomId: string): Promise<GameRoom | null> {
   return typeof raw === 'string' ? JSON.parse(raw) : (raw as unknown as GameRoom)
 }
 
+// §4.1: จับ user ใหม่เข้า "โต๊ะที่รอนานที่สุด" เสมอ — Redis SMEMBERS ไม่การันตีลำดับ ต้องดึงมาเทียบ createdAt เอง
 export async function findOpenRoom(tier: Tier): Promise<GameRoom | null> {
   const roomIds = await redis.smembers(openSetKey(tier))
+  const candidates: GameRoom[] = []
   for (const roomId of roomIds) {
     const room = await getRoom(roomId)
-    if (room && room.status === 'waiting' && !room.isPrivate) return room
+    if (room && room.status === 'waiting' && !room.isPrivate) candidates.push(room)
   }
-  return null
+  if (candidates.length === 0) return null
+  return candidates.reduce((oldest, r) => (r.createdAt < oldest.createdAt ? r : oldest))
 }
 
 // ─── สร้างห้องใหม่ — AI seats fix ตาม config ทันที ──────────────
@@ -202,6 +236,14 @@ export async function joinRoom(
   if (seatIdx === -1) return { ok: false, reason: 'full' }
 
   room.seats[seatIdx] = { type: 'human', userId, name: userName, joinedAt: Date.now() }
+  if (!room.hostUserId) room.hostUserId = userId // คนแรกที่ join ห้อง public = host (ใช้กับ Deadlock dialog §4.4/§6.1)
+
+  // §4.3: Adept — Human ครบ humanSeatsRequired (คนที่ 2) → สุ่ม Bot ตัวที่ 2 (Ghost/Reckless) เติมที่นั่งว่างสุดท้ายทันที
+  if (room.tier === 'adept' && humanCount(room) === TIER_ROOM_CONFIG.adept.humanSeatsRequired) {
+    const remainingEmpty = room.seats.findIndex(s => s.type === 'empty')
+    if (remainingEmpty !== -1) room.seats[remainingEmpty] = secondAdeptBotSeat()
+  }
+
   if (isRoomFull(room)) room.status = 'full'
 
   await saveRoom(room)
@@ -242,6 +284,65 @@ export async function closeRoom(roomId: string): Promise<void> {
   if (!room) return
   room.status = 'closed'
   await saveRoom(room)
+}
+
+// ─── Waiting Timeout Dialog (§4.4 / §6.1) — 2 stage: 'waiting' รอบแรก → ถาม choice → 'extended' รอบสอง ───
+
+// รอบแรกหมดเวลา (timeoutStage ยังไม่เคยถาม) — เรียกจาก interval check แล้ว emit dialog ให้ client
+export async function getRoomsNeedingTimeoutChoice(tier: Tier): Promise<GameRoom[]> {
+  const roomIds = await redis.smembers(openSetKey(tier))
+  const now = Date.now()
+  const result: GameRoom[] = []
+  for (const roomId of roomIds) {
+    const room = await getRoom(roomId)
+    if (room && room.status === 'waiting' && (room.timeoutStage ?? 'waiting') === 'waiting'
+      && room.timeoutAt !== null && now > room.timeoutAt) {
+      result.push(room)
+    }
+  }
+  return result
+}
+
+// mark ว่ากำลังถาม choice อยู่ — กัน interval ถัดไปยิง dialog ซ้ำจนกว่า client จะตอบ
+export async function markAwaitingTimeoutChoice(roomId: string): Promise<void> {
+  const room = await getRoom(roomId)
+  if (!room) return
+  room.timeoutStage = 'awaiting_choice'
+  await saveRoom(room)
+}
+
+// Client เลือก "Wait 2 More Minutes" — ต่อเวลาอีก 2 นาที เข้าสถานะ 'extended' (หมดแล้วลบทันที ไม่ถามซ้ำ)
+export async function extendRoomWait(roomId: string): Promise<GameRoom | null> {
+  const room = await getRoom(roomId)
+  if (!room) return null
+  room.timeoutStage = 'extended'
+  room.timeoutAt = Date.now() + WAIT_EXTENSION_MS
+  await saveRoom(room)
+  return room
+}
+
+// รอบขยาย (extended) หมดเวลา — ลบโต๊ะอัตโนมัติทันที ไม่ถามซ้ำ (§4.4)
+export async function getExpiredExtendedRooms(tier: Tier): Promise<GameRoom[]> {
+  const roomIds = await redis.smembers(openSetKey(tier))
+  const now = Date.now()
+  const result: GameRoom[] = []
+  for (const roomId of roomIds) {
+    const room = await getRoom(roomId)
+    if (room && room.status === 'waiting' && room.timeoutStage === 'extended'
+      && room.timeoutAt !== null && now > room.timeoutAt) {
+      result.push(room)
+    }
+  }
+  return result
+}
+
+// ลบโต๊ะออกจาก Redis จริง (ต่างจาก closeRoom ที่แค่ mark status) — ใช้ตอนเลือก "Delete Table" หรือ extended timeout หมดเวลา
+export async function deleteRoomCompletely(roomId: string): Promise<void> {
+  const room = await getRoom(roomId)
+  if (!room) return
+  await redis.srem(openSetKey(room.tier), roomId)
+  await redis.del(metaKey(roomId))
+  await redis.del(fullKey(roomId))
 }
 
 export async function markInProgress(roomId: string): Promise<void> {

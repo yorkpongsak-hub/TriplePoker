@@ -23,6 +23,8 @@ import { createAdeptTable, joinAdeptTable, getTimedOutAdeptTables } from "../gam
 import {
   findOrCreateRoom, createPrivateRoom, joinRoom, getRoom as getRoomFromRegistry,
   fillRemainingWithAI, getTimedOutRooms, markInProgress, finalizeBossSeat,
+  getRoomsNeedingTimeoutChoice, markAwaitingTimeoutChoice, extendRoomWait,
+  getExpiredExtendedRooms, deleteRoomCompletely,
   type Tier as RoomTier,
 } from "../game/roomRegistry";
 import { broadcastTableUpdate } from "./lobbySocket";
@@ -276,8 +278,9 @@ export function registerGameSocket(io: Server): void {
   }, 10_000);
 
   // Room Registry (ใหม่): เช็คห้องที่หมดเวลา → AI-fill ที่นั่งที่เหลือ ทุก 10 วิ
+  // หมายเหตุ: Adept ไม่อยู่ในลูปนี้แล้ว — ใช้ waiting timeout dialog flow แยกด้านล่างแทน (LobbyMatchmaking_Spec_v1_0 §4.4)
   setInterval(async () => {
-    const tiers: RoomTier[] = ['adept', 'mastermind', 'highNoble'];
+    const tiers: RoomTier[] = ['mastermind', 'highNoble'];
     for (const tier of tiers) {
       const timedOut = await getTimedOutRooms(tier);
       for (const room of timedOut) {
@@ -292,13 +295,31 @@ export function registerGameSocket(io: Server): void {
           });
           // Patch Multiplayer: ต้องเริ่มเกมจริงหลัง AI-fill ด้วย (เดิมลืม — ห้องค้าง 'full' เฉยๆ ไม่เริ่มเกม)
           await markInProgress(room.roomId);
-          if (tier === 'adept') {
-            await startMultiplayerMatch(io, room.roomId, filled.seats, 'adept');
-          } else if (tier === 'highNoble') {
+          if (tier === 'highNoble') {
             await startHighNobleMultiMatch(io, room.roomId, filled.seats);
           }
         }
       }
+    }
+  }, 10_000);
+
+  // Adept Waiting Timeout Dialog (LobbyMatchmaking_Spec_v1_0 §4.4) — 2 stage ทุก 10 วิ:
+  //   รอบแรก (3 นาที) หมด → ถาม dialog "Wait 2 More Minutes" / "Delete Table" (ครั้งเดียว ไม่ถามซ้ำระหว่างรอตอบ)
+  //   รอบขยาย (2 นาที) หมด → ลบโต๊ะทันที ไม่ถามซ้ำ
+  setInterval(async () => {
+    const needChoice = await getRoomsNeedingTimeoutChoice('adept');
+    for (const room of needChoice) {
+      await markAwaitingTimeoutChoice(room.roomId);
+      io.to(room.roomId).emit('room_wait_timeout_choice', { roomId: room.roomId });
+    }
+
+    const expired = await getExpiredExtendedRooms('adept');
+    for (const room of expired) {
+      io.to(room.roomId).emit('room_wait_timeout_expired', {
+        roomId: room.roomId,
+        message: 'Waiting too long — table has been removed.',
+      });
+      await deleteRoomCompletely(room.roomId);
     }
   }, 10_000);
 
@@ -725,6 +746,18 @@ export function registerGameSocket(io: Server): void {
     socket.on("room_get_status", async (data: { roomId: string }) => {
       const room = await getRoomFromRegistry(data.roomId);
       socket.emit("room_status", { room });
+    });
+
+    // Adept Waiting Timeout Dialog (§4.4): ผู้เล่นตอบ dialog "Wait 2 More Minutes" / "Delete Table"
+    socket.on("room_timeout_choice", async (data: { roomId: string; choice: "wait_2_more" | "delete" }) => {
+      const { roomId, choice } = data;
+      if (choice === "wait_2_more") {
+        const room = await extendRoomWait(roomId);
+        if (room) io.to(roomId).emit("room_wait_extended", { roomId, timeoutAt: room.timeoutAt });
+      } else {
+        io.to(roomId).emit("room_deleted", { roomId, message: "Table has been deleted." });
+        await deleteRoomCompletely(roomId);
+      }
     });
 
     // Multiplayer: Human ส่ง arrangement (Adept — 1-3 Human ในห้องเดียวกัน)
