@@ -289,6 +289,51 @@ export const gameConfig = {
     4: { id: 4, name: 'Bamboo Rice Field', tiers: ['highNoble'], assetPath: 'assets/tables/skin_4_bamboo.png' }
   },
 
+  // ─── Monarch (TriplePoker_Monarch_Spec_v1_2) ──────────────────
+  // บอสลับตัวที่ 5 ของ Tier A+ (High Noble) — สุ่ม Base 3% + Pity Counter ต่อผู้เล่น (max ของโต๊ะ)
+  monarchConfig: {
+    spawnRateBase:   0.03,   // 3% พื้นฐาน
+    pityStepPerGame: 0.005,  // +0.5% ต่อเกม High Noble ที่ไม่เจอ Monarch (นับจาก reset ล่าสุด)
+    pityGuaranteeAt: 30,     // เกมที่ 30 นับจาก reset ยังไม่เจอ → บังคับ spawn (effective rate = 100%)
+    potMultiplier:   2.0,    // Pot ×2 เมื่อผู้เล่น human ชนะ Monarch — ส่วนต่าง House mint ไม่หักจากผู้เล่นอื่น
+    // น้ำหนักสุ่ม Boss ปกติของ High Noble (รวม Monarch, รวมกัน = 100) — ไม่ใช่ Monarch → normalize 4 ตัวที่เหลือตามสัดส่วนเดิม
+    bossWeights: { reaper: 28, crag: 25, cortex: 25, cipher: 19, monarch: 3 },
+    // Personality Lock ของ Monarch — แบ่ง Total Hand Strength (bestArrangement) เป็น 4 ช่วงด้วย quartile threshold
+    // (Spec v1.2 ให้แค่คำบรรยายเชิงคุณภาพ "แข็งมาก/ปานกลาง/ปานกลางค่อนอ่อน/อ่อน" — ตัวเลขนี้เป็นค่าเริ่มต้นที่ปรับจูนได้หลัง playtest จริง)
+    handStrengthQuartile: { veryStrong: 0.75, medium: 0.5, mediumWeak: 0.25 },
+  },
+
+  // ─── Performance Score (PS) ────────────────────────────────────
+  // Active ตั้งแต่ Tier A+ ขึ้นไป (เดิม dormant รอ Arena) — ใช้คัดเลือก "Ascendant Star" ใน Ascendant Tier
+  psConfig: {
+    highNobleWin:        5,   // อันดับ 1 ในโต๊ะ High Noble (ชนะ Four Gods)
+    highNobleMonarchWin: 10,  // อันดับ 1 + Boss เป็น Monarch (×2 เสมอ)
+    ascendantWin:        7,
+    ascendantMonarchWin: 14,  // ×2 เสมอ เช่นเดียวกับ A+
+    notWinNonNegative:   2,   // ไม่ชนะ แต่ token สุทธิของเกมนั้นไม่ติดลบ
+    negative:            0,   // token สุทธิติดลบ — ไม่มี PS ติดลบใน Main App
+    monarchMultiplier:   2,   // กฎล็อค: Monarch = x2 ของค่าชนะปกติในระดับตนเสมอ
+  },
+
+  // ─── Monarch Identity (Canon Locked v1.2) ──────────────────────
+  monarchIdentity: {
+    name:     'Monarch',
+    title:    'The Faceless King',
+    hookLine: 'My mask is the hand I am dealt.',
+    emoji:    '👑',
+    // Asset มีอยู่แล้วใน client/assets/bosses/ — ชื่อไฟล์ตัว M พิมพ์ใหญ่ (ต่างจากจตุรเทพที่เป็นตัวเล็กหมด) ห้ามเปลี่ยนชื่อไฟล์
+    assetMain:   'boss_Monarch.png',
+    assetAvatar: 'boss_Monarch_avatar.png',
+  },
+
+  // ─── Ascendant Gate (Monarch_Spec_v1_2 §5 — ทับ MasterPlan §5 เดิม) ─
+  // Ascendant ยังไม่ใช่ tier เต็มรูปแบบใน tierRanges/getTierFromToken() — ใช้ค่านี้ตรงใน ascendantGate.ts เท่านั้น
+  ascendantConfig: {
+    tokenMin:              600_000,
+    tokenMax:              999_999,
+    requireMonarchVictory: true,   // ต้องมี monarch_victories >= 1 ก่อนเริ่มนับหน้าต่าง (badge ต้องได้ก่อนเข้า ไม่ใช่ระหว่างนับเวลา)
+    windowDays:            30,     // ต้องขึ้น Tier S (token >= 1M) ภายใน 30 วันหลังเข้า Ascendant
+  },
 
 } as const;
 

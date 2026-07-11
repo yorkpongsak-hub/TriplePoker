@@ -227,7 +227,7 @@ export async function startHighNobleMultiMatch(
       if (rs.isMonarch) {
         // Monarch Spec v1.2: personality ยังไม่ล็อค ณ จุดนี้ — startHNRound (Round 1) จะล็อคตาม hand strength
         // ทันทีที่แจกไพ่เสร็จ (ดู monarchAI.ts) แล้วคงบุคลิกนั้นตลอดแมตช์ ไม่สลับอีก
-        return { id: 'AI_BOSS', role, isHuman: false, name: MONARCH_IDENTITY.name, emoji: MONARCH_IDENTITY.emoji, personality: FOUR_GODS[0].personality, isMonarch: true }
+        return { id: 'AI_BOSS', role, isHuman: false, name: gameConfig.monarchIdentity.name, emoji: gameConfig.monarchIdentity.emoji, personality: FOUR_GODS[0].personality, isMonarch: true }
       }
       const god = FOUR_GODS.find(g => g.id === rs.aiConfigId) ?? FOUR_GODS[0]
       return { id: 'AI_BOSS', role, isHuman: false, name: god.name, emoji: god.emoji, personality: god.personality }
