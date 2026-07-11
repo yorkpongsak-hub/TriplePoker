@@ -9,6 +9,7 @@ import {
 } from 'react-native'
 import { router } from 'expo-router'
 import { useAuthStore } from '../../src/store/authStore'
+import { useBgm } from '../../src/services/bgmService'
 
 // ─── ธีมสีหลัก (Website Theme Spec v1.0) ─────────────────────
 const C = {
@@ -69,6 +70,7 @@ const ASCENDANT_TOKEN_MAX = 999_999
 type TabKey = 'stats' | 'bosses' | 'history' | 'social'
 
 export default function ProfileScreen() {
+  useBgm() // LobbyMatchmaking_Spec_v1_0 §2 — BGM เล่นต่อเนื่องข้าม Profile/Shop/Lobby/Hall of Fame
   const signOut = useAuthStore(s => s.signOut)
   const profile = useAuthStore(s => s.profile)
   const [activeTab, setActiveTab] = useState<TabKey>('stats')
@@ -201,6 +203,7 @@ export default function ProfileScreen() {
 
         {/* ═══════════════ MAIN ACTIONS ═══════════════ */}
         <View style={s.actionRow}>
+          {/* TODO LobbyMatchmaking_Spec_v1_0 §1.1: เปลี่ยน icon เป็น asset btn_play_royal_flush.png (ยังไม่มีไฟล์จริง — ใช้ emoji ไพ่โพดำแทนไปก่อน) */}
           <ActionButton icon="🂡" title="PLAY" sub="QUICK MATCH" color={C.blue} onPress={handlePlay} />
           <ActionButton icon="👑" title="Shop" sub="SKINS & ITEMS" color={C.gold} darkText onPress={handleShop} />
           <ActionButton icon="🏅" title="Table of The Legends" sub="LEGENDS & RANKING" color={C.card} onPress={handleTableOfLegends} />

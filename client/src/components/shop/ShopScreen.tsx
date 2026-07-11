@@ -16,6 +16,7 @@ import {
   Modal,
   FlatList,
 } from 'react-native'
+import { useBgm } from '../../services/bgmService'
 
 const { height: SCREEN_H, width: SCREEN_W } = Dimensions.get('window')
 
@@ -240,6 +241,7 @@ const ShopScreen: React.FC<ShopScreenProps> = ({
   onClose,
   initialCategory = 'competitive',
 }) => {
+  useBgm() // LobbyMatchmaking_Spec_v1_0 §2 — BGM เล่นต่อเนื่องข้าม Profile/Shop/Lobby/Hall of Fame
   const [activeCategory, setActiveCategory] = useState<ShopCategory>(initialCategory)
   const [vipSheetVisible, setVipSheetVisible] = useState(false)
   const [vipSheetCategory, setVipSheetCategory] = useState('')

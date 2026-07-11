@@ -11,6 +11,8 @@ import { useUserStore } from '../../src/store/userStore';
 import { router } from 'expo-router';
 import VIPSkinSelector from './components/VIPSkinSelector'
 import { useUserSkins } from '../../src/hooks/useUserSkins'
+import { useBgm, fadeOutBgm, playApplauseSfx } from '../../src/services/bgmService'
+import { useAuthStore } from '../../src/store/authStore'
 
 const studioLogo = require('../../assets/images/sage_unicorn_logo_transparent.png');
 
@@ -55,6 +57,7 @@ const TIER_ROWS: Tier[][] = [
 ];
 
 export default function LobbyScreen() {
+  useBgm(); // LobbyMatchmaking_Spec_v1_0 §2 — BGM เล่นต่อเนื่องข้าม Profile/Shop/Lobby/Hall of Fame
   const [selected, setSelected] = useState<Selection | null>(null);
   const [showSkinModal, setShowSkinModal] = useState(false);
 
@@ -86,8 +89,53 @@ export default function LobbyScreen() {
 
   const lastBossVisible = useMemo(() => meetsLastBossCondition(tokenBalance), [tokenBalance]);
 
-  const handleEnterInitiate = () => router.push('/game/initiate');
-  const handleEnterMastermind = () => router.push('/game/mastermind/select');
+  // ── Tier Unlock Celebration (ครั้งเดียวต่อ Tier — LobbyMatchmaking_Spec_v1_0 §1.3) ──
+  const session = useAuthStore(s => s.session);
+  const profile = useAuthStore(s => s.profile);
+  const refreshProfile = useAuthStore(s => s.refreshProfile);
+  const [celebrateQueue, setCelebrateQueue] = useState<Tier[]>([]);
+  const [celebrating, setCelebrating] = useState<Tier | null>(null);
+  const celebratedCheckedRef = useRef(false);
+
+  // เช็คครั้งเดียวหลัง profile โหลดเสร็จ — เทียบ tier ที่ unlock แล้ว (token ถึง) กับ tier_unlock_celebrated เดิม
+  useEffect(() => {
+    if (!profile || celebratedCheckedRef.current) return;
+    celebratedCheckedRef.current = true;
+    const celebrated = new Set(profile.tier_unlock_celebrated ?? []);
+    const newlyUnlocked = (Object.keys(TIER_CONFIG) as Tier[])
+      .filter(t => t !== 'demo' && isEligible(t, tokenBalance) && !celebrated.has(t));
+    if (newlyUnlocked.length > 0) setCelebrateQueue(newlyUnlocked);
+  }, [profile, tokenBalance]);
+
+  // ดึงคิวทีละ Tier — โชว์ celebration ทีละอันจนครบคิว
+  useEffect(() => {
+    if (celebrating || celebrateQueue.length === 0) return;
+    const [next, ...rest] = celebrateQueue;
+    setCelebrating(next);
+    setCelebrateQueue(rest);
+    playApplauseSfx();
+  }, [celebrateQueue, celebrating]);
+
+  const handleCelebrationDismiss = async () => {
+    const tier = celebrating;
+    setCelebrating(null);
+    if (!tier) return;
+    const token = session?.access_token;
+    if (!token) return;
+    try {
+      await fetch(`${SERVER_URL}/profile/celebrate-tier`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ tier }),
+      });
+      await refreshProfile();
+    } catch (e) {
+      console.error('[Lobby] celebrate-tier failed:', e);
+    }
+  };
+
+  const handleEnterInitiate = () => { fadeOutBgm(); router.push('/game/initiate'); };
+  const handleEnterMastermind = () => { fadeOutBgm(); router.push('/game/mastermind/select'); };
 
   // ── Multiplayer Matchmaking (Adept / High Noble ใช้ pattern เดียวกัน) ─────
   const handleAutoMatch = (tier: MatchmakingTier) => {
@@ -113,6 +161,7 @@ export default function LobbyScreen() {
     socket.on('room_ready', (data: { roomId: string; seats: any[] }) => {
       setMmStatus('matched');
       socket.disconnect();
+      fadeOutBgm();
       const route = tier === 'highNoble' ? '/game/highNoble' : '/game/adept';
       router.push(`${route}?roomId=${data.roomId}&userId=${userId}` as any);
     });
@@ -171,6 +220,23 @@ export default function LobbyScreen() {
 
   return (
     <View style={s.root}>
+
+      {/* ─── Tier Unlock Celebration (ครั้งเดียวต่อ Tier — §1.3) ───
+          TODO: ใช้ sprite_tier_up.png (VFX ArtSpec v1.0) แทน placeholder นี้เมื่อมี asset จริง */}
+      {celebrating && (
+        <View style={s.celebrateOverlay}>
+          <View style={s.celebrateCard}>
+            <Text style={s.celebrateIcon}>🎉</Text>
+            <Text style={s.celebrateTitle}>TIER UNLOCKED!</Text>
+            <Text style={s.celebrateTierName}>
+              [{TIER_CONFIG[celebrating].letter}] {TIER_CONFIG[celebrating].label}
+            </Text>
+            <TouchableOpacity onPress={handleCelebrationDismiss} style={s.celebrateBtn}>
+              <Text style={s.celebrateBtnTxt}>Continue</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
 
       {/* ─── Header (fixed) ─── */}
       <View style={s.headerRow}>
@@ -369,5 +435,20 @@ const s = StyleSheet.create({
   modalInfo: { color: COLOR.textSecondary, fontSize: 13, marginBottom: 20, lineHeight: 20 },
   modalCloseButton: { backgroundColor: COLOR.goldPrimary, borderRadius: 8, paddingVertical: 12, alignItems: 'center' },
   modalCloseButtonTxt: { color: COLOR.bgPrimary, fontSize: 14, fontWeight: '700' },
+
+  celebrateOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999,
+    backgroundColor: 'rgba(5,10,8,0.92)', alignItems: 'center', justifyContent: 'center', padding: 20,
+  },
+  celebrateCard: {
+    width: '100%', maxWidth: 320, alignItems: 'center',
+    backgroundColor: COLOR.bgSecondary, borderRadius: 16, borderWidth: 2, borderColor: COLOR.goldPrimary,
+    paddingVertical: 32, paddingHorizontal: 20,
+  },
+  celebrateIcon: { fontSize: 48, marginBottom: 10 },
+  celebrateTitle: { color: COLOR.goldPrimary, fontSize: 20, fontWeight: '900', letterSpacing: 2 },
+  celebrateTierName: { color: COLOR.textPrimary, fontSize: 15, fontWeight: '700', marginTop: 8, marginBottom: 22 },
+  celebrateBtn: { borderWidth: 1.5, borderColor: COLOR.goldPrimary, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 28 },
+  celebrateBtnTxt: { color: COLOR.goldPrimary, fontWeight: '800', letterSpacing: 1 },
 
 });
