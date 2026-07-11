@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { io, Socket } from 'socket.io-client'
 import { router, useLocalSearchParams } from 'expo-router'
 import { autoSort } from '../../../src/utils/autoSort'
+import PreGameCountdown from '../../../src/components/PreGameCountdown'
 
 // ── Assets
 const studioLogo  = require('../../../assets/images/sage_unicorn_logo_transparent.png')
@@ -230,6 +231,9 @@ const GameTableLive: React.FC = () => {
   const [dealCount, setDealCount]       = useState(0)
   const [roundNumber, setRoundNumber] = useState(1)
   const [countdown, setCountdown]     = useState(3)
+  // Pre-Game Countdown (LobbyMatchmaking_Spec_v1_0 §7.1) — คนละตัวกับ `countdown`/phase 'countdown' ข้างบน (Grand Finale/Showdown เดิม ห้ามแตะ)
+  const [showPreGameCountdown, setShowPreGameCountdown] = useState(false)
+  const preGameCountdownShownRef = useRef(false)
   const countAnim = useRef(new Animated.Value(1)).current
   const fadeCards    = useRef(new Animated.Value(1)).current
   const blinkAnim    = useRef(new Animated.Value(1)).current
@@ -408,6 +412,12 @@ const GameTableLive: React.FC = () => {
 
     // Patch High Noble: แยก logic จริงของ round_start ออกมาเป็นฟังก์ชัน — defer ตอน Round แรก (รอปิด Boss Intro Popup ก่อนแจกไพ่)
     const processRoundStart = (data: any) => {
+      // Pre-Game Countdown §7.1 — โชว์ครั้งเดียวตอนเริ่มแมตช์ (หลัง Boss Intro Popup ปิดแล้ว ถ้ามี — processRoundStart
+      // ถูก defer มาจนกว่าจะปิด popup อยู่แล้วตาม comment ด้านบน)
+      if (data.roundNumber === 1 && !preGameCountdownShownRef.current) {
+        preGameCountdownShownRef.current = true
+        setShowPreGameCountdown(true)
+      }
       setPhase('arrangement')
       setRoundNumber(data.roundNumber)
       setIsReady(false); setSortDone(false); setSelected(null)
@@ -1507,6 +1517,8 @@ const GameTableLive: React.FC = () => {
       <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" />
       <View style={[s.gameContainer, isWeb && s.webFrame]}>
         <View style={s.gameArea}>
+
+          <PreGameCountdown visible={showPreGameCountdown} onComplete={() => setShowPreGameCountdown(false)} />
 
           <View style={StyleSheet.absoluteFill as any} pointerEvents="none"><Image source={tableImg} style={{ width: '100%', height: '100%' }} resizeMode="cover" /></View>
           <View style={[StyleSheet.absoluteFill as any, s.logoWatermark]} pointerEvents="none">

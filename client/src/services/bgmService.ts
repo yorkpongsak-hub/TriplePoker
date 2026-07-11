@@ -93,3 +93,16 @@ export function playApplauseSfx(): void {
   const sfxPlayer = createAudioPlayer(SFX_APPLAUSE)
   sfxPlayer.play()
 }
+
+// ─── Pre-Game Countdown Tick SFX (Section 7.1 / 8 #3) ───────────────────────
+// TODO: asset จริงยังไม่มี — วางไฟล์ที่ client/assets/sounds/sfx_countdown_tick.mp3
+// แล้วเปลี่ยนบรรทัดล่างเป็น: require('../../assets/sounds/sfx_countdown_tick.mp3')
+// หมายเหตุ: เป็น in-game SFX จริงๆ (ไม่ใช่ BGM) แต่วางไว้ไฟล์เดียวกับ audio อื่นๆ ที่ยังเป็น placeholder เพื่อลดจำนวนไฟล์ setup expo-audio ซ้ำ
+const SFX_COUNTDOWN_TICK: AudioSource | null = null
+
+// เล่นทุกจังหวะของ 5-4-3-2-1 — no-op ถ้ายังไม่มี asset
+export function playCountdownTick(): void {
+  if (!SFX_COUNTDOWN_TICK) return
+  const sfxPlayer = createAudioPlayer(SFX_COUNTDOWN_TICK)
+  sfxPlayer.play()
+}
