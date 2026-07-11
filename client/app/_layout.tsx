@@ -2,10 +2,13 @@ import 'react-native-url-polyfill/auto'
 import { Stack } from 'expo-router'
 import { Platform, View } from 'react-native'
 import { useEffect } from 'react'
+import { useFonts, Cinzel_400Regular, Cinzel_700Bold } from '@expo-google-fonts/cinzel'
 import { useAuthStore } from '../src/store/authStore'
 import { useUserStore } from '../src/store/userStore'
 
 export default function RootLayout() {
+  const [fontsLoaded] = useFonts({ Cinzel_400Regular, Cinzel_700Bold })
+
   const initAuth = useAuthStore(s => s.initAuth)
   useEffect(() => {
     initAuth()
@@ -26,6 +29,10 @@ export default function RootLayout() {
       })
     }
   }, [authUser, authProfile])
+
+  if (!fontsLoaded) {
+    return <View style={{ flex: 1, backgroundColor: '#0a0a0a' }} />
+  }
 
   return (
     <View style={{

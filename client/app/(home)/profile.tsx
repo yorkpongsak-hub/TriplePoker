@@ -10,6 +10,8 @@ import {
 import { router } from 'expo-router'
 import { useAuthStore } from '../../src/store/authStore'
 import { useBgm } from '../../src/services/bgmService'
+import { ActionButton } from '../../src/components/ui/ActionButton'
+import { MenuButton } from '../../src/components/ui/MenuButton'
 
 // ─── ธีมสีหลัก (Website Theme Spec v1.0) ─────────────────────
 const C = {
@@ -132,13 +134,9 @@ export default function ProfileScreen() {
 
         {/* ═══════════════ TOP HEADER ═══════════════ */}
         <View style={s.topHeader}>
-          <TouchableOpacity onPress={handleSettings} style={s.iconBtn}>
-            <Text style={s.iconText}>⚙</Text>
-          </TouchableOpacity>
+          <MenuButton icon="settings" label="Settings" size="sm" onPress={handleSettings} />
           <View style={{ flex: 1 }} />
-          <TouchableOpacity onPress={handleLogout} style={s.iconBtn}>
-            <Text style={s.iconText}>🚪</Text>
-          </TouchableOpacity>
+          <MenuButton icon="exit" label="Logout" size="sm" onPress={handleLogout} />
         </View>
 
         {/* ═══════════════ HERO PLAYER CARD ═══════════════ */}
@@ -202,11 +200,12 @@ export default function ProfileScreen() {
         )}
 
         {/* ═══════════════ MAIN ACTIONS ═══════════════ */}
-        <View style={s.actionRow}>
-          {/* TODO LobbyMatchmaking_Spec_v1_0 §1.1: เปลี่ยน icon เป็น asset btn_play_royal_flush.png (ยังไม่มีไฟล์จริง — ใช้ emoji ไพ่โพดำแทนไปก่อน) */}
-          <ActionButton icon="🂡" title="PLAY" sub="QUICK MATCH" color={C.blue} onPress={handlePlay} />
-          <ActionButton icon="👑" title="Shop" sub="SKINS & ITEMS" color={C.gold} darkText onPress={handleShop} />
-          <ActionButton icon="🏅" title="Table of The Legends" sub="LEGENDS & RANKING" color={C.card} onPress={handleTableOfLegends} />
+        <View style={s.playHeroWrap}>
+          <ActionButton icon="play_royal_flush" label="PLAY" onPress={handlePlay} />
+        </View>
+        <View style={s.secondaryRow}>
+          <MenuButton icon="shop" label="Shop" size="md" onPress={handleShop} />
+          <MenuButton icon="hall_of_fame" label="Legends" size="md" onPress={handleTableOfLegends} />
         </View>
 
         {/* ═══════════════ TABS ═══════════════ */}
@@ -245,16 +244,6 @@ function ResourceBox({ icon, label, value, valueColor }: { icon: string; label: 
         <Text style={[s.resourceValue, valueColor ? { color: valueColor } : null]}>{value}</Text>
       </View>
     </View>
-  )
-}
-
-function ActionButton({ icon, title, sub, color, darkText, onPress }: { icon: string; title: string; sub: string; color: string; darkText?: boolean; onPress: () => void }) {
-  return (
-    <TouchableOpacity activeOpacity={0.85} onPress={onPress} style={[s.actionBtn, { backgroundColor: color }]}>
-      <Text style={s.actionIcon}>{icon}</Text>
-      <Text style={[s.actionTitle, darkText ? { color: C.bg } : null]}>{title}</Text>
-      <Text style={[s.actionSub, darkText ? { color: C.header } : null]}>{sub}</Text>
-    </TouchableOpacity>
   )
 }
 
@@ -308,25 +297,18 @@ const s = StyleSheet.create({
   scroll: { paddingHorizontal: 14, paddingBottom: 34 },
 
   topHeader: {
-    minHeight: 70,
+    minHeight: 92,
     backgroundColor: C.header,
     marginHorizontal: -14,
     paddingHorizontal: 20,
-    paddingTop: Platform.OS === 'web' ? 22 : 24,
-    paddingBottom: 8,
+    paddingTop: Platform.OS === 'web' ? 16 : 18,
+    paddingBottom: 10,
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 10,
     borderBottomWidth: 1,
     borderBottomColor: C.border,
   },
-  iconBtn: {
-    width: 40, height: 40, borderRadius: 10,
-    backgroundColor: C.card,
-    borderWidth: 1.5, borderColor: C.border,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  iconText: { fontSize: 18, color: C.textPrimary },
 
   goldCard: {
     backgroundColor: C.surface,
@@ -406,21 +388,8 @@ const s = StyleSheet.create({
   },
   ascendantHintText: { color: C.gold, fontSize: 11, fontWeight: '800', letterSpacing: 0.3, textAlign: 'center' },
 
-  actionRow: { flexDirection: 'row', gap: 8, marginTop: 14 },
-  actionBtn: {
-    flex: 1,
-    minHeight: 84,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: C.borderHi,
-    paddingVertical: 12,
-    paddingHorizontal: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  actionIcon: { fontSize: 22, marginBottom: 4 },
-  actionTitle: { color: C.textPrimary, fontSize: 12, fontWeight: '900', letterSpacing: 0.3, textAlign: 'center' },
-  actionSub: { color: C.textSec, fontSize: 8, fontWeight: '800', marginTop: 2, textAlign: 'center' },
+  playHeroWrap: { marginTop: 16 },
+  secondaryRow: { flexDirection: 'row', justifyContent: 'center', gap: 24, marginTop: 14 },
 
   tabsRow: { flexDirection: 'row', marginTop: 14 },
   tabBtn: {

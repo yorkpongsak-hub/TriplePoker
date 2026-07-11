@@ -18,6 +18,9 @@ import { io, Socket } from 'socket.io-client'
 import { autoSort } from '../../../src/utils/autoSort'
 import { useAuthStore } from '../../../src/store/authStore'
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
+import { ActionButton } from '../../../src/components/ui/ActionButton'
+import { MenuButton } from '../../../src/components/ui/MenuButton'
+import { ResultPanel } from '../../../src/components/ui/ResultPanel'
 
 // ── Assets
 const studioLogo  = require('../../../assets/images/sage_unicorn_logo_transparent.png')
@@ -1243,47 +1246,47 @@ const GameTableLive: React.FC = () => {
 
           {/* ── MATCH END OVERLAY ── */}
           {phase === 'end' && matchResult && (
-            <View style={s.overlay}>
-              {matchResult.finalWinner === PLAYER_ID && confettiAnims.map((a, i) => {
-                const colors = ['#ff6b6b','#ffd93d','#6bcb77','#4d96ff','#ff922b','#cc5de8']
-                const rotStr = a.rotate.interpolate({ inputRange: [0, 720], outputRange: ['0deg', '720deg'] })
-                return (
-                  <Animated.View key={i} style={{
-                    position: 'absolute', width: 8, height: 8, borderRadius: 2,
-                    backgroundColor: colors[i % colors.length], zIndex: 200,
-                    transform: [{ translateX: a.x }, { translateY: a.y }, { rotate: rotStr }],
-                    opacity: a.opacity,
-                  }} />
-                )
-              })}
-              {matchResult.finalWinner === PLAYER_ID ? (
-                <Animated.Text style={[s.matchEndTitle, {
-                  transform: [{ scale: winPulse }], opacity: winOpacity,
-                  textShadowColor: '#ffd700', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 20,
-                }]}>🏆 YOU WIN!</Animated.Text>
-              ) : (
-                <Text style={s.matchEndTitle}>💀 YOU LOSE</Text>
+            <>
+              {matchResult.finalWinner === PLAYER_ID && (
+                <View style={StyleSheet.absoluteFill} pointerEvents="none">
+                  {confettiAnims.map((a, i) => {
+                    const colors = ['#ff6b6b','#ffd93d','#6bcb77','#4d96ff','#ff922b','#cc5de8']
+                    const rotStr = a.rotate.interpolate({ inputRange: [0, 720], outputRange: ['0deg', '720deg'] })
+                    return (
+                      <Animated.View key={i} style={{
+                        position: 'absolute', width: 8, height: 8, borderRadius: 2,
+                        backgroundColor: colors[i % colors.length], zIndex: 200,
+                        transform: [{ translateX: a.x }, { translateY: a.y }, { rotate: rotStr }],
+                        opacity: a.opacity,
+                      }} />
+                    )
+                  })}
+                </View>
               )}
-              <Text style={s.matchEndSub}>Final Token Balance</Text>
-              {[PLAYER_ID, ...aiList.map(a => a.id)].sort((a, b) => (tokenBalance[b] ?? 0) - (tokenBalance[a] ?? 0)).map(pid => {
-                const ai  = aiList.find(a => a.id === pid)
-                const bal = tokenBalance[pid] ?? 5000
-                return (
-                  <View key={pid} style={s.matchEndRow}>
-                    <Text style={[s.matchEndName, pid === PLAYER_ID && { color: '#c9a84c' }]}>
-                      {pid === PLAYER_ID ? `${myAvatarEmoji} ${myDisplayName}` : `${ai?.emoji} ${ai?.name}`}
-                    </Text>
-                    <Text style={[s.matchEndBal, { color: bal >= 5000 ? '#4ade80' : '#f87171' }]}>🪙 {bal}</Text>
+              <ResultPanel
+                variant={matchResult.finalWinner === PLAYER_ID ? 'victory' : 'defeat'}
+                footer={
+                  <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 24 }}>
+                    <MenuButton icon="rematch" label="Rematch" size="md" onPress={handleRematch} />
+                    <MenuButton icon="exit" label="Lobby" size="md" onPress={() => router.replace('/(home)/lobby')} />
                   </View>
-                )
-              })}
-              <TouchableOpacity style={s.rematchBtn} onPress={handleRematch}>
-                <Text style={s.rematchTxt}>🔄 PLAY AGAIN</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={s.lobbyBtn} onPress={() => router.replace('/(home)/lobby')}>
-                <Text style={s.lobbyBtnTxt}>🏠 BACK TO LOBBY</Text>
-              </TouchableOpacity>
-            </View>
+                }
+              >
+                <Text style={s.matchEndSub}>Final Token Balance</Text>
+                {[PLAYER_ID, ...aiList.map(a => a.id)].sort((a, b) => (tokenBalance[b] ?? 0) - (tokenBalance[a] ?? 0)).map(pid => {
+                  const ai  = aiList.find(a => a.id === pid)
+                  const bal = tokenBalance[pid] ?? 5000
+                  return (
+                    <View key={pid} style={s.matchEndRow}>
+                      <Text style={[s.matchEndName, pid === PLAYER_ID && { color: '#c9a84c' }]} numberOfLines={1}>
+                        {pid === PLAYER_ID ? `${myAvatarEmoji} ${myDisplayName}` : `${ai?.emoji} ${ai?.name}`}
+                      </Text>
+                      <Text style={[s.matchEndBal, { color: bal >= 5000 ? '#4ade80' : '#f87171' }]}>🪙 {bal}</Text>
+                    </View>
+                  )
+                })}
+              </ResultPanel>
+            </>
           )}
 
           {/* ── TRIPLE SWEEP JACKPOT VFX — โชว์ไม่เกิน 5 วิ แล้วปิดเอง ── */}
@@ -1635,14 +1638,23 @@ const GameTableLive: React.FC = () => {
 
           {/* ACTION BAR */}
           {phase !== 'dealing' && phase !== 'showdown' && phase !== 'result' && <View style={s.actionBar}>
-            <TouchableOpacity style={[s.btnSort, sortDone && s.btnSortDone]}
-              disabled={sortDone || phase !== 'arrangement'} onPress={handleAutoSort}>
-              <Text style={s.btnSortTxt}>{sortDone ? 'Sorted ✓' : 'Auto Sort'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[s.btnReady, isReady && s.btnReadyDone]}
-              onPress={handleReady} disabled={isReady || phase !== 'arrangement'}>
-              <Text style={s.btnReadyTxt}>{isReady ? 'WAITING...' : 'READY ✓'}</Text>
-            </TouchableOpacity>
+            <ActionButton
+              icon="auto_sort"
+              label={sortDone ? 'Sorted ✓' : 'Auto Sort'}
+              variant={sortDone ? 'disabled' : 'normal'}
+              disabled={sortDone || phase !== 'arrangement'}
+              costBadge="FREE"
+              onPress={handleAutoSort}
+              style={s.actionBtnSize}
+            />
+            <ActionButton
+              icon="ready"
+              label="Ready"
+              variant={isReady ? 'waiting' : 'normal'}
+              disabled={isReady || phase !== 'arrangement'}
+              onPress={handleReady}
+              style={s.actionBtnSize}
+            />
           </View>}
 
         </View>
@@ -1711,15 +1723,8 @@ const s = StyleSheet.create({
   userCard:     { width: CW, height: CH, borderRadius: 4, backgroundColor: '#fdfaf3', borderWidth: 1, borderColor: 'rgba(201,168,76,.65)', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   userCardSel:  { borderColor: '#6ec87a', borderWidth: 2, transform: [{ translateY: -16 }] },
   swapHint:     { fontSize: 8, color: 'rgba(201,168,76,.9)', textAlign: 'center', marginBottom: 2 },
-  actionBar:    { flexDirection: 'row', gap: 8, paddingHorizontal: 10, paddingTop: 4, paddingBottom: 36, zIndex: 2 },
-
-  actionBar:    { flexDirection: 'row', gap: 8, paddingHorizontal: 10, paddingTop: 4, paddingBottom: 20, zIndex: 2 },
-  btnSort:      { flex: 1, paddingVertical: 9, borderRadius: 8, borderWidth: 1, borderColor: '#e07020', backgroundColor: '#e07020', alignItems: 'center' },
-  btnSortDone:  { backgroundColor: '#6b4010', borderColor: '#6b4010' },
-  btnSortTxt:   { fontSize: 11, fontWeight: '700', color: '#ffffff', letterSpacing: 0.5 },
-  btnReady:     { flex: 2, paddingVertical: 9, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(74,154,90,.45)', backgroundColor: '#1a5e20', alignItems: 'center' },
-  btnReadyDone: { backgroundColor: '#14481a', borderColor: 'rgba(74,154,90,.2)' },
-  btnReadyTxt:  { fontSize: 12, fontWeight: '700', color: '#fff', letterSpacing: 1.5 },
+  actionBar:      { flexDirection: 'row', justifyContent: 'center', gap: 16, paddingHorizontal: 10, paddingTop: 4, paddingBottom: 20, zIndex: 2 },
+  actionBtnSize:  { width: 130 },
 
   // Overlay
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.90)', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 16 },
@@ -1750,15 +1755,10 @@ const s = StyleSheet.create({
   countdownSub:   { fontSize: 11, color: 'rgba(201,168,76,0.6)', letterSpacing: 2, marginTop: 10 },
 
   // Match end
-  matchEndTitle: { fontSize: 28, fontWeight: '900', color: '#c9a84c', marginBottom: 14 },
-  matchEndSub:   { fontSize: 10, color: 'rgba(201,168,76,0.5)', letterSpacing: 2, marginBottom: 10 },
-  matchEndRow:   { flexDirection: 'row', justifyContent: 'space-between', width: '100%', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#1e2e22' },
-  matchEndName:  { fontSize: 13, color: '#e8dfc0', fontWeight: '600' },
-  matchEndBal:   { fontSize: 13, fontWeight: '800' },
-  rematchBtn:    { marginTop: 20, backgroundColor: '#1a5e20', borderRadius: 12, paddingVertical: 13, paddingHorizontal: 36 },
-  rematchTxt:    { color: '#fff', fontSize: 13, fontWeight: '800', letterSpacing: 2 },
-  lobbyBtn:      { marginTop: 10, backgroundColor: 'transparent', borderWidth: 1.5, borderColor: '#c9a84c', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 36 },
-  lobbyBtnTxt:   { color: '#c9a84c', fontSize: 13, fontWeight: '800', letterSpacing: 2 },
+  matchEndSub:   { fontSize: 10, color: 'rgba(201,168,76,0.5)', letterSpacing: 2, marginBottom: 10, textAlign: 'center' },
+  matchEndRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#1e2e22' },
+  matchEndName:  { flexShrink: 1, marginRight: 8, fontSize: 13, color: '#e8dfc0', fontWeight: '600' },
+  matchEndBal:   { flexShrink: 0, fontSize: 13, fontWeight: '800' },
 
   // Server log
   logZone:   { flex: 10, backgroundColor: '#080808', borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,.12)' },

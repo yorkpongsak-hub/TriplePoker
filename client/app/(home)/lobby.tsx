@@ -13,6 +13,7 @@ import VIPSkinSelector from './components/VIPSkinSelector'
 import { useUserSkins } from '../../src/hooks/useUserSkins'
 import { useBgm, fadeOutBgm, playApplauseSfx } from '../../src/services/bgmService'
 import { useAuthStore } from '../../src/store/authStore'
+import { MenuButton } from '../../src/components/ui/MenuButton'
 
 const studioLogo = require('../../assets/images/sage_unicorn_logo_transparent.png');
 
@@ -100,6 +101,7 @@ export default function LobbyScreen() {
   const session = useAuthStore(s => s.session);
   const profile = useAuthStore(s => s.profile);
   const refreshProfile = useAuthStore(s => s.refreshProfile);
+  const signOut = useAuthStore(s => s.signOut);
   const [celebrateQueue, setCelebrateQueue] = useState<Tier[]>([]);
   const [celebrating, setCelebrating] = useState<Tier | null>(null);
   const celebratedCheckedRef = useRef(false);
@@ -143,6 +145,21 @@ export default function LobbyScreen() {
 
   const handleEnterInitiate = () => { fadeOutBgm(); router.push('/game/initiate'); };
   const handleEnterMastermind = () => { fadeOutBgm(); router.push('/game/mastermind/select'); };
+
+  // ─── Menu Bar (UI Button System) — ปุ่มที่ระบบหลังบ้านยังไม่มี โชว์ Toast "Coming Soon" แทนการซ่อน ───
+  const [comingSoonMsg, setComingSoonMsg] = useState<string | null>(null);
+  useEffect(() => {
+    if (!comingSoonMsg) return;
+    const id = setTimeout(() => setComingSoonMsg(null), 2500);
+    return () => clearTimeout(id);
+  }, [comingSoonMsg]);
+  const handleComingSoon = (label: string) => setComingSoonMsg(`${label} — Coming Soon`);
+  const handleShopNav = () => router.push('/(home)/shop');
+  const handleExit = async () => {
+    fadeOutBgm();
+    await signOut();
+    router.replace('/(auth)/login');
+  };
 
   // ── Multiplayer Matchmaking (Adept / High Noble ใช้ pattern เดียวกัน) ─────
   const handleAutoMatch = (tier: MatchmakingTier) => {
@@ -333,6 +350,13 @@ export default function LobbyScreen() {
         </View>
       )}
 
+      {/* ─── Toast: Coming Soon (Menu Bar buttons ที่ระบบหลังบ้านยังไม่มี) ─── */}
+      {comingSoonMsg && (
+        <View style={s.toastBanner}>
+          <Text style={s.toastText}>{comingSoonMsg}</Text>
+        </View>
+      )}
+
       {/* ─── Header (fixed) ─── */}
       <View style={s.headerRow}>
         <Text style={s.header}>TriplePoker Lobby</Text>
@@ -340,6 +364,26 @@ export default function LobbyScreen() {
           <Text style={s.profileBtnTxt}>👤 Profile</Text>
         </TouchableOpacity>
       </View>
+
+      {/* ─── Menu Bar (fixed) — LobbyMatchmaking_Spec_v1_0 §1.2 — UI Button System ─── */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={s.menuBar}
+        contentContainerStyle={s.menuBarContent}
+      >
+        <MenuButton icon="shop" label="Shop" size="sm" onPress={handleShopNav} />
+        <MenuButton icon="hall_of_fame" label="Hall of Fame" size="sm" onPress={() => handleComingSoon('Hall of Fame')} />
+        <MenuButton icon="friends" label="Friends" size="sm" onPress={() => handleComingSoon('Friends')} />
+        <MenuButton icon="ranking" label="Ranking" size="sm" onPress={() => handleComingSoon('Ranking')} />
+        <MenuButton icon="daily_reward" label="Daily Reward" size="sm" onPress={() => handleComingSoon('Daily Reward')} />
+        <MenuButton icon="quests" label="Quests" size="sm" onPress={() => handleComingSoon('Quests')} />
+        <MenuButton icon="achievements" label="Achievements" size="sm" onPress={() => handleComingSoon('Achievements')} />
+        <MenuButton icon="events" label="Events" size="sm" onPress={() => handleComingSoon('Events')} />
+        <MenuButton icon="mail" label="Mail" size="sm" onPress={() => handleComingSoon('Mail')} />
+        <MenuButton icon="settings" label="Settings" size="sm" onPress={() => handleComingSoon('Settings')} />
+        <MenuButton icon="exit" label="Exit" size="sm" onPress={handleExit} />
+      </ScrollView>
 
       {/* ─── Table List — Scroll Zone (~75% สูง) ─── */}
       <View style={s.scrollZone}>
@@ -490,6 +534,9 @@ const s = StyleSheet.create({
   header: { color: COLOR.goldPrimary, fontSize: 20, fontWeight: '800', letterSpacing: 1, fontFamily: 'Cinzel' },
   profileBtn: { borderWidth: 1, borderColor: COLOR.goldPrimary, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
   profileBtnTxt: { color: COLOR.goldPrimary, fontSize: 12, fontWeight: '700' },
+
+  menuBar: { flexGrow: 0, flexShrink: 0, marginBottom: 10 },
+  menuBarContent: { flexDirection: 'row', gap: 14, paddingHorizontal: 2, paddingVertical: 2 },
 
   // Scroll Zone กิน flex:3 ของพื้นที่ที่เหลือ (~75%), Fixed Bottom Block กิน flex:1 (~25%)
   scrollZone: { flex: 1, minHeight: 0, overflow: 'hidden' },
