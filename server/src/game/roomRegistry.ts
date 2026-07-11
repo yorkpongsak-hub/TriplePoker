@@ -11,7 +11,7 @@ import { redis } from '../config/redis'
 import { FOUR_GODS, AIConfig } from './aiEngine'
 
 // ─── Types ───────────────────────────────────────────────────────
-export type Tier = 'adept' | 'mastermind' | 'highNoble' | 'monarch'
+export type Tier = 'adept' | 'mastermind' | 'highNoble'
 export type SeatType = 'human' | 'ai' | 'empty'
 
 export interface Seat {
@@ -22,7 +22,7 @@ export interface Seat {
   joinedAt: number
   aiConfigId?: string   // Patch Multiplayer HighNoble: เก็บ AIConfig.id ของที่นั่ง AI ไว้ (boss = Four Gods id, filler = generic AI_CONFIGS id)
   isBoss?: boolean      // Patch Multiplayer HighNoble: true เฉพาะที่นั่ง Boss (seat index 0, Four Gods, ห้าม Human เข้าตลอดกาล)
-  isMonarch?: boolean   // Patch Monarch: true เฉพาะที่นั่ง Boss ของห้อง tier 'monarch' — engine จะสลับบุคลิกใหม่ทุก Round แทนที่จะคงที่ทั้งแมตช์
+  isMonarch?: boolean   // Monarch Spec v1.2: true เฉพาะที่นั่ง Boss ที่สุ่มโดน Monarch (บุคลิกล็อคครั้งเดียวตอนแจกไพ่ ไม่สลับกลางเกม — ดู monarchAI.ts)
 }
 
 export interface GameRoom {
@@ -42,8 +42,7 @@ export interface GameRoom {
 export const TIER_ROOM_CONFIG: Record<Tier, { waitTimeoutMs: number; humanSeatsRequired: number }> = {
   adept:      { waitTimeoutMs: 90_000,  humanSeatsRequired: 2 }, // 2H + 2AI — AI เต็มทันทีที่ Human ครบ 2
   mastermind: { waitTimeoutMs: 120_000, humanSeatsRequired: 3 }, // 3H + 1AI
-  highNoble:  { waitTimeoutMs: 180_000, humanSeatsRequired: 3 }, // 3H + 1AI
-  monarch:    { waitTimeoutMs: 180_000, humanSeatsRequired: 3 }, // 3H + 1AI (Boss = Monarch, สลับบุคลิกจตุรเทพทุก Round)
+  highNoble:  { waitTimeoutMs: 180_000, humanSeatsRequired: 3 }, // 3H + 1AI (Boss = Four Gods ปกติ 97% / Monarch ลับ 3%+pity — ดู monarchSpawn.ts)
 }
 
 // ─── Redis Key Helpers ──────────────────────────────────────────
@@ -61,16 +60,11 @@ function aiSeat(idx: number): Seat {
   return { type: 'ai', name: `Minion-${idx + 1}`, joinedAt: Date.now() }
 }
 
-// Patch Multiplayer HighNoble: ที่นั่ง Boss (index 0) ต้องเป็นหนึ่งใน Four Gods เสมอ — สุ่มครั้งเดียวตอนสร้างห้อง แล้วคงไว้ทั้งแมตช์
+// Patch Multiplayer HighNoble: ที่นั่ง Boss (index 0) — สุ่ม placeholder ตอนสร้างห้อง (ยังไม่รู้ว่าใครจะมานั่ง Human บ้าง)
+// ตัวจริงจะถูกสุ่มใหม่ทับด้วย finalizeBossSeat() ตอนห้องเต็ม (รู้ user_id ครบ 3 คนแล้ว ใช้คำนวณ Monarch pity ได้)
 function bossSeat(): Seat {
   const god: AIConfig = FOUR_GODS[Math.floor(Math.random() * FOUR_GODS.length)]
   return { type: 'ai', name: god.name, joinedAt: Date.now(), aiConfigId: god.id, isBoss: true }
-}
-
-// Patch Monarch: ที่นั่ง Boss ของห้อง tier 'monarch' — ชื่อ/บุคลิกเริ่มต้นไม่สำคัญ เพราะ engine
-// จะสุ่มสลับเป็นหนึ่งใน Four Gods ใหม่ทุก Round ให้ครบทั้ง 4 คนก่อนจบแมตช์ (ดู highNobleMultiEngine.ts)
-function monarchSeat(): Seat {
-  return { type: 'ai', name: 'Monarch', joinedAt: Date.now(), isBoss: true, isMonarch: true }
 }
 
 function makeRoomId(tier: Tier): string {
@@ -83,10 +77,8 @@ function buildInitialSeats(tier: Tier): [Seat, Seat, Seat, Seat] {
   const seats: Seat[] = []
   for (let i = 0; i < 4; i++) {
     if (i >= aiCount) { seats.push(emptySeat()); continue }
-    // Patch Multiplayer HighNoble/Monarch: seat 0 = Boss (fixed, never human-joinable) — seat 1+ (ถ้ามี) = generic AI filler
-    seats.push(i === 0 && tier === 'highNoble' ? bossSeat()
-      : i === 0 && tier === 'monarch' ? monarchSeat()
-      : aiSeat(i))
+    // Patch Multiplayer HighNoble: seat 0 = Boss (fixed, never human-joinable) — seat 1+ (ถ้ามี) = generic AI filler
+    seats.push(i === 0 && tier === 'highNoble' ? bossSeat() : aiSeat(i))
   }
   return seats as [Seat, Seat, Seat, Seat]
 }
