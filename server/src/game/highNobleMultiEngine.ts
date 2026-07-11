@@ -22,6 +22,7 @@ import { gameConfig } from '../config/gameConfig'
 import { supabase } from '../config/supabase'
 import { lockPlayerTokens, returnPlayerLockedTokens } from './gameLoop'
 import { Seat as RoomSeat } from './roomRegistry'
+import { lockMonarchPersonality } from './monarchAI'
 
 // ── Local copies of small pure helpers (ตั้งใจ duplicate จาก gameLoop.ts แทนการ import
 //    เพื่อไม่ให้ engine ใหม่นี้ผูกกับการแก้ไขไฟล์เดิมในอนาคต — ของเดิมพิสูจน์แล้วว่าถูกต้อง) ──
@@ -302,6 +303,13 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
   state.community = community
   state.cardsMap = cardsMap
   state.blindAuctionCards = dealt.blindAuction
+
+  // Monarch Spec v1.2: ล็อคบุคลิกตาม hand strength ทันทีที่แจกไพ่เสร็จ — เฉพาะ Round 1 เท่านั้น
+  // (ล็อคครั้งเดียวทั้งแมตช์ ไม่สลับอีก, client ไม่เห็นค่า personality — เห็นแค่ name="Monarch")
+  const boss = state.seats[0]
+  if (boss.isMonarch && state.roundNumber === 1) {
+    boss.personality = lockMonarchPersonality(cardsMap[boss.id], community)
+  }
 
   // AI/Boss ตัดสินใจจัดไพ่ทันที
   aiSeats(state).forEach(seat => {
