@@ -1,6 +1,7 @@
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native'
 import { MENU_BUTTON_IMAGES, MenuButtonName } from '../../ui/buttonManifest'
 import { UI_THEME } from '../../ui/theme'
+import { ShimmerOverlay } from './ShimmerOverlay'
 
 const SIZE_MAP = { sm: 64, md: 88, lg: 112 } as const
 
@@ -11,10 +12,11 @@ interface MenuButtonProps {
   disabled?: boolean
   size?: keyof typeof SIZE_MAP
   badge?: number
+  vipShimmer?: boolean
 }
 
 // ปุ่มจัตุรัสเมนู (ภาพต้นฉบับ ~313×313) — label Cinzel ทับชิดขอบล่างของภาพ
-export function MenuButton({ icon, label, onPress, disabled, size = 'md', badge }: MenuButtonProps) {
+export function MenuButton({ icon, label, onPress, disabled, size = 'md', badge, vipShimmer }: MenuButtonProps) {
   const dim = SIZE_MAP[size]
 
   return (
@@ -30,6 +32,7 @@ export function MenuButton({ icon, label, onPress, disabled, size = 'md', badge 
       {({ pressed }) => (
         <>
           <Image source={MENU_BUTTON_IMAGES[icon]} style={styles.image} resizeMode="contain" />
+          {vipShimmer && <ShimmerOverlay />}
           <View style={styles.labelSlot} pointerEvents="none">
             <Text style={styles.label} numberOfLines={1}>{label}</Text>
           </View>

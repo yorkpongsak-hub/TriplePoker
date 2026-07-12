@@ -1,6 +1,7 @@
 import { Image, Pressable, StyleProp, StyleSheet, Text, View, ViewStyle } from 'react-native'
 import { ACTION_BUTTON_IMAGES, ActionButtonName } from '../../ui/buttonManifest'
 import { UI_THEME } from '../../ui/theme'
+import { ShimmerOverlay } from './ShimmerOverlay'
 
 const IMAGE_ASPECT_RATIO = 1536 / 1024
 
@@ -14,10 +15,11 @@ interface ActionButtonProps {
   variant?: ActionButtonVariant
   costBadge?: string
   style?: StyleProp<ViewStyle>
+  vipShimmer?: boolean
 }
 
 // ปุ่มกว้าง 3:2 (Play / Ready / Auto Sort) — label Cinzel ทับชิดขอบล่างของภาพ
-export function ActionButton({ icon, label, onPress, disabled, variant = 'normal', costBadge, style }: ActionButtonProps) {
+export function ActionButton({ icon, label, onPress, disabled, variant = 'normal', costBadge, style, vipShimmer }: ActionButtonProps) {
   const isWaiting = variant === 'waiting'
   const isDisabled = variant === 'disabled'
   const interactionDisabled = disabled || isWaiting || isDisabled
@@ -37,6 +39,7 @@ export function ActionButton({ icon, label, onPress, disabled, variant = 'normal
       {({ pressed }) => (
         <>
           <Image source={ACTION_BUTTON_IMAGES[icon]} style={styles.image} resizeMode="contain" />
+          {vipShimmer && <ShimmerOverlay />}
           <View style={styles.labelSlot} pointerEvents="none">
             <Text style={styles.label} numberOfLines={1}>{displayLabel}</Text>
           </View>

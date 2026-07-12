@@ -75,6 +75,7 @@ export default function LobbyScreen() {
   const userId = useUserStore(s => s.userId); // ต้อง login เสมอ — Lobby อยู่ใต้ auth guard แล้ว ไม่มี guest mode
   const displayName = useUserStore(s => s.displayName) || 'Player';
   const tokenBalance = useUserStore(s => s.tokenBalance);
+  const isVip = useUserStore(s => s.isVIP); // VIP Shimmer Effect — ใช้ state ที่มีอยู่แล้ว ไม่สร้าง state/query ใหม่
   type MatchmakingStatus = 'idle' | 'queued' | 'matched';
   type MatchmakingTier = 'adept' | 'highNoble';
   const [mmStatus, setMmStatus] = useState<MatchmakingStatus>('idle');
@@ -500,17 +501,17 @@ export default function LobbyScreen() {
         style={s.menuBar}
         contentContainerStyle={s.menuBarContent}
       >
-        <MenuButton icon="shop" label="Shop" size="sm" onPress={handleShopNav} />
-        <MenuButton icon="hall_of_fame" label="Hall of Fame" size="sm" onPress={() => handleComingSoon('Hall of Fame')} />
-        <MenuButton icon="friends" label="Friends" size="sm" onPress={() => handleComingSoon('Friends')} />
-        <MenuButton icon="ranking" label="Ranking" size="sm" onPress={() => handleComingSoon('Ranking')} />
-        <MenuButton icon="daily_reward" label="Daily Reward" size="sm" onPress={() => handleComingSoon('Daily Reward')} />
-        <MenuButton icon="quests" label="Quests" size="sm" onPress={() => handleComingSoon('Quests')} />
-        <MenuButton icon="achievements" label="Achievements" size="sm" onPress={() => handleComingSoon('Achievements')} />
-        <MenuButton icon="events" label="Events" size="sm" onPress={() => handleComingSoon('Events')} />
-        <MenuButton icon="mail" label="Mail" size="sm" onPress={() => handleComingSoon('Mail')} />
-        <MenuButton icon="settings" label="Settings" size="sm" onPress={() => handleComingSoon('Settings')} />
-        <MenuButton icon="exit" label="Exit" size="sm" onPress={handleExit} />
+        <MenuButton icon="shop" label="Shop" size="sm" onPress={handleShopNav} vipShimmer={isVip} />
+        <MenuButton icon="hall_of_fame" label="Hall of Fame" size="sm" onPress={() => handleComingSoon('Hall of Fame')} vipShimmer={isVip} />
+        <MenuButton icon="friends" label="Friends" size="sm" onPress={() => handleComingSoon('Friends')} vipShimmer={isVip} />
+        <MenuButton icon="ranking" label="Ranking" size="sm" onPress={() => handleComingSoon('Ranking')} vipShimmer={isVip} />
+        <MenuButton icon="daily_reward" label="Daily Reward" size="sm" onPress={() => handleComingSoon('Daily Reward')} vipShimmer={isVip} />
+        <MenuButton icon="quests" label="Quests" size="sm" onPress={() => handleComingSoon('Quests')} vipShimmer={isVip} />
+        <MenuButton icon="achievements" label="Achievements" size="sm" onPress={() => handleComingSoon('Achievements')} vipShimmer={isVip} />
+        <MenuButton icon="events" label="Events" size="sm" onPress={() => handleComingSoon('Events')} vipShimmer={isVip} />
+        <MenuButton icon="mail" label="Mail" size="sm" onPress={() => handleComingSoon('Mail')} vipShimmer={isVip} />
+        <MenuButton icon="settings" label="Settings" size="sm" onPress={() => handleComingSoon('Settings')} vipShimmer={isVip} />
+        <MenuButton icon="exit" label="Exit" size="sm" onPress={handleExit} vipShimmer={isVip} />
       </ScrollView>
 
       {/* ─── Table List — Scroll Zone (~75% สูง) ─── */}

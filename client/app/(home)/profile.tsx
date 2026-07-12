@@ -99,6 +99,7 @@ export default function ProfileScreen() {
 
   const tierInfo = TIER_INFO[tier] ?? TIER_INFO['C']
   const vipInfo  = VIP_INFO[vipStatus]
+  const isVip    = vipStatus !== 'none' // VIP Shimmer Effect — ใช้ vip_status ที่มีอยู่แล้ว ไม่สร้าง state/query ใหม่
 
   const handleLogout = async () => {
     await signOut()
@@ -134,9 +135,9 @@ export default function ProfileScreen() {
 
         {/* ═══════════════ TOP HEADER ═══════════════ */}
         <View style={s.topHeader}>
-          <MenuButton icon="settings" label="Settings" size="sm" onPress={handleSettings} />
+          <MenuButton icon="settings" label="Settings" size="sm" onPress={handleSettings} vipShimmer={isVip} />
           <View style={{ flex: 1 }} />
-          <MenuButton icon="exit" label="Logout" size="sm" onPress={handleLogout} />
+          <MenuButton icon="exit" label="Logout" size="sm" onPress={handleLogout} vipShimmer={isVip} />
         </View>
 
         {/* ═══════════════ HERO PLAYER CARD ═══════════════ */}
@@ -201,11 +202,11 @@ export default function ProfileScreen() {
 
         {/* ═══════════════ MAIN ACTIONS ═══════════════ */}
         <View style={s.playHeroWrap}>
-          <ActionButton icon="play_royal_flush" label="PLAY" onPress={handlePlay} />
+          <ActionButton icon="play_royal_flush" label="PLAY" onPress={handlePlay} vipShimmer={isVip} />
         </View>
         <View style={s.secondaryRow}>
-          <MenuButton icon="shop" label="Shop" size="md" onPress={handleShop} />
-          <MenuButton icon="hall_of_fame" label="Legends" size="md" onPress={handleTableOfLegends} />
+          <MenuButton icon="shop" label="Shop" size="md" onPress={handleShop} vipShimmer={isVip} />
+          <MenuButton icon="hall_of_fame" label="Legends" size="md" onPress={handleTableOfLegends} vipShimmer={isVip} />
         </View>
 
         {/* ═══════════════ TABS ═══════════════ */}
