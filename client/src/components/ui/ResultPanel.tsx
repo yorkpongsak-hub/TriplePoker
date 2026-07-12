@@ -3,7 +3,7 @@ import { ImageBackground, StyleSheet, Text, View } from 'react-native'
 import { PANEL_IMAGES } from '../../ui/buttonManifest'
 import { UI_THEME } from '../../ui/theme'
 
-const PANEL_ASPECT_RATIO = 1024 / 1536 // panel_result_bg.png (1024×1536)
+const PANEL_ASPECT_RATIO = 999 / 1478 // panel_result_bg.png (999×1478 — ลุงแก้ภาพให้กว้างขึ้นเอง)
 
 interface ResultPanelProps {
   variant: 'victory' | 'defeat'
