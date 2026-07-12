@@ -1,6 +1,8 @@
 import 'react-native-url-polyfill/auto'
 import { Stack } from 'expo-router'
 import { Platform, View } from 'react-native'
+import { SafeAreaProvider } from 'react-native-safe-area-context'
+import { StatusBar } from 'expo-status-bar'
 import { useEffect } from 'react'
 import { useFonts, Cinzel_400Regular, Cinzel_700Bold } from '@expo-google-fonts/cinzel'
 import { JetBrainsMono_400Regular, JetBrainsMono_600SemiBold } from '@expo-google-fonts/jetbrains-mono'
@@ -36,22 +38,25 @@ export default function RootLayout() {
   }
 
   return (
-    <View style={{
-      flex: 1,
-      backgroundColor: '#0a0a0a',
-      alignItems: Platform.OS === 'web' ? 'center' : undefined,
-      justifyContent: Platform.OS === 'web' ? 'center' : undefined,
-    }}>
+    <SafeAreaProvider>
+      <StatusBar style="light" translucent />
       <View style={{
-        width: Platform.OS === 'web' ? 390 : '100%',
-        height: Platform.OS === 'web' ? 780 : '100%',
-        overflow: 'hidden',
-        borderRadius: Platform.OS === 'web' ? 40 : 0,
-        borderWidth: Platform.OS === 'web' ? 3 : 0,
-        borderColor: '#2a2a2a',
+        flex: 1,
+        backgroundColor: '#0a0a0a',
+        alignItems: Platform.OS === 'web' ? 'center' : undefined,
+        justifyContent: Platform.OS === 'web' ? 'center' : undefined,
       }}>
-        <Stack screenOptions={{ headerShown: false }} />
+        <View style={{
+          width: Platform.OS === 'web' ? 390 : '100%',
+          height: Platform.OS === 'web' ? 780 : '100%',
+          overflow: 'hidden',
+          borderRadius: Platform.OS === 'web' ? 40 : 0,
+          borderWidth: Platform.OS === 'web' ? 3 : 0,
+          borderColor: '#2a2a2a',
+        }}>
+          <Stack screenOptions={{ headerShown: false }} />
+        </View>
       </View>
-    </View>
+    </SafeAreaProvider>
   )
 }

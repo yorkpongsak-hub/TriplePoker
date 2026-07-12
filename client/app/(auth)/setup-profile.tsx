@@ -8,6 +8,7 @@ import {
   View, Text, TextInput, TouchableOpacity, Image,
   StyleSheet, Platform, StatusBar, ScrollView, ActivityIndicator, Dimensions,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
 import { supabase } from '../../src/services/supabaseService'
 import { useAuthStore } from '../../src/store/authStore'
@@ -52,6 +53,7 @@ function validateNamePattern(name: string): string | null {
 }
 
 export default function SetupProfileScreen() {
+  const insets = useSafeAreaInsets()
   const refreshProfile = useAuthStore(s => s.refreshProfile)
 
   const [displayName, setDisplayName] = useState('')
@@ -128,7 +130,7 @@ export default function SetupProfileScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
 
       <ScrollView contentContainerStyle={styles.scroll}>

@@ -384,7 +384,7 @@ const styles = StyleSheet.create({
     alignItems:      'center',
     justifyContent:  'space-between',
     paddingHorizontal: 18,
-    paddingTop:      Platform.OS === 'ios' ? 54 : 20,
+    paddingTop:      14, // เดิม hardcode ชดเชย status bar เอง (ios 54 / android 20) — VipBackground มี SafeAreaView(top) ให้แล้ว เหลือแค่ breathing room ปกติ
     paddingBottom:   14,
     borderBottomWidth: 1,
     borderBottomColor: C.border,

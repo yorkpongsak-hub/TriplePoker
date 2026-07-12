@@ -5,7 +5,7 @@
 import React, { useState } from 'react'
 import {
   View, Text, TouchableOpacity,
-  StyleSheet, Platform, StatusBar, ScrollView,
+  StyleSheet, StatusBar, ScrollView,
 } from 'react-native'
 import { router } from 'expo-router'
 import { useAuthStore } from '../../src/store/authStore'
@@ -305,7 +305,7 @@ const s = StyleSheet.create({
     backgroundColor: C.header,
     marginHorizontal: -14,
     paddingHorizontal: 20,
-    paddingTop: Platform.OS === 'web' ? 16 : 18,
+    paddingTop: 12, // เดิม hardcode ชดเชย status bar เอง (16/18) — VipBackground มี SafeAreaView(top) ให้แล้ว เหลือแค่ breathing room ปกติ
     paddingBottom: 10,
     flexDirection: 'row',
     alignItems: 'flex-start',
