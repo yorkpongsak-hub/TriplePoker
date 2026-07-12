@@ -72,6 +72,18 @@ export const gameConfig = {
     },
   },
 
+  // ─── Buy-in per Tier (Escrow Model — TriplePoker_BuyIn_Spec_v1_0 §2/§5) ───
+  // หักจาก users.token_balance ครั้งเดียวตอนเข้าโต๊ะ (escrow) — settle กลับครั้งเดียวตอนจบแมตช์
+  // ค่านี้แทนที่ baseline 5000 เดิมที่ hardcode กระจายอยู่ทั่ว gameLoop.ts/highNobleMultiEngine.ts ทั้งหมด
+  buyIn: {
+    initiate:   500,
+    adept:      1_000,
+    mastermind: 9_000,
+    highNoble:  30_000,
+    lastBoss:   60_000,  // reserve — Arena Phase 3
+  },
+  adRescueAmount: 500,  // token ต่อ 1 rewarded ad ตอน token < buyIn (Buy-in Spec §3 — คนละ mechanism กับ debtRecovery.adReward แต่ค่าเท่ากัน)
+
   // ─── Progressive Game Mechanics ─────────────────────────────
   // *** ADDED v1.1 — ต้องอ่าน block นี้ก่อน execute ทุก phase ***
   // Game Engine, Socket Events, Frontend UI ทั้งหมดต้อง reference block นี้

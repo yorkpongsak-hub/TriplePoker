@@ -14,6 +14,8 @@ import { useUserSkins } from '../../src/hooks/useUserSkins'
 import { useBgm, fadeOutBgm, playApplauseSfx } from '../../src/services/bgmService'
 import { useAuthStore } from '../../src/store/authStore'
 import { MenuButton } from '../../src/components/ui/MenuButton'
+import AsyncStorage from '@react-native-async-storage/async-storage'
+import { BUY_IN, BuyInTier, AD_RESCUE_AMOUNT } from '../../src/config/buyInConfig'
 
 const studioLogo = require('../../assets/images/sage_unicorn_logo_transparent.png');
 
@@ -42,6 +44,11 @@ const TIER_CONFIG: Record<Tier, { label: string; letter: string; minToken: numbe
   mastermind:  { label: 'Mastermind',    letter: 'A',  minToken: 40_000,  implemented: true,  badgeColor: COLOR.goldPrimary },
   high_noble:  { label: 'High Noble',    letter: 'S',  minToken: 100_000, implemented: true,  badgeColor: COLOR.red },
   last_boss:   { label: 'The Last Boss', letter: 'S+', minToken: 0,       implemented: false, badgeColor: COLOR.goldDark },
+};
+
+// TriplePoker_BuyIn_Spec_v1_0 §2 — เทียบ Tier type ของ Lobby (snake_case) กับ key ของ BUY_IN (camelCase ตรงกับ server)
+const TIER_TO_BUYIN_KEY: Partial<Record<Tier, BuyInTier>> = {
+  initiate: 'initiate', adept: 'adept', mastermind: 'mastermind', high_noble: 'highNoble', last_boss: 'lastBoss',
 };
 
 function meetsLastBossCondition(_token: number): boolean { return false; }
@@ -161,6 +168,74 @@ export default function LobbyScreen() {
     router.replace('/(auth)/login');
   };
 
+  // ─── Buy-in Entry Gate (TriplePoker_BuyIn_Spec_v1_0 §3) ───
+  // การหักจริงเกิดที่ server เสมอ (escrowBuyIn) — ที่นี่แค่เช็คก่อนเข้าเพื่อ UX เท่านั้น
+  const [insufficientTier, setInsufficientTier] = useState<Tier | null>(null);
+  const [confirmBuyInTier, setConfirmBuyInTier] = useState<Tier | null>(null);
+  const [buyInToast, setBuyInToast] = useState<string | null>(null);
+  const pendingEnterRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (!buyInToast) return;
+    const id = setTimeout(() => setBuyInToast(null), 2000);
+    return () => clearTimeout(id);
+  }, [buyInToast]);
+
+  // เรียกก่อนเข้าโต๊ะเสมอ — ห่อ handler เข้าโต๊ะเดิม (handleEnterInitiate ฯลฯ) ไม่แก้ handler เดิมเลย
+  const runBuyInGate = async (tier: Tier, proceed: () => void) => {
+    const buyInKey = TIER_TO_BUYIN_KEY[tier];
+    if (!buyInKey) { proceed(); return; } // demo/last_boss ยังไม่มี buy-in กำหนด
+    const buyIn = BUY_IN[buyInKey];
+
+    if (tokenBalance < buyIn) {
+      pendingEnterRef.current = proceed;
+      setInsufficientTier(tier);
+      return;
+    }
+
+    const confirmed = await AsyncStorage.getItem(`buyInConfirmed_${tier}`);
+    if (confirmed !== 'true') {
+      pendingEnterRef.current = proceed;
+      setConfirmBuyInTier(tier);
+      return;
+    }
+
+    setBuyInToast(`Buy-in deducted: −${buyIn.toLocaleString('en-US')}`);
+    proceed();
+  };
+
+  const handleConfirmBuyIn = async () => {
+    const tier = confirmBuyInTier;
+    setConfirmBuyInTier(null);
+    if (!tier) return;
+    await AsyncStorage.setItem(`buyInConfirmed_${tier}`, 'true');
+    pendingEnterRef.current?.();
+    pendingEnterRef.current = null;
+  };
+
+  const handleCancelConfirmBuyIn = () => {
+    setConfirmBuyInTier(null);
+    pendingEnterRef.current = null;
+  };
+
+  const handleWatchAd = () => {
+    // TODO: ต่อ AdMob rewarded ad จริง — ดูจบแล้วเรียก server endpoint ให้เครดิต +AD_RESCUE_AMOUNT แล้ว refreshProfile()
+    setInsufficientTier(null);
+    pendingEnterRef.current = null;
+    handleComingSoon('Watch Ad');
+  };
+
+  const handleBuyTokensNav = () => {
+    setInsufficientTier(null);
+    pendingEnterRef.current = null;
+    router.push('/(home)/shop');
+  };
+
+  const handleCancelInsufficientTier = () => {
+    setInsufficientTier(null);
+    pendingEnterRef.current = null;
+  };
+
   // ── Multiplayer Matchmaking (Adept / High Noble ใช้ pattern เดียวกัน) ─────
   const handleAutoMatch = (tier: MatchmakingTier) => {
     setMmStatus('queued');
@@ -263,6 +338,7 @@ export default function LobbyScreen() {
     const cfg = TIER_CONFIG[tier];
     const locked = !isEligible(tier, tokenBalance);
     const isSelected = selected === tier;
+    const buyInKey = TIER_TO_BUYIN_KEY[tier];
     return (
       <TouchableOpacity
         key={tier}
@@ -277,9 +353,13 @@ export default function LobbyScreen() {
         ]}
       >
         <View style={[s.badgeDot, { backgroundColor: cfg.badgeColor }]} />
-        <Text style={[s.tierBtnTxt, locked && s.tierBtnTxtLocked]}>
-          [{cfg.letter}] {cfg.label}{locked ? ' 🔒' : ''}
-        </Text>
+        <View style={{ alignItems: 'center' }}>
+          <Text style={[s.tierBtnTxt, locked && s.tierBtnTxtLocked]}>
+            [{cfg.letter}] {cfg.label}{locked ? ' 🔒' : ''}
+          </Text>
+          {/* TriplePoker_BuyIn_Spec_v1_0 §6 — JetBrains Mono, Gold #FFC857 (=COLOR.goldDark) */}
+          {buyInKey && <Text style={s.buyInLabel}>Buy-in: {BUY_IN[buyInKey].toLocaleString('en-US')}</Text>}
+        </View>
         {!cfg.implemented && <Text style={s.comingSoonTag}>Coming Soon</Text>}
       </TouchableOpacity>
     );
@@ -343,6 +423,54 @@ export default function LobbyScreen() {
         </View>
       )}
 
+      {/* ─── Not Enough Tokens (Buy-in Spec §3) ─── */}
+      {insufficientTier && (
+        <View style={s.celebrateOverlay}>
+          <View style={s.celebrateCard}>
+            <Text style={s.celebrateIcon}>🪙</Text>
+            <Text style={s.celebrateTitle}>NOT ENOUGH TOKENS</Text>
+            <Text style={[s.celebrateTierName, { textAlign: 'center', marginBottom: 20 }]}>
+              You need {BUY_IN[TIER_TO_BUYIN_KEY[insufficientTier]!].toLocaleString('en-US')} tokens to enter {TIER_CONFIG[insufficientTier].label}.
+            </Text>
+            <TouchableOpacity onPress={handleWatchAd} style={[s.celebrateBtn, { marginBottom: 10 }]}>
+              <Text style={s.celebrateBtnTxt}>Watch Ad (+{AD_RESCUE_AMOUNT})</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleBuyTokensNav} style={[s.celebrateBtn, { marginBottom: 10 }]}>
+              <Text style={s.celebrateBtnTxt}>Buy Tokens</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleCancelInsufficientTier} style={[s.celebrateBtn, { borderColor: COLOR.red }]}>
+              <Text style={[s.celebrateBtnTxt, { color: COLOR.red }]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* ─── Entry Buy-in Confirm (ครั้งแรกต่อ Tier — Buy-in Spec §3) ─── */}
+      {confirmBuyInTier && (
+        <View style={s.celebrateOverlay}>
+          <View style={s.celebrateCard}>
+            <Text style={s.celebrateIcon}>🪙</Text>
+            <Text style={s.celebrateTitle}>ENTRY BUY-IN</Text>
+            <Text style={[s.celebrateTierName, { textAlign: 'center', marginBottom: 20 }]}>
+              Entry Buy-in: {BUY_IN[TIER_TO_BUYIN_KEY[confirmBuyInTier]!].toLocaleString('en-US')} tokens.{'\n'}This amount is deducted now and settled when the match ends.
+            </Text>
+            <TouchableOpacity onPress={handleConfirmBuyIn} style={[s.celebrateBtn, { marginBottom: 10 }]}>
+              <Text style={s.celebrateBtnTxt}>Confirm</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleCancelConfirmBuyIn} style={[s.celebrateBtn, { borderColor: COLOR.red }]}>
+              <Text style={[s.celebrateBtnTxt, { color: COLOR.red }]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* ─── Toast: Buy-in deducted (ครั้งถัดไปหลัง confirm ครั้งแรกแล้ว) ─── */}
+      {buyInToast && (
+        <View style={s.toastBanner}>
+          <Text style={s.toastText}>{buyInToast}</Text>
+        </View>
+      )}
+
       {/* ─── Toast: Table deleted / timeout expired ─── */}
       {mmDeletedMessage && (
         <View style={s.toastBanner}>
@@ -391,25 +519,25 @@ export default function LobbyScreen() {
           <Text style={s.sectionTitle}>{sectionTitle}</Text>
 
           {selected === 'initiate' && (
-            <TouchableOpacity style={s.enterBtn} onPress={handleEnterInitiate}>
+            <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('initiate', handleEnterInitiate)}>
               <Text style={s.enterBtnTxt}>▶ เริ่มเล่น (สร้างโต๊ะของคุณ)</Text>
             </TouchableOpacity>
           )}
 
           {selected === 'mastermind' && (
-            <TouchableOpacity style={s.enterBtn} onPress={handleEnterMastermind}>
+            <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('mastermind', handleEnterMastermind)}>
               <Text style={s.enterBtnTxt}>▶ เริ่มเล่น (1 Human + AI)</Text>
             </TouchableOpacity>
           )}
 
           {selected === 'high_noble' && mmStatus === 'idle' && (
-            <TouchableOpacity style={s.enterBtn} onPress={handleEnterHighNoble}>
+            <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('high_noble', handleEnterHighNoble)}>
               <Text style={s.enterBtnTxt}>▶ เริ่มเล่น (Auto-Match 3 Human + จตุรเทพ AI)</Text>
             </TouchableOpacity>
           )}
 
           {selected === 'adept' && mmStatus === 'idle' && (
-            <TouchableOpacity style={s.enterBtn} onPress={handleAutoMatchAdept}>
+            <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('adept', handleAutoMatchAdept)}>
               <Text style={s.enterBtnTxt}>▶ เริ่มเล่น (Auto-Match 3 Human + AI)</Text>
             </TouchableOpacity>
           )}
@@ -558,6 +686,7 @@ const s = StyleSheet.create({
   tierBtnLocked: { opacity: 0.35 },
   tierBtnTxt: { color: COLOR.textPrimary, fontWeight: '700', fontSize: 13 },
   tierBtnTxtLocked: { color: COLOR.textTertiary },
+  buyInLabel: { color: COLOR.goldDark, fontSize: 9, fontFamily: 'JetBrainsMono_400Regular', marginTop: 2 },
   comingSoonTag: { color: COLOR.goldDark, fontSize: 8, marginTop: 2, fontWeight: '700', position: 'absolute', bottom: 2, right: 6 },
   badgeDot: { width: 6, height: 6, borderRadius: 3 },
 
