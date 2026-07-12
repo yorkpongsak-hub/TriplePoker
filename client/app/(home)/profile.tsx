@@ -2,17 +2,19 @@
 // Profile Screen -- TriplePoker (Merged: Arena layout + Brand theme colors)
 // The Sage Unicorn Studio Co., Ltd.
 
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   View, Text, TouchableOpacity,
   StyleSheet, StatusBar, ScrollView,
 } from 'react-native'
+import { LinearGradient } from 'expo-linear-gradient'
 import { router } from 'expo-router'
 import { useAuthStore } from '../../src/store/authStore'
 import { useBgm } from '../../src/services/bgmService'
 import { ActionButton } from '../../src/components/ui/ActionButton'
 import { MenuButton } from '../../src/components/ui/MenuButton'
-import { VipBackground } from '../../src/components/common/VipBackground'
+import { ThemedBackground } from '../../src/components/ui/ThemedBackground'
+import { glassPanel, glassPanelDense } from '../../src/ui/glassStyles'
 
 // ─── ธีมสีหลัก (Website Theme Spec v1.0) ─────────────────────
 const C = {
@@ -102,6 +104,15 @@ export default function ProfileScreen() {
   const vipInfo  = VIP_INFO[vipStatus]
   const isVip    = vipStatus !== 'none' // VIP Shimmer Effect — ใช้ vip_status ที่มีอยู่แล้ว ไม่สร้าง state/query ใหม่
 
+  // ─── Toast: Coming Soon (ปุ่มที่ระบบหลังบ้านยังไม่มี) — pattern เดียวกับ lobby.tsx ───
+  const [comingSoonMsg, setComingSoonMsg] = useState<string | null>(null)
+  useEffect(() => {
+    if (!comingSoonMsg) return
+    const id = setTimeout(() => setComingSoonMsg(null), 2500)
+    return () => clearTimeout(id)
+  }, [comingSoonMsg])
+  const handleComingSoon = (label: string) => setComingSoonMsg(`${label} — Coming Soon`)
+
   const handleLogout = async () => {
     await signOut()
     router.replace('/(auth)/login')
@@ -129,17 +140,32 @@ export default function ProfileScreen() {
   }
 
   return (
-    <VipBackground isVip={isVip}>
+    <ThemedBackground isVip={isVip}>
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
+
+      {/* ─── Toast: Coming Soon (Friends/Ranking/Legends) — pattern เดียวกับ lobby.tsx ─── */}
+      {comingSoonMsg && (
+        <View style={s.toastBanner}>
+          <Text style={s.toastText}>{comingSoonMsg}</Text>
+        </View>
+      )}
 
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 
         {/* ═══════════════ TOP HEADER ═══════════════ */}
         <View style={s.topHeader}>
-          <MenuButton icon="settings" label="Settings" size="sm" onPress={handleSettings} vipShimmer={isVip} />
-          <View style={{ flex: 1 }} />
-          <MenuButton icon="exit" label="Logout" size="sm" onPress={handleLogout} vipShimmer={isVip} />
+          <MenuButton icon="settings" label="Settings" size="xs" onPress={handleSettings} vipShimmer={isVip} />
+          <View style={s.playerProfileLabel}>
+            <LinearGradient
+              colors={[C.goldDark, C.gold]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFill}
+            />
+            <Text style={s.playerProfileLabelText}>Player Profile</Text>
+          </View>
+          <MenuButton icon="exit" label="Logout" size="xs" onPress={handleLogout} vipShimmer={isVip} />
         </View>
 
         {/* ═══════════════ HERO PLAYER CARD ═══════════════ */}
@@ -204,11 +230,13 @@ export default function ProfileScreen() {
 
         {/* ═══════════════ MAIN ACTIONS ═══════════════ */}
         <View style={s.playHeroWrap}>
-          <ActionButton icon="play_royal_flush" label="PLAY" onPress={handlePlay} vipShimmer={isVip} />
+          <ActionButton icon="play_royal_flush" label="PLAY" onPress={handlePlay} vipShimmer={isVip} labelStyle={s.playLabel} />
         </View>
         <View style={s.secondaryRow}>
-          <MenuButton icon="shop" label="Shop" size="md" onPress={handleShop} vipShimmer={isVip} />
-          <MenuButton icon="hall_of_fame" label="Legends" size="md" onPress={handleTableOfLegends} vipShimmer={isVip} />
+          <MenuButton icon="friends" label="Friends" size="sm" onPress={() => handleComingSoon('Friends')} vipShimmer={isVip} />
+          <MenuButton icon="ranking" label="Ranking" size="sm" onPress={() => handleComingSoon('Ranking')} vipShimmer={isVip} />
+          <MenuButton icon="shop" label="Shop" size="sm" onPress={handleShop} vipShimmer={isVip} />
+          <MenuButton icon="hall_of_fame" label="Legends" size="sm" onPress={handleTableOfLegends} vipShimmer={isVip} />
         </View>
 
         {/* ═══════════════ TABS ═══════════════ */}
@@ -231,7 +259,7 @@ export default function ProfileScreen() {
         )}
       </ScrollView>
     </View>
-    </VipBackground>
+    </ThemedBackground>
   )
 }
 
@@ -301,24 +329,42 @@ const s = StyleSheet.create({
   scroll: { paddingHorizontal: 14, paddingBottom: 34 },
 
   topHeader: {
-    minHeight: 92,
-    backgroundColor: C.header,
+    minHeight: 76, // เดิม 92 — Settings/Logout เล็กลง (size xs=48) เพิ่ม Player Profile label panel ตรงกลาง — Feedback B2
+    backgroundColor: glassPanel.backgroundColor, // เดิมพื้นทึบ C.header — เหลือแค่ backgroundColor เพราะเป็นแถบเต็มขอบจอ (border/radius เดิมของบาร์ไม่แตะ)
     marginHorizontal: -14,
     paddingHorizontal: 20,
     paddingTop: 12, // เดิม hardcode ชดเชย status bar เอง (16/18) — VipBackground มี SafeAreaView(top) ให้แล้ว เหลือแค่ breathing room ปกติ
     paddingBottom: 10,
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: 10,
     borderBottomWidth: 1,
     borderBottomColor: C.border,
   },
+  playerProfileLabel: {
+    // Feedback B2 — label header เฉยๆ ระหว่าง Settings/Logout กว้างเต็มพื้นที่ที่เหลือ ไม่มี action
+    flex: 1,
+    height: 48,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: C.goldDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  playerProfileLabelText: {
+    fontFamily: 'Cinzel',
+    color: C.bg,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+    textShadowColor: 'rgba(255,255,255,0.35)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 1,
+  },
 
   goldCard: {
-    backgroundColor: C.surface,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    borderColor: C.borderHi,
+    ...glassPanel, // เดิมพื้นทึบ C.surface — เปลี่ยนเป็นกระจกฝ้ากลาง (ห้าม hardcode rgba เอง)
   },
   heroCard: {
     marginTop: -20,
@@ -360,6 +406,7 @@ const s = StyleSheet.create({
   xpLine: { color: C.textSec, fontSize: 11, fontWeight: '800' },
 
   resourceCard: {
+    ...glassPanelDense, // Token/Crown bar — ตัวเลขสำคัญ ใช้กระจกทึบกว่า
     marginTop: 12,
     padding: 14,
     flexDirection: 'row',
@@ -382,31 +429,38 @@ const s = StyleSheet.create({
   psSeasonValue: { color: C.purple, fontSize: 20, fontWeight: '900' },
   psCareerValue: { color: C.textDim, fontSize: 10, fontWeight: '700', marginTop: 4, textAlign: 'right' },
   ascendantHint: {
+    ...glassPanel, // เดิม backgroundColor/borderColor hardcode เอง — เปลี่ยนมาใช้กระจกฝ้ากลาง
     marginTop: 10,
     padding: 12,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: C.gold,
-    backgroundColor: 'rgba(255,215,106,0.08)',
     alignItems: 'center',
   },
   ascendantHintText: { color: C.gold, fontSize: 11, fontWeight: '800', letterSpacing: 0.3, textAlign: 'center' },
 
   playHeroWrap: { marginTop: 16 },
-  secondaryRow: { flexDirection: 'row', justifyContent: 'center', gap: 24, marginTop: 14 },
+  playLabel: {
+    // Feedback B1 — ขยับ "PLAY" ขึ้น 20px + ฟอนต์ใหญ่ขึ้น 25% (16 -> 20) เฉพะปุ่มนี้ ไม่กระทบ ActionButton อื่น (Ready/Auto Sort)
+    fontSize: 20,
+    transform: [{ translateY: -20 }],
+  },
+  secondaryRow: {
+    // Feedback B3 — เพิ่ม Friends/Ranking นำหน้า Shop/Legends รวม 4 ปุ่ม — ลด size เป็น sm + space-evenly กันล้นจอ
+    flexDirection: 'row',
+    justifyContent: 'space-evenly',
+    marginTop: 14,
+  },
 
   tabsRow: { flexDirection: 'row', marginTop: 14 },
   tabBtn: {
     flex: 1,
-    backgroundColor: C.surface,
-    borderWidth: 1, borderColor: C.border,
+    backgroundColor: glassPanel.backgroundColor, // เดิม C.surface — radius แบบ top-only เดิมไม่แตะ (ต่อกับ panel ด้านล่าง)
+    borderWidth: 1, borderColor: glassPanel.borderColor,
     paddingVertical: 11,
     alignItems: 'center',
     borderTopLeftRadius: 10,
     borderTopRightRadius: 10,
     marginRight: -1,
   },
-  tabBtnActive: { backgroundColor: C.card, borderColor: C.gold },
+  tabBtnActive: { backgroundColor: glassPanelDense.backgroundColor, borderColor: C.gold },
   tabText: { color: C.textDim, fontSize: 11, fontWeight: '900' },
   tabTextActive: { color: C.gold },
 
@@ -429,4 +483,13 @@ const s = StyleSheet.create({
   statValue: { color: C.textPrimary, fontSize: 16, fontWeight: '900', marginTop: 3, textAlign: 'center' },
   statValueSmall: { fontSize: 11 },
   statSub: { color: C.textDim, fontSize: 8, fontWeight: '700', marginTop: 4, textAlign: 'center' },
+
+  toastBanner: {
+    // Feedback B3 — Coming Soon toast, pattern เดียวกับ lobby.tsx
+    position: 'absolute', top: 60, left: 16, right: 16, zIndex: 1000,
+    backgroundColor: glassPanel.backgroundColor,
+    borderWidth: 1.5, borderColor: C.red, borderRadius: 10,
+    paddingVertical: 10, paddingHorizontal: 16,
+  },
+  toastText: { color: C.textPrimary, fontSize: 12, fontWeight: '700', textAlign: 'center' },
 })

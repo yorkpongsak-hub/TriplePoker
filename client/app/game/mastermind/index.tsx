@@ -6,18 +6,24 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Alert, Animated, Image, PanResponder, Platform, ScrollView, StatusBar, StyleSheet,
+  Alert, Animated, Image, ImageBackground, PanResponder, Platform, ScrollView, StatusBar, StyleSheet,
   Text, TouchableOpacity, View,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { io, Socket } from 'socket.io-client'
 import { router, useLocalSearchParams } from 'expo-router'
+import { useAuthStore } from '../../../src/store/authStore'
 import { autoSort } from '../../../src/utils/autoSort'
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
 import { MINION_AVATAR } from '../../../src/constants/minionAvatars'
 import { ActionButton } from '../../../src/components/ui/ActionButton'
 import { MenuButton } from '../../../src/components/ui/MenuButton'
 import { ResultPanel } from '../../../src/components/ui/ResultPanel'
+import { glassPanelDense } from '../../../src/ui/glassStyles'
+
+// Feedback C5 — Showdown result ครอบด้วยพื้นหลังชุดเดียวกับ Profile/Lobby (bg free/vip ตาม isVip)
+const SHOWDOWN_BG_FREE = require('../../../assets/backgrounds/bg_main_free.png')
+const SHOWDOWN_BG_VIP  = require('../../../assets/backgrounds/bg_main_vip.png')
 
 // ── Assets
 const studioLogo  = require('../../../assets/images/sage_unicorn_logo_transparent.png')
@@ -186,6 +192,10 @@ const GameTableLive: React.FC = () => {
   const insets = useSafeAreaInsets()
   const isWeb  = Platform.OS === 'web'
   const socketRef = useRef<Socket | null>(null)
+  // Feedback C2 — ไฟล์นี้ไม่เคยผูก authStore เลย ทำให้ P1 โชว์ '👤'/'You' hardcode ตลอด — เพิ่มเหมือน initiate/adept
+  const myAvatarEmoji = useAuthStore(s => s.profile?.avatar_url) || '👤'
+  const myDisplayName = useAuthStore(s => s.profile?.display_name) || 'You'
+  const isVip = useAuthStore(s => (s.profile?.vip_status ?? 'none') !== 'none') // Feedback C5 — ใช้ vip_status เดิม ไม่สร้าง state ใหม่
 
   // ── Timer ref (ไม่ trigger re-render)
   const timerValRef = useRef({ val: 90, max: 90 })
@@ -1159,7 +1169,7 @@ const GameTableLive: React.FC = () => {
   // Pile Reveal Overlay — Tab mode ผู้เล่นเลือกดูได้ + Continue button
   const PileRevealOverlay: React.FC<{ pileNum: 1|2|3 }> = ({ pileNum }) => {
     const players = [
-      { id: PLAYER_ID, label: 'You', emoji: '👤' },
+      { id: PLAYER_ID, label: myDisplayName, emoji: myAvatarEmoji },
       ...(aiList.map(a => ({ id: a.id, label: a.name, emoji: a.emoji }))),
     ]
     const commMap: Record<number, string[]> = { 1: comm.p1, 2: comm.p2, 3: comm.p3 }
@@ -1280,7 +1290,7 @@ const GameTableLive: React.FC = () => {
     const allPlayerIds = [PLAYER_ID, ...Object.keys(allCards).filter(id => id !== PLAYER_ID)]
     const aiData = aiListRef.current.length > 0 ? aiListRef.current : aiList
     const players = allPlayerIds.map(id => {
-      if (id === PLAYER_ID) return { id, label: 'You', emoji: '👤' }
+      if (id === PLAYER_ID) return { id, label: myDisplayName, emoji: myAvatarEmoji }
       const ai = aiData.find(a => a.id === id)
       return { id, label: ai?.name ?? id, emoji: ai?.emoji ?? '🤖' }
     })
@@ -1299,7 +1309,7 @@ const GameTableLive: React.FC = () => {
     const bonusTriple = isTriple ? Math.round(raw / 2) : 0
 
     return (
-      <View style={{ flex: 1, width: '100%', backgroundColor: 'rgba(15,36,24,0.97)', borderRadius: 16, padding: 12 }}>
+      <View style={{ flex: 1, width: '100%', ...glassPanelDense, padding: 12 }}>
         {/* Header */}
         <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10, gap: 8 }}>
           <Text style={{ fontSize: 18, color: '#FFD76A', fontWeight: '900', letterSpacing: 2, flex: 1 }}>SHOWDOWN</Text>
@@ -1404,14 +1414,14 @@ const GameTableLive: React.FC = () => {
                   borderColor: isWinner ? '#8DFFB5' : '#2A4A34',
                   backgroundColor: isWinner ? 'rgba(141,255,181,0.08)' : 'rgba(0,0,0,0.3)',
                 }}>
-                  <View style={{ width: 64, alignItems: 'center', marginRight: 8 }}>
+                  <View style={{ width: 76, alignItems: 'center', marginRight: 8 }}>
                     <Text style={{ fontSize: 18 }}>{p.emoji}</Text>
-                    <Text style={{ fontSize: 10, color: isUser ? '#FFD76A' : '#F5F2E8', fontWeight: '800' }} numberOfLines={1}>
-                      {isUser ? 'You' : p.label.split(' ')[0]}
+                    <Text style={{ fontSize: 9, color: isUser ? '#FFD76A' : '#F5F2E8', fontWeight: '800' }} numberOfLines={1}>
+                      {isUser ? myDisplayName : p.label}
                     </Text>
                     {isWinner && <Text style={{ fontSize: 9, color: '#8DFFB5', fontWeight: '900' }}>🏆 WIN</Text>}
                   </View>
-                  <View style={{ flexDirection: 'row', gap: 4 }}>
+                  <View style={{ flexDirection: 'row', gap: 4, marginLeft: 100 }}>
                     {cardKeys.length > 0 ? cardKeys.map((k, i) => (
                       <View key={i} style={{ width: CARD_W, height: CARD_H, borderRadius: 4, overflow: 'hidden', borderWidth: 1.5, borderColor: isWinner ? '#8DFFB5' : '#2A4A34' }}>
                         {CARD_IMG[k] ? <Image source={CARD_IMG[k]} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" /> : <Image source={cardBackImg} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" />}
@@ -1914,7 +1924,7 @@ const GameTableLive: React.FC = () => {
                   return (
                     <View key={pid} style={s.matchEndRow}>
                       <Text style={[s.matchEndName, pid === PLAYER_ID && { color: '#c9a84c' }]} numberOfLines={1}>
-                        {pid === PLAYER_ID ? '👤 You' : `${ai?.emoji} ${ai?.name}`}
+                        {pid === PLAYER_ID ? `${myAvatarEmoji} ${myDisplayName}` : `${ai?.emoji} ${ai?.name}`}
                       </Text>
                       <Text style={[s.matchEndBal, { color: bal >= (matchResult.buyInAmount ?? buyInAmount) ? '#4ade80' : '#f87171' }]}>🪙 {bal}</Text>
                     </View>
@@ -2326,9 +2336,10 @@ const GameTableLive: React.FC = () => {
           </View>
 
           </Animated.View>
-          {/* USER AVATAR — มุมล่างซ้าย (ซ่อนตอน Grand Finale เพราะ Overlay มี Avatar P1 แล้ว) */}
-          <View style={{ position: 'absolute', bottom: 58, left: 10, zIndex: 10, opacity: (phase === 'showdown' || phase === 'result' || phase === 'grand_finale' || phase === 'grand_finale_done') ? 0 : 1 }}>
-            <AvatarBubble emoji="👤" size={40} />
+          {/* USER AVATAR — มุมล่างซ้าย (ซ่อนตอน Grand Finale เพราะ Overlay มี Avatar P1 แล้ว) — Feedback C2: ใช้ myAvatarEmoji/myDisplayName จริง */}
+          <View style={{ position: 'absolute', bottom: 58, left: 10, zIndex: 10, opacity: (phase === 'showdown' || phase === 'result' || phase === 'grand_finale' || phase === 'grand_finale_done') ? 0 : 1, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <AvatarBubble emoji={myAvatarEmoji} size={40} />
+            <Text style={s.userNameTag} numberOfLines={1}>{myDisplayName}</Text>
           </View>
 
           {/* ACTION BAR */}
@@ -2529,8 +2540,8 @@ const GameTableLive: React.FC = () => {
                   {/* Avatar + Status + Health ชิดซ้าย */}
                   <View style={{ alignItems: 'flex-start', paddingLeft: 14, gap: 2 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <AvatarBubble emoji="👤" size={32} />
-                      <Text style={{ color: '#FFD76A', fontSize: 11, fontWeight: '700', letterSpacing: 1 }}>YOU</Text>
+                      <AvatarBubble emoji={myAvatarEmoji} size={32} />
+                      <Text style={{ color: '#FFD76A', fontSize: 11, fontWeight: '700', letterSpacing: 1 }} numberOfLines={1}>{myDisplayName}</Text>
                     </View>
                     <GFStatusBadge playerId={PLAYER_ID} />
                     <GFHealthBar playerId={PLAYER_ID} />
@@ -2584,10 +2595,12 @@ const GameTableLive: React.FC = () => {
           </View>}
 
         </View>
-        {/* ── SHOWDOWN RESULT (กลางจอ) ── */}
+        {/* ── SHOWDOWN RESULT (กลางจอ) — Feedback C5: ครอบด้วยพื้นหลัง free/vip ชุดเดียวกับ Profile/Lobby ── */}
         {showResult && (phase === 'showdown' || phase === 'result') && (
-          <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: -200, backgroundColor: 'rgba(15,36,24,0.97)', padding: 12, flexDirection: 'column', zIndex: 200 }}>
-            <ShowdownResult />
+          <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: -200, zIndex: 200 }}>
+            <ImageBackground source={isVip ? SHOWDOWN_BG_VIP : SHOWDOWN_BG_FREE} resizeMode="cover" style={{ flex: 1, padding: 12 }}>
+              <ShowdownResult />
+            </ImageBackground>
           </View>
         )}
         <ServerLog />
@@ -2633,6 +2646,7 @@ const s = StyleSheet.create({
   mainArea:      { flex: 1, flexDirection: 'row', zIndex: 2 },
   sideCol:       { width: SIDE_COL_W, alignItems: 'center', paddingTop: 4, gap: 2 },
   sideName:      { fontSize: 9, color: '#ffffff', letterSpacing: 1, fontWeight: '700' },
+  userNameTag:   { fontSize: 10, color: '#ffffff', letterSpacing: 1, fontWeight: '800', maxWidth: 100, textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
   sideSeatWrap:  { flex: 1, width: SIDE_COL_W, overflow: 'visible', justifyContent: 'flex-start', alignItems: 'center' },
   sideSeatInner: { flexDirection: 'row', alignItems: 'center' },
 

@@ -14,7 +14,8 @@ import { useUserSkins } from '../../src/hooks/useUserSkins'
 import { useBgm, fadeOutBgm, playApplauseSfx } from '../../src/services/bgmService'
 import { useAuthStore } from '../../src/store/authStore'
 import { MenuButton } from '../../src/components/ui/MenuButton'
-import { VipBackground } from '../../src/components/common/VipBackground'
+import { ThemedBackground } from '../../src/components/ui/ThemedBackground'
+import { glassPanel, glassPanelDense, textOnGlass } from '../../src/ui/glassStyles'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { BUY_IN, BuyInTier, AD_RESCUE_AMOUNT } from '../../src/config/buyInConfig'
 
@@ -110,7 +111,6 @@ export default function LobbyScreen() {
   const session = useAuthStore(s => s.session);
   const profile = useAuthStore(s => s.profile);
   const refreshProfile = useAuthStore(s => s.refreshProfile);
-  const signOut = useAuthStore(s => s.signOut);
   const [celebrateQueue, setCelebrateQueue] = useState<Tier[]>([]);
   const [celebrating, setCelebrating] = useState<Tier | null>(null);
   const celebratedCheckedRef = useRef(false);
@@ -164,11 +164,6 @@ export default function LobbyScreen() {
   }, [comingSoonMsg]);
   const handleComingSoon = (label: string) => setComingSoonMsg(`${label} — Coming Soon`);
   const handleShopNav = () => router.push('/(home)/shop');
-  const handleExit = async () => {
-    fadeOutBgm();
-    await signOut();
-    router.replace('/(auth)/login');
-  };
 
   // ─── Buy-in Entry Gate (TriplePoker_BuyIn_Spec_v1_0 §3) ───
   // การหักจริงเกิดที่ server เสมอ (escrowBuyIn) — ที่นี่แค่เช็คก่อนเข้าเพื่อ UX เท่านั้น
@@ -350,7 +345,6 @@ export default function LobbyScreen() {
           s.tierBtn,
           fullWidth && s.tierBtnFull,
           { borderColor: isSelected ? cfg.badgeColor : COLOR.borderPrimary },
-          isSelected && { backgroundColor: COLOR.bgTertiary },
           locked && s.tierBtnLocked,
         ]}
       >
@@ -373,7 +367,7 @@ export default function LobbyScreen() {
     : 'เลือก Tier ด้านล่างเพื่อดูโต๊ะ';
 
   return (
-    <VipBackground isVip={isVip}>
+    <ThemedBackground isVip={isVip}>
     <View style={s.root}>
 
       {/* ─── Tier Unlock Celebration (ครั้งเดียวต่อ Tier — §1.3) ───
@@ -496,25 +490,13 @@ export default function LobbyScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* ─── Menu Bar (fixed) — LobbyMatchmaking_Spec_v1_0 §1.2 — UI Button System ─── */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={s.menuBar}
-        contentContainerStyle={s.menuBarContent}
-      >
+      {/* ─── Menu Bar (fixed) — Feedback A2: เหลือ 4 ปุ่ม กระจายเต็มความกว้าง ไม่ scroll แล้ว ─── */}
+      <View style={s.menuBar}>
         <MenuButton icon="shop" label="Shop" size="sm" onPress={handleShopNav} vipShimmer={isVip} />
         <MenuButton icon="hall_of_fame" label="Hall of Fame" size="sm" onPress={() => handleComingSoon('Hall of Fame')} vipShimmer={isVip} />
         <MenuButton icon="friends" label="Friends" size="sm" onPress={() => handleComingSoon('Friends')} vipShimmer={isVip} />
         <MenuButton icon="ranking" label="Ranking" size="sm" onPress={() => handleComingSoon('Ranking')} vipShimmer={isVip} />
-        <MenuButton icon="daily_reward" label="Daily Reward" size="sm" onPress={() => handleComingSoon('Daily Reward')} vipShimmer={isVip} />
-        <MenuButton icon="quests" label="Quests" size="sm" onPress={() => handleComingSoon('Quests')} vipShimmer={isVip} />
-        <MenuButton icon="achievements" label="Achievements" size="sm" onPress={() => handleComingSoon('Achievements')} vipShimmer={isVip} />
-        <MenuButton icon="events" label="Events" size="sm" onPress={() => handleComingSoon('Events')} vipShimmer={isVip} />
-        <MenuButton icon="mail" label="Mail" size="sm" onPress={() => handleComingSoon('Mail')} vipShimmer={isVip} />
-        <MenuButton icon="settings" label="Settings" size="sm" onPress={() => handleComingSoon('Settings')} vipShimmer={isVip} />
-        <MenuButton icon="exit" label="Exit" size="sm" onPress={handleExit} vipShimmer={isVip} />
-      </ScrollView>
+      </View>
 
       {/* ─── Table List — Scroll Zone (~75% สูง) ─── */}
       <View style={s.scrollZone}>
@@ -547,8 +529,8 @@ export default function LobbyScreen() {
 
           {(selected === 'adept' || selected === 'high_noble') && mmStatus === 'queued' && mmTier === (selected === 'high_noble' ? 'highNoble' : 'adept') && (
             <View style={{
-              backgroundColor: COLOR.bgSecondary, borderRadius: 12, borderWidth: 1.5,
-              borderColor: COLOR.goldPrimary, padding: 16, alignItems: 'center', marginBottom: 12,
+              ...glassPanel, // เดิม COLOR.bgSecondary ทึบ
+              padding: 16, alignItems: 'center', marginBottom: 12,
             }}>
               <Text style={{ color: COLOR.goldPrimary, fontSize: 14, fontWeight: '800', marginBottom: 10 }}>
                 🔍 กำลังหาผู้เล่น...
@@ -584,20 +566,20 @@ export default function LobbyScreen() {
 
           {(selected === 'adept' || selected === 'high_noble') && mmStatus === 'idle' && (
             <View style={{ paddingVertical: 24, paddingHorizontal: 16, alignItems: 'center' }}>
-              <Text style={{ color: COLOR.textSecondary, fontSize: 12, textAlign: 'center', lineHeight: 18 }}>
+              <Text style={{ color: COLOR.textSecondary, fontSize: 12, textAlign: 'center', lineHeight: 18, ...textOnGlass }}>
                 ยังไม่มีห้องที่เปิดอยู่{'\n'}กด "เริ่มเล่น" เพื่อสร้างห้องใหม่
               </Text>
             </View>
           )}
 
           {selected === 'all' && (
-            <Text style={{ color: COLOR.textTertiary, fontSize: 12, textAlign: 'center', paddingVertical: 24 }}>
+            <Text style={{ color: COLOR.textTertiary, fontSize: 12, textAlign: 'center', paddingVertical: 24, ...textOnGlass }}>
               เลือก Tier ด้านล่างเพื่อเริ่มเล่น
             </Text>
           )}
 
           {!selected && (
-            <Text style={{ color: COLOR.textTertiary, fontSize: 12 }}>— ยังไม่ได้เลือก Tier —</Text>
+            <Text style={{ color: COLOR.textTertiary, fontSize: 12, ...textOnGlass }}>— ยังไม่ได้เลือก Tier —</Text>
           )}
         </ScrollView>
       </View>
@@ -649,7 +631,7 @@ export default function LobbyScreen() {
       />
 
       </View>
-    </VipBackground>
+    </ThemedBackground>
   );
 }
 
@@ -662,30 +644,29 @@ const s = StyleSheet.create({
     overflow: 'hidden',
     ...(Platform.OS === 'web' ? { height: '100vh' as any } : {}),
   },
-  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, marginBottom: 12 }, // เดิม marginTop:50 hardcode ชดเชย status bar เอง — VipBackground มี SafeAreaView(top) ให้แล้ว เหลือแค่ breathing room ปกติ
-  header: { color: COLOR.goldPrimary, fontSize: 20, fontWeight: '800', letterSpacing: 1, fontFamily: 'Cinzel' },
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginTop: 8, marginBottom: 12 }, // เดิม marginTop:50 hardcode ชดเชย status bar เอง — VipBackground มี SafeAreaView(top) ให้แล้ว เหลือแค่ breathing room ปกติ | justifyContent เปลี่ยนเป็น flex-end เพราะ header ย้ายไป absolute-center แล้ว (Feedback A1)
+  header: { position: 'absolute', left: 0, right: 0, textAlign: 'center', color: COLOR.goldPrimary, fontSize: 20, fontWeight: '800', letterSpacing: 1, fontFamily: 'Cinzel', ...textOnGlass }, // Feedback A1: จัดกึ่งกลางแนวนอน — ลอยตรงบนพื้นหลัง ไม่มี panel รอง
   profileBtn: { borderWidth: 1, borderColor: COLOR.goldPrimary, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
-  profileBtnTxt: { color: COLOR.goldPrimary, fontSize: 12, fontWeight: '700' },
+  profileBtnTxt: { color: COLOR.goldPrimary, fontSize: 12, fontWeight: '700', ...textOnGlass },
 
-  menuBar: { flexGrow: 0, flexShrink: 0, marginBottom: 10 },
-  menuBarContent: { flexDirection: 'row', gap: 14, paddingHorizontal: 2, paddingVertical: 2 },
+  menuBar: { flexDirection: 'row', justifyContent: 'space-evenly', alignItems: 'center', marginBottom: 10 }, // Feedback A2: เหลือ 4 ปุ่ม กระจายเต็มความกว้างแทน scroll
 
   // Scroll Zone กิน flex:3 ของพื้นที่ที่เหลือ (~75%), Fixed Bottom Block กิน flex:1 (~25%)
   scrollZone: { flex: 1, minHeight: 0, overflow: 'hidden' },
-  sectionTitle: { color: COLOR.textPrimary, fontSize: 14, fontWeight: '700', marginBottom: 6 },
+  sectionTitle: { color: COLOR.textPrimary, fontSize: 14, fontWeight: '700', marginBottom: 6, ...textOnGlass }, // ลอยตรงบนพื้นหลัง ไม่มี panel รอง
 
   enterBtn: { backgroundColor: COLOR.goldPrimary, borderRadius: 8, paddingVertical: 12, alignItems: 'center', marginBottom: 12 },
   enterBtnTxt: { color: COLOR.bgPrimary, fontWeight: '700', fontSize: 13 },
 
   fixedBottomBlock: { paddingTop: 10, flexShrink: 0 },
 
-  allBtn: { borderRadius: 10, borderWidth: 1.5, borderColor: COLOR.greenHighlight, backgroundColor: COLOR.bgSecondary, paddingVertical: 12, alignItems: 'center', marginBottom: 10 },
-  allBtnActive: { backgroundColor: COLOR.bgTertiary },
+  allBtn: { borderRadius: 10, borderWidth: 1.5, borderColor: COLOR.greenHighlight, backgroundColor: glassPanel.backgroundColor, paddingVertical: 12, alignItems: 'center', marginBottom: 10 }, // เดิม COLOR.bgSecondary ทึบ — คง border เขียว (สื่อความหมาย "all tables") ไว้ตามเดิม
+  allBtnActive: { backgroundColor: glassPanelDense.backgroundColor },
   allBtnTxt: { color: COLOR.greenHighlight, fontWeight: '700', fontSize: 13 },
 
   tierRowsWrap: { gap: 8 },
   tierRow: { flexDirection: 'row', gap: 8 },
-  tierBtn: { flex: 1, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 10, borderWidth: 1.5, backgroundColor: COLOR.bgSecondary, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 },
+  tierBtn: { ...glassPanelDense, flex: 1, paddingHorizontal: 14, paddingVertical: 12, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 }, // เดิม COLOR.bgSecondary ทึบ — dense เพราะโชว์ Buy-in price
   tierBtnFull: { flex: 1 },
   tierBtnLocked: { opacity: 0.35 },
   tierBtnTxt: { color: COLOR.textPrimary, fontWeight: '700', fontSize: 13 },
@@ -696,8 +677,8 @@ const s = StyleSheet.create({
 
   footer: { alignItems: 'center', paddingVertical: 10, borderTopWidth: 1, borderTopColor: COLOR.borderPrimary, marginTop: 10 },
   footerLogo: { width: 28, height: 28, opacity: 0.9, marginBottom: 4 },
-  footerText: { color: COLOR.goldPrimary, fontSize: 12, fontWeight: '800', letterSpacing: 1, fontFamily: 'Cinzel' },
-  footerSub: { color: COLOR.textTertiary, fontSize: 8, marginTop: 2 },
+  footerText: { color: COLOR.goldPrimary, fontSize: 12, fontWeight: '800', letterSpacing: 1, fontFamily: 'Cinzel', ...textOnGlass }, // ลอยตรงบนพื้นหลัง ไม่มี panel รอง
+  footerSub: { color: COLOR.textTertiary, fontSize: 8, marginTop: 2, ...textOnGlass },
 
     skinSelectorBtn: { backgroundColor: COLOR.goldPrimary, borderRadius: 10, paddingVertical: 12, alignItems: 'center', marginBottom: 10 },
   skinSelectorBtnTxt: { color: COLOR.bgPrimary, fontWeight: '700', fontSize: 13 },
@@ -716,8 +697,8 @@ const s = StyleSheet.create({
     backgroundColor: 'rgba(5,10,8,0.92)', alignItems: 'center', justifyContent: 'center', padding: 20,
   },
   celebrateCard: {
+    ...glassPanelDense, // เดิม COLOR.bgSecondary ทึบ — dialog มักโชว์ตัวเลข token (Not Enough Tokens/Entry Buy-in) จึงใช้ dense
     width: '100%', maxWidth: 320, alignItems: 'center',
-    backgroundColor: COLOR.bgSecondary, borderRadius: 16, borderWidth: 2, borderColor: COLOR.goldPrimary,
     paddingVertical: 32, paddingHorizontal: 20,
   },
   celebrateIcon: { fontSize: 48, marginBottom: 10 },
@@ -728,7 +709,8 @@ const s = StyleSheet.create({
 
   toastBanner: {
     position: 'absolute', top: 60, left: 16, right: 16, zIndex: 1000,
-    backgroundColor: COLOR.bgSecondary, borderWidth: 1.5, borderColor: COLOR.red, borderRadius: 10,
+    backgroundColor: glassPanel.backgroundColor, // เดิม COLOR.bgSecondary ทึบ — คง border แดง (สื่อความหมาย alert) ไว้ตามเดิม
+    borderWidth: 1.5, borderColor: COLOR.red, borderRadius: 10,
     paddingVertical: 10, paddingHorizontal: 16,
   },
   toastText: { color: COLOR.textPrimary, fontSize: 12, fontWeight: '700', textAlign: 'center' },

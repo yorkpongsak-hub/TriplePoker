@@ -3,7 +3,7 @@ import { MENU_BUTTON_IMAGES, MenuButtonName } from '../../ui/buttonManifest'
 import { UI_THEME } from '../../ui/theme'
 import { ShimmerOverlay } from './ShimmerOverlay'
 
-const SIZE_MAP = { sm: 64, md: 88, lg: 112 } as const
+const SIZE_MAP = { xs: 48, sm: 64, md: 88, lg: 112 } as const
 
 interface MenuButtonProps {
   icon: MenuButtonName

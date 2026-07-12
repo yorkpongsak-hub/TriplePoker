@@ -55,6 +55,7 @@ const styles = StyleSheet.create({
   titleSlot: {
     marginTop: '7%',
     alignItems: 'center',
+    transform: [{ translateY: 50 }], // Feedback D1 — ขยับลง 50px จากตำแหน่งเดิม
   },
   textBackdrop: {
     backgroundColor: 'rgba(0,0,0,0.35)',
@@ -80,5 +81,6 @@ const styles = StyleSheet.create({
     marginHorizontal: '13%',
     marginBottom: '11%',
     gap: 8,
+    transform: [{ translateY: -50 }], // Feedback D2 — ขยับขึ้น 50px จากตำแหน่งเดิม
   },
 })
