@@ -12,6 +12,7 @@ import { useAuthStore } from '../../src/store/authStore'
 import { useBgm } from '../../src/services/bgmService'
 import { ActionButton } from '../../src/components/ui/ActionButton'
 import { MenuButton } from '../../src/components/ui/MenuButton'
+import { VipBackground } from '../../src/components/common/VipBackground'
 
 // ─── ธีมสีหลัก (Website Theme Spec v1.0) ─────────────────────
 const C = {
@@ -128,6 +129,7 @@ export default function ProfileScreen() {
   }
 
   return (
+    <VipBackground isVip={isVip}>
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
 
@@ -229,6 +231,7 @@ export default function ProfileScreen() {
         )}
       </ScrollView>
     </View>
+    </VipBackground>
   )
 }
 
@@ -294,7 +297,7 @@ function StatItem({ icon, label, value, sub, small }: { icon: string; label: str
 
 // ─── Styles ──────────────────────────────────────────────────
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.bg },
+  root: { flex: 1, backgroundColor: 'transparent' }, // VipBackground ครอบพื้นหลังแล้ว — Free เห็น C.bg ผ่าน VipBackground fallback
   scroll: { paddingHorizontal: 14, paddingBottom: 34 },
 
   topHeader: {

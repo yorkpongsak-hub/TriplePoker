@@ -17,6 +17,7 @@ import {
   FlatList,
 } from 'react-native'
 import { useBgm } from '../../services/bgmService'
+import { VipBackground } from '../common/VipBackground'
 
 const { height: SCREEN_H, width: SCREEN_W } = Dimensions.get('window')
 
@@ -270,6 +271,7 @@ const ShopScreen: React.FC<ShopScreenProps> = ({
   }, [isVip, onBuy, onOpenLootBox, onOpenTokenPack])
 
   return (
+    <VipBackground isVip={isVip}>
     <View style={styles.container}>
 
       {/* ── Header */}
@@ -365,6 +367,7 @@ const ShopScreen: React.FC<ShopScreenProps> = ({
         onClose={() => setVipSheetVisible(false)}
       />
     </View>
+    </VipBackground>
   )
 }
 
@@ -372,7 +375,7 @@ const ShopScreen: React.FC<ShopScreenProps> = ({
 const styles = StyleSheet.create({
   container: {
     flex:            1,
-    backgroundColor: C.bg,
+    backgroundColor: 'transparent', // VipBackground ครอบพื้นหลังแล้ว — Free เห็นพื้นสีเดิม (#0F2418) ผ่าน fallback
   },
 
   // Header

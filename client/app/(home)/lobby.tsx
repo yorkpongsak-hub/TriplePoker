@@ -14,6 +14,7 @@ import { useUserSkins } from '../../src/hooks/useUserSkins'
 import { useBgm, fadeOutBgm, playApplauseSfx } from '../../src/services/bgmService'
 import { useAuthStore } from '../../src/store/authStore'
 import { MenuButton } from '../../src/components/ui/MenuButton'
+import { VipBackground } from '../../src/components/common/VipBackground'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { BUY_IN, BuyInTier, AD_RESCUE_AMOUNT } from '../../src/config/buyInConfig'
 
@@ -372,6 +373,7 @@ export default function LobbyScreen() {
     : 'เลือก Tier ด้านล่างเพื่อดูโต๊ะ';
 
   return (
+    <VipBackground isVip={isVip}>
     <View style={s.root}>
 
       {/* ─── Tier Unlock Celebration (ครั้งเดียวต่อ Tier — §1.3) ───
@@ -647,13 +649,14 @@ export default function LobbyScreen() {
       />
 
       </View>
+    </VipBackground>
   );
 }
 
 const s = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: COLOR.bgPrimary,
+    backgroundColor: 'transparent', // VipBackground ครอบพื้นหลังแล้ว — Free เห็น bgPrimary ผ่าน VipBackground fallback
     paddingHorizontal: 16,
     paddingTop: 16,
     overflow: 'hidden',
