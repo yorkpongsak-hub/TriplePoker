@@ -9,7 +9,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Animated, Image, Platform, ScrollView, StatusBar, StyleSheet,
+  Alert, Animated, Image, Platform, ScrollView, StatusBar, StyleSheet,
   Text, TouchableOpacity, View,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -263,7 +263,7 @@ const GameTableLive: React.FC = () => {
 
   // ── Discard
   const [showDiscard, setShowDiscard]         = useState(false)
-  const [lockedTokens, setLockedTokens]     = useState(0)
+  const [buyInAmount, setBuyInAmount]       = useState(0)
   const [showLockup, setShowLockup]         = useState(false)
   const [discardSelected, setDiscardSelected] = useState<number[]>([])
 
@@ -364,6 +364,15 @@ const GameTableLive: React.FC = () => {
       setConnectionError(err?.message || 'Cannot reach the game server.')
     })
 
+    // Buy-in Spec §4 safety net — server ปฏิเสธเข้าโต๊ะเพราะ token ไม่พอ (ปกติ Lobby เช็คไว้ก่อนแล้ว)
+    socket.on('match_error', (data: { roomId: string; message: string }) => {
+      Alert.alert(
+        'Cannot Start Match',
+        data.message === 'INSUFFICIENT_TOKENS' ? 'You do not have enough tokens for this table\'s buy-in.' : 'Something went wrong starting the match.',
+        [{ text: 'OK', onPress: () => router.replace('/(home)/lobby') }]
+      )
+    })
+
     socket.on('round_start', (data: any) => {
       console.log('[DEAL] round_start received, roundNumber=', data.roundNumber, 'at', Date.now())
       // Pre-Game Countdown §7.1 — โชว์ครั้งเดียวตอนเริ่มแมตช์ (ref ไม่ reset ตอน Rematch เพราะ component เดิมไม่ remount)
@@ -403,9 +412,9 @@ const GameTableLive: React.FC = () => {
       })
       setBlind(data.blindAuction ?? [])
 
-      // Lock-up Token — แสดง popup เฉพาะ Round 1
-      if (data.lockedTokens && data.roundNumber === 1) {
-        setLockedTokens(data.lockedTokens)
+      // Buy-in (Escrow) — แสดง popup เฉพาะ Round 1
+      if (data.buyInAmount && data.roundNumber === 1) {
+        setBuyInAmount(data.buyInAmount)
         setShowLockup(true)
       }
 
@@ -1189,13 +1198,13 @@ const GameTableLive: React.FC = () => {
               backgroundColor: 'rgba(15,36,24,0.95)', borderRadius: 12, borderWidth: 1.5,
               borderColor: '#FFD76A', padding: 16, alignItems: 'center' }}>
               <Text style={{ fontSize: 14, color: '#FFD76A', fontWeight: '800', marginBottom: 6 }}>
-                ⚠️ Token Lock-up
+                🪙 Buy-in
               </Text>
               <Text style={{ fontSize: 12, color: '#F5F2E8', textAlign: 'center', lineHeight: 18 }}>
-                {lockedTokens} tokens locked for 5 rounds.{'\n'}Will be returned after match ends.
+                {buyInAmount} tokens deducted for this match.{'\n'}Settled automatically when the match ends.
               </Text>
               <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 6 }}>
-                <Text style={{ fontSize: 11, color: '#8DFFB5' }}>🔒 Locked: {lockedTokens}</Text>
+                <Text style={{ fontSize: 11, color: '#8DFFB5', fontFamily: 'JetBrainsMono_400Regular' }}>Buy-in: {buyInAmount}</Text>
               </View>
             </View>
           )}
@@ -1272,16 +1281,33 @@ const GameTableLive: React.FC = () => {
                   </View>
                 }
               >
+                {/* Buy-in Spec §6 — Buy-in/Returned/Net เหนือ Final Token Balance, JetBrains Mono */}
+                {(() => {
+                  const buyIn = matchResult.buyInAmount ?? buyInAmount
+                  const returned = tokenBalance[PLAYER_ID] ?? 0
+                  const net = returned - buyIn
+                  return (
+                    <View style={s.buyInSummaryRow}>
+                      <Text style={s.buyInSummaryText}>
+                        Buy-in <Text style={{ color: '#f87171' }}>−{buyIn.toLocaleString('en-US')}</Text>
+                        {'   '}Returned <Text style={{ color: '#4ade80' }}>+{returned.toLocaleString('en-US')}</Text>
+                        {'   '}Net <Text style={{ color: net >= 0 ? '#4ade80' : '#f87171', fontWeight: '800' }}>
+                          {net >= 0 ? '+' : ''}{net.toLocaleString('en-US')}
+                        </Text>
+                      </Text>
+                    </View>
+                  )
+                })()}
                 <Text style={s.matchEndSub}>Final Token Balance</Text>
                 {[PLAYER_ID, ...aiList.map(a => a.id)].sort((a, b) => (tokenBalance[b] ?? 0) - (tokenBalance[a] ?? 0)).map(pid => {
                   const ai  = aiList.find(a => a.id === pid)
-                  const bal = tokenBalance[pid] ?? 5000
+                  const bal = tokenBalance[pid] ?? (matchResult.buyInAmount ?? buyInAmount)
                   return (
                     <View key={pid} style={s.matchEndRow}>
                       <Text style={[s.matchEndName, pid === PLAYER_ID && { color: '#c9a84c' }]} numberOfLines={1}>
                         {pid === PLAYER_ID ? `${myAvatarEmoji} ${myDisplayName}` : `${ai?.emoji} ${ai?.name}`}
                       </Text>
-                      <Text style={[s.matchEndBal, { color: bal >= 5000 ? '#4ade80' : '#f87171' }]}>🪙 {bal}</Text>
+                      <Text style={[s.matchEndBal, { color: bal >= (matchResult.buyInAmount ?? buyInAmount) ? '#4ade80' : '#f87171' }]}>🪙 {bal}</Text>
                     </View>
                   )
                 })}
@@ -1512,7 +1538,8 @@ const GameTableLive: React.FC = () => {
               <Text style={s.roundText}>R{roundNumber}/5</Text>
             </View>
             <View style={[s.potBadge, { marginLeft: 6 }]}>
-              <Text style={s.potText}>🪙 {tokenBalance[PLAYER_ID] ?? 5000}</Text>
+              <Text style={s.stackLabel}>STACK</Text>
+              <Text style={s.potText}>🪙 {tokenBalance[PLAYER_ID] ?? buyInAmount}</Text>
               {(tokenDeltas[PLAYER_ID] ?? 0) !== 0 && (
                 <Text style={[s.deltaText, { color: (tokenDeltas[PLAYER_ID] ?? 0) > 0 ? '#4ade80' : '#f87171' }]}>
                   {(tokenDeltas[PLAYER_ID] ?? 0) > 0 ? '+' : ''}{tokenDeltas[PLAYER_ID]}
@@ -1688,6 +1715,7 @@ const s = StyleSheet.create({
   tierText:   { fontSize: 8, color: '#38bdf8', letterSpacing: 2, fontWeight: '800' },
   roundText:  { fontSize: 9, color: '#38bdf8', fontWeight: '800' },
   potBadge:   { borderWidth: 1, borderColor: 'rgba(201,168,76,.4)', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 2, backgroundColor: 'rgba(0,0,0,.4)', alignItems: 'center' },
+  stackLabel: { fontSize: 6, fontWeight: '800', letterSpacing: 1, color: 'rgba(201,168,76,.6)', fontFamily: 'JetBrainsMono_400Regular' },
   potText:    { fontSize: 10, fontWeight: '700', color: '#c9a84c' },
   deltaText:  { fontSize: 9, fontWeight: '800' },
   timerText:  { fontSize: 20, fontWeight: '700', minWidth: 48, textAlign: 'right' },
@@ -1755,6 +1783,8 @@ const s = StyleSheet.create({
   countdownSub:   { fontSize: 11, color: 'rgba(201,168,76,0.6)', letterSpacing: 2, marginTop: 10 },
 
   // Match end
+  buyInSummaryRow:  { alignItems: 'center', marginBottom: 8 },
+  buyInSummaryText: { fontSize: 10, fontFamily: 'JetBrainsMono_400Regular', color: '#C8C4B0', textAlign: 'center' },
   matchEndSub:   { fontSize: 10, color: 'rgba(201,168,76,0.5)', letterSpacing: 2, marginBottom: 10, textAlign: 'center' },
   matchEndRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#1e2e22' },
   matchEndName:  { flexShrink: 1, marginRight: 8, fontSize: 13, color: '#e8dfc0', fontWeight: '600' },

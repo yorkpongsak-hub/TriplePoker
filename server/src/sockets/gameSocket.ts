@@ -9,11 +9,13 @@
 
 import { Server, Socket } from "socket.io";
 import { dealCards, validateDeal } from "../game/cardEngine";
-import { startMatch, submitArrangement, submitArrangementRound2, resolveContinue, submitAuctionBid, submitDiscard, submitGrandFinaleAction, burnLockedTokens } from "../game/gameLoop";
+import { startMatch, submitArrangement, submitArrangementRound2, resolveContinue, submitAuctionBid, submitDiscard, submitGrandFinaleAction, settleAndEndSoloMatch } from "../game/gameLoop";
 import { startMultiplayerMatch, submitMultiArrangement, replaceMultiPlayerWithAI, resendRoundStartToPlayer } from "../game/gameLoop";
+import { getMatchState, getMultiMatchState, settleEscrow } from "../game/gameLoop";
 import {
   startHighNobleMultiMatch, submitHNArrangement, submitHNAuctionBid, submitHNArrangementRound2,
   submitHNDiscard, submitHNGrandFinaleAction, replaceHNPlayerWithAI, resendHNRoundStartToPlayer,
+  getHNMatchState,
 } from "../game/highNobleMultiEngine";
 import { gameConfig, getMechanics, getTierFromToken, type Tier } from "../config/gameConfig";
 import { registerLobbySocket } from "./lobbySocket";
@@ -546,8 +548,28 @@ export function registerGameSocket(io: Server): void {
     socket.on("player_leave", async (data: { roomId: string; playerId: string }) => {
       const { roomId, playerId } = data;
       socket.leave(roomId);
-      // Patch 04: Leave จริง = ลบโต๊ะออกจาก registry (Rematch ไม่เรียกจุดนี้ จึงไม่ถูกลบ)
-      deleteTable(roomId);
+
+      // Buy-in Spec §4: ผู้เล่นกด Lobby กลางเกม → settle ทันทีด้วย stack ปัจจุบัน (ก่อนลบห้อง)
+      // เช็คทีละ engine เพราะ handler นี้ไม่รู้ tier ล่วงหน้า (ใช้ร่วมทั้ง solo/Adept/HighNoble)
+      const soloState = getMatchState(roomId);
+      const multiState = getMultiMatchState(roomId);
+      const hnState = getHNMatchState(roomId);
+      if (soloState?.escrowId) {
+        await settleEscrow(soloState.humanPlayerId, soloState.escrowId, soloState.tokenBalance[soloState.humanPlayerId] ?? soloState.buyInAmount);
+        deleteTable(roomId);
+      } else if (multiState) {
+        const escrowId = multiState.escrowIds[playerId];
+        if (escrowId) await settleEscrow(playerId, escrowId, multiState.tokenBalance[playerId] ?? multiState.buyInAmount);
+        await deleteRoomCompletely(roomId);
+      } else if (hnState) {
+        const escrowId = hnState.escrowIds[playerId];
+        if (escrowId) await settleEscrow(playerId, escrowId, hnState.tokenBalance[playerId] ?? hnState.buyInAmount);
+        await deleteRoomCompletely(roomId);
+      } else {
+        // Patch 04 เดิม: ไม่พบ match state ที่ยัง active (เช่น ยังไม่เริ่มแมตช์จริง) — ลบ table แบบเดิม
+        deleteTable(roomId);
+      }
+
       // ถือว่า Leave = ทุกคนกลับ Lobby ตาม spec (ดู CoreRules 1.8)
       io.to(roomId).emit("match_end", {
         roomId,
@@ -557,12 +579,15 @@ export function registerGameSocket(io: Server): void {
       });
     });
 
-    // start_match — Human เริ่ม Match ใหม่
+    // start_match — Human เริ่ม Match ใหม่ (Initiate/Mastermind, solo)
     socket.on("start_match", async (data: {
       roomId: string; playerId: string; tier: string; devBossId?: string; bossId?: string;
     }) => {
       const { roomId, playerId, tier, devBossId, bossId } = data;
       socket.join(roomId);
+      // Buy-in Spec §4: ต้อง track ใน socketUserMap ให้ disconnect กลางเกม settle escrow ได้
+      // (เดิม solo tier ไม่เคยถูก track เลย เพราะ join ผ่าน player_join_room คนละ event กับ Adept/HighNoble)
+      socketUserMap.set(socket.id, { userId: playerId, roomId, tier });
       await startMatch(io, roomId, playerId, tier, devBossId, bossId);
     });
 
@@ -889,6 +914,9 @@ export function registerGameSocket(io: Server): void {
           await replaceMultiPlayerWithAI(io, info.roomId, info.userId);
         } else if (info.tier === 'highNoble') {
           await replaceHNPlayerWithAI(io, info.roomId, info.userId);
+        } else if (info.tier === 'initiate' || info.tier === 'mastermind') {
+          // Buy-in Spec §4: solo tier ไม่มี Human อื่นให้เล่นต่อ — settle ทันทีด้วย stack ปัจจุบันแล้วปิดแมตช์
+          await settleAndEndSoloMatch(info.roomId);
         }
         socketUserMap.delete(socket.id);
       } else {

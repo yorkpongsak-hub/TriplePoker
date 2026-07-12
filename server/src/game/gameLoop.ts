@@ -36,7 +36,8 @@ export interface MatchState {
   tokenBalance: Record<string, number>
   results: RoundResult[]
   phase: 'waiting' | 'arrangement' | 'arrangement_2' | 'showdown' | 'fog_of_war' | 'blind_auction' | 'auction_done' | 'discard' | 'discard_done' | 'grand_finale' | 'grand_finale_done' | 'round_end' | 'match_end'
-  lockedTokens: number           // Token ที่ถูก lock ไว้ก่อนเริ่มเกม
+  buyInAmount: number            // Escrow Buy-in Spec §2 — หักจาก DB ครั้งเดียวตอนเข้าโต๊ะ, AI ได้ virtual stack เท่ากัน
+  escrowId?: string              // แถวใน match_escrow — ใช้ settle ตอนจบแมตช์/หลุดกลางเกม
   // Patch Mastermind: เก็บผล Pile1+2 ไว้รอ Auction/Discard/GrandFinale (patch ถัดไป)
   _pendingPile12?: {
     pile1Winner: string
@@ -113,6 +114,88 @@ function calcDeltas(
 }
 
 // ============================================================
+// ESCROW SYSTEM (TriplePoker_BuyIn_Spec_v1_0) — ใช้ร่วมกันทั้ง 3 engine
+// (single-player, Adept multiplayer ในไฟล์นี้ + highNobleMultiEngine.ts)
+// แทนที่ lockPlayerTokens/returnLockedTokens/returnPlayerLockedTokens/
+// burnLockedTokens/persistHNNetTokenResult เดิมทั้งหมด
+// ============================================================
+
+type EscrowTier = 'initiate' | 'adept' | 'mastermind' | 'highNoble' | 'lastBoss'
+function toEscrowTier(tier: string): EscrowTier {
+  return (['initiate', 'adept', 'mastermind', 'highNoble', 'lastBoss'].includes(tier) ? tier : 'initiate') as EscrowTier
+}
+
+// หัก Buy-in จาก users.token_balance + สร้างแถว match_escrow (status='in_match') — คืน null ถ้า token ไม่พอ
+// (Phase 2 client เช็คก่อนเข้าโต๊ะแล้ว — เช็คนี้เป็น safety net ฝั่ง server เท่านั้น)
+export async function escrowBuyIn(
+  userId: string, roomId: string, tier: string,
+): Promise<{ escrowId: string; buyInAmount: number } | null> {
+  const validTier = toEscrowTier(tier)
+  const buyInAmount = gameConfig.buyIn[validTier]
+  try {
+    const { data: userData } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
+    const currentBalance = userData?.token_balance ?? 0
+    if (currentBalance < buyInAmount) {
+      console.warn('[ESCROW] Insufficient tokens for', userId, '| have', currentBalance, '| need', buyInAmount)
+      return null
+    }
+
+    const newBalance = currentBalance - buyInAmount
+    await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
+
+    const { data: escrowRow, error } = await supabaseAdmin
+      .from('match_escrow')
+      .insert({ user_id: userId, room_id: roomId, tier: validTier, buyin_amount: buyInAmount, status: 'in_match' })
+      .select('escrow_id')
+      .single()
+
+    if (error || !escrowRow) {
+      // insert escrow ไม่สำเร็จ → rollback การหักทันที กัน token หายลอย
+      await supabaseAdmin.from('users').update({ token_balance: currentBalance }).eq('user_id', userId)
+      console.error('[ESCROW] Failed to insert match_escrow, rolled back deduction for', userId, error)
+      return null
+    }
+
+    console.log('[ESCROW] Buy-in', buyInAmount, 'deducted from', userId, '| escrow', escrowRow.escrow_id, '| New balance:', newBalance)
+    return { escrowId: escrowRow.escrow_id, buyInAmount }
+  } catch (err) {
+    console.error('[ESCROW] Error in escrowBuyIn for', userId, err)
+    return null
+  }
+}
+
+// Settle escrow ครั้งเดียว — token += finalStack (buyin ถูกหักไปแล้วตอน escrowBuyIn), update match_escrow เป็น settled
+// finalStack = stack ปัจจุบันตอน settle (จบแมตช์ปกติ, หลุด, หรือกด Lobby กลางเกม — Spec §4 ทั้งหมดใช้ path นี้)
+export async function settleEscrow(userId: string, escrowId: string, finalStack: number): Promise<void> {
+  try {
+    const { data: userData } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
+    const newBalance = (userData?.token_balance ?? 0) + finalStack
+    await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
+    await supabaseAdmin.from('match_escrow')
+      .update({ status: 'settled', final_stack: finalStack, settled_at: new Date().toISOString() })
+      .eq('escrow_id', escrowId)
+    console.log('[ESCROW] Settled', userId, '| finalStack', finalStack, '| New balance:', newBalance)
+  } catch (err) {
+    console.error('[ESCROW] Error settling escrow for', userId, err)
+  }
+}
+
+// Refund เต็มจำนวน — ใช้เฉพาะตอน escrow บาง seat ในกลุ่ม join พร้อมกันล้มเหลว (rollback seat ที่หักไปแล้วก่อนหน้า)
+export async function refundEscrow(userId: string, escrowId: string, buyInAmount: number): Promise<void> {
+  try {
+    const { data: userData } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
+    const newBalance = (userData?.token_balance ?? 0) + buyInAmount
+    await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
+    await supabaseAdmin.from('match_escrow')
+      .update({ status: 'refunded', settled_at: new Date().toISOString() })
+      .eq('escrow_id', escrowId)
+    console.log('[ESCROW] Refunded', buyInAmount, 'to', userId, '(join rollback)')
+  } catch (err) {
+    console.error('[ESCROW] Error refunding escrow for', userId, err)
+  }
+}
+
+// ============================================================
 // startMatch — เริ่ม Match ใหม่
 // ============================================================
 export async function startMatch(
@@ -124,42 +207,18 @@ export async function startMatch(
   bossId?: string,    // Patch Mastermind Conquest: Sentinel ที่ผู้เล่นเลือกเองจาก select.tsx/story.tsx (บังคับสำหรับ tier mastermind)
 ): Promise<void> {
 
-  const initBalance: Record<string, number> = { [humanPlayerId]: 5000 }
-  AI_CONFIGS.forEach(ai => initBalance[ai.id] = 5000)
-
-  // ── Lock-up Token: คำนวณ + หัก DB ──────────────────────────
-  type TierKey = 'initiate' | 'adept' | 'mastermind' | 'highNoble' | 'lastBoss'
-  const validTier = (['initiate','adept','mastermind','highNoble','lastBoss'].includes(tier) ? tier : 'initiate') as TierKey
-  const stakes = gameConfig.tokenPot.tiers[validTier]
   const totalRounds = 5
-  const lockupAmount = (stakes.pile1 + stakes.pile2 + stakes.pile3) * totalRounds
 
-  // หัก lock-up จาก users.token_balance ใน DB
-  try {
-    const { data: userData } = await supabaseAdmin
-      .from('users')
-      .select('token_balance')
-      .eq('user_id', humanPlayerId)
-      .single()
-
-    if (userData) {
-      const newBalance = (userData.token_balance ?? 0) - lockupAmount
-      await supabaseAdmin
-        .from('users')
-        .update({ token_balance: newBalance })
-        .eq('user_id', humanPlayerId)
-
-      // บันทึก locked_tokens ใน room_players
-      await supabaseAdmin
-        .from('room_players')
-        .update({ locked_tokens: lockupAmount })
-        .eq('user_id', humanPlayerId)
-
-      console.log('[LOCKUP] Locked', lockupAmount, 'tokens for', humanPlayerId, '| New balance:', newBalance)
-    }
-  } catch (err) {
-    console.error('[LOCKUP] Error locking tokens:', err)
+  // ── Escrow Buy-in: หัก DB ครั้งเดียว, AI ได้ virtual stack เท่ากัน (Buy-in Spec §2) ──
+  const escrow = await escrowBuyIn(humanPlayerId, roomId, tier)
+  if (!escrow) {
+    io.to(roomId).emit('match_error', { roomId, message: 'INSUFFICIENT_TOKENS' })
+    return
   }
+  const { escrowId, buyInAmount } = escrow
+
+  const initBalance: Record<string, number> = { [humanPlayerId]: buyInAmount }
+  AI_CONFIGS.forEach(ai => initBalance[ai.id] = buyInAmount)
 
   const state: MatchState = {
     roomId, tier, humanPlayerId,
@@ -168,7 +227,7 @@ export async function startMatch(
     tokenBalance: initBalance,
     results: [],
     phase: 'waiting',
-    lockedTokens: lockupAmount,
+    buyInAmount, escrowId,
   }
   // Patch High Noble: Boss (P3) ต้องเป็นจตุรเทพ 1 ใน 4 เสมอ — ถ้า devBossId ไม่ระบุ (production จริง) สุ่มเอา
   if (tier === 'highNoble') {
@@ -284,7 +343,7 @@ export async function startRound(io: Server, roomId: string): Promise<void> {
     aiNames: AI_CONFIGS.map(a => { const eff = getEffectiveAIConfig(state, a); return { id: a.id, name: eff.name, emoji: eff.emoji } }),
     tokenBalance: state.tokenBalance,
     timer: (gameConfig.arrangementTimer as Record<string, number>)[state.tier] ?? gameConfig.arrangementTimer.initiate,
-    ...(state.roundNumber === 1 ? { lockedTokens: state.lockedTokens } : {}),
+    ...(state.roundNumber === 1 ? { buyInAmount: state.buyInAmount } : {}),
   })
 }
 
@@ -362,7 +421,7 @@ export async function submitArrangement(
 
   const deltas = calcDeltas(p1Winner, p2Winner, p3Winner, playerIds, state.tier)
   playerIds.forEach(id => {
-    state.tokenBalance[id] = (state.tokenBalance[id] ?? 5000) + (deltas[id] ?? 0)
+    state.tokenBalance[id] = (state.tokenBalance[id] ?? state.buyInAmount) + (deltas[id] ?? 0)
   })
 
   // ── Human win streak ────────────────────────────────────
@@ -403,8 +462,10 @@ export async function submitArrangement(
     const finalWinner = playerIds.reduce((a, b) =>
       (state.tokenBalance[a] ?? 0) > (state.tokenBalance[b] ?? 0) ? a : b
     )
-    // ── คืน Lock-up Token ──────────────────────────────────
-    await returnLockedTokens(state)
+    // ── Settle Escrow ครั้งเดียว (Buy-in Spec §4 — จบแมตช์ปกติ) ──
+    if (state.escrowId) {
+      await settleEscrow(state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount)
+    }
 
     io.to(roomId).emit('match_end', {
       roomId,
@@ -412,6 +473,7 @@ export async function submitArrangement(
       tokenBalance: state.tokenBalance,
       results: state.results,
       totalRounds: state.totalRounds,
+      buyInAmount: state.buyInAmount,
     })
   } else {
     state.roundNumber++
@@ -556,7 +618,7 @@ function startBlindAuction(io: Server, roomId: string, state: MatchState): void 
           break
         case 'black_magic': { // กลาง ปรับตาม pot size — ใช้ tokenBalance ของตัวเองเป็น proxy (ยังไม่มีตัวแปร pot size ณ จุดนี้)
           willBid = Math.random() < 0.65
-          const myBalance = state.tokenBalance[ai.id] ?? 5000
+          const myBalance = state.tokenBalance[ai.id] ?? state.buyInAmount
           level = myBalance > 6000 ? bidLevels.length - 1 : myBalance > 4000 ? Math.floor(bidLevels.length / 2) : 0
           break
         }
@@ -1470,7 +1532,7 @@ function finalizeGrandFinale(
 
   // อัพเดท tokenBalance รวม (Call ที่จ่ายไปก่อนหน้าโดน hak ไปแล้วใน applyGrandFinaleAction)
   allPlayerIds.forEach(id => {
-    state.tokenBalance[id] = (state.tokenBalance[id] ?? 5000) + (deltas[id] ?? 0)
+    state.tokenBalance[id] = (state.tokenBalance[id] ?? state.buyInAmount) + (deltas[id] ?? 0)
   })
 
   // Patch: คำนวณ Rank ของผู้ชนะ Pile 3 + Jackpot flag (ชนะทั้ง 3 กอง)
@@ -1554,8 +1616,10 @@ function finalizeGrandFinale(
       const finalWinner = allPlayerIds.reduce((a, b) =>
         (state.tokenBalance[a] ?? 0) > (state.tokenBalance[b] ?? 0) ? a : b
       )
-      // ── คืน Lock-up Token ──────────────────────────────────
-      await returnLockedTokens(state)
+      // ── Settle Escrow ครั้งเดียว (Buy-in Spec §4 — จบแมตช์ปกติ) ──
+      if (state.escrowId) {
+        await settleEscrow(state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount)
+      }
 
       // Patch Mastermind Conquest: ผู้เล่นได้อันดับ 1 → บันทึก conquered_sentinels (กันซ้ำ)
       let sentinelConquered = false
@@ -1594,6 +1658,7 @@ function finalizeGrandFinale(
         totalRounds: state.totalRounds,
         sentinelConquered,
         allSentinelsConquered,
+        buyInAmount: state.buyInAmount,
       })
     } else {
       state.roundNumber++
@@ -1666,66 +1731,6 @@ function waitForContinue(roomId: string): Promise<void> {
 
 
 // ============================================================
-// Lock-up Token Functions
-// ============================================================
-
-// คืน Lock-up Token ให้ผู้เล่นหลังจบ Match
-async function returnLockedTokens(state: MatchState): Promise<void> {
-  if (!state.lockedTokens || state.lockedTokens <= 0) return
-  try {
-    const { data: userData } = await supabaseAdmin
-      .from('users')
-      .select('token_balance')
-      .eq('user_id', state.humanPlayerId)
-      .single()
-
-    if (userData) {
-      const newBalance = (userData.token_balance ?? 0) + state.lockedTokens
-      await supabaseAdmin
-        .from('users')
-        .update({ token_balance: newBalance })
-        .eq('user_id', state.humanPlayerId)
-
-      // Reset locked_tokens ใน room_players
-      await supabaseAdmin
-        .from('room_players')
-        .update({ locked_tokens: 0 })
-        .eq('user_id', state.humanPlayerId)
-
-      console.log('[LOCKUP] Returned', state.lockedTokens, 'tokens to', state.humanPlayerId, '| New balance:', newBalance)
-    }
-    state.lockedTokens = 0
-  } catch (err) {
-    console.error('[LOCKUP] Error returning tokens:', err)
-  }
-}
-
-// Burn Lock-up Token เมื่อผู้เล่น Disconnect (Penalty 100%)
-export async function burnLockedTokens(humanPlayerId: string, roomId: string): Promise<void> {
-  try {
-    const { data } = await supabaseAdmin
-      .from('room_players')
-      .select('locked_tokens')
-      .eq('user_id', humanPlayerId)
-      .single()
-
-    const lockedAmount = data?.locked_tokens ?? 0
-    if (lockedAmount <= 0) return
-
-    // Burn = ไม่คืน lock-up → แค่ reset เป็น 0
-    await supabaseAdmin
-      .from('room_players')
-      .update({ locked_tokens: 0 })
-      .eq('user_id', humanPlayerId)
-
-    console.log('[LOCKUP] BURNED', lockedAmount, 'tokens from', humanPlayerId, '(disconnect penalty)')
-  } catch (err) {
-    console.error('[LOCKUP] Error burning tokens:', err)
-  }
-}
-
-
-// ============================================================
 // MULTIPLAYER (Adept — Simultaneous Showdown, 1-3 Human + AI fill)
 // ระบบแยกจาก single-player เดิมทั้งหมด (ไม่แตะ startMatch/submitArrangement เดิม)
 // ============================================================
@@ -1738,7 +1743,8 @@ interface MultiMatchState {
   roundNumber: number
   totalRounds: number
   tokenBalance: Record<string, number>
-  lockedTokens: Record<string, number>
+  buyInAmount: number             // Escrow Buy-in Spec §2 — เท่ากันทุกคนในแมตช์เดียวกัน (tier เดียวกัน)
+  escrowIds: Record<string, string>  // เฉพาะ human seat — ใช้ settle ตอนจบแมตช์/หลุดกลางเกม
   results: RoundResult[]
   phase: 'waiting' | 'arrangement' | 'showdown' | 'match_end'
   submittedArrangements: Record<string, PlayerArrangement>
@@ -1747,59 +1753,6 @@ interface MultiMatchState {
 }
 
 const multiMatchStates = new Map<string, MultiMatchState>()
-
-export async function lockPlayerTokens(userId: string, tier: string, totalRounds: number): Promise<number> {
-  const { supabaseAdmin } = await import('../config/supabase')
-  type TierKey = 'initiate' | 'adept' | 'mastermind' | 'highNoble' | 'lastBoss'
-  const validTier = (['initiate','adept','mastermind','highNoble','lastBoss'].includes(tier) ? tier : 'adept') as TierKey
-  const stakes = gameConfig.tokenPot.tiers[validTier]
-  const amount = (stakes.pile1 + stakes.pile2 + stakes.pile3) * totalRounds
-  try {
-    const { data: userData } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
-    if (userData) {
-      const newBalance = (userData.token_balance ?? 0) - amount
-      await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
-      await supabaseAdmin.from('room_players').update({ locked_tokens: amount }).eq('user_id', userId)
-    }
-  } catch (err) {
-    console.error('[LOCKUP-MULTI] Error locking tokens for', userId, err)
-  }
-  return amount
-}
-
-export async function returnPlayerLockedTokens(userId: string, amount: number): Promise<void> {
-  if (!amount || amount <= 0) return
-  const { supabaseAdmin } = await import('../config/supabase')
-  try {
-    const { data: userData } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
-    if (userData) {
-      const newBalance = (userData.token_balance ?? 0) + amount
-      await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
-      await supabaseAdmin.from('room_players').update({ locked_tokens: 0 }).eq('user_id', userId)
-    }
-  } catch (err) {
-    console.error('[LOCKUP-MULTI] Error returning tokens for', userId, err)
-  }
-}
-
-// Patch Monarch prerequisite: returnPlayerLockedTokens() ข้างบนคืนแค่ locked-up ante เดิม (buy-in) —
-// ไม่เคย persist ผลแพ้/ชนะจริงของแมตช์ (state.tokenBalance) ลง token_balance เลยทั้งระบบ (พบว่าเป็น gap เดิม
-// ทั้ง single-player และ Adept ด้วย แต่ตาม CLAUDE.md ห้ามแตะ tier อื่น จึงแก้เฉพาะ High Noble ในฟังก์ชันนี้
-// เพิ่มใหม่ ไม่แก้ returnPlayerLockedTokens เดิม เรียกใช้เฉพาะจาก highNobleMultiEngine.ts)
-// netDelta = tokenBalance สุดท้ายของผู้เล่น ณ match_end ลบด้วย baseline เริ่มต้น 5000 ของ HN multiplayer
-export async function persistHNNetTokenResult(userId: string, netDelta: number): Promise<void> {
-  if (!netDelta) return
-  const { supabaseAdmin } = await import('../config/supabase')
-  try {
-    const { data: userData } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
-    if (userData) {
-      const newBalance = (userData.token_balance ?? 0) + netDelta
-      await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
-    }
-  } catch (err) {
-    console.error('[HN-SETTLE] Error persisting net token result for', userId, err)
-  }
-}
 
 // เรียกจาก gameSocket.ts ตอน room เต็ม (room_ready)
 export async function startMultiplayerMatch(
@@ -1817,20 +1770,28 @@ export async function startMultiplayerMatch(
   const aiPlayerIds = aiSeatsFromRoom.map((s, i) => s.aiConfigId ?? AI_CONFIGS[i % AI_CONFIGS.length].id)
 
   const totalRounds = 5
+  const buyInAmount = gameConfig.buyIn[tier]
   const tokenBalance: Record<string, number> = {}
-  const lockedTokens: Record<string, number> = {}
+  const escrowIds: Record<string, string> = {}
 
-  await Promise.all(humanPlayerIds.map(async (uid) => {
-    const amt = await lockPlayerTokens(uid, tier, totalRounds)
-    lockedTokens[uid] = amt
-    tokenBalance[uid] = 5000
-  }))
-  aiPlayerIds.forEach(id => tokenBalance[id] = 5000)
+  // Escrow Buy-in ทีละคน (sequential — ไม่ Promise.all) เพื่อ rollback ได้ถูกต้องถ้าคนใดคนหนึ่ง token ไม่พอ
+  for (const uid of humanPlayerIds) {
+    const escrow = await escrowBuyIn(uid, roomId, tier)
+    if (!escrow) {
+      // rollback คนที่หักไปแล้วก่อนหน้าในกลุ่มเดียวกัน
+      await Promise.all(Object.entries(escrowIds).map(([doneUid, escrowId]) => refundEscrow(doneUid, escrowId, buyInAmount)))
+      io.to(roomId).emit('match_error', { roomId, message: 'INSUFFICIENT_TOKENS' })
+      return
+    }
+    escrowIds[uid] = escrow.escrowId
+    tokenBalance[uid] = escrow.buyInAmount
+  }
+  aiPlayerIds.forEach(id => tokenBalance[id] = buyInAmount)
 
   const state: MultiMatchState = {
     roomId, tier, humanPlayerIds, aiPlayerIds,
     roundNumber: 1, totalRounds,
-    tokenBalance, lockedTokens,
+    tokenBalance, buyInAmount, escrowIds,
     results: [],
     phase: 'waiting',
     submittedArrangements: {},
@@ -1886,7 +1847,7 @@ async function startMultiRound(io: Server, roomId: string): Promise<void> {
       }),
       tokenBalance: state.tokenBalance,
       timer,
-      ...(state.roundNumber === 1 ? { lockedTokens: state.lockedTokens[uid] } : {}),
+      ...(state.roundNumber === 1 ? { buyInAmount: state.buyInAmount } : {}),
     })
   })
 }
@@ -1949,7 +1910,7 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
 
   const deltas = calcDeltas(p1Winner, p2Winner, p3Winner, playerIds, state.tier)
   playerIds.forEach(id => {
-    state.tokenBalance[id] = (state.tokenBalance[id] ?? 5000) + (deltas[id] ?? 0)
+    state.tokenBalance[id] = (state.tokenBalance[id] ?? state.buyInAmount) + (deltas[id] ?? 0)
   })
 
   const result: RoundResult = {
@@ -1971,11 +1932,15 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
     state.phase = 'match_end'
     const finalWinner = playerIds.reduce((a, b) => (state.tokenBalance[a] ?? 0) > (state.tokenBalance[b] ?? 0) ? a : b)
 
-    await Promise.all(state.humanPlayerIds.map(uid => returnPlayerLockedTokens(uid, state.lockedTokens[uid] ?? 0)))
+    // ── Settle Escrow ครั้งเดียวต่อคน (Buy-in Spec §4 — จบแมตช์ปกติ) ──
+    await Promise.all(state.humanPlayerIds.map(uid =>
+      settleEscrow(uid, state.escrowIds[uid], state.tokenBalance[uid] ?? state.buyInAmount)
+    ))
 
     io.to(roomId).emit('match_end', {
       roomId, finalWinner, tokenBalance: state.tokenBalance,
       results: state.results, totalRounds: state.totalRounds,
+      buyInAmount: state.buyInAmount,
     })
     multiMatchStates.delete(roomId)
   } else {
@@ -1985,28 +1950,22 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
   }
 }
 
-// Disconnect — แทน Human ด้วย AI ทันที (burn lock-up, ไม่มี grace period)
+// Disconnect — แทน Human ด้วย AI ทันที
+// Buy-in Spec §4: settle ทันทีด้วย stack ปัจจุบัน (ante ที่จ่ายเข้า Pot ไปแล้วไม่คืน — เปลี่ยนจาก burn ทั้งก้อนเดิม)
 export async function replaceMultiPlayerWithAI(io: Server, roomId: string, userId: string): Promise<void> {
   const state = multiMatchStates.get(roomId)
   if (!state) return
   if (!state.humanPlayerIds.includes(userId)) return
 
-  const { supabaseAdmin } = await import('../config/supabase')
-  try {
-    const { data } = await supabaseAdmin.from('room_players').select('locked_tokens').eq('user_id', userId).single()
-    const remain = data?.locked_tokens ?? 0
-    if (remain > 0) {
-      await supabaseAdmin.from('room_players').update({ locked_tokens: 0 }).eq('user_id', userId)
-      console.log('[LOCKUP-MULTI] BURNED', remain, 'from disconnected', userId)
-    }
-  } catch (err) {
-    console.error('[LOCKUP-MULTI] Error burning on disconnect:', err)
+  const escrowId = state.escrowIds[userId]
+  if (escrowId) {
+    await settleEscrow(userId, escrowId, state.tokenBalance[userId] ?? state.buyInAmount)
   }
 
   state.humanPlayerIds = state.humanPlayerIds.filter(id => id !== userId)
   const replacementAI = AI_CONFIGS[state.aiPlayerIds.length % AI_CONFIGS.length]
   state.aiPlayerIds.push(replacementAI.id)
-  state.tokenBalance[replacementAI.id] = state.tokenBalance[userId] ?? 5000
+  state.tokenBalance[replacementAI.id] = state.tokenBalance[userId] ?? state.buyInAmount
 
   if (state.phase === 'arrangement' && state.cardsMap && state.community) {
     const arr = aiDecideArrangement(replacementAI, state.cardsMap[userId], state.community, state.roundNumber, state.tier, 0)
@@ -2061,7 +2020,7 @@ export async function resendRoundStartToPlayer(io: Server, roomId: string, userI
     }),
     tokenBalance: state.tokenBalance,
     timer,
-    ...(state.roundNumber === 1 ? { lockedTokens: state.lockedTokens[userId] } : {}),
+    ...(state.roundNumber === 1 ? { buyInAmount: state.buyInAmount } : {}),
   })
   console.log('[GAME_JOIN] Resent round_start to', userId, 'in room', roomId)
 }
@@ -2069,4 +2028,15 @@ export async function resendRoundStartToPlayer(io: Server, roomId: string, userI
 // ── Export getState ──────────────────────────────────────────
 export function getMatchState(roomId: string): MatchState | undefined {
   return matchStates.get(roomId)
+}
+
+// Disconnect/กด Lobby กลางเกม — single-player (Initiate/Mastermind, ไม่มี tier อื่นให้ AI-replace เพราะ
+// เป็น 1 Human + AI อยู่แล้ว) — Buy-in Spec §4: settle ทันทีด้วย stack ปัจจุบัน แล้วปิดแมตช์
+export async function settleAndEndSoloMatch(roomId: string): Promise<void> {
+  const state = matchStates.get(roomId)
+  if (!state) return
+  if (state.escrowId) {
+    await settleEscrow(state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount)
+  }
+  matchStates.delete(roomId)
 }

@@ -3,11 +3,12 @@ import { Stack } from 'expo-router'
 import { Platform, View } from 'react-native'
 import { useEffect } from 'react'
 import { useFonts, Cinzel_400Regular, Cinzel_700Bold } from '@expo-google-fonts/cinzel'
+import { JetBrainsMono_400Regular, JetBrainsMono_600SemiBold } from '@expo-google-fonts/jetbrains-mono'
 import { useAuthStore } from '../src/store/authStore'
 import { useUserStore } from '../src/store/userStore'
 
 export default function RootLayout() {
-  const [fontsLoaded] = useFonts({ Cinzel_400Regular, Cinzel_700Bold })
+  const [fontsLoaded] = useFonts({ Cinzel_400Regular, Cinzel_700Bold, JetBrainsMono_400Regular, JetBrainsMono_600SemiBold })
 
   const initAuth = useAuthStore(s => s.initAuth)
   useEffect(() => {

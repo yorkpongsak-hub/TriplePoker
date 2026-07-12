@@ -20,7 +20,7 @@ import { aiDecideArrangement, AIConfig, AIPersonality, FOUR_GODS, greedyArrangem
 import { Card } from './deck'
 import { gameConfig } from '../config/gameConfig'
 import { supabase } from '../config/supabase'
-import { lockPlayerTokens, returnPlayerLockedTokens, persistHNNetTokenResult } from './gameLoop'
+import { escrowBuyIn, settleEscrow, refundEscrow } from './gameLoop'
 import { Seat as RoomSeat } from './roomRegistry'
 import { lockMonarchPersonality } from './monarchAI'
 import { recordMonarchVictory } from './monarchSpawn'
@@ -150,7 +150,8 @@ interface HNMatchState {
   roundNumber: number
   totalRounds: number
   tokenBalance: Record<string, number>
-  lockedTokens: Record<string, number>   // เฉพาะ human seat
+  buyInAmount: number                    // Escrow Buy-in Spec §2 — เท่ากันทุกคนในแมตช์เดียวกัน
+  escrowIds: Record<string, string>      // เฉพาะ human seat — ใช้ settle ตอนจบแมตช์/หลุดกลางเกม
   results: Array<{
     roundNumber: number; pile1Winner: string; pile2Winner: string; pile3Winner: string
     tokenDeltas: Record<string, number>
@@ -206,7 +207,7 @@ export function resendHNRoundStartToPlayer(io: Server, roomId: string, userId: s
     seats: state.seats.map(s => ({ id: s.id, name: s.name, emoji: s.emoji, role: s.role, isHuman: s.isHuman })),
     tokenBalance: state.tokenBalance,
     timer,
-    ...(state.roundNumber === 1 ? { lockedTokens: state.lockedTokens[userId] } : {}),
+    ...(state.roundNumber === 1 ? { buyInAmount: state.buyInAmount } : {}),
   })
 }
 
@@ -257,20 +258,27 @@ export async function startHighNobleMultiMatch(
   }) as [HNSeat, HNSeat, HNSeat, HNSeat]
 
   const totalRounds = 5
+  const buyInAmount = gameConfig.buyIn.highNoble
   const tokenBalance: Record<string, number> = {}
-  const lockedTokens: Record<string, number> = {}
+  const escrowIds: Record<string, string> = {}
 
-  await Promise.all(seats.filter(s => s.isHuman).map(async s => {
-    const amt = await lockPlayerTokens(s.id, 'highNoble', totalRounds)
-    lockedTokens[s.id] = amt
-    tokenBalance[s.id] = 5000
-  }))
-  seats.filter(s => !s.isHuman).forEach(s => tokenBalance[s.id] = 5000)
+  // Escrow Buy-in ทีละคน (sequential — ไม่ Promise.all) เพื่อ rollback ได้ถูกต้องถ้าคนใดคนหนึ่ง token ไม่พอ
+  for (const s of seats.filter(s => s.isHuman)) {
+    const escrow = await escrowBuyIn(s.id, roomId, 'highNoble')
+    if (!escrow) {
+      await Promise.all(Object.entries(escrowIds).map(([doneUid, escrowId]) => refundEscrow(doneUid, escrowId, buyInAmount)))
+      io.to(roomId).emit('match_error', { roomId, message: 'INSUFFICIENT_TOKENS' })
+      return
+    }
+    escrowIds[s.id] = escrow.escrowId
+    tokenBalance[s.id] = escrow.buyInAmount
+  }
+  seats.filter(s => !s.isHuman).forEach(s => tokenBalance[s.id] = buyInAmount)
 
   const state: HNMatchState = {
     roomId, seats,
     roundNumber: 1, totalRounds,
-    tokenBalance, lockedTokens,
+    tokenBalance, buyInAmount, escrowIds,
     results: [],
     phase: 'waiting',
     submittedArrangement: new Set(),
@@ -356,7 +364,7 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
       seats: aiNamesPublic,
       tokenBalance: state.tokenBalance,
       timer,
-      ...(state.roundNumber === 1 ? { lockedTokens: state.lockedTokens[seat.id] } : {}),
+      ...(state.roundNumber === 1 ? { buyInAmount: state.buyInAmount } : {}),
     })
   })
 
@@ -1015,23 +1023,27 @@ function finalizeHNGrandFinale(
       state.phase = 'match_end'
       const finalWinner = allPlayerIds.reduce((a, b) => (state.tokenBalance[a] ?? 0) > (state.tokenBalance[b] ?? 0) ? a : b)
 
-      // ── Settlement จริง: คืน lock-up ante + persist ผลแพ้/ชนะสุทธิของแมตช์ลง token_balance ──
-      // (ของเดิมคืนแค่ locked ante เฉยๆ ไม่เคย persist ผลเล่นจริง — แก้เป็น prerequisite ก่อน Monarch payout)
+      // ── Settle Escrow ครั้งเดียวต่อคน (Buy-in Spec §4) — netDelta เทียบกับ buy-in แทน baseline 5000 เดิม ──
       // Monarch Spec v1.3 §3: ผู้ชนะ human ที่เจอ Monarch (กำไรสุทธิ > 0) ได้ Pot ×2.0 ระดับ "ทั้งแมตช์" —
       // ส่วนต่างที่เพิ่ม (อีก 1x) เป็น House mint ไม่หักจากผู้เล่นอื่น (ยืนยันขอบเขตกับลุงเยาะแล้ว — ระดับ match ไม่ใช่ต่อ pile/round)
-      const HN_BASELINE = 5000
+      // computeHNHumanPayout เดิมไม่แตะ — effectiveFinalStack = buyInAmount + payout ทำให้ settleEscrow ให้ผลรวมเท่าเดิมทุกกรณี
       const bossSeatFinal = state.seats[0]
       const winnerSeat = seatById(state, finalWinner)
       const isMonarchMatch = bossSeatFinal.isMonarch === true
       const isHumanWinner = !!winnerSeat?.isHuman
 
       const humanNetDeltas: Record<string, number> = {}
+      // Buy-in Spec §6: client ResultPanel ต้องโชว์ยอด "Returned" จริงที่เข้า DB — ถ้าใช้ state.tokenBalance ตรงๆ
+      // จะผิดเฉพาะเคส Monarch ×2 (payout ถูกคูณแล้วก่อน settle แต่ state.tokenBalance ไม่เคยถูกเขียนทับ)
+      const finalStackByHuman: Record<string, number> = {}
       await Promise.all(humanSeats(state).map(async s => {
-        await returnPlayerLockedTokens(s.id, state.lockedTokens[s.id] ?? 0)
-        const netDelta = (state.tokenBalance[s.id] ?? HN_BASELINE) - HN_BASELINE
+        const netDelta = (state.tokenBalance[s.id] ?? state.buyInAmount) - state.buyInAmount
         humanNetDeltas[s.id] = netDelta
         const payout = computeHNHumanPayout(netDelta, isMonarchMatch && isHumanWinner && s.id === finalWinner, gameConfig.monarchConfig.potMultiplier)
-        if (payout !== 0) await persistHNNetTokenResult(s.id, payout)
+        const escrowId = state.escrowIds[s.id]
+        const finalStack = state.buyInAmount + payout
+        finalStackByHuman[s.id] = finalStack
+        if (escrowId) await settleEscrow(s.id, escrowId, finalStack)
       }))
 
       // Badge "Monarch Slayer" + เงื่อนไข Ascendant Gate (Spec v1.3 §5)
@@ -1047,7 +1059,7 @@ function finalizeHNGrandFinale(
         humanNetDeltas,
       })
 
-      io.to(roomId).emit('match_end', { roomId, finalWinner, tokenBalance: state.tokenBalance, results: state.results, totalRounds: state.totalRounds })
+      io.to(roomId).emit('match_end', { roomId, finalWinner, tokenBalance: state.tokenBalance, results: state.results, totalRounds: state.totalRounds, buyInAmount: state.buyInAmount, finalStackByHuman })
       hnMatchStates.delete(roomId)
     } else {
       state.roundNumber++
@@ -1058,8 +1070,9 @@ function finalizeHNGrandFinale(
 }
 
 // ============================================================
-// DISCONNECT — แทน Human ด้วย AI ทันที (burn lock-up, ไม่มี grace period)
+// DISCONNECT — แทน Human ด้วย AI ทันที
 // mirror ของ replaceMultiPlayerWithAI เดิม แต่ครอบคลุมทุก phase ของ High Noble
+// Buy-in Spec §4: settle ทันทีด้วย stack ปัจจุบัน (ante ที่จ่ายเข้า Pot ไปแล้วไม่คืน — เปลี่ยนจาก burn ทั้งก้อนเดิม)
 // ============================================================
 export async function replaceHNPlayerWithAI(io: Server, roomId: string, userId: string): Promise<void> {
   const state = hnMatchStates.get(roomId)
@@ -1067,9 +1080,11 @@ export async function replaceHNPlayerWithAI(io: Server, roomId: string, userId: 
   const seat = seatById(state, userId)
   if (!seat || !seat.isHuman) return
 
-  // Burn ทั้งหมด ไม่คืน
-  const { burnLockedTokens } = await import('./gameLoop')
-  try { await burnLockedTokens(userId, roomId) } catch (err) { console.error('[HN-DISCONNECT] burn error:', err) }
+  const escrowId = state.escrowIds[userId]
+  if (escrowId) {
+    try { await settleEscrow(userId, escrowId, state.tokenBalance[userId] ?? state.buyInAmount) }
+    catch (err) { console.error('[HN-DISCONNECT] settle error:', err) }
+  }
 
   // LobbyMatchmaking_Spec_v1_0 §6.1: filler ใน High Noble = Minion ทั้งระบบแล้ว (ไม่ใช่แค่ตอน Deadlock "Start Now")
   // — ตอน Human หลุดกลางเกมก็แทนที่ด้วย Minion สุ่มเช่นกัน เพื่อความสอดคล้อง (personality สุ่มอิสระ 1 ใน 3 เหมือนเดิม)
