@@ -13,6 +13,7 @@ import { aiDecideArrangement, AI_CONFIGS, AIConfig, AIPersonality, FOUR_GODS, NI
 import { Card } from './deck'
 import { gameConfig } from '../config/gameConfig'
 import { supabaseAdmin } from '../config/supabase'
+import { recordGameResults } from './gameStats'
 
 // ── Types ────────────────────────────────────────────────────
 export interface RoundResult {
@@ -466,6 +467,8 @@ export async function submitArrangement(
     if (state.escrowId) {
       await settleEscrow(state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount)
     }
+    // Player Stats Leaderboard — นับ games_played/games_won เฉพาะแมตช์ที่จบครบ totalRounds จริง
+    await recordGameResults([state.humanPlayerId], finalWinner)
 
     io.to(roomId).emit('match_end', {
       roomId,
@@ -1620,6 +1623,8 @@ function finalizeGrandFinale(
       if (state.escrowId) {
         await settleEscrow(state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount)
       }
+      // Player Stats Leaderboard — นับ games_played/games_won เฉพาะแมตช์ที่จบครบ totalRounds จริง
+      await recordGameResults([state.humanPlayerId], finalWinner)
 
       // Patch Mastermind Conquest: ผู้เล่นได้อันดับ 1 → บันทึก conquered_sentinels (กันซ้ำ)
       let sentinelConquered = false
@@ -1936,6 +1941,8 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
     await Promise.all(state.humanPlayerIds.map(uid =>
       settleEscrow(uid, state.escrowIds[uid], state.tokenBalance[uid] ?? state.buyInAmount)
     ))
+    // Player Stats Leaderboard — นับ games_played/games_won เฉพาะแมตช์ที่จบครบ totalRounds จริง
+    await recordGameResults(state.humanPlayerIds, finalWinner)
 
     io.to(roomId).emit('match_end', {
       roomId, finalWinner, tokenBalance: state.tokenBalance,

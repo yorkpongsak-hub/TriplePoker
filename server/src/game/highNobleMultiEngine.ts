@@ -25,6 +25,7 @@ import { Seat as RoomSeat } from './roomRegistry'
 import { lockMonarchPersonality } from './monarchAI'
 import { recordMonarchVictory } from './monarchSpawn'
 import { awardPerformanceScore } from './psEngine'
+import { recordGameResults } from './gameStats'
 
 // ── Local copies of small pure helpers (ตั้งใจ duplicate จาก gameLoop.ts แทนการ import
 //    เพื่อไม่ให้ engine ใหม่นี้ผูกกับการแก้ไขไฟล์เดิมในอนาคต — ของเดิมพิสูจน์แล้วว่าถูกต้อง) ──
@@ -1045,6 +1046,8 @@ function finalizeHNGrandFinale(
         finalStackByHuman[s.id] = finalStack
         if (escrowId) await settleEscrow(s.id, escrowId, finalStack)
       }))
+      // Player Stats Leaderboard — นับ games_played/games_won เฉพาะแมตช์ที่จบครบ totalRounds จริง
+      await recordGameResults(humanSeats(state).map(s => s.id), finalWinner)
 
       // Badge "Monarch Slayer" + เงื่อนไข Ascendant Gate (Spec v1.3 §5)
       if (isMonarchMatch && isHumanWinner) {

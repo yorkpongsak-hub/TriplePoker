@@ -234,7 +234,7 @@ export default function ProfileScreen() {
         </View>
         <View style={s.secondaryRow}>
           <MenuButton icon="friends" label="Friends" size="sm" onPress={() => handleComingSoon('Friends')} vipShimmer={isVip} />
-          <MenuButton icon="ranking" label="Ranking" size="sm" onPress={() => handleComingSoon('Ranking')} vipShimmer={isVip} />
+          <MenuButton icon="ranking" label="Ranking" size="sm" onPress={() => router.push('/(home)/stats')} vipShimmer={isVip} />
           <MenuButton icon="shop" label="Shop" size="sm" onPress={handleShop} vipShimmer={isVip} />
           <MenuButton icon="hall_of_fame" label="Legends" size="sm" onPress={handleTableOfLegends} vipShimmer={isVip} />
         </View>

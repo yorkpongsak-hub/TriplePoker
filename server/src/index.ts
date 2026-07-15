@@ -3,6 +3,7 @@ import cors from '@fastify/cors'
 import { Server } from 'socket.io'
 import { authRoutes } from './routes/auth'
 import { profileRoutes } from './routes/profile'
+import statsRoutes from './routes/stats'
 import { registerGameSocket } from './sockets/gameSocket'
 import * as dotenv from 'dotenv'
 
@@ -17,6 +18,7 @@ app.register(cors, { origin: '*' })
 // Routes
 app.register(authRoutes)
 app.register(profileRoutes)
+app.register(statsRoutes)
 
 // Health check
 app.get('/health', async () => ({
