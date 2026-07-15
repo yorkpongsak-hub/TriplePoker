@@ -17,6 +17,7 @@ import { router, useLocalSearchParams } from 'expo-router'
 import { io, Socket } from 'socket.io-client'
 import { autoSort } from '../../../src/utils/autoSort'
 import { useAuthStore } from '../../../src/store/authStore'
+import { useUserStore } from '../../../src/store/userStore'
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
 import { ActionButton } from '../../../src/components/ui/ActionButton'
 import { MenuButton } from '../../../src/components/ui/MenuButton'
@@ -67,6 +68,9 @@ const CARD_IMG: Record<string, any> = {
 const CW = 62; const CH = 90; const OVERLAP = -38
 const SIDE_COL_W = 72
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
+// Escrow (ที่หักตอน matchmaking เต็มห้อง) ผูกกับ user_id จริงใน DB — ห้าม fallback เงียบเป็น literal เด็ดขาด
+// เปิดทางเทสเร็วไม่ login ได้เฉพาะ __DEV__ + ตั้ง env EXPO_PUBLIC_DEV_FAKE_USER_ID เอง — production build ตัดทิ้งอัตโนมัติ
+const DEV_FAKE_USER_ID = __DEV__ ? process.env.EXPO_PUBLIC_DEV_FAKE_USER_ID : undefined
 
 interface CardData { id: string; key: string }
 interface AIInfo   { id: string; name: string; emoji: string }
@@ -182,8 +186,12 @@ const GameTableLive: React.FC = () => {
 
   // Patch Multiplayer: roomId/userId มาจาก Lobby (auto-match) ผ่าน route params
   const params = useLocalSearchParams<{ roomId?: string; userId?: string }>()
+  const authUserId = useUserStore(s => s.userId)
   const ROOM_ID   = params.roomId ?? 'Adept1'
-  const PLAYER_ID = params.userId ?? 'Human1'
+  // params.userId มาจาก Lobby matchmaking (ผูก escrow ไว้แล้วตอนห้องเต็ม) — authUserId เป็น fallback กันกรณี
+  // route param หลุด แต่ทั้งคู่ต้องไม่ว่างพร้อมกัน ห้าม fallback เงียบเป็น literal เด็ดขาด (ดู DEV_FAKE_USER_ID ด้านบน)
+  const usingDevFakeId = !params.userId && !authUserId && !!DEV_FAKE_USER_ID
+  const PLAYER_ID = params.userId || authUserId || DEV_FAKE_USER_ID || ''
   const myAvatarEmoji = useAuthStore(s => s.profile?.avatar_url) || '👤'
   const myDisplayName = useAuthStore(s => s.profile?.display_name) || 'You'
   const isVip = useAuthStore(s => (s.profile?.vip_status ?? 'none') !== 'none') // Feedback C5 — ใช้ vip_status เดิม ไม่สร้าง state ใหม่
@@ -348,6 +356,21 @@ const GameTableLive: React.FC = () => {
 
   // ── Connect Socket (ครั้งเดียว)
   useEffect(() => {
+    // Auth guard: userId ว่างแปลว่าหลุด auth guard มาได้ (authStore ยังไม่ sync) — ห้ามเข้าโต๊ะต่อ
+    // เพราะ escrow จะผูก token จริงเข้ากับ id ที่ไม่มีอยู่จริง คืนไม่ได้ — fail loud แทน fail silent
+    if (!PLAYER_ID) {
+      console.error('[game] userId missing — auth state broken')
+      Alert.alert(
+        'Session expired',
+        'Please log in again.',
+        [{ text: 'OK', onPress: () => router.replace('/(auth)/login') }]
+      )
+      return
+    }
+    if (usingDevFakeId) {
+      console.warn('[game] Using DEV_FAKE_USER_ID for PLAYER_ID:', PLAYER_ID)
+    }
+
     const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: false })
     socketRef.current = socket
 
@@ -367,7 +390,9 @@ const GameTableLive: React.FC = () => {
     socket.on('match_error', (data: { roomId: string; message: string }) => {
       Alert.alert(
         'Cannot Start Match',
-        data.message === 'INSUFFICIENT_TOKENS' ? 'You do not have enough tokens for this table\'s buy-in.' : 'Something went wrong starting the match.',
+        data.message === 'INSUFFICIENT_TOKENS' ? 'You do not have enough tokens for this table\'s buy-in.'
+          : data.message === 'ACTIVE_MATCH_EXISTS' ? 'You have an unfinished match.'
+          : 'Something went wrong. Please try again.',
         [{ text: 'OK', onPress: () => router.replace('/(home)/lobby') }]
       )
     })
@@ -529,6 +554,11 @@ const GameTableLive: React.FC = () => {
       setPhase('end')
       setMatchResult(data)
       setTokenBalance(data.tokenBalance ?? {})
+      // Server ส่งยอด token_balance จริงหลัง settle มาด้วย (per-player) — ห้ามคำนวณเองจาก buyin/stack
+      const myNewBalance = data.newTokenBalances?.[PLAYER_ID] ?? data.newTokenBalance
+      if (typeof myNewBalance === 'number') {
+        useUserStore.getState().updateTokenBalance(myNewBalance)
+      }
       if (data.finalWinner === PLAYER_ID) {
         winPulseLoopRef.current = Animated.loop(Animated.sequence([
           Animated.timing(winPulse, { toValue: 1.25, duration: 400, useNativeDriver: false }),
@@ -732,15 +762,15 @@ const GameTableLive: React.FC = () => {
     </View>
   )
 
-  const renderCard = (key: string | undefined, w: number, h: number, ml: number = 0) => {
+  const renderCard = (key: string | undefined, w: number, h: number, ml: number = 0, elKey?: string) => {
     if (key && CARD_IMG[key]) {
       return (
-        <View style={{ width: w, height: h, borderRadius: w * 0.14, marginLeft: ml, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(201,168,76,.5)' }}>
+        <View key={elKey} style={{ width: w, height: h, borderRadius: w * 0.14, marginLeft: ml, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(201,168,76,.5)' }}>
           <Image source={CARD_IMG[key]} style={{ width: w, height: h }} resizeMode="cover" />
         </View>
       )
     }
-    return <CardBack w={w} h={h} ml={ml} />
+    return <CardBack key={elKey} w={w} h={h} ml={ml} />
   }
 
   const AIPiles: React.FC<{ aiId: string }> = ({ aiId }) => {
@@ -752,7 +782,11 @@ const GameTableLive: React.FC = () => {
           <React.Fragment key={pi}>
             {pi > 0 && <View style={{ width: 4 }} />}
             <View style={{ flexDirection: 'row' }}>
-              {Array.from({ length: cnt }).map((_, ci) => renderCard(cards[pi === 0 ? ci : pi === 1 ? 3+ci : 6+ci], 25, 36, ci === 0 ? 0 : -18))}
+              {Array.from({ length: cnt }).map((_, ci) => {
+                const idx = pi === 0 ? ci : pi === 1 ? 3 + ci : 6 + ci
+                const cardKey = cards[idx]
+                return renderCard(cardKey, 25, 36, ci === 0 ? 0 : -18, `${aiId}-${pi}-${ci}-${cardKey ?? 'back'}`)
+              })}
             </View>
           </React.Fragment>
         ))}
@@ -770,7 +804,11 @@ const GameTableLive: React.FC = () => {
             <React.Fragment key={pi}>
               {pi > 0 && <View style={{ width: 4 }} />}
               <View style={{ flexDirection: 'row' }}>
-                {Array.from({ length: cnt }).map((_, ci) => renderCard(cards[pi === 0 ? ci : pi === 1 ? 3+ci : 6+ci], 25, 36, ci === 0 ? 0 : -18))}
+                {Array.from({ length: cnt }).map((_, ci) => {
+                  const idx = pi === 0 ? ci : pi === 1 ? 3 + ci : 6 + ci
+                  const cardKey = cards[idx]
+                  return renderCard(cardKey, 25, 36, ci === 0 ? 0 : -18, `${aiId}-${pi}-${ci}-${cardKey ?? 'back'}`)
+                })}
               </View>
             </React.Fragment>
           ))}
@@ -1280,6 +1318,13 @@ const GameTableLive: React.FC = () => {
                     </View>
                   )
                 })()}
+                {/* ยอด token_balance จริงหลัง settle จาก server (ไม่คำนวณเอง) — ต่างจาก "Final Token Balance"
+                    ด้านล่างที่เป็น leaderboard stack ในแมตช์นี้ (รวม AI ซึ่งไม่มี token_balance จริงใน DB) */}
+                {typeof (matchResult.newTokenBalances?.[PLAYER_ID] ?? matchResult.newTokenBalance) === 'number' && (
+                  <Text style={[s.buyInSummaryText, { textAlign: 'center', marginBottom: 8 }]}>
+                    Your Token Balance <Text style={{ color: '#c9a84c', fontWeight: '800' }}>{(matchResult.newTokenBalances?.[PLAYER_ID] ?? matchResult.newTokenBalance).toLocaleString('en-US')}</Text>
+                  </Text>
+                )}
                 <Text style={s.matchEndSub}>Final Token Balance</Text>
                 {[PLAYER_ID, ...aiList.map(a => a.id)].sort((a, b) => (tokenBalance[b] ?? 0) - (tokenBalance[a] ?? 0)).map(pid => {
                   const ai  = aiList.find(a => a.id === pid)
@@ -1641,7 +1686,8 @@ const GameTableLive: React.FC = () => {
 
           </Animated.View>
           {/* USER AVATAR — มุมล่างซ้าย — Feedback C2: ใช้ myAvatarEmoji/myDisplayName จริงแทน hardcode */}
-          <View style={{ position: 'absolute', bottom: 58, left: 10, zIndex: 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          {/* bottom ต้องพ้น actionBar (paddingTop 4 + ปุ่มสูง ~87 + paddingBottom 20 = ~111) กันซ้อนปุ่ม Auto Sort */}
+          <View style={{ position: 'absolute', bottom: 120, left: 10, zIndex: 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <AvatarBubble emoji={myAvatarEmoji} size={40} />
             <Text style={s.userNameTag} numberOfLines={1}>{myDisplayName}</Text>
           </View>
