@@ -2390,8 +2390,8 @@ const GameTableLive: React.FC = () => {
 
           </Animated.View>
           {/* USER AVATAR — มุมล่างซ้าย (ซ่อนตอน Grand Finale เพราะ Overlay มี Avatar P1 แล้ว) — Feedback C2: ใช้ myAvatarEmoji/myDisplayName จริง */}
-          {/* bottom ต้องพ้น actionBar (paddingTop 4 + ปุ่มสูง ~87 + paddingBottom 20 = ~111) กันซ้อนปุ่ม Auto Sort */}
-          <View style={{ position: 'absolute', bottom: 120, left: 10, zIndex: 10, opacity: (phase === 'showdown' || phase === 'result' || phase === 'grand_finale' || phase === 'grand_finale_done') ? 0 : 1, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          {/* P1 HUD ย้ายลงชิดขอบล่าง — pointerEvents none เพื่อไม่บังปุ่ม actionBar */}
+          <View style={{ position: 'absolute', bottom: Math.max(insets.bottom, 4), left: 10, zIndex: 3, opacity: (phase === 'showdown' || phase === 'result' || phase === 'grand_finale' || phase === 'grand_finale_done') ? 0 : 1, flexDirection: 'row', alignItems: 'center', gap: 6 }} pointerEvents="none">
             <AvatarBubble emoji={myAvatarEmoji} size={40} />
             <Text style={s.userNameTag} numberOfLines={1}>{myDisplayName}</Text>
           </View>
