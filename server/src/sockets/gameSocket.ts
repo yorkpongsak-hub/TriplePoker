@@ -9,241 +9,73 @@
 
 import { Server, Socket } from "socket.io";
 import { dealCards, validateDeal } from "../game/cardEngine";
-import { startMatch, submitArrangement, submitArrangementRound2, resolveContinue, submitAuctionBid, submitDiscard, submitGrandFinaleAction, burnLockedTokens } from "../game/gameLoop";
-import { startMultiplayerMatch, submitMultiArrangement, replaceMultiPlayerWithAI, resendRoundStartToPlayer } from "../game/gameLoop";
-import { gameConfig, getMechanics, getTierFromToken, type Tier } from "../config/gameConfig";
+import { startMatch, submitArrangement, submitArrangementRound2, resolveContinue, submitAuctionBid, submitDiscard, submitGrandFinaleAction, settleAndEndSoloMatch } from "../game/gameLoop";
+import { startMultiplayerMatch, submitMultiArrangement, markPlayerAFK, resendRoundStartToPlayer, settleAndEndMultiMatch } from "../game/gameLoop";
+import { getMatchState, getMultiMatchState, settleEscrow } from "../game/gameLoop";
+import {
+  startHighNobleMultiMatch, submitHNArrangement, submitHNAuctionBid, submitHNArrangementRound2,
+  submitHNDiscard, submitHNGrandFinaleAction, replaceHNPlayerWithAI, resendHNRoundStartToPlayer,
+  getHNMatchState,
+} from "../game/highNobleMultiEngine";
+import { getTierFromToken } from "../config/gameConfig";
 import { registerLobbySocket } from "./lobbySocket";
-import { supabase } from "../config/supabase";
 import { createTableWithId, setSeat, deleteTable } from "../game/tableRegistry";
 import { createAdeptTable, joinAdeptTable, getTimedOutAdeptTables } from "../game/tableRegistry";
 import {
-  findOrCreateRoom, createPrivateRoom, joinRoom, getRoom as getRoomFromRegistry,
-  fillRemainingWithAI, getTimedOutRooms, markInProgress,
-  type Tier as RoomTier,
+  findOrCreateRoomAndJoin, createPrivateRoom, joinRoomLocked, getRoom as getRoomFromRegistry,
+  fillRemainingWithAI, getTimedOutRooms, markInProgress, finalizeBossSeat,
+  getRoomsNeedingTimeoutChoice, markAwaitingTimeoutChoice, extendRoomWait,
+  getExpiredExtendedRooms, deleteRoomCompletely, fillWithMinion, humanCount,
+  markAwaitingDeadlockChoice, getAdeptGraceExpiredRoomIds, resolveAdeptGraceExpiry,
+  type Tier as RoomTier, type GameRoom,
 } from "../game/roomRegistry";
 import { broadcastTableUpdate } from "./lobbySocket";
 
-// ─── Types ───────────────────────────────────────────────────────
-
-// โครงสร้างไพ่ 1 ใบ
-interface Card {
-  suit: "spades" | "hearts" | "diamonds" | "clubs";
-  rank: number; // 2–14 (14 = Ace)
-}
-
-// การจัดไพ่ 11 ใบลง 3 Pile ของผู้เล่น 1 คน
-interface PlayerArrangement {
-  playerId: string;
-  pile1: Card[]; // 3 ใบ (อ่อนสุด)
-  pile2: Card[]; // 3 ใบ (กลาง)
-  pile3: Card[]; // 5 ใบ (แข็งสุด) — Beginner ใช้ทั้ง 5, Pro+ Discard เหลือ 3
-  isAutoSorted: boolean;
-  foulChecked: boolean; // Client ตรวจแล้ว (Server ตรวจซ้ำที่ Showdown)
-}
-
-// ผลชนะ/แพ้ต่อ Pile
-interface PileResult {
-  pileNumber: 1 | 2 | 3;
-  winnerId: string;        // playerId ที่ชนะ
-  winnerHand: string;      // เช่น "Full House"
-  potAmount: number;       // Token ที่ได้ (หลังหัก Rake แล้ว)
-  hasFoul: boolean;        // มี Foul ใน Pile นี้ไหม
-}
-
-// State ของห้องเกม (เก็บใน Redis)
-interface GameRoom {
-  roomId: string;
-  tier: Tier;
-  players: {
-    id: string;
-    tokenBalance: number;
-    isAI: boolean;
-    isVip: boolean;
-    isReady: boolean;
-    arrangement?: PlayerArrangement;
-  }[];
-  round: number;          // รอบปัจจุบัน (นับตั้งแต่ต้น Match)
-  phase: GamePhase;
-  communityCards: {
-    pile1: Card[];         // Community 2 ใบสำหรับ Pile 1
-    pile2: Card[];         // Community 2 ใบสำหรับ Pile 2
-    pile3: Card[];         // Community 2 ใบสำหรับ Pile 3
-  };
-}
-
-// Phase ทั้งหมดของเกม
-type GamePhase =
-  | "waiting"
-  | "arrangement"
-  | "simultaneous_showdown"  // Beginner เท่านั้น
-  | "pile1_reveal"           // Pro+
-  | "pile2_reveal"           // Pro+
-  | "fog_of_war"             // Pro+
-  | "pre_auction"            // Pro+
-  | "blind_auction"          // Pro+
-  | "discard"                // Pro+
-  | "grand_finale"           // Pro+
-  | "match_end";
-
-// ─── Helper: ดึง GameRoom จาก Redis ─────────────────────────────
-// จริงๆ ต้อง import redis client — stub ไว้เพื่อ Sprint 3
-// Sprint 4 จะ implement เต็มใน gameRoom.ts
-async function getRoom(roomId: string): Promise<GameRoom | null> {
-  // TODO: return await redisClient.get(`room:${roomId}`)
-  return null;
-}
-
-async function saveRoom(room: GameRoom): Promise<void> {
-  // TODO: await redisClient.set(`room:${roomId}`, JSON.stringify(room))
+// แปลง card key string (เช่น "10s", "jh") → Card object — ใช้ร่วมกันทุก handler ที่รับไพ่จาก client
+function toCards(keys: string[]) {
+  return keys.map(k => {
+    const suitMap: Record<string, string> = { s: 'spades', h: 'hearts', d: 'diamonds', c: 'clubs' };
+    const rankMap: Record<string, number> = { '2':2,'3':3,'4':4,'5':5,'6':6,'7':7,'8':8,'9':9,'10':10,'j':11,'q':12,'k':13,'a':14 };
+    const suit = suitMap[k[k.length - 1]] ?? 'spades';
+    const rank = k.slice(0, -1).toUpperCase();
+    const value = rankMap[k.slice(0, -1).toLowerCase()] ?? 0;
+    return { suit, rank, value } as any;
+  });
 }
 
 // ─── Multiplayer: track socket -> {userId, roomId} สำหรับ disconnect handling ───
 const socketUserMap = new Map<string, { userId: string; roomId: string; tier: string }>();
 
-// ─── Helper: ตรวจว่าทุกคน Ready แล้วหรือยัง ────────────────────
-function allPlayersReady(room: GameRoom): boolean {
-  return room.players.every((p) => p.isReady);
-}
+// ห้องเต็มแล้ว → finalize (สุ่ม Boss จริงถ้า High Noble) + emit room_ready + เริ่มเกม
+// ใช้ร่วมกัน 3 จุด: room_auto_match, room_join_private, Adept grace-period AI-fill
+//
+// A2 (Bug A fix, 2026-07-17): Adept ต้องหัก escrow ให้ครบทุกคน "ก่อน" broadcast room_ready เสมอ —
+// เดิม room_ready ยิงก่อน escrow loop ใน startMultiplayerMatch ทำให้ทุกคน navigate เข้าเกมไปแล้ว
+// ก่อนรู้ว่า escrow ใครคนหนึ่งล้มเหลว (เช่น ACTIVE_MATCH_EXISTS จากห้องก่อนหน้าที่ยังไม่ settle) — พอ
+// ล้มเหลวจริงจะไม่มีใครเห็น error เลยเพราะ socket lobby เดิมถูก disconnect ไปแล้วตอน navigate
+async function finalizeAndStartRoom(io: Server, room: GameRoom): Promise<void> {
+  const finalRoom = room.tier === 'highNoble' ? await finalizeBossSeat(room) : room;
+  await markInProgress(finalRoom.roomId);
 
-// ─── Helper: คำนวณ Token ที่ชนะแต่ละ Pile (หลัง Rake) ──────────
-function calcPotAfterRake(tierKey: Tier, pileNumber: 1 | 2 | 3): number {
-  const stakes = gameConfig.tokenPot.tiers[tierKey];
-  const rawStake = pileNumber === 1 ? stakes.pile1 :
-                   pileNumber === 2 ? stakes.pile2 : stakes.pile3;
-  const players = gameConfig.tokenPot.s1s2.potPlayers; // 4 คน (3H + AI)
-  const totalPot = rawStake * players;
-  return Math.floor(totalPot * (1 - gameConfig.tokenPot.rake));
+  if (finalRoom.tier === 'adept') {
+    const result = await startMultiplayerMatch(io, finalRoom.roomId, finalRoom.seats, 'adept');
+    if (!result.ok) {
+      // room_ready ไม่เคยถูก broadcast เลย — client ทุกคนยังอยู่ที่ lobby socket เดิม ได้ยิน room_error
+      // แน่นอน (handler เดิมของ lobby.tsx อยู่แล้ว ไม่ต้องเพิ่ม client listener ใหม่)
+      io.to(finalRoom.roomId).emit("room_error", { message: result.reason ?? "Could not start the match. Please try again." });
+      await deleteRoomCompletely(finalRoom.roomId); // กันห้องค้างสถานะ in_progress ทั้งที่ไม่มี match จริง
+      return;
+    }
+    io.to(finalRoom.roomId).emit("room_ready", { roomId: finalRoom.roomId, seats: finalRoom.seats });
+  } else if (finalRoom.tier === 'highNoble') {
+    io.to(finalRoom.roomId).emit("room_ready", { roomId: finalRoom.roomId, seats: finalRoom.seats });
+    await startHighNobleMultiMatch(io, finalRoom.roomId, finalRoom.seats);
+  }
 }
 
 // ============================================================
 // Main Socket Handler — register ที่ server/index.ts
 // ============================================================
-// ============================================================
-// Handler: handleEndOfMatch — ประมวลผลจบ Match + Skin Unlock
-// ============================================================
-async function handleEndOfMatch(
-  io: Server,
-  roomId: string,
-  room: GameRoom,
-  results: PileResult[]
-): Promise<void> {
-  // Step 1: คำนวณ Token deltas
-  const tokenDeltas = calcTokenDeltas(results, room);
-
-  // Step 2: ตรวจสอบ skin unlock ต่อแต่ละ Human player
-  for (const player of room.players) {
-    if (player.isAI) continue; // ข้าม AI
-    
-    const tokenDelta = tokenDeltas[player.id] ?? 0;
-    const isWin = tokenDelta > 0;
-
-    if (!isWin) continue;
-
-    try {
-      const { data: userSkins } = await supabase
-        .from('user_table_skins')
-        .select('*')
-        .eq('user_id', player.id)
-        .single();
-
-      if (!userSkins) {
-        console.warn(`[SKIN] No skin record for ${player.id}`);
-        continue;
-      }
-
-      let unlockedNewSkin = false;
-      let newActiveSkin = userSkins.active_skin;
-
-      // Tier B (Adept) → unlock Skin #2
-      if (room.tier === 'adept' && !userSkins.skin_unlock_b) {
-        const { error } = await supabase
-          .from('user_table_skins')
-          .update({
-            unlocked_skins: [1, 2],
-            active_skin: 2,
-            skin_unlock_b: true,
-            updated_at: new Date().toISOString()
-          })
-          .eq('user_id', player.id);
-
-        if (!error) {
-          unlockedNewSkin = true;
-          newActiveSkin = 2;
-          console.log(`[SKIN] ${player.id} unlocked Skin #2 (Adept)`);
-        }
-      }
-
-      // Tier A (Mastermind) → unlock Skin #3
-      if (room.tier === 'mastermind' && !userSkins.skin_unlock_a) {
-        const { error } = await supabase
-          .from('user_table_skins')
-          .update({
-            unlocked_skins: [1, 2, 3],
-            active_skin: 3,
-            skin_unlock_a: true,
-            updated_at: new Date().toISOString()
-          })
-          .eq('user_id', player.id);
-
-        if (!error) {
-          unlockedNewSkin = true;
-          newActiveSkin = 3;
-          console.log(`[SKIN] ${player.id} unlocked Skin #3 (Mastermind)`);
-        }
-      }
-
-      // Tier A+ (High Noble) → unlock Skin #4
-      if (room.tier === 'highNoble' && !userSkins.skin_unlock_a_plus) {
-        const { error } = await supabase
-          .from('user_table_skins')
-          .update({
-            unlocked_skins: [1, 2, 3, 4],
-            active_skin: 4,
-            skin_unlock_a_plus: true,
-            updated_at: new Date().toISOString()
-          })
-          .eq('user_id', player.id);
-
-        if (!error) {
-          unlockedNewSkin = true;
-          newActiveSkin = 4;
-          console.log(`[SKIN] ${player.id} unlocked Skin #4 (High Noble)`);
-        }
-      }
-
-      if (unlockedNewSkin) {
-        const skinNames: Record<number, string> = {
-          1: 'Marble Luxury',
-          2: 'Ancient Stone Castle',
-          3: 'Cosmic Mystical',
-          4: 'Bamboo Rice Field'
-        };
-
-        io.to(roomId).emit('skin_unlocked', {
-          playerId: player.id,
-          skinId: newActiveSkin,
-          skinName: skinNames[newActiveSkin],
-          tier: room.tier,
-          message: `🎉 ยินดีด้วย! คุณปลดล็อค Skin: ${skinNames[newActiveSkin]}`
-        });
-      }
-    } catch (err) {
-      console.error(`[SKIN] Error processing skin unlock for ${player.id}:`, err);
-    }
-  }
-
-  io.to(roomId).emit('match_end', {
-    roomId,
-    tier: room.tier,
-    finalScores: tokenDeltas,
-    pileResults: results,
-    showAd: room.players.every((p) => !p.isVip),
-    timestamp: Date.now(),
-  });
-
-  await saveRoom(room);
-}
-
 
 export function registerGameSocket(io: Server): void {
 
@@ -260,8 +92,9 @@ export function registerGameSocket(io: Server): void {
   }, 10_000);
 
   // Room Registry (ใหม่): เช็คห้องที่หมดเวลา → AI-fill ที่นั่งที่เหลือ ทุก 10 วิ
+  // หมายเหตุ: Adept และ High Noble ไม่อยู่ในลูปนี้แล้ว — ใช้ waiting timeout dialog flow แยกด้านล่างแทน (§4.4/§6.1)
   setInterval(async () => {
-    const tiers: RoomTier[] = ['adept', 'mastermind', 'highNoble'];
+    const tiers: RoomTier[] = ['mastermind'];
     for (const tier of tiers) {
       const timedOut = await getTimedOutRooms(tier);
       for (const room of timedOut) {
@@ -274,13 +107,69 @@ export function registerGameSocket(io: Server): void {
           });
           // Patch Multiplayer: ต้องเริ่มเกมจริงหลัง AI-fill ด้วย (เดิมลืม — ห้องค้าง 'full' เฉยๆ ไม่เริ่มเกม)
           await markInProgress(room.roomId);
-          if (tier === 'adept') {
-            await startMultiplayerMatch(io, room.roomId, filled.seats, 'adept');
-          }
         }
       }
     }
   }, 10_000);
+
+  // Waiting Timeout Dialog (LobbyMatchmaking_Spec_v1_0 §4.4/§6.1) — High Noble เท่านั้นทุก 10 วิ
+  // (Adept ไม่ใช้ dialog นี้อีกแล้ว — เปลี่ยนไปใช้ Adept Dynamic Capacity grace period แทน ดู
+  // setInterval ใหม่ด้านล่างที่เรียก getAdeptGraceExpiredRoomIds/resolveAdeptGraceExpiry):
+  //   รอบแรก (3 นาที) หมด → ถาม dialog "Wait 2 More Minutes" / "Delete Table" (เฉพาะ Host)
+  //   รอบขยาย (2 นาที) หมด:
+  //     Human >=2: Deadlock dialog "Start Now (Fill 1 Minion AI)"/"Delete Table" (Host เท่านั้น, §6.1)
+  //     Human =1: ลบโต๊ะทันที
+  setInterval(async () => {
+    const dialogTiers: RoomTier[] = ['highNoble'];
+    for (const tier of dialogTiers) {
+      const needChoice = await getRoomsNeedingTimeoutChoice(tier);
+      for (const room of needChoice) {
+        await markAwaitingTimeoutChoice(room.roomId);
+        io.to(room.roomId).emit('room_wait_timeout_choice', {
+          roomId: room.roomId, stage: 'first', hostUserId: room.hostUserId,
+        });
+      }
+
+      const expired = await getExpiredExtendedRooms(tier);
+      for (const room of expired) {
+        if (tier === 'highNoble' && humanCount(room) >= 2) {
+          await markAwaitingDeadlockChoice(room.roomId);
+          io.to(room.roomId).emit('room_wait_timeout_choice', {
+            roomId: room.roomId, stage: 'deadlock', hostUserId: room.hostUserId, humanCount: humanCount(room),
+          });
+          continue;
+        }
+        io.to(room.roomId).emit('room_wait_timeout_expired', {
+          roomId: room.roomId,
+          message: 'Waiting too long — table has been removed.',
+        });
+        await deleteRoomCompletely(room.roomId);
+      }
+    }
+  }, 10_000);
+
+  // Adept Dynamic Capacity grace period — เฉพาะโต๊ะ public (auto-match) เท่านั้น (private ไม่เคยอยู่
+  // ใน openSetKey เลย ไม่โดนกระทบ ยังคงพฤติกรรมเดิม 2H+2AI ตายตัวใน joinRoom()) โพลถี่กว่า loop อื่น
+  // (3 วิ แทน 10 วิ) เพราะ grace window สั้นแค่ ~40 วิ ไม่ใช่หลักนาทีเหมือน loop ด้านบน
+  setInterval(async () => {
+    const roomIds = await getAdeptGraceExpiredRoomIds();
+    for (const roomId of roomIds) {
+      try {
+        const result = await resolveAdeptGraceExpiry(roomId);
+        if (result.action === 'cancelled') {
+          io.to(roomId).emit('room_deleted', {
+            roomId,
+            message: 'No second player joined in time — table has been removed. Please try Auto Match again.',
+          });
+        } else if (result.action === 'ai_filled' && result.room.status === 'full') {
+          await finalizeAndStartRoom(io, result.room);
+        }
+        // 'noop' — มี join แทรกเข้ามาระหว่าง scan กับตอนนี้พอดี (resolveAdeptGraceExpiry เช็คสดแล้วเจอว่าไม่หมดเวลาจริง) ไม่ต้องทำอะไร
+      } catch (err) {
+        console.error('[ADEPT_GRACE] failed for room', roomId, err);
+      }
+    }
+  }, 3_000);
 
   io.on("connection", (socket: Socket) => {
 
@@ -357,74 +246,6 @@ export function registerGameSocket(io: Server): void {
     // });
 
     // ──────────────────────────────────────────────────────────
-    // EVENT: arrangement_ready
-    // Client → Server: ผู้เล่นกด Ready ส่งการจัดไพ่มา
-    // ──────────────────────────────────────────────────────────
-    socket.on("arrangement_ready", async (data: {
-      roomId: string;
-      playerId: string;
-      arrangement: PlayerArrangement;
-    }) => {
-      const { roomId, playerId, arrangement } = data;
-      const room = await getRoom(roomId);
-      if (!room) return;
-
-      const mechanics = getMechanics(room.tier);
-
-      // อัปเดต arrangement และ isReady ของผู้เล่นคนนี้
-      const player = room.players.find((p) => p.id === playerId);
-      if (player) {
-        player.arrangement = arrangement;
-        player.isReady = true;
-      }
-      await saveRoom(room);
-
-      // แจ้ง Client คนอื่นว่าคนนี้ Ready แล้ว
-      io.to(roomId).emit("player_ready_ack", { playerId });
-
-      // ตรวจว่าทุกคน (Human + AI) Ready ครบหรือยัง
-      if (!allPlayersReady(room)) return;
-
-      // ─── แตกทางตาม Tier ────────────────────────────────────
-      if (mechanics.showdownStyle === "simultaneous") {
-        // ════ BEGINNER FLOW ════════════════════════════════════
-        // ข้ามทุก phase → Simultaneous Showdown ทันที
-        room.phase = "simultaneous_showdown";
-        await saveRoom(room);
-
-        io.to(roomId).emit("simultaneous_showdown", {
-          roomId,
-          tier: room.tier,
-          countdownSeconds: 3, // นับถอยหลัง 3-2-1 ก่อนหงาย
-          message: "All piles reveal at once!",
-          // Server ส่ง payload ขั้นต่ำ — ผลแท้จริงจะมาใน showdown_result
-          // หลัง Client แสดง animation 3-2-1 ครบ → emit showdown_result
-        });
-
-        // หลัง countdown → Server resolve ทุก Pile พร้อมกัน → emit showdown_result
-        // (ใน production จะมี setTimeout หรือ await ตาม countdown)
-        // สำหรับ Sprint 3: emit ทันที พร้อมกำหนด delay ฝั่ง Client
-        const results = await resolveAllPilesSimultaneous(room);
-
-        await handleEndOfMatch(io, roomId, room, results);
-
-      } else {
-        // ════ PRO+ FLOW ════════════════════════════════════════
-        // เริ่มด้วย Pile 1 Resolution → sequential ต่อใน Sprint 4
-        room.phase = "pile1_reveal";
-        await saveRoom(room);
-
-        io.to(roomId).emit("pile_1_reveal_start", {
-          roomId,
-          tier: room.tier,
-          revealDelayMs: room.tier === "mastermind" ? 6_000 : 5_000,
-        });
-        // Pile 2, Fog of War, Auction, Discard, Grand Finale
-        // → implement ใน Sprint 4 ใน pileResolution.ts + blindAuction.ts
-      }
-    });
-
-    // ──────────────────────────────────────────────────────────
     // EVENT: arrangement_timeout
     // Server → Client: หมดเวลา → Auto-sort ทำงาน
     // (emit จาก timer ใน gameRoom.ts ไม่ใช่ listener)
@@ -493,24 +314,52 @@ export function registerGameSocket(io: Server): void {
     socket.on("player_leave", async (data: { roomId: string; playerId: string }) => {
       const { roomId, playerId } = data;
       socket.leave(roomId);
-      // Patch 04: Leave จริง = ลบโต๊ะออกจาก registry (Rematch ไม่เรียกจุดนี้ จึงไม่ถูกลบ)
-      deleteTable(roomId);
+
+      // Buy-in Spec §4: ผู้เล่นกด Lobby กลางเกม → settle ทันทีด้วย stack ปัจจุบัน (ก่อนลบห้อง)
+      // เช็คทีละ engine เพราะ handler นี้ไม่รู้ tier ล่วงหน้า (ใช้ร่วมทั้ง solo/Adept/HighNoble)
+      const soloState = getMatchState(roomId);
+      const multiState = getMultiMatchState(roomId);
+      const hnState = getHNMatchState(roomId);
+      let newTokenBalance: number | null = null;
+      if (soloState?.escrowId) {
+        newTokenBalance = await settleEscrow(soloState.humanPlayerId, soloState.escrowId, soloState.tokenBalance[soloState.humanPlayerId] ?? soloState.buyInAmount);
+        deleteTable(roomId);
+      } else if (multiState) {
+        // A3/A4 (Bug A fix, 2026-07-17): settle escrow ให้ Human "ทุกคน" ในห้อง ไม่ใช่แค่ playerId ที่
+        // leave (เดิมพลาดจุดนี้ — คนที่เหลือมี match_escrow ค้าง status='in_match' ไปกวนโต๊ะใหม่ทีหลัง
+        // ผ่าน ACTIVE_MATCH_EXISTS) ในตัวเดียวกันนี้ก็ลบ multiMatchStates กันหน่วยความจำรั่วด้วย
+        newTokenBalance = await settleAndEndMultiMatch(roomId, playerId);
+        await deleteRoomCompletely(roomId);
+      } else if (hnState) {
+        const escrowId = hnState.escrowIds[playerId];
+        if (escrowId) newTokenBalance = await settleEscrow(playerId, escrowId, hnState.tokenBalance[playerId] ?? hnState.buyInAmount);
+        await deleteRoomCompletely(roomId);
+      } else {
+        // Patch 04 เดิม: ไม่พบ match state ที่ยัง active (เช่น ยังไม่เริ่มแมตช์จริง) — ลบ table แบบเดิม
+        deleteTable(roomId);
+      }
+
       // ถือว่า Leave = ทุกคนกลับ Lobby ตาม spec (ดู CoreRules 1.8)
+      // newTokenBalance เป็นของ playerId ที่ leave เท่านั้น — client อื่นในห้องต้องเช็ค leavingPlayerId ตรงกับตัวเองก่อนใช้ค่านี้
       io.to(roomId).emit("match_end", {
         roomId,
         reason: "player_left",
         leavingPlayerId: playerId,
+        newTokenBalance,
         timestamp: Date.now(),
       });
     });
 
-    // start_match — Human เริ่ม Match ใหม่
+    // start_match — Human เริ่ม Match ใหม่ (Initiate/Mastermind, solo)
     socket.on("start_match", async (data: {
-      roomId: string; playerId: string; tier: string; devBossId?: string;
+      roomId: string; playerId: string; tier: string; devBossId?: string; bossId?: string;
     }) => {
-      const { roomId, playerId, tier, devBossId } = data;
+      const { roomId, playerId, tier, devBossId, bossId } = data;
       socket.join(roomId);
-      await startMatch(io, roomId, playerId, tier, devBossId);
+      // Buy-in Spec §4: ต้อง track ใน socketUserMap ให้ disconnect กลางเกม settle escrow ได้
+      // (เดิม solo tier ไม่เคยถูก track เลย เพราะ join ผ่าน player_join_room คนละ event กับ Adept/HighNoble)
+      socketUserMap.set(socket.id, { userId: playerId, roomId, tier });
+      await startMatch(io, roomId, playerId, tier, devBossId, bossId);
     });
 
     // player_ready — Human ส่ง arrangement
@@ -626,14 +475,15 @@ export function registerGameSocket(io: Server): void {
 
     // Auto-Match: หาห้อง public ที่เปิดอยู่ก่อน ถ้าไม่มีสร้างใหม่
     socket.on("room_auto_match", async (data: {
-      tier: RoomTier; userId: string; userName: string;
+      tier: RoomTier; userId: string; userName: string; avatarUrl?: string;
     }) => {
-      const { tier, userId, userName } = data;
+      const { tier, userId, userName, avatarUrl } = data;
       try {
-        const room = await findOrCreateRoom(tier);
-        const result = await joinRoom(room.roomId, userId, userName);
+        const result = await findOrCreateRoomAndJoin(tier, userId, userName, avatarUrl);
         if (!result.ok || !result.room) {
-          socket.emit("room_error", { message: "เข้าห้องไม่สำเร็จ กรุณาลองใหม่" });
+          // Patch (2026-07-17): แก้ข้อความเป็นภาษาอังกฤษ (canon บังคับ UI/error message ทั้งหมดเป็น
+          // อังกฤษ — เจอเป็นภาษาไทยค้างอยู่ระหว่างแก้ A2)
+          socket.emit("room_error", { message: "Could not join the table. Please try again." });
           return;
         }
         socket.join(result.room.roomId);
@@ -643,15 +493,10 @@ export function registerGameSocket(io: Server): void {
         io.to(result.room.roomId).emit("room_status", { room: result.room });
 
         if (result.room.status === 'full') {
-          await markInProgress(result.room.roomId);
-          io.to(result.room.roomId).emit("room_ready", { roomId: result.room.roomId, seats: result.room.seats });
-          // Patch Multiplayer: เริ่มเกมทันทีเมื่อห้องเต็ม (Adept เท่านั้นตอนนี้)
-          if (tier === 'adept') {
-            await startMultiplayerMatch(io, result.room.roomId, result.room.seats, 'adept');
-          }
+          await finalizeAndStartRoom(io, result.room);
         }
       } catch (err: any) {
-        socket.emit("room_error", { message: err.message ?? "เกิดข้อผิดพลาด" });
+        socket.emit("room_error", { message: err.message ?? "Something went wrong. Please try again." });
       }
     });
 
@@ -675,7 +520,7 @@ export function registerGameSocket(io: Server): void {
       roomId: string; userId: string; userName: string; pin?: string; tier?: RoomTier;
     }) => {
       const { roomId, userId, userName, pin, tier } = data;
-      const result = await joinRoom(roomId, userId, userName, pin);
+      const result = await joinRoomLocked(roomId, userId, userName, pin);
       socket.emit("room_join_result", result);
       if (result.ok && result.room) {
         socket.join(roomId);
@@ -684,11 +529,7 @@ export function registerGameSocket(io: Server): void {
         io.to(roomId).emit("room_status", { room: result.room });
 
         if (result.room.status === 'full') {
-          await markInProgress(roomId);
-          io.to(roomId).emit("room_ready", { roomId, seats: result.room.seats });
-          if (result.room.tier === 'adept') {
-            await startMultiplayerMatch(io, roomId, result.room.seats, 'adept');
-          }
+          await finalizeAndStartRoom(io, result.room);
         }
       }
     });
@@ -699,15 +540,105 @@ export function registerGameSocket(io: Server): void {
       socket.emit("room_status", { room });
     });
 
+    // Waiting Timeout Dialog (§4.4/§6.1): ผู้เล่นตอบ dialog
+    //   Adept: "wait_2_more" / "delete" — ใครก็ตอบได้ (มี Human รอแค่คนเดียวเสมอ)
+    //   High Noble: "wait_2_more" / "delete" (รอบแรก) และ "start_now" (รอบ Deadlock) — เฉพาะ Host เท่านั้น
+    socket.on("room_timeout_choice", async (data: { roomId: string; userId: string; choice: "wait_2_more" | "delete" | "start_now" }) => {
+      const { roomId, userId, choice } = data;
+      const room = await getRoomFromRegistry(roomId);
+      if (!room) return;
+
+      // High Noble ทุก choice ต้องเป็น Host เท่านั้น (§6.1) — Adept ไม่ gate เพราะมี Human รอแค่คนเดียว
+      if (room.tier === "highNoble" && room.hostUserId && userId !== room.hostUserId) {
+        socket.emit("room_error", { message: "Only the host can decide for this table." });
+        return;
+      }
+
+      if (choice === "wait_2_more") {
+        const extended = await extendRoomWait(roomId);
+        if (extended) io.to(roomId).emit("room_wait_extended", { roomId, timeoutAt: extended.timeoutAt });
+        return;
+      }
+
+      if (choice === "start_now" && room.tier === "highNoble") {
+        let filled = await fillWithMinion(roomId);
+        if (!filled) return;
+        filled = await finalizeBossSeat(filled);
+        await markInProgress(roomId);
+        io.to(roomId).emit("room_ready", { roomId, seats: filled.seats });
+        await startHighNobleMultiMatch(io, roomId, filled.seats);
+        return;
+      }
+
+      // "delete" (หรือ start_now ที่ไม่ใช่ highNoble — ไม่ควรเกิดขึ้นจาก client ปกติ)
+      io.to(roomId).emit("room_deleted", { roomId, message: "Table has been deleted." });
+      await deleteRoomCompletely(roomId);
+    });
+
     // Multiplayer: Human ส่ง arrangement (Adept — 1-3 Human ในห้องเดียวกัน)
     // Multiplayer: Client เข้ามาถึง game screen แล้ว → join user room + ขอไพ่ปัจจุบัน
     // (แก้ race: server อาจ emit round_start ก่อน client พร้อม)
-    socket.on("game_join", async (data: { roomId: string; userId: string }) => {
-      const { roomId, userId } = data;
+    socket.on("game_join", async (data: { roomId: string; userId: string; tier?: RoomTier }) => {
+      const { roomId, userId, tier } = data;
       socket.join(roomId);
       socket.join(userId);
-      socketUserMap.set(socket.id, { userId, roomId, tier: 'adept' });
-      await resendRoundStartToPlayer(io, roomId, userId);
+      socketUserMap.set(socket.id, { userId, roomId, tier: tier ?? 'adept' });
+      if (tier === 'highNoble') {
+        resendHNRoundStartToPlayer(io, roomId, userId);
+      } else {
+        await resendRoundStartToPlayer(io, roomId, userId);
+      }
+    });
+
+    // Multiplayer HighNoble: Human ส่ง arrangement รอบ 1
+    socket.on("hn_player_ready", async (data: {
+      roomId: string; userId: string;
+      arrangement: { pile1: string[]; pile2: string[]; pile3: string[] };
+    }) => {
+      const { roomId, userId, arrangement } = data;
+      const result = await submitHNArrangement(io, roomId, userId, {
+        pile1: toCards(arrangement.pile1), pile2: toCards(arrangement.pile2), pile3: toCards(arrangement.pile3),
+      });
+      socket.emit("hn_player_ready_ack", result);
+    });
+
+    // Multiplayer HighNoble: Human ประมูล
+    socket.on("hn_auction_bid", (data: {
+      roomId: string; userId: string; cardIndex: 0 | 1; level: number;
+    }) => {
+      const { roomId, userId, cardIndex, level } = data;
+      const result = submitHNAuctionBid(roomId, userId, cardIndex, level);
+      socket.emit("hn_auction_bid_ack", result);
+    });
+
+    // Multiplayer HighNoble: Human ส่ง arrangement รอบ 2 (รวมไพ่ประมูล)
+    socket.on("hn_arrangement_2", async (data: {
+      roomId: string; userId: string;
+      arrangement: { pile1: string[]; pile2: string[]; pile3: string[] };
+    }) => {
+      const { roomId, userId, arrangement } = data;
+      const result = await submitHNArrangementRound2(io, roomId, userId, {
+        pile1: toCards(arrangement.pile1), pile2: toCards(arrangement.pile2), pile3: toCards(arrangement.pile3),
+      });
+      socket.emit("hn_arrangement_2_ack", result);
+    });
+
+    // Multiplayer HighNoble: Human เลือกเก็บไพ่ 9 ใบ (3/3/3)
+    socket.on("hn_discard_submit", (data: {
+      roomId: string; userId: string; keepKeys: string[];
+    }) => {
+      const { roomId, userId, keepKeys } = data;
+      const result = submitHNDiscard(io, roomId, userId, keepKeys);
+      socket.emit("hn_discard_submit_ack", result);
+    });
+
+    // Multiplayer HighNoble: Human Call/Fold ใน Grand Finale (revealedCardKey = ใบที่เลือกหงายเอง ถ้ามี)
+    socket.on("hn_grand_finale_action", (data: {
+      roomId: string; userId: string; action: "call" | "fold"; revealedCardKey?: string;
+    }) => {
+      const { roomId, userId, action, revealedCardKey } = data;
+      const result = submitHNGrandFinaleAction(io, roomId, userId, action, revealedCardKey);
+      socket.emit("hn_grand_finale_action_ack", result);
     });
 
     socket.on("player_ready_multi", async (data: {
@@ -734,8 +665,21 @@ export function registerGameSocket(io: Server): void {
       const info = socketUserMap.get(socket.id);
       if (info) {
         console.log('[DISCONNECT]', info.userId, 'from room', info.roomId);
-        if (info.tier === 'adept') {
-          await replaceMultiPlayerWithAI(io, info.roomId, info.userId);
+        // Bug A fix (2026-07-17): ครอบ try/catch — เดิมไม่มีเลย ถ้า replace/AFK logic throw กลางทาง
+        // socketUserMap.delete() ด้านล่างจะไม่ทำงาน ทิ้ง entry ค้างตลอดไป
+        try {
+          if (info.tier === 'adept') {
+            // A5: mark AFK + ให้ AI ตอบแทนทันที (ไม่ settle escrow ตรงนี้แล้ว — รอ grace 60s ก่อน
+            // reconnect ได้ ดู markPlayerAFK/finalizeAFKReplacement ใน gameLoop.ts)
+            await markPlayerAFK(io, info.roomId, info.userId);
+          } else if (info.tier === 'highNoble') {
+            await replaceHNPlayerWithAI(io, info.roomId, info.userId);
+          } else if (info.tier === 'initiate' || info.tier === 'mastermind') {
+            // Buy-in Spec §4: solo tier ไม่มี Human อื่นให้เล่นต่อ — settle ทันทีด้วย stack ปัจจุบันแล้วปิดแมตช์
+            await settleAndEndSoloMatch(info.roomId);
+          }
+        } catch (err) {
+          console.error('[DISCONNECT] handler failed for', info.userId, 'in', info.roomId, err);
         }
         socketUserMap.delete(socket.id);
       } else {
@@ -743,47 +687,4 @@ export function registerGameSocket(io: Server): void {
       }
     });
   });
-}
-
-// ============================================================
-// Internal Resolvers (Stub — Sprint 3)
-// จะ implement เต็มใน Sprint 4 ใน pileResolution.ts
-// ============================================================
-
-// resolve ทุก Pile พร้อมกัน (Beginner)
-// Sprint 4 จะ import จาก pileResolution.ts แทน
-async function resolveAllPilesSimultaneous(room: GameRoom): Promise<PileResult[]> {
-  // TODO Sprint 4: เรียก handEvaluator.ts + foulChecker.ts → คืน PileResult[]
-  // สำหรับ Sprint 3: return stub เพื่อให้ socket flow compile ผ่าน
-  return [
-    { pileNumber: 1, winnerId: "", winnerHand: "", potAmount: calcPotAfterRake(room.tier, 1), hasFoul: false },
-    { pileNumber: 2, winnerId: "", winnerHand: "", potAmount: calcPotAfterRake(room.tier, 2), hasFoul: false },
-    { pileNumber: 3, winnerId: "", winnerHand: "", potAmount: calcPotAfterRake(room.tier, 3), hasFoul: false },
-  ];
-}
-
-// คำนวณ +/- Token ต่อผู้เล่นจากผล Pile ทั้งหมด
-function calcTokenDeltas(
-  results: PileResult[],
-  room: GameRoom
-): Record<string, number> {
-  const deltas: Record<string, number> = {};
-  room.players.forEach((p) => (deltas[p.id] = 0));
-
-  for (const result of results) {
-    if (!result.hasFoul && result.winnerId) {
-      deltas[result.winnerId] = (deltas[result.winnerId] ?? 0) + result.potAmount;
-
-      // หัก Ante จากทุกคน (จ่ายไปแล้วตอนต้น Hand — บันทึกการเปลี่ยนแปลงสุทธิ)
-      const stakes = gameConfig.tokenPot.tiers[room.tier];
-      const ante = result.pileNumber === 1 ? stakes.pile1 :
-                   result.pileNumber === 2 ? stakes.pile2 : stakes.pile3;
-      room.players.forEach((p) => {
-        if (p.id !== result.winnerId) {
-          deltas[p.id] = (deltas[p.id] ?? 0) - ante;
-        }
-      });
-    }
-  }
-  return deltas;
 }

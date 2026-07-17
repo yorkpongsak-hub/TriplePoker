@@ -1,21 +1,31 @@
 /**
- * live.tsx — GameTable Live v5 (Clean)
- * - TimerDisplay แยก component ไม่กะพริบ
- * - Showdown หงายพร้อมกันทันที
- * - Winner แสดงกลางจอ 3 แถว
- * - CONTINUE emit player_continue รอ server
+ * index.tsx — High Noble Multiplayer (3 real Human + Four Gods Boss)
+ * Patch Multiplayer: เชื่อมกับ highNobleMultiEngine.ts ฝั่ง server ผ่าน room registry
+ * (roomId/userId มาจาก route param — matchmaking เกิดที่ lobby.tsx ก่อนเข้าหน้านี้)
  * The Sage Unicorn Studio Co., Ltd.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Animated, Image, PanResponder, Platform, ScrollView, StatusBar, StyleSheet,
+  Alert, Animated, Image, ImageBackground, PanResponder, Platform, ScrollView, StatusBar, StyleSheet,
   Text, TouchableOpacity, View,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { io, Socket } from 'socket.io-client'
-import { router } from 'expo-router'
+import { router, useLocalSearchParams } from 'expo-router'
+import { useAuthStore } from '../../../src/store/authStore'
+import { useUserStore } from '../../../src/store/userStore'
 import { autoSort } from '../../../src/utils/autoSort'
+import PreGameCountdown from '../../../src/components/PreGameCountdown'
+import { MINION_AVATAR } from '../../../src/constants/minionAvatars'
+import { ActionButton } from '../../../src/components/ui/ActionButton'
+import { MenuButton } from '../../../src/components/ui/MenuButton'
+import { ResultPanel } from '../../../src/components/ui/ResultPanel'
+import { glassPanelDense } from '../../../src/ui/glassStyles'
+
+// Feedback C5 — Showdown result ครอบด้วยพื้นหลังชุดเดียวกับ Profile/Lobby (bg free/vip ตาม isVip)
+const SHOWDOWN_BG_FREE = require('../../../assets/backgrounds/bg_main_free.png')
+const SHOWDOWN_BG_VIP  = require('../../../assets/backgrounds/bg_main_vip.png')
 
 // ── Assets
 const studioLogo  = require('../../../assets/images/sage_unicorn_logo_transparent.png')
@@ -49,6 +59,13 @@ const BOSS_INTRO: Record<string, { image: any; quotes: string[] }> = {
       "There is no pattern to crack. There is only luck — and how well you bear it.",
     ],
   },
+  // Monarch Spec v1.3: บอสลับ — ผู้เล่นเห็นแค่ชื่อ "Monarch" ไม่รู้ว่าสวมบุคลิกจตุรเทพใด (ล็อคไว้ฝั่ง server)
+  'Monarch': {
+    image: require('../../../assets/bosses/boss_Monarch.png'),
+    quotes: [
+      "My mask is the hand I am dealt.",
+    ],
+  },
 }
 // Patch High Noble: รูป Avatar จตุรเทพ (square crop หน้าชิด ใช้กับ AvatarBubble ของ P3 เท่านั้น)
 const BOSS_AVATAR: Record<string, any> = {
@@ -56,6 +73,7 @@ const BOSS_AVATAR: Record<string, any> = {
   'The Crag': require('../../../assets/bosses/boss_crag_avatar.png'),
   'Cortex':   require('../../../assets/bosses/boss_cortex_avatar.png'),
   'Cipher':   require('../../../assets/bosses/boss_cipher_avatar.png'),
+  'Monarch':  require('../../../assets/bosses/boss_Monarch_avatar.png'),
 }
 const cardBackImg = require('../../../assets/images/card_back_default.png')
 const tableImg    = require('../../../assets/images/table_default.png')
@@ -95,8 +113,9 @@ const CARD_IMG: Record<string, any> = {
 const CW = 62; const CH = 90; const OVERLAP = -38
 const SIDE_COL_W = 72
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
-const ROOM_ID    = 'Beginner1'
-const PLAYER_ID  = 'Human1'
+// Escrow (ที่หักตอน matchmaking เต็มห้อง) ผูกกับ user_id จริงใน DB — ห้าม fallback เงียบเป็น literal เด็ดขาด
+// เปิดทางเทสเร็วไม่ login ได้เฉพาะ __DEV__ + ตั้ง env EXPO_PUBLIC_DEV_FAKE_USER_ID เอง — production build ตัดทิ้งอัตโนมัติ
+const DEV_FAKE_USER_ID = __DEV__ ? process.env.EXPO_PUBLIC_DEV_FAKE_USER_ID : undefined
 
 interface CardData { id: string; key: string }
 interface AIInfo   { id: string; name: string; emoji: string }
@@ -209,6 +228,18 @@ const GameTableLive: React.FC = () => {
   const insets = useSafeAreaInsets()
   const isWeb  = Platform.OS === 'web'
   const socketRef = useRef<Socket | null>(null)
+  // Patch Multiplayer: roomId/userId มาจาก matchmaking ที่ lobby.tsx (room_auto_match -> room_ready) — ไม่ hardcode อีกต่อไป
+  const params   = useLocalSearchParams<{ roomId?: string; userId?: string }>()
+  const authUserId = useUserStore(s => s.userId)
+  const ROOM_ID  = params.roomId ?? 'HighNoble1'
+  // params.userId มาจาก Lobby matchmaking (ผูก escrow ไว้แล้วตอนห้องเต็ม) — authUserId เป็น fallback กันกรณี
+  // route param หลุด แต่ทั้งคู่ต้องไม่ว่างพร้อมกัน ห้าม fallback เงียบเป็น literal เด็ดขาด (ดู DEV_FAKE_USER_ID ด้านบน)
+  const usingDevFakeId = !params.userId && !authUserId && !!DEV_FAKE_USER_ID
+  const PLAYER_ID = params.userId || authUserId || DEV_FAKE_USER_ID || ''
+  // Feedback C2 — ไฟล์นี้ไม่เคยผูก authStore เลย ทำให้ P1 (ตัวผู้เล่นเอง) โชว์ '👤'/'You' hardcode ตลอด
+  const myAvatarEmoji = useAuthStore(s => s.profile?.avatar_url) || '👤'
+  const myDisplayName = useAuthStore(s => s.profile?.display_name) || 'You'
+  const isVip = useAuthStore(s => (s.profile?.vip_status ?? 'none') !== 'none') // Feedback C5 — ใช้ vip_status เดิม ไม่สร้าง state ใหม่
 
   // ── Timer ref (ไม่ trigger re-render)
   const timerValRef = useRef({ val: 90, max: 90 })
@@ -222,6 +253,9 @@ const GameTableLive: React.FC = () => {
   const [dealCount, setDealCount]       = useState(0)
   const [roundNumber, setRoundNumber] = useState(1)
   const [countdown, setCountdown]     = useState(3)
+  // Pre-Game Countdown (LobbyMatchmaking_Spec_v1_0 §7.1) — คนละตัวกับ `countdown`/phase 'countdown' ข้างบน (Grand Finale/Showdown เดิม ห้ามแตะ)
+  const [showPreGameCountdown, setShowPreGameCountdown] = useState(false)
+  const preGameCountdownShownRef = useRef(false)
   const countAnim = useRef(new Animated.Value(1)).current
   const fadeCards    = useRef(new Animated.Value(1)).current
   const blinkAnim    = useRef(new Animated.Value(1)).current
@@ -265,11 +299,6 @@ const GameTableLive: React.FC = () => {
   const [revealPile, setRevealPile] = useState<0|1|2|3>(0) // 0=ไม่แสดง 1/2/3=Pile นั้น
   const [showTierInfo, setShowTierInfo] = useState(false)
   const [activeTierTab, setActiveTierTab] = useState('MASTERMIND')
-  // Patch High Noble: Dev Boss Selector (__DEV__ only) — เลือกจตุรเทพให้นั่ง P3 เพื่อทดสอบ
-  const [devBossId, setDevBossId] = useState<string | undefined>(undefined) // Patch: default undefined ให้ backend สุ่มจตุรเทพจริง (ไม่ล็อก Cipher) — กดเลือกเองได้ผ่าน Dev Boss Selector
-  // Patch: ใช้ ref เก็บค่าล่าสุดของ devBossId เพื่อเลี่ยง stale closure ใน useEffect ที่รันครั้งเดียว (connect)
-  const devBossIdRef = useRef<string | undefined>(undefined)
-  useEffect(() => { devBossIdRef.current = devBossId }, [devBossId])
   // Patch High Noble: เก็บ round_start data ไว้รอ — จะ process จริงตอนปิด Boss Intro Popup (Round แรกเท่านั้น)
   const pendingRoundDataRef = useRef<any>(null)
   const processRoundStartRef = useRef<((data: any) => void) | null>(null)
@@ -307,7 +336,7 @@ const GameTableLive: React.FC = () => {
 
   // ── Discard
   const [showDiscard, setShowDiscard]         = useState(false)
-  const [lockedTokens, setLockedTokens]     = useState(0)
+  const [buyInAmount, setBuyInAmount]       = useState(0)
   const [showLockup, setShowLockup]         = useState(false)
   // Patch Blind Auction: state ทั้งหมดสำหรับประมูล
   const [auctionBidLevels, setAuctionBidLevels] = useState<number[]>([])
@@ -392,6 +421,21 @@ const GameTableLive: React.FC = () => {
 
   // ── Connect Socket (ครั้งเดียว)
   useEffect(() => {
+    // Auth guard: userId ว่างแปลว่าหลุด auth guard มาได้ (authStore ยังไม่ sync) — ห้ามเข้าโต๊ะต่อ
+    // เพราะ escrow จะผูก token จริงเข้ากับ id ที่ไม่มีอยู่จริง คืนไม่ได้ — fail loud แทน fail silent
+    if (!PLAYER_ID) {
+      console.error('[game] userId missing — auth state broken')
+      Alert.alert(
+        'Session expired',
+        'Please log in again.',
+        [{ text: 'OK', onPress: () => router.replace('/(auth)/login') }]
+      )
+      return
+    }
+    if (usingDevFakeId) {
+      console.warn('[game] Using DEV_FAKE_USER_ID for PLAYER_ID:', PLAYER_ID)
+    }
+
     const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: false })
     socketRef.current = socket
 
@@ -399,12 +443,29 @@ const GameTableLive: React.FC = () => {
     socket.on('connect', () => {
       if (matchStarted) return
       matchStarted = true
-      socket.emit('player_join_room', { roomId: ROOM_ID, playerId: PLAYER_ID, tokenBalance: 5000, isVip: false })
-      socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'highNoble', devBossId: devBossIdRef.current })
+      // Patch Multiplayer: ห้องเริ่มแมตช์ไปแล้วตั้งแต่ room_ready (lobby.tsx) — หน้านี้แค่ join กลับเข้าไปรับไพ่ของตัวเอง
+      socket.emit('game_join', { roomId: ROOM_ID, userId: PLAYER_ID, tier: 'highNoble' })
+    })
+
+    // Buy-in Spec §4 safety net — server ปฏิเสธเข้าโต๊ะเพราะ token ไม่พอ (ปกติ Lobby เช็คไว้ก่อนแล้ว)
+    socket.on('match_error', (data: { roomId: string; message: string }) => {
+      Alert.alert(
+        'Cannot Start Match',
+        data.message === 'INSUFFICIENT_TOKENS' ? 'You do not have enough tokens for this table\'s buy-in.'
+          : data.message === 'ACTIVE_MATCH_EXISTS' ? 'You have an unfinished match.'
+          : 'Something went wrong. Please try again.',
+        [{ text: 'OK', onPress: () => router.replace('/(home)/lobby') }]
+      )
     })
 
     // Patch High Noble: แยก logic จริงของ round_start ออกมาเป็นฟังก์ชัน — defer ตอน Round แรก (รอปิด Boss Intro Popup ก่อนแจกไพ่)
     const processRoundStart = (data: any) => {
+      // Pre-Game Countdown §7.1 — โชว์ครั้งเดียวตอนเริ่มแมตช์ (หลัง Boss Intro Popup ปิดแล้ว ถ้ามี — processRoundStart
+      // ถูก defer มาจนกว่าจะปิด popup อยู่แล้วตาม comment ด้านบน)
+      if (data.roundNumber === 1 && !preGameCountdownShownRef.current) {
+        preGameCountdownShownRef.current = true
+        setShowPreGameCountdown(true)
+      }
       setPhase('arrangement')
       setRoundNumber(data.roundNumber)
       setIsReady(false); setSortDone(false); setSelected(null)
@@ -421,12 +482,17 @@ const GameTableLive: React.FC = () => {
       fadeCards.setValue(1)
       setBlind([]); setDealCount(0)
       setTokenBalance(data.tokenBalance ?? {})
-      const aiNames = data.aiNames ?? []
+      // Patch Multiplayer: server ส่ง seats ทั้ง 4 ที่นั่ง (boss เสมอ + อีก 3 ที่อาจเป็น Human หรือ AI)
+      // แปลงเป็น aiList แบบเดิม [boss, ...อีก 2 คนที่ไม่ใช่ฉัน] — โครง bossAI/p2AI/p4AI ด้านล่างใช้ index เดิมได้เลย
+      const seats = data.seats ?? []
+      const bossSeat = seats.find((s: any) => s.role === 'boss')
+      const otherSeats = seats.filter((s: any) => s.id !== PLAYER_ID && s.role !== 'boss')
+      const aiNames = [bossSeat, ...otherSeats].filter(Boolean)
       setAiList(aiNames)
       aiListRef.current = aiNames
 
       const init: Record<string, string> = {}
-      data.aiNames?.forEach((a: any) => { init[a.id] = 'Arranging...' })
+      aiNames.forEach((a: any) => { init[a.id] = 'Arranging...' })
       setAiStatus(init)
 
       setComm({
@@ -436,9 +502,9 @@ const GameTableLive: React.FC = () => {
       })
       setBlind(data.blindAuction ?? [])
 
-      // Lock-up Token — แสดง popup เฉพาะ Round 1
-      if (data.lockedTokens && data.roundNumber === 1) {
-        setLockedTokens(data.lockedTokens)
+      // Buy-in (Escrow) — แสดง popup เฉพาะ Round 1
+      if (data.buyInAmount && data.roundNumber === 1) {
+        setBuyInAmount(data.buyInAmount)
         setShowLockup(true)
       }
 
@@ -460,8 +526,8 @@ const GameTableLive: React.FC = () => {
         if (next <= 0) {
           clearInterval(timerRef.current)
           setPiles(cur => {
-            socket.emit('player_ready', {
-              roomId: ROOM_ID, playerId: PLAYER_ID,
+            socket.emit('hn_player_ready', {
+              roomId: ROOM_ID, userId: PLAYER_ID,
               arrangement: {
                 pile1: cur[0].map((c: CardData) => c.key),
                 pile2: cur[1].map((c: CardData) => c.key),
@@ -478,7 +544,7 @@ const GameTableLive: React.FC = () => {
     socket.on('round_start', (data: any) => {
       // Patch High Noble: Round แรกของ Match — โชว์ Boss Intro Popup ก่อน แล้วค่อยแจกไพ่ตอนปิด popup
       if (data.roundNumber === 1) {
-        const bossName = data.aiNames?.[0]?.name
+        const bossName = (data.seats ?? []).find((s: any) => s.role === 'boss')?.name
         if (bossName && BOSS_INTRO[bossName]) {
           setBossIntroName(bossName)
           setShowBossIntro(true)
@@ -619,8 +685,8 @@ const GameTableLive: React.FC = () => {
         if (next <= 0) {
           clearInterval(timerRef.current)
           setPiles(cur => {
-            socket.emit('submit_arrangement_2', {
-              roomId: ROOM_ID, playerId: PLAYER_ID,
+            socket.emit('hn_arrangement_2', {
+              roomId: ROOM_ID, userId: PLAYER_ID,
               arrangement: {
                 pile1: cur[0].map((c: CardData) => c.key),
                 pile2: cur[1].map((c: CardData) => c.key),
@@ -807,6 +873,11 @@ const GameTableLive: React.FC = () => {
       setPhase('end')
       setMatchResult(data)
       setTokenBalance(data.tokenBalance ?? {})
+      // Server ส่งยอด token_balance จริงหลัง settle มาด้วย (per-player) — ห้ามคำนวณเองจาก buyin/stack
+      const myNewBalance = data.newTokenBalances?.[PLAYER_ID] ?? data.newTokenBalance
+      if (typeof myNewBalance === 'number') {
+        useUserStore.getState().updateTokenBalance(myNewBalance)
+      }
       if (data.finalWinner === PLAYER_ID) {
         Animated.loop(Animated.sequence([
           Animated.timing(winPulse, { toValue: 1.25, duration: 400, useNativeDriver: true }),
@@ -920,10 +991,10 @@ const GameTableLive: React.FC = () => {
     if (isReady || (phase !== 'arrangement' && phase !== 'arrangement_2')) return
     setIsReady(true)
     if (timerRef.current) clearInterval(timerRef.current)
-    // Patch High Noble: arrangement_2 ส่งไป submit_arrangement_2 แทน player_ready
-    const eventName = phase === 'arrangement_2' ? 'submit_arrangement_2' : 'player_ready'
+    // Patch Multiplayer: arrangement_2 ส่งไป hn_arrangement_2 แทน hn_player_ready
+    const eventName = phase === 'arrangement_2' ? 'hn_arrangement_2' : 'hn_player_ready'
     socketRef.current?.emit(eventName, {
-      roomId: ROOM_ID, playerId: PLAYER_ID,
+      roomId: ROOM_ID, userId: PLAYER_ID,
       arrangement: {
         pile1: piles[0].map(c => c.key),
         pile2: piles[1].map(c => c.key),
@@ -937,7 +1008,7 @@ const GameTableLive: React.FC = () => {
     if (discardSelected.length !== maxDiscard) return
     if (discardTimerRef.current) clearInterval(discardTimerRef.current)
     const keepKeys = discardHandKeys.filter((_, i) => !discardSelected.includes(i))
-    socketRef.current?.emit('discard_submit', { roomId: ROOM_ID, playerId: PLAYER_ID, keepKeys })
+    socketRef.current?.emit('hn_discard_submit', { roomId: ROOM_ID, userId: PLAYER_ID, keepKeys })
     setShowDiscard(false)
   }
 
@@ -958,7 +1029,7 @@ const GameTableLive: React.FC = () => {
     const keepFrom = (pile: 'pile1' | 'pile2' | 'pile3') =>
       discardPiles[pile].filter((_, i) => !discardSelByPile[pile].includes(i))
     const keepKeys = [...keepFrom('pile1'), ...keepFrom('pile2'), ...keepFrom('pile3')]
-    socketRef.current?.emit('discard_submit', { roomId: ROOM_ID, playerId: PLAYER_ID, keepKeys })
+    socketRef.current?.emit('hn_discard_submit', { roomId: ROOM_ID, userId: PLAYER_ID, keepKeys })
     setShowDiscard(false)
     setIsHNDiscard(false)
   }
@@ -973,7 +1044,7 @@ const GameTableLive: React.FC = () => {
   const handleAuctionBid = (cardIndex: 0 | 1, level: number) => {
     if (auctionMyBid) return
     setAuctionMyBid({ cardIndex, level })
-    socketRef.current?.emit('auction_bid', { roomId: ROOM_ID, playerId: PLAYER_ID, cardIndex, level })
+    socketRef.current?.emit('hn_auction_bid', { roomId: ROOM_ID, userId: PLAYER_ID, cardIndex, level })
   }
 
   // ── Continue → emit player_continue รอ server (Mastermind: ไม่ fade ออก เพราะต่อ Flow ใน Round เดียวกัน)
@@ -988,10 +1059,8 @@ const GameTableLive: React.FC = () => {
 
   // auto continue ย้ายไปทำใน startContinueCountdown interval แทน (เลี่ยง re-render)
 
-  const handleRematch = () => {
-    setMatchResult(null); setPhase('arrangement')
-    socketRef.current?.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'highNoble', devBossId: devBossIdRef.current })
-  }
+  // Patch Multiplayer: ไม่มี "Play Again" ในที่เดิม — ผู้เล่นอีก 2 คนอาจไม่อยากเล่นซ้ำทันที
+  // ต้อง re-queue ผ่าน lobby.tsx ใหม่เสมอ (ตรงกับ pattern เดียวกับ Adept multiplayer)
 
   // ── Sub-components
   const CardBack: React.FC<{ w: number; h: number; ml?: number }> = ({ w, h, ml = 0 }) => (
@@ -1080,15 +1149,15 @@ const GameTableLive: React.FC = () => {
     </View>
   )
 
-  const renderCard = (key: string | undefined, w: number, h: number, ml: number = 0) => {
+  const renderCard = (key: string | undefined, w: number, h: number, ml: number = 0, elKey?: string) => {
     if (key && CARD_IMG[key]) {
       return (
-        <View style={{ width: w, height: h, borderRadius: w * 0.14, marginLeft: ml, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(201,168,76,.5)' }}>
+        <View key={elKey} style={{ width: w, height: h, borderRadius: w * 0.14, marginLeft: ml, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(201,168,76,.5)' }}>
           <Image source={CARD_IMG[key]} style={{ width: w, height: h }} resizeMode="cover" />
         </View>
       )
     }
-    return <CardBack w={w} h={h} ml={ml} />
+    return <CardBack key={elKey} w={w} h={h} ml={ml} />
   }
 
   const AIPiles: React.FC<{ aiId: string }> = ({ aiId }) => {
@@ -1108,9 +1177,11 @@ const GameTableLive: React.FC = () => {
             <View style={{ flexDirection: 'row' }}>
               {Array.from({ length: cnt }).map((_, ci) => {
                 const idx = fog ? ci : (gf ? 6 + ci + gfRevealed : (pi === 0 ? ci : pi === 1 ? 3 + ci : 6 + ci))
+                const cardKey = cards[idx]
+                const elKey = `${aiId}-${pi}-${ci}-${cardKey ?? 'back'}`
                 return (fog || gf)
-                  ? renderCard(cards[idx], 50, 72, ci === 0 ? 0 : -34)   // Fog of War / Grand Finale: ขนาดจริง
-                  : renderCard(cards[idx], 25, 36, ci === 0 ? 0 : -18)   // Arrangement: ขนาดเล็กเดิม
+                  ? renderCard(cardKey, 50, 72, ci === 0 ? 0 : -34, elKey)   // Fog of War / Grand Finale: ขนาดจริง
+                  : renderCard(cardKey, 25, 36, ci === 0 ? 0 : -18, elKey)   // Arrangement: ขนาดเล็กเดิม
               })}
             </View>
           </React.Fragment>
@@ -1137,9 +1208,11 @@ const GameTableLive: React.FC = () => {
               <View style={{ flexDirection: 'row' }}>
                 {Array.from({ length: cnt }).map((_, ci) => {
                   const idx = fog ? ci : (pi === 0 ? ci : pi === 1 ? 3 + ci : 6 + ci)
+                  const cardKey = cards[idx]
+                  const elKey = `${aiId}-${pi}-${ci}-${cardKey ?? 'back'}`
                   return fog
-                    ? renderCard(cards[idx], 50, 72, ci === 0 ? 0 : -34)   // Fog of War: ขนาดจริง (เหลือ 5 ใบ)
-                    : renderCard(cards[idx], 25, 36, ci === 0 ? 0 : -18)   // Arrangement: ขนาดเล็กเดิม
+                    ? renderCard(cardKey, 50, 72, ci === 0 ? 0 : -34, elKey)   // Fog of War: ขนาดจริง (เหลือ 5 ใบ)
+                    : renderCard(cardKey, 25, 36, ci === 0 ? 0 : -18, elKey)   // Arrangement: ขนาดเล็กเดิม
                 })}
               </View>
             </React.Fragment>
@@ -1147,6 +1220,17 @@ const GameTableLive: React.FC = () => {
         </View>
       </View>
     )
+  }
+
+  // เงาไพ่กองกลาง — แยกจากไพ่ในมือผู้เล่น (Scope A)
+  const pileShadowStyle = {
+    shadowColor: '#000',
+    shadowOffset: { width: 3, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 5,
+    elevation: 8,                // Android
+    borderRadius: 4,             // ให้เงาโค้งตามมุมไพ่เดิม (คงค่า 4 ตาม commCard)
+    backgroundColor: '#fdfaf3',  // จำเป็นสำหรับ elevation บน Android (คงสีเดิม)
   }
 
   const CommRow: React.FC<{ pileNum: number; k1: string; k2: string }> = ({ pileNum, k1, k2 }) => {
@@ -1174,8 +1258,9 @@ const GameTableLive: React.FC = () => {
         {/* Community + ไพ่ผู้ชนะ */}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
           {/* Community cards */}
-          {k1 && CARD_IMG[k1] && <View style={s.commCard}><Image source={CARD_IMG[k1]} style={{ width: 50, height: 72 }} resizeMode="cover" /></View>}
-          {k2 && CARD_IMG[k2] && <View style={s.commCard}><Image source={CARD_IMG[k2]} style={{ width: 50, height: 72 }} resizeMode="cover" /></View>}
+          {/* two-layer wrapper: View ชั้นนอกถือเงา (ห้ามมี overflow:hidden กันเงาโดนตัดบน iOS) / View ชั้นในคง s.commCard เดิมทุกประการ */}
+          {k1 && CARD_IMG[k1] && <View style={pileShadowStyle}><View style={s.commCard}><Image source={CARD_IMG[k1]} style={{ width: 50, height: 72 }} resizeMode="cover" /></View></View>}
+          {k2 && CARD_IMG[k2] && <View style={pileShadowStyle}><View style={s.commCard}><Image source={CARD_IMG[k2]} style={{ width: 50, height: 72 }} resizeMode="cover" /></View></View>}
           {/* Divider */}
           {hasWinner && <View style={{ width: 1, height: 72, backgroundColor: 'rgba(201,168,76,0.3)', marginHorizontal: 2 }} />}
           {/* Winner cards */}
@@ -1209,7 +1294,7 @@ const GameTableLive: React.FC = () => {
   // Pile Reveal Overlay — Tab mode ผู้เล่นเลือกดูได้ + Continue button
   const PileRevealOverlay: React.FC<{ pileNum: 1|2|3 }> = ({ pileNum }) => {
     const players = [
-      { id: PLAYER_ID, label: 'You', emoji: '👤' },
+      { id: PLAYER_ID, label: myDisplayName, emoji: myAvatarEmoji },
       ...(aiList.map(a => ({ id: a.id, label: a.name, emoji: a.emoji }))),
     ]
     const commMap: Record<number, string[]> = { 1: comm.p1, 2: comm.p2, 3: comm.p3 }
@@ -1330,7 +1415,7 @@ const GameTableLive: React.FC = () => {
     const allPlayerIds = [PLAYER_ID, ...Object.keys(allCards).filter(id => id !== PLAYER_ID)]
     const aiData = aiListRef.current.length > 0 ? aiListRef.current : aiList
     const players = allPlayerIds.map(id => {
-      if (id === PLAYER_ID) return { id, label: 'You', emoji: '👤' }
+      if (id === PLAYER_ID) return { id, label: myDisplayName, emoji: myAvatarEmoji }
       const ai = aiData.find(a => a.id === id)
       return { id, label: ai?.name ?? id, emoji: ai?.emoji ?? '🤖' }
     })
@@ -1341,15 +1426,15 @@ const GameTableLive: React.FC = () => {
     const raw        = tokenDeltas[PLAYER_ID] ?? 0
     const isWin      = raw > 0
     const isTriple   = pileWinners[1] === PLAYER_ID && pileWinners[2] === PLAYER_ID && pileWinners[3] === PLAYER_ID
-    // Triple Sweep: Rake 10% (ตาม CoreRules) / ชนะปกติ: Rake 5%
-    const rakeRate   = isTriple ? 0.10 : 0.05
+    // Patch (2026-07-17): ยกเลิก Rake 10% ของ Triple Sweep — ใช้ Rake 5% อัตราเดียวทุกกรณีแล้ว
+    const rakeRate   = 0.05
     const rake       = isWin ? Math.round(raw * rakeRate) : 0
     const netToken   = isWin ? raw - rake : raw
     const potWin     = isTriple ? Math.round(raw / 2) : raw  // ประมาณ
     const bonusTriple = isTriple ? Math.round(raw / 2) : 0
 
     return (
-      <View style={{ flex: 1, width: '100%', backgroundColor: 'rgba(15,36,24,0.97)', borderRadius: 16, padding: 12 }}>
+      <View style={{ flex: 1, width: '100%', ...glassPanelDense, padding: 12 }}>
         {/* Header */}
         <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10, gap: 8 }}>
           <Text style={{ fontSize: 18, color: '#FFD76A', fontWeight: '900', letterSpacing: 2, flex: 1 }}>SHOWDOWN</Text>
@@ -1409,7 +1494,8 @@ const GameTableLive: React.FC = () => {
                 const raw   = tokenDeltas[PLAYER_ID] ?? 0
                 const isWin = raw > 0
                 const isTriple = pileWinners[1] === PLAYER_ID && pileWinners[2] === PLAYER_ID && pileWinners[3] === PLAYER_ID
-                const rakeRate = isTriple ? 0.10 : 0.05
+                // Patch (2026-07-17): ยกเลิก Rake 10% ของ Triple Sweep — ใช้ Rake 5% อัตราเดียวทุกกรณีแล้ว
+                const rakeRate = 0.05
                 const rake  = isWin ? Math.round(raw * rakeRate) : 0
                 const net   = isWin ? raw - rake : raw
                 return (
@@ -1454,14 +1540,15 @@ const GameTableLive: React.FC = () => {
                   borderColor: isWinner ? '#8DFFB5' : '#2A4A34',
                   backgroundColor: isWinner ? 'rgba(141,255,181,0.08)' : 'rgba(0,0,0,0.3)',
                 }}>
-                  <View style={{ width: 64, alignItems: 'center', marginRight: 8 }}>
+                  <View style={{ width: 76, alignItems: 'center', marginRight: 8 }}>
                     <Text style={{ fontSize: 18 }}>{p.emoji}</Text>
-                    <Text style={{ fontSize: 10, color: isUser ? '#FFD76A' : '#F5F2E8', fontWeight: '800' }} numberOfLines={1}>
-                      {isUser ? 'You' : p.label.split(' ')[0]}
+                    <Text style={{ fontSize: 9, color: isUser ? '#FFD76A' : '#F5F2E8', fontWeight: '800' }} numberOfLines={1}>
+                      {isUser ? myDisplayName : p.label}
                     </Text>
                     {isWinner && <Text style={{ fontSize: 9, color: '#8DFFB5', fontWeight: '900' }}>🏆 WIN</Text>}
                   </View>
-                  <View style={{ flexDirection: 'row', gap: 4 }}>
+                  {/* ตำแหน่งแถวไพ่หงายใน Showdown — unify เท่ากันทุก Tier ห้ามแก้ไฟล์เดียว */}
+                  <View style={{ flexDirection: 'row', gap: 4, marginLeft: 25 }}>
                     {cardKeys.length > 0 ? cardKeys.map((k, i) => (
                       <View key={i} style={{ width: CARD_W, height: CARD_H, borderRadius: 4, overflow: 'hidden', borderWidth: 1.5, borderColor: isWinner ? '#8DFFB5' : '#2A4A34' }}>
                         {CARD_IMG[k] ? <Image source={CARD_IMG[k]} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" /> : <Image source={cardBackImg} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" />}
@@ -1501,6 +1588,8 @@ const GameTableLive: React.FC = () => {
       <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" />
       <View style={[s.gameContainer, isWeb && s.webFrame]}>
         <View style={s.gameArea}>
+
+          <PreGameCountdown visible={showPreGameCountdown} onComplete={() => setShowPreGameCountdown(false)} />
 
           <View style={StyleSheet.absoluteFill as any} pointerEvents="none"><Image source={tableImg} style={{ width: '100%', height: '100%' }} resizeMode="cover" /></View>
           <View style={[StyleSheet.absoluteFill as any, s.logoWatermark]} pointerEvents="none">
@@ -1554,7 +1643,7 @@ const GameTableLive: React.FC = () => {
               <Text style={s.discardTitle}>🔮 BLIND AUCTION</Text>
               {phase === 'blind_auction' && (
                 <Text style={[s.discardSub, { color: auctionTimeLeft <= 2 ? '#f87171' : '#FFD76A' }]}>
-                  เลือกราคาภายใน {auctionTimeLeft}s
+                  Choose a price within {auctionTimeLeft}s
                 </Text>
               )}
               <View style={{ flexDirection: 'row', gap: 28, marginTop: 16 }}>
@@ -1611,12 +1700,12 @@ const GameTableLive: React.FC = () => {
                           {result?.winnerId ? (
                             <>
                               <Text style={{ fontSize: 11, color: isWinner ? '#8DFFB5' : '#FF6B6B', fontWeight: '700' }}>
-                                {isWinner ? '🏆 คุณชนะ!' : `${winAI?.emoji ?? '🤖'} ${winAI?.name ?? 'AI'} ชนะ`}
+                                {isWinner ? '🏆 You win!' : `${winAI?.emoji ?? '🤖'} ${winAI?.name ?? 'AI'} wins`}
                               </Text>
                               <Text style={{ fontSize: 10, color: '#a89060' }}>-{result.amount} tokens</Text>
                             </>
                           ) : (
-                            <Text style={{ fontSize: 11, color: '#a89060' }}>ไม่มีใครประมูล</Text>
+                            <Text style={{ fontSize: 11, color: '#a89060' }}>No one bid</Text>
                           )}
                         </View>
                       )}
@@ -1675,7 +1764,7 @@ const GameTableLive: React.FC = () => {
                     {gfFinalResult.burned ? (
                       <>
                         <Text style={{ fontSize: 24, color: '#f87171', fontWeight: '900', letterSpacing: 2 }}>🔥 POT BURNED</Text>
-                        <Text style={{ fontSize: 12, color: '#a89060', marginTop: 8 }}>ทุกคน Foul — Pot {gfFinalResult.pile3Pot} ถูกเบิร์น</Text>
+                        <Text style={{ fontSize: 12, color: '#a89060', marginTop: 8 }}>Everyone fouled — Pot {gfFinalResult.pile3Pot} burned</Text>
                       </>
                     ) : gfFinalResult.winnerId === PLAYER_ID ? (
                       <>
@@ -1741,7 +1830,7 @@ const GameTableLive: React.FC = () => {
                       <Text style={{ color: '#FFC857', fontSize: 14, fontWeight: '900', letterSpacing: 1 }}>
                         🎰 JACKPOT! {winnerName(gfFinalResult.jackpotWinner)}
                       </Text>
-                      <Text style={{ color: '#a89060', fontSize: 10, marginTop: 2 }}>คว้าทั้ง 3 กอง!</Text>
+                      <Text style={{ color: '#a89060', fontSize: 10, marginTop: 2 }}>Swept all 3 piles!</Text>
                     </View>
                   )}
                   {/* Your delta */}
@@ -1763,13 +1852,13 @@ const GameTableLive: React.FC = () => {
               backgroundColor: 'rgba(15,36,24,0.95)', borderRadius: 12, borderWidth: 1.5,
               borderColor: '#FFD76A', padding: 16, alignItems: 'center' }}>
               <Text style={{ fontSize: 14, color: '#FFD76A', fontWeight: '800', marginBottom: 6 }}>
-                ⚠️ Token Lock-up
+                🪙 Buy-in
               </Text>
               <Text style={{ fontSize: 12, color: '#F5F2E8', textAlign: 'center', lineHeight: 18 }}>
-                {lockedTokens} tokens locked for 5 rounds.{'\n'}Will be returned after match ends.
+                {buyInAmount} tokens deducted for this match.{'\n'}Settled automatically when the match ends.
               </Text>
               <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 6 }}>
-                <Text style={{ fontSize: 11, color: '#8DFFB5' }}>🔒 Locked: {lockedTokens}</Text>
+                <Text style={{ fontSize: 11, color: '#8DFFB5', fontFamily: 'JetBrainsMono_400Regular' }}>Buy-in: {buyInAmount}</Text>
               </View>
             </View>
           )}
@@ -1777,9 +1866,9 @@ const GameTableLive: React.FC = () => {
           {/* ── DISCARD OVERLAY ── */}
           {showDiscard && !isHNDiscard && (
             <View style={s.overlay}>
-              <Text style={s.discardTitle}>เลือกไพ่ที่จะทิ้ง (เหลือ 3 ใบ)</Text>
+              <Text style={s.discardTitle}>Choose cards to discard (keep 3)</Text>
               <Text style={[s.discardSub, { color: discardTimeLeft <= 3 ? '#f87171' : '#FFD76A' }]}>
-                {discardSelected.length}/{discardHandKeys.length - 3} ใบที่เลือก — เหลือ {discardTimeLeft}s
+                {discardSelected.length}/{discardHandKeys.length - 3} selected — {discardTimeLeft}s left
               </Text>
               {/* Patch: โชว์ Community Pile3 ประกอบการตัดสินใจ (บังคับรวมในการประเมิน Hand เสมอ) */}
               <View style={{ alignItems: 'center', marginTop: 6, marginBottom: 4 }}>
@@ -1794,8 +1883,8 @@ const GameTableLive: React.FC = () => {
               </View>
               {/* Patch: แยก 2 แถว — ไม่แนะนำให้ทิ้ง (เก็บ) / แนะนำให้ทิ้ง */}
               {([
-                { label: 'ไม่แนะนำให้ทิ้ง', filterFn: (key: string) => discardSuggested.includes(key) },
-                { label: 'แนะนำให้ทิ้ง', filterFn: (key: string) => !discardSuggested.includes(key) },
+                { label: 'Not recommended to discard', filterFn: (key: string) => discardSuggested.includes(key) },
+                { label: 'Recommended to discard', filterFn: (key: string) => !discardSuggested.includes(key) },
               ]).map((group, gi) => {
                 const items = discardHandKeys
                   .map((key, idx) => ({ key, idx }))
@@ -1841,14 +1930,14 @@ const GameTableLive: React.FC = () => {
               && discardSelByPile.pile3.length === discardNeed.pile3
             return (
               <View style={s.overlay}>
-                <Text style={s.discardTitle}>เลือกไพ่ที่จะทิ้ง (ให้เหลือกองละ 3 ใบ)</Text>
+                <Text style={s.discardTitle}>Choose cards to discard (keep 3 per pile)</Text>
                 <Text style={[s.discardSub, { color: discardTimeLeft <= 3 ? '#f87171' : '#FFD76A' }]}>
-                  เหลือ {discardTimeLeft}s
+                  {discardTimeLeft}s left
                 </Text>
                 {(['pile1', 'pile2', 'pile3'] as const).map((pile, pIdx) => (
                   <View key={pile} style={{ alignItems: 'center', marginBottom: 10 }}>
                     <Text style={[s.pileLabel, { marginBottom: 4, color: discardSelByPile[pile].length === discardNeed[pile] ? '#8DFFB5' : '#FFC857' }]}>
-                      PILE {pIdx + 1} — เลือกทิ้ง {discardSelByPile[pile].length}/{discardNeed[pile]}
+                      PILE {pIdx + 1} — Discard {discardSelByPile[pile].length}/{discardNeed[pile]}
                     </Text>
                     <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
                       {discardPiles[pile].map((key, idx) => {
@@ -1896,53 +1985,74 @@ const GameTableLive: React.FC = () => {
 
           {/* ── MATCH END OVERLAY ── */}
           {phase === 'end' && matchResult && (
-            <View style={s.overlay}>
-              {matchResult.finalWinner === PLAYER_ID && confettiAnims.map((a, i) => {
-                const colors = ['#ff6b6b','#ffd93d','#6bcb77','#4d96ff','#ff922b','#cc5de8']
-                const rotStr = a.rotate.interpolate({ inputRange: [0, 720], outputRange: ['0deg', '720deg'] })
-                return (
-                  <Animated.View key={i} style={{
-                    position: 'absolute', width: 8, height: 8, borderRadius: 2,
-                    backgroundColor: colors[i % colors.length], zIndex: 200,
-                    transform: [{ translateX: a.x }, { translateY: a.y }, { rotate: rotStr }],
-                    opacity: a.opacity,
-                  }} />
-                )
-              })}
-              {matchResult.finalWinner === PLAYER_ID ? (
-                <Animated.Text style={[s.matchEndTitle, {
-                  transform: [{ scale: winPulse }], opacity: winOpacity,
-                  textShadowColor: '#ffd700', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 20,
-                }]}>🏆 YOU WIN!</Animated.Text>
-              ) : (
-                <Text style={s.matchEndTitle}>💀 YOU LOSE</Text>
+            <>
+              {matchResult.finalWinner === PLAYER_ID && (
+                <View style={StyleSheet.absoluteFill} pointerEvents="none">
+                  {confettiAnims.map((a, i) => {
+                    const colors = ['#ff6b6b','#ffd93d','#6bcb77','#4d96ff','#ff922b','#cc5de8']
+                    const rotStr = a.rotate.interpolate({ inputRange: [0, 720], outputRange: ['0deg', '720deg'] })
+                    return (
+                      <Animated.View key={i} style={{
+                        position: 'absolute', width: 8, height: 8, borderRadius: 2,
+                        backgroundColor: colors[i % colors.length], zIndex: 200,
+                        transform: [{ translateX: a.x }, { translateY: a.y }, { rotate: rotStr }],
+                        opacity: a.opacity,
+                      }} />
+                    )
+                  })}
+                </View>
               )}
-              <View style={[s.tierBadge, { alignSelf: 'center', marginBottom: 6 }]}>
-                <Text style={s.tierText}>HIGH NOBLE</Text>
-              </View>
-              <Text style={s.matchEndSub}>Final Token Balance</Text>
-              {[PLAYER_ID, ...aiList.map(a => a.id)].sort((a, b) => (tokenBalance[b] ?? 0) - (tokenBalance[a] ?? 0)).map(pid => {
-                const ai  = aiList.find(a => a.id === pid)
-                const bal = tokenBalance[pid] ?? 5000
-                return (
-                  <View key={pid} style={s.matchEndRow}>
-                    <Text style={[s.matchEndName, pid === PLAYER_ID && { color: '#c9a84c' }]}>
-                      {pid === PLAYER_ID ? '👤 You' : `${ai?.emoji} ${ai?.name}`}
-                    </Text>
-                    <Text style={[s.matchEndBal, { color: bal >= 5000 ? '#4ade80' : '#f87171' }]}>🪙 {bal}</Text>
+              <ResultPanel
+                variant={matchResult.finalWinner === PLAYER_ID ? 'victory' : 'defeat'}
+                footer={
+                  <View style={{ flexDirection: 'row', justifyContent: 'center' }}>
+                    <MenuButton icon="exit" label="Lobby" size="md" onPress={() => router.push('/lobby')} />
                   </View>
-                )
-              })}
-              <TouchableOpacity style={s.rematchBtn} onPress={handleRematch}>
-                <Text style={s.rematchTxt}>🔄 PLAY AGAIN</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={{ marginTop: 10, borderWidth: 1.5, borderColor: '#FFD76A', borderRadius: 10, paddingVertical: 12, alignItems: 'center' }}
-                onPress={() => router.push('/lobby')}
+                }
               >
-                <Text style={{ color: '#FFD76A', fontWeight: '700', fontSize: 14 }}>♣♦ Back to Lobby ♥♠</Text>
-              </TouchableOpacity>
-            </View>
+                <View style={[s.tierBadge, { alignSelf: 'center', marginBottom: 6 }]}>
+                  <Text style={s.tierText}>HIGH NOBLE</Text>
+                </View>
+                {/* Buy-in Spec §6 — Buy-in/Returned/Net เหนือ Final Token Balance, JetBrains Mono
+                    Returned ใช้ finalStackByHuman จาก server ถ้ามี (ตรงกับยอดจริงที่เข้า DB แม้เจอ Monarch ×2) */}
+                {(() => {
+                  const buyIn = matchResult.buyInAmount ?? buyInAmount
+                  const returned = matchResult.finalStackByHuman?.[PLAYER_ID] ?? tokenBalance[PLAYER_ID] ?? 0
+                  const net = returned - buyIn
+                  return (
+                    <View style={s.buyInSummaryRow}>
+                      <Text style={s.buyInSummaryText}>
+                        Buy-in <Text style={{ color: '#f87171' }}>−{buyIn.toLocaleString('en-US')}</Text>
+                        {'   '}Returned <Text style={{ color: '#4ade80' }}>+{returned.toLocaleString('en-US')}</Text>
+                        {'   '}Net <Text style={{ color: net >= 0 ? '#4ade80' : '#f87171', fontWeight: '800' }}>
+                          {net >= 0 ? '+' : ''}{net.toLocaleString('en-US')}
+                        </Text>
+                      </Text>
+                    </View>
+                  )
+                })()}
+                {/* ยอด token_balance จริงหลัง settle จาก server (ไม่คำนวณเอง) — ต่างจาก "Final Token Balance"
+                    ด้านล่างที่เป็น leaderboard stack ในแมตช์นี้ (รวม AI ซึ่งไม่มี token_balance จริงใน DB) */}
+                {typeof (matchResult.newTokenBalances?.[PLAYER_ID] ?? matchResult.newTokenBalance) === 'number' && (
+                  <Text style={[s.buyInSummaryText, { textAlign: 'center', marginBottom: 8 }]}>
+                    Your Token Balance <Text style={{ color: '#c9a84c', fontWeight: '800' }}>{(matchResult.newTokenBalances?.[PLAYER_ID] ?? matchResult.newTokenBalance).toLocaleString('en-US')}</Text>
+                  </Text>
+                )}
+                <Text style={s.matchEndSub}>Final Token Balance</Text>
+                {[PLAYER_ID, ...aiList.map(a => a.id)].sort((a, b) => (tokenBalance[b] ?? 0) - (tokenBalance[a] ?? 0)).map(pid => {
+                  const ai  = aiList.find(a => a.id === pid)
+                  const bal = tokenBalance[pid] ?? (matchResult.buyInAmount ?? buyInAmount)
+                  return (
+                    <View key={pid} style={s.matchEndRow}>
+                      <Text style={[s.matchEndName, pid === PLAYER_ID && { color: '#c9a84c' }]} numberOfLines={1}>
+                        {pid === PLAYER_ID ? `${myAvatarEmoji} ${myDisplayName}` : `${ai?.emoji} ${ai?.name}`}
+                      </Text>
+                      <Text style={[s.matchEndBal, { color: bal >= (matchResult.buyInAmount ?? buyInAmount) ? '#4ade80' : '#f87171' }]}>🪙 {bal}</Text>
+                    </View>
+                  )
+                })}
+              </ResultPanel>
+            </>
           )}
 
           {/* LOGOS — position absolute */}
@@ -2067,7 +2177,7 @@ const GameTableLive: React.FC = () => {
           <Text style={{ fontSize: 14, color: '#FFB74D', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>⚡ TRIPLE SWEEP JACKPOT</Text>
           <Row label="Winner Payout" value={`${t.jackpot.payout} tokens`} valueColor="#FFD76A" />
           <Row label="Loser Penalty" value={`${t.jackpot.penalty} tokens each`} valueColor="#FFB74D" />
-          <Row label="Rake" value="10% (burn)" valueColor="#FFB74D" />
+          <Row label="Rake" value="5% (burn)" valueColor="#FFB74D" />
 
           {/* Features */}
           <Text style={{ fontSize: 14, color: '#8DFFB5', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>FEATURES</Text>
@@ -2084,7 +2194,7 @@ const GameTableLive: React.FC = () => {
     </ScrollView>
 
     <TouchableOpacity style={[s.continueBtn, { marginTop: 12, backgroundColor: '#102218', borderColor: '#FFD76A' }]} onPress={() => setShowTierInfo(false)}>
-      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>ปิด</Text>
+      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>Close</Text>
     </TouchableOpacity>
   </View>
 )}
@@ -2123,7 +2233,7 @@ const GameTableLive: React.FC = () => {
     <View style={{ height: 16 }} />
     </ScrollView>
     <TouchableOpacity style={[s.continueBtn, { marginTop: 12, backgroundColor: '#102218', borderColor: '#FFD76A' }]} onPress={() => setShowRankTable(false)}>
-      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>ปิด</Text>
+      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>Close</Text>
     </TouchableOpacity>
   </View>
 )}
@@ -2137,6 +2247,9 @@ const GameTableLive: React.FC = () => {
                 <View style={{ width: '100%', maxWidth: 340, alignItems: 'center' }}>
                   <Image source={intro.image} style={{ width: 220, height: 275, borderRadius: 14, borderWidth: 2.5, borderColor: '#FFD76A' }} resizeMode="cover" />
                   <Text style={{ fontSize: 20, color: '#FFD76A', fontWeight: '900', letterSpacing: 2, marginTop: 14 }}>{bossIntroName.toUpperCase()}</Text>
+                  {bossIntroName === 'Monarch' && (
+                    <Text style={{ fontSize: 12, color: '#C8C4B0', letterSpacing: 1.5, marginTop: 2 }}>THE FACELESS KING</Text>
+                  )}
                   <Text style={{ fontSize: 13, color: '#F5F2E8', lineHeight: 20, textAlign: 'center', marginTop: 16, minHeight: 110 }}>
                     {typedText}
                   </Text>
@@ -2165,7 +2278,8 @@ const GameTableLive: React.FC = () => {
               <Text style={s.roundText}>R{roundNumber}/5</Text>
             </View>
             <View style={[s.potBadge, { marginLeft: 6 }]}>
-              <Text style={s.potText}>🪙 {tokenBalance[PLAYER_ID] ?? 5000}</Text>
+              <Text style={s.stackLabel}>STACK</Text>
+              <Text style={s.potText}>🪙 {tokenBalance[PLAYER_ID] ?? buyInAmount}</Text>
               {(tokenDeltas[PLAYER_ID] ?? 0) !== 0 && (
                 <Text style={[s.deltaText, { color: (tokenDeltas[PLAYER_ID] ?? 0) > 0 ? '#4ade80' : '#f87171' }]}>
                   {(tokenDeltas[PLAYER_ID] ?? 0) > 0 ? '+' : ''}{tokenDeltas[PLAYER_ID]}
@@ -2197,7 +2311,7 @@ const GameTableLive: React.FC = () => {
             <View style={[s.sideCol, { paddingLeft: 10 }]}>
               <Text style={s.sideName}>{p2AI?.emoji ?? 'P2'}</Text>
               <View style={{ marginTop: 4, marginBottom: 60 }}>
-                <AvatarBubble emoji={p2AI?.emoji ?? '👤'} size={36} />
+                <AvatarBubble emoji={p2AI?.emoji ?? '👤'} size={36} image={p2AI?.name ? MINION_AVATAR[p2AI.name] : undefined} />
                 {p2AI && <GFStatusBadge playerId={p2AI.id} />}
                 {p2AI && <GFHealthBar playerId={p2AI.id} />}
               </View>
@@ -2281,7 +2395,7 @@ const GameTableLive: React.FC = () => {
             <View style={[s.sideCol, { paddingRight: 10 }]}>
               <Text style={s.sideName}>{p4AI?.emoji ?? 'P4'}</Text>
               <View style={{ marginTop: 4, marginBottom: 60 }}>
-                <AvatarBubble emoji={p4AI?.emoji ?? '👤'} size={36} />
+                <AvatarBubble emoji={p4AI?.emoji ?? '👤'} size={36} image={p4AI?.name ? MINION_AVATAR[p4AI.name] : undefined} />
                 {p4AI && <GFStatusBadge playerId={p4AI.id} />}
                 {p4AI && <GFHealthBar playerId={p4AI.id} />}
               </View>
@@ -2301,7 +2415,7 @@ const GameTableLive: React.FC = () => {
             { opacity: (phase === 'countdown' || phase === 'showdown' || phase === 'result' || phase === 'grand_finale' || phase === 'grand_finale_done') ? 0 : 1 },
           ]}>
 
-            <Text style={[s.swapHint, { opacity: selected ? 1 : 0 }]}>กดไพ่ใบที่ต้องการสลับตำแหน่ง</Text>
+            <Text style={[s.swapHint, { opacity: selected ? 1 : 0 }]}>Tap the cards you want to swap</Text>
             {hasFoul[PLAYER_ID] && <Text style={s.foulText}>⚠️ FOUL{foulReasons[PLAYER_ID] ? ` — ${foulReasons[PLAYER_ID]}` : ''}</Text>}
 
 
@@ -2373,15 +2487,17 @@ const GameTableLive: React.FC = () => {
           </View>
 
           </Animated.View>
-          {/* USER AVATAR — มุมล่างซ้าย (ซ่อนตอน Grand Finale เพราะ Overlay มี Avatar P1 แล้ว) */}
-          <View style={{ position: 'absolute', bottom: 58, left: 10, zIndex: 10, opacity: (phase === 'showdown' || phase === 'result' || phase === 'grand_finale' || phase === 'grand_finale_done') ? 0 : 1 }}>
-            <AvatarBubble emoji="👤" size={40} />
+          {/* USER AVATAR — มุมล่างซ้าย (ซ่อนตอน Grand Finale เพราะ Overlay มี Avatar P1 แล้ว) — Feedback C2: ใช้ myAvatarEmoji/myDisplayName จริง */}
+          {/* P1 HUD ย้ายลงชิดขอบล่าง — pointerEvents none เพื่อไม่บังปุ่ม actionBar */}
+          <View style={{ position: 'absolute', bottom: Math.max(insets.bottom, 4), left: 10, zIndex: 3, opacity: (phase === 'showdown' || phase === 'result' || phase === 'grand_finale' || phase === 'grand_finale_done') ? 0 : 1, flexDirection: 'row', alignItems: 'center', gap: 6 }} pointerEvents="none">
+            <AvatarBubble emoji={myAvatarEmoji} size={40} />
+            <Text style={s.userNameTag} numberOfLines={1}>{myDisplayName}</Text>
           </View>
 
           {/* ACTION BAR */}
           {phase === 'fog_of_war' && (
             <View style={{ alignItems: 'center', paddingVertical: 10 }}>
-              <Text style={{ color: '#8DFFB5', fontSize: 12, fontWeight: '700' }}>🌫 Fog of War — เหลือ Pile 3 ในมือคุณเท่านั้นที่เห็น</Text>
+              <Text style={{ color: '#8DFFB5', fontSize: 12, fontWeight: '700' }}>🌫 Fog of War — Only your Pile 3 is visible</Text>
             </View>
           )}
           {/* ═════════════════════════════════════════════════════════ */}
@@ -2446,7 +2562,7 @@ const GameTableLive: React.FC = () => {
                       onMoveShouldSetPanResponder: (_, g) => g.dy > 20 && Math.abs(g.dy) > Math.abs(g.dx),
                       onPanResponderRelease: (_, g) => {
                         if (g.dy > 50) {
-                          socketRef.current?.emit('grand_finale_action', { roomId: ROOM_ID, playerId: PLAYER_ID, action: 'fold' })
+                          socketRef.current?.emit('hn_grand_finale_action', { roomId: ROOM_ID, userId: PLAYER_ID, action: 'fold' })
                         }
                       },
                     })
@@ -2459,8 +2575,8 @@ const GameTableLive: React.FC = () => {
                       const isSelected = isMyTurn && !isCalled && c.key === effectiveSelected
                       const handlePress = !isMyTurn || isCalled ? undefined : () => {
                         if (effectiveSelected === c.key) {
-                          socketRef.current?.emit('grand_finale_action', {
-                            roomId: ROOM_ID, playerId: PLAYER_ID, action: 'call', revealedCardKey: c.key,
+                          socketRef.current?.emit('hn_grand_finale_action', {
+                            roomId: ROOM_ID, userId: PLAYER_ID, action: 'call', revealedCardKey: c.key,
                           })
                         } else {
                           setGfSelectedCardKey(c.key)
@@ -2545,13 +2661,13 @@ const GameTableLive: React.FC = () => {
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginTop: 14, paddingHorizontal: 4 }}>
                   {p2AI && (
                     <View style={{ alignItems: 'flex-start', gap: 4 }}>
-                      <SeatHeader pid={p2AI.id} emoji={p2AI.emoji} name={p2AI.name} />
+                      <SeatHeader pid={p2AI.id} emoji={p2AI.emoji} name={p2AI.name} image={MINION_AVATAR[p2AI.name]} />
                       <GFPile3Row playerId={p2AI.id} />
                     </View>
                   )}
                   {p4AI && (
                     <View style={{ alignItems: 'flex-end', gap: 4 }}>
-                      <SeatHeader pid={p4AI.id} emoji={p4AI.emoji} name={p4AI.name} />
+                      <SeatHeader pid={p4AI.id} emoji={p4AI.emoji} name={p4AI.name} image={MINION_AVATAR[p4AI.name]} />
                       <GFPile3Row playerId={p4AI.id} />
                     </View>
                   )}
@@ -2576,8 +2692,8 @@ const GameTableLive: React.FC = () => {
                   {/* Avatar + Status + Health ชิดซ้าย */}
                   <View style={{ alignItems: 'flex-start', paddingLeft: 14, gap: 2 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <AvatarBubble emoji="👤" size={32} />
-                      <Text style={{ color: '#FFD76A', fontSize: 11, fontWeight: '700', letterSpacing: 1 }}>YOU</Text>
+                      <AvatarBubble emoji={myAvatarEmoji} size={32} />
+                      <Text style={{ color: '#FFD76A', fontSize: 11, fontWeight: '700', letterSpacing: 1 }} numberOfLines={1}>{myDisplayName}</Text>
                     </View>
                     <GFStatusBadge playerId={PLAYER_ID} />
                     <GFHealthBar playerId={PLAYER_ID} />
@@ -2604,28 +2720,39 @@ const GameTableLive: React.FC = () => {
                 </Text>
               </View>
               <TouchableOpacity
-                onPress={() => socketRef.current?.emit('grand_finale_action', { roomId: ROOM_ID, playerId: PLAYER_ID, action: 'fold' })}
+                onPress={() => socketRef.current?.emit('hn_grand_finale_action', { roomId: ROOM_ID, userId: PLAYER_ID, action: 'fold' })}
                 style={{ backgroundColor: '#5e1a1a', borderWidth: 1.5, borderColor: '#f87171', borderRadius: 10, paddingVertical: 12, paddingHorizontal: 18, justifyContent: 'center' }}>
                 <Text style={{ color: '#fff', fontWeight: '900', fontSize: 13, letterSpacing: 1 }}>FOLD ✗</Text>
               </TouchableOpacity>
             </View>
           )}
           {phase !== 'dealing' && phase !== 'showdown' && phase !== 'result' && phase !== 'fog_of_war' && phase !== 'grand_finale' && <View style={s.actionBar}>
-            <TouchableOpacity style={[s.btnSort, sortDone && s.btnSortDone]}
-              disabled={sortDone || (phase !== 'arrangement' && phase !== 'arrangement_2')} onPress={handleAutoSort}>
-              <Text style={s.btnSortTxt}>{sortDone ? 'Sorted ✓' : 'Auto Sort'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[s.btnReady, isReady && s.btnReadyDone]}
-              onPress={handleReady} disabled={isReady || (phase !== 'arrangement' && phase !== 'arrangement_2')}>
-              <Text style={s.btnReadyTxt}>{isReady ? 'WAITING...' : 'READY ✓'}</Text>
-            </TouchableOpacity>
+            <ActionButton
+              icon="auto_sort"
+              label={sortDone ? 'Sorted ✓' : 'Auto Sort'}
+              variant={sortDone ? 'disabled' : 'normal'}
+              disabled={sortDone || (phase !== 'arrangement' && phase !== 'arrangement_2')}
+              costBadge="250"
+              onPress={handleAutoSort}
+              style={s.actionBtnSize}
+            />
+            <ActionButton
+              icon="ready"
+              label="Ready"
+              variant={isReady ? 'waiting' : 'normal'}
+              disabled={isReady || (phase !== 'arrangement' && phase !== 'arrangement_2')}
+              onPress={handleReady}
+              style={s.actionBtnSize}
+            />
           </View>}
 
         </View>
-        {/* ── SHOWDOWN RESULT (กลางจอ) ── */}
+        {/* ── SHOWDOWN RESULT (กลางจอ) — Feedback C5: ครอบด้วยพื้นหลัง free/vip ชุดเดียวกับ Profile/Lobby ── */}
         {showResult && (phase === 'showdown' || phase === 'result') && (
-          <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: -200, backgroundColor: 'rgba(15,36,24,0.97)', padding: 12, flexDirection: 'column', zIndex: 200 }}>
-            <ShowdownResult />
+          <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: -200, zIndex: 200 }}>
+            <ImageBackground source={isVip ? SHOWDOWN_BG_VIP : SHOWDOWN_BG_FREE} resizeMode="cover" style={{ flex: 1, padding: 12 }}>
+              <ShowdownResult />
+            </ImageBackground>
           </View>
         )}
         <ServerLog />
@@ -2652,6 +2779,7 @@ const s = StyleSheet.create({
   tierText:   { fontSize: 8, color: '#38bdf8', letterSpacing: 2, fontWeight: '800' },
   roundText:  { fontSize: 9, color: '#38bdf8', fontWeight: '800' },
   potBadge:   { borderWidth: 1, borderColor: 'rgba(201,168,76,.4)', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 2, backgroundColor: 'rgba(0,0,0,.4)', alignItems: 'center' },
+  stackLabel: { fontSize: 6, fontWeight: '800', letterSpacing: 1, color: 'rgba(201,168,76,.6)', fontFamily: 'JetBrainsMono_400Regular' },
   potText:    { fontSize: 10, fontWeight: '700', color: '#c9a84c' },
   deltaText:  { fontSize: 9, fontWeight: '800' },
   timerText:  { fontSize: 20, fontWeight: '700', minWidth: 48, textAlign: 'right' },
@@ -2670,6 +2798,7 @@ const s = StyleSheet.create({
   mainArea:      { flex: 1, flexDirection: 'row', zIndex: 2 },
   sideCol:       { width: SIDE_COL_W, alignItems: 'center', paddingTop: 4, gap: 2 },
   sideName:      { fontSize: 9, color: '#ffffff', letterSpacing: 1, fontWeight: '700' },
+  userNameTag:   { fontSize: 10, color: '#ffffff', letterSpacing: 1, fontWeight: '800', maxWidth: 100, textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
   sideSeatWrap:  { flex: 1, width: SIDE_COL_W, overflow: 'visible', justifyContent: 'flex-start', alignItems: 'center' },
   sideSeatInner: { flexDirection: 'row', alignItems: 'center' },
 
@@ -2687,15 +2816,8 @@ const s = StyleSheet.create({
   userCard:     { width: CW, height: CH, borderRadius: 4, backgroundColor: '#fdfaf3', borderWidth: 1, borderColor: 'rgba(201,168,76,.65)', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   userCardSel:  { borderColor: '#6ec87a', borderWidth: 2, transform: [{ translateY: -16 }] },
   swapHint:     { fontSize: 8, color: 'rgba(201,168,76,.9)', textAlign: 'center', marginBottom: 2 },
-  actionBar:    { flexDirection: 'row', gap: 8, paddingHorizontal: 10, paddingTop: 4, paddingBottom: 36, zIndex: 2 },
-
-  actionBar:    { flexDirection: 'row', gap: 8, paddingHorizontal: 10, paddingTop: 4, paddingBottom: 20, zIndex: 2 },
-  btnSort:      { flex: 1, paddingVertical: 9, borderRadius: 8, borderWidth: 1, borderColor: '#e07020', backgroundColor: '#e07020', alignItems: 'center' },
-  btnSortDone:  { backgroundColor: '#6b4010', borderColor: '#6b4010' },
-  btnSortTxt:   { fontSize: 11, fontWeight: '700', color: '#ffffff', letterSpacing: 0.5 },
-  btnReady:     { flex: 2, paddingVertical: 9, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(74,154,90,.45)', backgroundColor: '#1a5e20', alignItems: 'center' },
-  btnReadyDone: { backgroundColor: '#14481a', borderColor: 'rgba(74,154,90,.2)' },
-  btnReadyTxt:  { fontSize: 12, fontWeight: '700', color: '#fff', letterSpacing: 1.5 },
+  actionBar:      { flexDirection: 'row', justifyContent: 'center', gap: 16, paddingHorizontal: 10, paddingTop: 4, paddingBottom: 20, zIndex: 2 },
+  actionBtnSize:  { width: 130 },
 
   // Overlay
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.90)', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 16 },
@@ -2726,13 +2848,12 @@ const s = StyleSheet.create({
   countdownSub:   { fontSize: 11, color: 'rgba(201,168,76,0.6)', letterSpacing: 2, marginTop: 10 },
 
   // Match end
-  matchEndTitle: { fontSize: 28, fontWeight: '900', color: '#c9a84c', marginBottom: 14 },
-  matchEndSub:   { fontSize: 10, color: 'rgba(201,168,76,0.5)', letterSpacing: 2, marginBottom: 10 },
-  matchEndRow:   { flexDirection: 'row', justifyContent: 'space-between', width: '100%', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#1e2e22' },
-  matchEndName:  { fontSize: 13, color: '#e8dfc0', fontWeight: '600' },
-  matchEndBal:   { fontSize: 13, fontWeight: '800' },
-  rematchBtn:    { marginTop: 20, backgroundColor: '#1a5e20', borderRadius: 12, paddingVertical: 13, paddingHorizontal: 36 },
-  rematchTxt:    { color: '#fff', fontSize: 13, fontWeight: '800', letterSpacing: 2 },
+  buyInSummaryRow:  { alignItems: 'center', marginBottom: 8 },
+  buyInSummaryText: { fontSize: 10, fontFamily: 'JetBrainsMono_400Regular', color: '#C8C4B0', textAlign: 'center' },
+  matchEndSub:   { fontSize: 10, color: 'rgba(201,168,76,0.5)', letterSpacing: 2, marginBottom: 10, textAlign: 'center' },
+  matchEndRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#1e2e22' },
+  matchEndName:  { flexShrink: 1, marginRight: 8, fontSize: 13, color: '#e8dfc0', fontWeight: '600' },
+  matchEndBal:   { flexShrink: 0, fontSize: 13, fontWeight: '800' },
 
   // Server log
   logZone:   { flex: 10, backgroundColor: '#080808', borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,.12)' },

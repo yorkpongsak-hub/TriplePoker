@@ -1,4 +1,6 @@
 # TriplePoker — Core Rules v1.2
+> ⚠️ DEPRECATED — ตัวเลข Ante/Pot/Triple Sweep ใช้ v1.3 แทน (docs/TriplePoker_CoreRules_v1_3.md)
+> ไฟล์นี้คงไว้เพื่ออ้างอิงประวัติเท่านั้น ตัวเลขในหมวด 1.10, 2.1, 2.2, 2.3 และ Section 5 ไม่ตรงกับ gameConfig.ts จริงอีกต่อไป
 > กติกาหลักที่ใช้ร่วมกันในทุก Season และทุก Tournament
 > The Sage Unicorn Studio Co., Ltd.
 > Founder & Chief Architect: Assistant Professor Pongnathee Maneekul

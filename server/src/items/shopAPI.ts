@@ -2,10 +2,11 @@
 // Shop API — ซื้อสินค้า / เปิด Loot Box / ดู inventory
 // ใช้ vipGuard.ts ตรวจสิทธิ์ก่อน allow purchase
 // ใช้ lootBox.ts สำหรับ randomization
-// Ref: Retention Spec v1.5 §5.0 — VIP Purchase Rules
+// Patch (2026-07-17): ลบการอ้างอิง "Retention Spec v1.5 §5.0" ออก — ค้นทั้ง docs/ แล้วไม่พบ
+// ไฟล์เอกสารนี้อยู่จริง ราคา/กติกา VIP Purchase ด้านล่างคือ canon ปัจจุบันโดยตรง
 
 import { supabase } from '../config/supabase'
-import { assertVip, isVipOnlyCategory } from '../middleware/vipGuard'
+import { assertVip, isVipOnlyCategory, getUserVipStatus } from '../middleware/vipGuard'
 import {
   openLootBox,
   getLootBoxOdds,
@@ -79,27 +80,26 @@ export interface OpenLootBoxResult {
 }
 
 // ดึง token balance ของ user
+// แก้บั๊กเดิม: query ผิด PK (.eq('id', ...)) — ตาราง users ใช้ user_id เป็น PK (Known Bug #3 ใน CLAUDE.md)
 async function getUserTokenBalance(userId: string): Promise<number> {
   const { data, error } = await supabase
     .from('users')
-    .select('token_balance, is_vip')
-    .eq('id', userId)
+    .select('token_balance')
+    .eq('user_id', userId)
     .single()
 
   if (error || !data) throw new Error('User not found')
   return data.token_balance
 }
 
-// ดึง VIP status และ token balance พร้อมกัน
+// ดึง VIP status และ token balance พร้อมกัน — reuse getUserVipStatus (vipGuard.ts, มาตรฐาน vip_status
+// เดียวกันทั้งระบบ) แทนที่จะ query is_vip แยกเองที่นี่ (คอลัมน์เก่า เลิกใช้แล้ว — ดู vipGuard.ts)
 async function getUserInfo(userId: string): Promise<{ tokenBalance: number; isVip: boolean }> {
-  const { data, error } = await supabase
-    .from('users')
-    .select('token_balance, is_vip')
-    .eq('id', userId)
-    .single()
-
-  if (error || !data) throw new Error('User not found')
-  return { tokenBalance: data.token_balance, isVip: data.is_vip === true }
+  const [tokenBalance, isVip] = await Promise.all([
+    getUserTokenBalance(userId),
+    getUserVipStatus(userId),
+  ])
+  return { tokenBalance, isVip }
 }
 
 // ดึง stock ปัจจุบันของ item ใน inventory

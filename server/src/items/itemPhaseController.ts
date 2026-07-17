@@ -1,6 +1,8 @@
 // itemPhaseController.ts
 // จัดการสถานะ Enable / Disable / Lock ของ Competitive Items ตาม Game Phase และ Tier
-// ข้อมูลอ้างอิงจาก Retention Spec v1.5 §6.2 — HUD Enable/Disable ตาม Phase
+// Patch (2026-07-17): ลบการอ้างอิง "Retention Spec v1.5 §6.2" ออก — ค้นทั้ง docs/ แล้วไม่พบ
+// ไฟล์เอกสารนี้อยู่จริง (ไม่ทราบว่าหายไปหรือไม่เคยเขียนขึ้นจริง) ตารางด้านล่างคือ canon
+// ปัจจุบันโดยตรง ไม่มีเอกสารอื่นอ้างอิงเพิ่มเติม
 
 // ประเภทของ Game Phase ทั้งหมด
 export type GamePhase =
@@ -31,7 +33,7 @@ export type CompetitiveItemKey =
   | 'recall'          // Memory Sigil
   | 'super_vision'    // Eye of the Demon
 
-// ตาราง Enable/Disable ตาม Phase (อ้างอิง Retention Spec §6.2)
+// ตาราง Enable/Disable ตาม Phase (canon อยู่ในโค้ดนี้โดยตรง — ดู patch note บนสุดของไฟล์)
 // key = phase, value = set ของ item ที่ Enable ใน phase นั้น
 const PHASE_ENABLED_MAP: Record<GamePhase, Set<CompetitiveItemKey>> = {
   deal: new Set(['swap', 'chrono_shard']),
@@ -196,11 +198,16 @@ function isLimitPerRound(item: CompetitiveItemKey): boolean {
 }
 
 // คำนวณราคา Free Sort ตาม Tier
+// Patch (2026-07-17): แก้ compile error เท่านั้น (TS2678 'last_boss' ไม่ตรง TableTier,
+// TS2366 ไม่มี return ครบทุก branch) — ยังไม่ใช่ราคาจริงของ Auto Sort Fee
+// (feature นี้ยังไม่โค้ดจริง ตาม CLAUDE.md pending #7) case 'adept' และ default
+// เป็น placeholder รอ sprint Auto Sort Fee ค่อยใส่ราคาจริงตาม canon
 export function getFreeSortPrice(tier: TableTier): number {
   switch (tier) {
     case 'initiate':  return 15
     case 'mastermind':       return 40
     case 'highNoble':
-    case 'last_boss': return 80
+    case 'lastBoss': return 80
+    default: return 0
   }
 }

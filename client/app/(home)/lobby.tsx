@@ -5,26 +5,22 @@
  * The Sage Unicorn Studio Co., Ltd.
  */
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Image, Platform, Modal } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Image, Platform, Modal } from 'react-native';
 import { io, Socket } from 'socket.io-client';
 import { useUserStore } from '../../src/store/userStore';
 import { router } from 'expo-router';
-import VIPSkinSelector from './components/VIPSkinSelector'
-import { useUserSkins } from '../../src/hooks/useUserSkins'
+import { useBgm, fadeOutBgm } from '../../src/services/bgmService'
+import { useAuthStore } from '../../src/store/authStore'
+import { MenuButton } from '../../src/components/ui/MenuButton'
+import { ThemedBackground } from '../../src/components/ui/ThemedBackground'
+import { glassPanel, glassPanelDense, textOnGlass } from '../../src/ui/glassStyles'
+import AsyncStorage from '@react-native-async-storage/async-storage'
+import { BUY_IN, BuyInTier, AD_RESCUE_AMOUNT } from '../../src/config/buyInConfig'
+import { Tier, TIER_CONFIG, isEligible, meetsLastBossCondition } from '../../src/config/tierConfig'
 
 const studioLogo = require('../../assets/images/sage_unicorn_logo_transparent.png');
 
-type Tier = 'demo' | 'initiate' | 'adept' | 'mastermind' | 'high_noble' | 'last_boss';
 type Selection = Tier | 'all';
-
-interface SeatView { name: string; type: 'human' | 'bot' | 'ai' | 'empty'; }
-interface TableView {
-  tableId: string;
-  tier: Tier;
-  seats: SeatView[];
-  secondsLeft: number | null;
-  joinable: boolean;
-}
 
 const COLOR = {
   bgPrimary: '#0F2418',
@@ -41,42 +37,12 @@ const COLOR = {
   borderSecondary: '#3A5A44',
 };
 
-const TIER_CONFIG: Record<Tier, { label: string; letter: string; minToken: number; implemented: boolean; badgeColor: string }> = {
-  demo:        { label: 'Demo',          letter: 'D',  minToken: 0,       implemented: false, badgeColor: COLOR.greenHighlight },
-  initiate:    { label: 'Initiate',      letter: 'C',  minToken: 100,     implemented: true,  badgeColor: COLOR.greenHighlight },
-  adept:       { label: 'Adept',         letter: 'B',  minToken: 10_000,  implemented: true,  badgeColor: COLOR.goldPrimary },
-  mastermind:  { label: 'Mastermind',    letter: 'A',  minToken: 40_000,  implemented: true,  badgeColor: COLOR.goldPrimary },
-  high_noble:  { label: 'High Noble',    letter: 'S',  minToken: 100_000, implemented: true,  badgeColor: COLOR.red },
-  last_boss:   { label: 'The Last Boss', letter: 'S+', minToken: 0,       implemented: false, badgeColor: COLOR.goldDark },
+// TIER_CONFIG/isEligible ย้ายไปไว้ที่ src/config/tierConfig.ts แล้ว (single source of truth ฝั่ง client)
+
+// TriplePoker_BuyIn_Spec_v1_0 §2 — เทียบ Tier type ของ Lobby (snake_case) กับ key ของ BUY_IN (camelCase ตรงกับ server)
+const TIER_TO_BUYIN_KEY: Partial<Record<Tier, BuyInTier>> = {
+  initiate: 'initiate', adept: 'adept', mastermind: 'mastermind', high_noble: 'highNoble', last_boss: 'lastBoss',
 };
-
-const MOCK_USER_TOKEN = 25_000;
-
-function meetsLastBossCondition(_token: number): boolean { return false; }
-function isEligible(tier: Tier, token: number): boolean {
-  if (tier === 'last_boss') return meetsLastBossCondition(token);
-  return token >= TIER_CONFIG[tier].minToken;
-}
-
-function buildMockTables(tier: Tier, eligible: boolean): TableView[] {
-  const mockNames = ['ThaiDragon', 'WinWin99', 'PokerPro7', 'LuckyAce', 'KingCard'];
-  const count = 2 + Math.floor(Math.random() * 2);
-  return Array.from({ length: count }).map((_, i) => {
-    const seatCount = 1 + Math.floor(Math.random() * 2);
-    const seats: SeatView[] = Array.from({ length: 3 }).map((_, si) =>
-      si < seatCount
-        ? { name: mockNames[(i + si) % mockNames.length], type: 'human' }
-        : { name: '— waiting —', type: 'empty' }
-    );
-    return {
-      tableId: `mock_${tier}_${i + 1}`,
-      tier,
-      seats,
-      secondsLeft: 180 - i * 40,
-      joinable: false && eligible,
-    };
-  });
-}
 
 const TIER_ROWS: Tier[][] = [
   ['last_boss'],
@@ -86,21 +52,30 @@ const TIER_ROWS: Tier[][] = [
 ];
 
 export default function LobbyScreen() {
+  useBgm(); // LobbyMatchmaking_Spec_v1_0 §2 — BGM เล่นต่อเนื่องข้าม Profile/Shop/Lobby/Hall of Fame
   const [selected, setSelected] = useState<Selection | null>(null);
-  const [tables, setTables] = useState<TableView[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [showSkinModal, setShowSkinModal] = useState(false);
 
   // ── Multiplayer Matchmaking (Adept) ──────────────────────────
   const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001';
   const socketRef = useRef<Socket | null>(null);
   const userId = useUserStore(s => s.userId); // ต้อง login เสมอ — Lobby อยู่ใต้ auth guard แล้ว ไม่มี guest mode
   const displayName = useUserStore(s => s.displayName) || 'Player';
+  const tokenBalance = useUserStore(s => s.tokenBalance);
+  const isVip = useUserStore(s => s.isVIP); // VIP Shimmer Effect — ใช้ state ที่มีอยู่แล้ว ไม่สร้าง state/query ใหม่
   type MatchmakingStatus = 'idle' | 'queued' | 'matched';
+  type MatchmakingTier = 'adept' | 'highNoble';
   const [mmStatus, setMmStatus] = useState<MatchmakingStatus>('idle');
+  const [mmTier, setMmTier] = useState<MatchmakingTier>('adept');
   const [mmSeats, setMmSeats] = useState<Array<{ type: string; name: string }>>([]);
   const [mmTimeoutAt, setMmTimeoutAt] = useState<number | null>(null);
   const [mmSecondsLeft, setMmSecondsLeft] = useState(0);
+  const [mmRoomId, setMmRoomId] = useState<string | null>(null);
+  // §4.4/§6.1: Waiting Timeout Dialog — โชว์ตอนรอบแรก (3 นาที) หมด (stage='first') หรือรอบ Deadlock ของ
+  // High Noble (stage='deadlock', §6.1) — สิทธิ์กดจำกัดเฉพาะ Host เท่านั้นสำหรับ High Noble
+  const [mmTimeoutDialog, setMmTimeoutDialog] = useState(false);
+  const [mmDialogStage, setMmDialogStage] = useState<'first' | 'deadlock'>('first');
+  const [mmHostUserId, setMmHostUserId] = useState<string | null>(null);
+  const [mmDeletedMessage, setMmDeletedMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (mmStatus !== 'queued' || !mmTimeoutAt) return;
@@ -112,56 +87,142 @@ export default function LobbyScreen() {
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
   }, [mmStatus, mmTimeoutAt]);
-  const { unlocked, active, loading: skinsLoading } = useUserSkins();
 
-  const lastBossVisible = useMemo(() => meetsLastBossCondition(MOCK_USER_TOKEN), []);
+  const lastBossVisible = useMemo(() => meetsLastBossCondition(tokenBalance), [tokenBalance]);
+
+  // ── Tier Unlock Tracking (LobbyMatchmaking_Spec_v1_0 §1.3) ──
+  // ไม่มี popup ใน Lobby แล้ว (การแสดงผล Tier ที่ปลดล็อกย้ายไปหน้า Profile) — เหลือแค่ mark
+  // tier_unlock_celebrated เงียบๆ กัน newlyUnlocked ถูกคำนวณ/ยิงซ้ำทุกครั้งที่ profile/tokenBalance เปลี่ยน
+  const session = useAuthStore(s => s.session);
+  const profile = useAuthStore(s => s.profile);
+  const refreshProfile = useAuthStore(s => s.refreshProfile);
+  const celebratedCheckedRef = useRef(false);
 
   useEffect(() => {
-    if (!selected) return;
-    setLoading(true);
+    if (!profile || celebratedCheckedRef.current) return;
+    celebratedCheckedRef.current = true;
+    const celebrated = new Set(profile.tier_unlock_celebrated ?? []);
+    const newlyUnlocked = (Object.keys(TIER_CONFIG) as Tier[])
+      .filter(t => t !== 'demo' && isEligible(t, tokenBalance) && !celebrated.has(t));
+    if (newlyUnlocked.length === 0) return;
+    const token = session?.access_token;
+    if (!token) return;
+    (async () => {
+      for (const tier of newlyUnlocked) {
+        try {
+          await fetch(`${SERVER_URL}/profile/celebrate-tier`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ tier }),
+          });
+        } catch (e) {
+          console.error('[Lobby] celebrate-tier failed:', e);
+        }
+      }
+      await refreshProfile();
+    })();
+  }, [profile, tokenBalance]);
 
-    if (selected === 'all') {
-      const timer = setTimeout(() => {
-        const allTiers: Tier[] = ['initiate', 'adept', 'mastermind', 'high_noble', 'demo'];
-        setTables(allTiers.flatMap(t => buildMockTables(t, isEligible(t, MOCK_USER_TOKEN))));
-        setLoading(false);
-      }, 250);
-      return () => clearTimeout(timer);
+  const handleEnterInitiate = () => { fadeOutBgm(); router.push('/game/initiate'); };
+  const handleEnterMastermind = () => { fadeOutBgm(); router.push('/game/mastermind/select'); };
+
+  // ─── Menu Bar (UI Button System) — ปุ่มที่ระบบหลังบ้านยังไม่มี โชว์ Toast "Coming Soon" แทนการซ่อน ───
+  const [comingSoonMsg, setComingSoonMsg] = useState<string | null>(null);
+  useEffect(() => {
+    if (!comingSoonMsg) return;
+    const id = setTimeout(() => setComingSoonMsg(null), 2500);
+    return () => clearTimeout(id);
+  }, [comingSoonMsg]);
+  const handleComingSoon = (label: string) => setComingSoonMsg(`${label} — Coming Soon`);
+  const handleShopNav = () => router.push('/(home)/shop');
+
+  // ─── Buy-in Entry Gate (TriplePoker_BuyIn_Spec_v1_0 §3) ───
+  // การหักจริงเกิดที่ server เสมอ (escrowBuyIn) — ที่นี่แค่เช็คก่อนเข้าเพื่อ UX เท่านั้น
+  const [insufficientTier, setInsufficientTier] = useState<Tier | null>(null);
+  const [confirmBuyInTier, setConfirmBuyInTier] = useState<Tier | null>(null);
+  const [buyInToast, setBuyInToast] = useState<string | null>(null);
+  const pendingEnterRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (!buyInToast) return;
+    const id = setTimeout(() => setBuyInToast(null), 2000);
+    return () => clearTimeout(id);
+  }, [buyInToast]);
+
+  // เรียกก่อนเข้าโต๊ะเสมอ — ห่อ handler เข้าโต๊ะเดิม (handleEnterInitiate ฯลฯ) ไม่แก้ handler เดิมเลย
+  const runBuyInGate = async (tier: Tier, proceed: () => void) => {
+    const buyInKey = TIER_TO_BUYIN_KEY[tier];
+    if (!buyInKey) { proceed(); return; } // demo/last_boss ยังไม่มี buy-in กำหนด
+    const buyIn = BUY_IN[buyInKey];
+
+    if (tokenBalance < buyIn) {
+      pendingEnterRef.current = proceed;
+      setInsufficientTier(tier);
+      return;
     }
 
-    if (selected === 'initiate') {
-      setTables(buildMockTables('initiate', true).map(t => ({ ...t, joinable: false })));
-      setLoading(false);
-    } else if (selected === 'adept') {
-      // Patch Multiplayer: Adept ไม่มี mock — real matchmaking ใช้ปุ่ม Auto-Match แทน
-      setTables([]);
-      setLoading(false);
-    } else {
-      const timer = setTimeout(() => {
-        setTables(buildMockTables(selected, isEligible(selected, MOCK_USER_TOKEN)));
-        setLoading(false);
-      }, 300);
-      return () => clearTimeout(timer);
+    const confirmed = await AsyncStorage.getItem(`buyInConfirmed_${tier}`);
+    if (confirmed !== 'true') {
+      pendingEnterRef.current = proceed;
+      setConfirmBuyInTier(tier);
+      return;
     }
-  }, [selected]);
 
-  const handleEnterInitiate = () => router.push('/game/initiate');
-  const handleEnterMastermind = () => router.push('/game/mastermind');
-  const handleEnterHighNoble = () => router.push('/game/highNoble');
+    setBuyInToast(`Buy-in deducted: −${buyIn.toLocaleString('en-US')}`);
+    proceed();
+  };
 
-  const handleAutoMatchAdept = () => {
+  const handleConfirmBuyIn = async () => {
+    const tier = confirmBuyInTier;
+    setConfirmBuyInTier(null);
+    if (!tier) return;
+    await AsyncStorage.setItem(`buyInConfirmed_${tier}`, 'true');
+    pendingEnterRef.current?.();
+    pendingEnterRef.current = null;
+  };
+
+  const handleCancelConfirmBuyIn = () => {
+    setConfirmBuyInTier(null);
+    pendingEnterRef.current = null;
+  };
+
+  const handleWatchAd = () => {
+    // TODO: ต่อ AdMob rewarded ad จริง — ดูจบแล้วเรียก server endpoint ให้เครดิต +AD_RESCUE_AMOUNT แล้ว refreshProfile()
+    setInsufficientTier(null);
+    pendingEnterRef.current = null;
+    handleComingSoon('Watch Ad');
+  };
+
+  const handleBuyTokensNav = () => {
+    setInsufficientTier(null);
+    pendingEnterRef.current = null;
+    router.push('/(home)/shop');
+  };
+
+  const handleCancelInsufficientTier = () => {
+    setInsufficientTier(null);
+    pendingEnterRef.current = null;
+  };
+
+  // ── Multiplayer Matchmaking (Adept / High Noble ใช้ pattern เดียวกัน) ─────
+  const handleAutoMatch = (tier: MatchmakingTier) => {
     setMmStatus('queued');
+    setMmTier(tier);
     setMmSeats([]);
     const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: false });
     socketRef.current = socket;
 
     socket.on('connect', () => {
-      socket.emit('room_auto_match', { tier: 'adept', userId, userName: displayName });
+      // Bug C fix (2026-07-17): ส่ง avatarUrl ไปด้วย — server เก็บลง Seat แล้วส่งต่อให้ผู้เล่นคนอื่นเห็น
+      // avatar กันใน round_start (เดิมไม่เคยส่ง เลยมีแต่ userName แต่ไม่มี avatar ของคนอื่นเลย)
+      socket.emit('room_auto_match', { tier, userId, userName: displayName, avatarUrl: profile?.avatar_url ?? undefined });
     });
 
     socket.on('room_matched', (data: { room: any; seatIndex: number }) => {
+      setMmRoomId(data.room.roomId);
       setMmSeats(data.room.seats);
       setMmTimeoutAt(data.room.timeoutAt);
+      setMmHostUserId(data.room.hostUserId ?? null);
     });
 
     socket.on('room_status', (data: { room: any }) => {
@@ -171,14 +232,55 @@ export default function LobbyScreen() {
     socket.on('room_ready', (data: { roomId: string; seats: any[] }) => {
       setMmStatus('matched');
       socket.disconnect();
-      router.push(`/game/adept?roomId=${data.roomId}&userId=${userId}` as any);
+      fadeOutBgm();
+      const route = tier === 'highNoble' ? '/game/highNoble' : '/game/adept';
+      router.push(`${route}?roomId=${data.roomId}&userId=${userId}` as any);
     });
 
     socket.on('room_error', (data: { message: string }) => {
       setMmStatus('idle');
       socket.disconnect();
     });
+
+    // §4.4/§6.1: รอบแรก (3 นาที) หรือรอบ Deadlock (High Noble) หมด — โชว์ dialog ให้เลือก
+    socket.on('room_wait_timeout_choice', (data: { roomId: string; stage: 'first' | 'deadlock'; hostUserId?: string }) => {
+      setMmDialogStage(data.stage);
+      if (data.hostUserId) setMmHostUserId(data.hostUserId);
+      setMmTimeoutDialog(true);
+    });
+
+    // เลือก "Wait 2 More Minutes" สำเร็จ — ต่อเวลา ปิด dialog
+    socket.on('room_wait_extended', (data: { roomId: string; timeoutAt: number }) => {
+      setMmTimeoutDialog(false);
+      setMmTimeoutAt(data.timeoutAt);
+    });
+
+    // รอบขยายหมดเวลาแบบไม่มีใครตอบ dialog ทัน หรือเลือก "Delete Table" — โต๊ะถูกลบ กลับ Lobby
+    const handleRoomRemoved = (data: { roomId: string; message?: string }) => {
+      setMmDeletedMessage(data.message ?? 'Table has been deleted.');
+      setMmTimeoutDialog(false);
+      setMmStatus('idle');
+      setMmSeats([]);
+      setMmTimeoutAt(null);
+      setMmRoomId(null);
+      setMmHostUserId(null);
+      socket.disconnect();
+    };
+    socket.on('room_wait_timeout_expired', handleRoomRemoved);
+    socket.on('room_deleted', handleRoomRemoved);
   };
+
+  const handleTimeoutChoice = (choice: 'wait_2_more' | 'delete' | 'start_now') => {
+    if (!mmRoomId) return;
+    socketRef.current?.emit('room_timeout_choice', { roomId: mmRoomId, userId, choice });
+    if (choice !== 'wait_2_more') setMmTimeoutDialog(false); // room_deleted/room_ready handler จะเคลียร์ state ที่เหลือ
+  };
+
+  // §6.1: สิทธิ์กด dialog จำกัดเฉพาะ Host เท่านั้นสำหรับ High Noble — Adept ไม่ gate (มี Human รอแค่คนเดียวเสมอ)
+  const isTimeoutDialogHost = mmTier !== 'highNoble' || !mmHostUserId || userId === mmHostUserId;
+
+  const handleAutoMatchAdept = () => handleAutoMatch('adept');
+  const handleEnterHighNoble = () => handleAutoMatch('highNoble');
 
   const handleCancelMatchmaking = () => {
     socketRef.current?.disconnect();
@@ -186,20 +288,27 @@ export default function LobbyScreen() {
     setMmStatus('idle');
     setMmSeats([]);
     setMmTimeoutAt(null);
+    setMmRoomId(null);
+    setMmTimeoutDialog(false);
+    setMmHostUserId(null);
   };
+
+  // Toast แจ้งโต๊ะถูกลบ (timeout expired / delete) — auto-dismiss เอง
+  useEffect(() => {
+    if (!mmDeletedMessage) return;
+    const id = setTimeout(() => setMmDeletedMessage(null), 4000);
+    return () => clearTimeout(id);
+  }, [mmDeletedMessage]);
 
   useEffect(() => {
     return () => { socketRef.current?.disconnect(); };
   }, []);
-  const handleEnterTable = (table: TableView) => {
-    if (!table.joinable) return;
-    router.push(`/game/${table.tier}` as any);
-  };
 
   const renderTierButton = (tier: Tier, fullWidth: boolean) => {
     const cfg = TIER_CONFIG[tier];
-    const locked = !isEligible(tier, MOCK_USER_TOKEN);
+    const locked = !isEligible(tier, tokenBalance);
     const isSelected = selected === tier;
+    const buyInKey = TIER_TO_BUYIN_KEY[tier];
     return (
       <TouchableOpacity
         key={tier}
@@ -209,26 +318,125 @@ export default function LobbyScreen() {
           s.tierBtn,
           fullWidth && s.tierBtnFull,
           { borderColor: isSelected ? cfg.badgeColor : COLOR.borderPrimary },
-          isSelected && { backgroundColor: COLOR.bgTertiary },
           locked && s.tierBtnLocked,
         ]}
       >
         <View style={[s.badgeDot, { backgroundColor: cfg.badgeColor }]} />
-        <Text style={[s.tierBtnTxt, locked && s.tierBtnTxtLocked]}>
-          [{cfg.letter}] {cfg.label}{locked ? ' 🔒' : ''}
-        </Text>
+        <View style={{ alignItems: 'center' }}>
+          <Text style={[s.tierBtnTxt, locked && s.tierBtnTxtLocked]}>
+            [{cfg.letter}] {cfg.label}{locked ? ' 🔒' : ''}
+          </Text>
+          {/* TriplePoker_BuyIn_Spec_v1_0 §6 — JetBrains Mono, Gold #FFC857 (=COLOR.goldDark) */}
+          {buyInKey && <Text style={s.buyInLabel}>Buy-in: {BUY_IN[buyInKey].toLocaleString('en-US')}</Text>}
+        </View>
         {!cfg.implemented && <Text style={s.comingSoonTag}>Coming Soon</Text>}
       </TouchableOpacity>
     );
   };
 
   const sectionTitle =
-    selected === 'all' ? 'All Tiers — Open Tables'
-    : selected ? `${TIER_CONFIG[selected].label} — Open Tables`
-    : 'เลือก Tier ด้านล่างเพื่อดูโต๊ะ';
+    selected === 'all' ? 'All Tiers'
+    : selected ? TIER_CONFIG[selected].label
+    : 'Select a Tier below to view tables';
 
   return (
+    <ThemedBackground isVip={isVip}>
     <View style={s.root}>
+
+      {/* ─── Waiting Timeout Dialog (§4.4/§6.1) — stage='first' (Wait 2 More/Delete) หรือ stage='deadlock'
+          (Start Now Fill Minion AI/Delete, เฉพาะ High Noble) — High Noble จำกัดสิทธิ์กดเฉพาะ Host ─── */}
+      {mmTimeoutDialog && (
+        <View style={s.celebrateOverlay}>
+          <View style={s.celebrateCard}>
+            <Text style={s.celebrateIcon}>⏱️</Text>
+            <Text style={s.celebrateTitle}>{mmDialogStage === 'deadlock' ? 'TABLE STUCK' : 'STILL WAITING'}</Text>
+            <Text style={[s.celebrateTierName, { textAlign: 'center', marginBottom: 20 }]}>
+              {isTimeoutDialogHost
+                ? (mmDialogStage === 'deadlock'
+                    ? 'Not enough players joined in time. Start now with a Minion AI filling the last seat, or delete this table?'
+                    : 'No player has joined yet. Keep waiting a bit longer, or delete this table?')
+                : 'Waiting for host decision…'}
+            </Text>
+            {isTimeoutDialogHost && (
+              <>
+                <TouchableOpacity
+                  onPress={() => handleTimeoutChoice(mmDialogStage === 'deadlock' ? 'start_now' : 'wait_2_more')}
+                  style={[s.celebrateBtn, { marginBottom: 10 }]}
+                >
+                  <Text style={s.celebrateBtnTxt}>
+                    {mmDialogStage === 'deadlock' ? 'Start Now (Fill 1 Minion AI)' : 'Wait 2 More Minutes'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => handleTimeoutChoice('delete')} style={[s.celebrateBtn, { borderColor: COLOR.red }]}>
+                  <Text style={[s.celebrateBtnTxt, { color: COLOR.red }]}>Delete Table</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </View>
+      )}
+
+      {/* ─── Not Enough Tokens (Buy-in Spec §3) ─── */}
+      {insufficientTier && (
+        <View style={s.celebrateOverlay}>
+          <View style={s.celebrateCard}>
+            <Text style={s.celebrateIcon}>🪙</Text>
+            <Text style={s.celebrateTitle}>NOT ENOUGH TOKENS</Text>
+            <Text style={[s.celebrateTierName, { textAlign: 'center', marginBottom: 20 }]}>
+              You need {BUY_IN[TIER_TO_BUYIN_KEY[insufficientTier]!].toLocaleString('en-US')} tokens to enter {TIER_CONFIG[insufficientTier].label}.
+            </Text>
+            <TouchableOpacity onPress={handleWatchAd} style={[s.celebrateBtn, { marginBottom: 10 }]}>
+              <Text style={s.celebrateBtnTxt}>Watch Ad (+{AD_RESCUE_AMOUNT})</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleBuyTokensNav} style={[s.celebrateBtn, { marginBottom: 10 }]}>
+              <Text style={s.celebrateBtnTxt}>Buy Tokens</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleCancelInsufficientTier} style={[s.celebrateBtn, { borderColor: COLOR.red }]}>
+              <Text style={[s.celebrateBtnTxt, { color: COLOR.red }]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* ─── Entry Buy-in Confirm (ครั้งแรกต่อ Tier — Buy-in Spec §3) ─── */}
+      {confirmBuyInTier && (
+        <View style={s.celebrateOverlay}>
+          <View style={s.celebrateCard}>
+            <Text style={s.celebrateIcon}>🪙</Text>
+            <Text style={s.celebrateTitle}>ENTRY BUY-IN</Text>
+            <Text style={[s.celebrateTierName, { textAlign: 'center', marginBottom: 20 }]}>
+              Entry Buy-in: {BUY_IN[TIER_TO_BUYIN_KEY[confirmBuyInTier]!].toLocaleString('en-US')} tokens.{'\n'}This amount is deducted now and settled when the match ends.
+            </Text>
+            <TouchableOpacity onPress={handleConfirmBuyIn} style={[s.celebrateBtn, { marginBottom: 10 }]}>
+              <Text style={s.celebrateBtnTxt}>Confirm</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleCancelConfirmBuyIn} style={[s.celebrateBtn, { borderColor: COLOR.red }]}>
+              <Text style={[s.celebrateBtnTxt, { color: COLOR.red }]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* ─── Toast: Buy-in deducted (ครั้งถัดไปหลัง confirm ครั้งแรกแล้ว) ─── */}
+      {buyInToast && (
+        <View style={s.toastBanner}>
+          <Text style={s.toastText}>{buyInToast}</Text>
+        </View>
+      )}
+
+      {/* ─── Toast: Table deleted / timeout expired ─── */}
+      {mmDeletedMessage && (
+        <View style={s.toastBanner}>
+          <Text style={s.toastText}>{mmDeletedMessage}</Text>
+        </View>
+      )}
+
+      {/* ─── Toast: Coming Soon (Menu Bar buttons ที่ระบบหลังบ้านยังไม่มี) ─── */}
+      {comingSoonMsg && (
+        <View style={s.toastBanner}>
+          <Text style={s.toastText}>{comingSoonMsg}</Text>
+        </View>
+      )}
 
       {/* ─── Header (fixed) ─── */}
       <View style={s.headerRow}>
@@ -238,42 +446,50 @@ export default function LobbyScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* ─── Menu Bar (fixed) — Feedback A2: เหลือ 4 ปุ่ม กระจายเต็มความกว้าง ไม่ scroll แล้ว ─── */}
+      <View style={s.menuBar}>
+        <MenuButton icon="shop" label="Shop" size="sm" onPress={handleShopNav} vipShimmer={isVip} />
+        <MenuButton icon="hall_of_fame" label="Hall of Fame" size="sm" onPress={() => handleComingSoon('Hall of Fame')} vipShimmer={isVip} />
+        <MenuButton icon="friends" label="Friends" size="sm" onPress={() => handleComingSoon('Friends')} vipShimmer={isVip} />
+        <MenuButton icon="ranking" label="Ranking" size="sm" onPress={() => handleComingSoon('Ranking')} vipShimmer={isVip} />
+      </View>
+
       {/* ─── Table List — Scroll Zone (~75% สูง) ─── */}
       <View style={s.scrollZone}>
         <ScrollView contentContainerStyle={{ paddingBottom: 8 }}>
           <Text style={s.sectionTitle}>{sectionTitle}</Text>
 
           {selected === 'initiate' && (
-            <TouchableOpacity style={s.enterBtn} onPress={handleEnterInitiate}>
-              <Text style={s.enterBtnTxt}>▶ เริ่มเล่น (สร้างโต๊ะของคุณ)</Text>
+            <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('initiate', handleEnterInitiate)}>
+              <Text style={s.enterBtnTxt}>▶ Play (Create Your Table)</Text>
             </TouchableOpacity>
           )}
 
           {selected === 'mastermind' && (
-            <TouchableOpacity style={s.enterBtn} onPress={handleEnterMastermind}>
-              <Text style={s.enterBtnTxt}>▶ เริ่มเล่น (1 Human + AI)</Text>
+            <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('mastermind', handleEnterMastermind)}>
+              <Text style={s.enterBtnTxt}>▶ Play (1 Human + AI)</Text>
             </TouchableOpacity>
           )}
 
-          {selected === 'high_noble' && (
-            <TouchableOpacity style={s.enterBtn} onPress={handleEnterHighNoble}>
-              <Text style={s.enterBtnTxt}>▶ เริ่มเล่น (1 Human + จตุรเทพ AI)</Text>
+          {selected === 'high_noble' && mmStatus === 'idle' && (
+            <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('high_noble', handleEnterHighNoble)}>
+              <Text style={s.enterBtnTxt}>▶ Play (Auto-Match 3 Human + Four Gods AI)</Text>
             </TouchableOpacity>
           )}
 
           {selected === 'adept' && mmStatus === 'idle' && (
-            <TouchableOpacity style={s.enterBtn} onPress={handleAutoMatchAdept}>
-              <Text style={s.enterBtnTxt}>▶ เริ่มเล่น (Auto-Match 3 Human + AI)</Text>
+            <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('adept', handleAutoMatchAdept)}>
+              <Text style={s.enterBtnTxt}>▶ Play (Auto-Match 3 Human + AI)</Text>
             </TouchableOpacity>
           )}
 
-          {selected === 'adept' && mmStatus === 'queued' && (
+          {(selected === 'adept' || selected === 'high_noble') && mmStatus === 'queued' && mmTier === (selected === 'high_noble' ? 'highNoble' : 'adept') && (
             <View style={{
-              backgroundColor: COLOR.bgSecondary, borderRadius: 12, borderWidth: 1.5,
-              borderColor: COLOR.goldPrimary, padding: 16, alignItems: 'center', marginBottom: 12,
+              ...glassPanel, // เดิม COLOR.bgSecondary ทึบ
+              padding: 16, alignItems: 'center', marginBottom: 12,
             }}>
               <Text style={{ color: COLOR.goldPrimary, fontSize: 14, fontWeight: '800', marginBottom: 10 }}>
-                🔍 กำลังหาผู้เล่น...
+                🔍 Finding players...
               </Text>
               <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
                 {[0, 1, 2, 3].map(i => {
@@ -294,63 +510,32 @@ export default function LobbyScreen() {
               </View>
               {mmSecondsLeft > 0 && (
                 <Text style={{ color: COLOR.textSecondary, fontSize: 11, marginBottom: 10 }}>
-                  AI จะเข้ามาแทนที่ในอีก {mmSecondsLeft} วินาที ถ้าหา Human ไม่ครบ
+                  AI will fill in {mmSecondsLeft}s if not enough Humans join
                 </Text>
               )}
               <TouchableOpacity onPress={handleCancelMatchmaking}
                 style={{ borderWidth: 1, borderColor: COLOR.red, borderRadius: 8, paddingHorizontal: 20, paddingVertical: 8 }}>
-                <Text style={{ color: COLOR.red, fontSize: 12, fontWeight: '700' }}>ยกเลิก</Text>
+                <Text style={{ color: COLOR.red, fontSize: 12, fontWeight: '700' }}>Cancel</Text>
               </TouchableOpacity>
             </View>
           )}
 
-          {loading && <ActivityIndicator color={COLOR.goldPrimary} style={{ marginVertical: 12 }} />}
-
-          {!loading && selected === 'adept' && tables.length === 0 && (
+          {(selected === 'adept' || selected === 'high_noble') && mmStatus === 'idle' && (
             <View style={{ paddingVertical: 24, paddingHorizontal: 16, alignItems: 'center' }}>
-              <Text style={{ color: COLOR.textSecondary, fontSize: 12, textAlign: 'center', lineHeight: 18 }}>
-                ยังไม่มีห้องที่เปิดอยู่{'\n'}กด "เริ่มเล่น" เพื่อสร้างห้องใหม่
+              <Text style={{ color: COLOR.textSecondary, fontSize: 12, textAlign: 'center', lineHeight: 18, ...textOnGlass }}>
+                No open rooms yet{'\n'}Tap "Play" to create a new room
               </Text>
             </View>
           )}
-          {!loading && selected && tables.map(table => (
-            <View key={table.tableId} style={s.tableCard}>
-              <View style={{ flex: 1 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Text style={s.tableId}>{table.tableId}</Text>
-                  {selected === 'all' && (
-                    <View style={[s.tierTagSmall, { borderColor: TIER_CONFIG[table.tier].badgeColor }]}>
-                      <Text style={[s.tierTagSmallTxt, { color: TIER_CONFIG[table.tier].badgeColor }]}>
-                        [{TIER_CONFIG[table.tier].letter}] {TIER_CONFIG[table.tier].label}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-                <View style={{ flexDirection: 'row', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
-                  {table.seats.map((seat, i) => (
-                    <View key={i} style={s.seatChip}>
-                      <Text style={s.seatChipTxt}>P{i + 1}: {seat.type === 'empty' ? '— ' : ''}{seat.name}</Text>
-                    </View>
-                  ))}
-                </View>
-                {table.secondsLeft !== null && (
-                  <Text style={s.timeoutTxt}>⏱ {table.secondsLeft}s before timeout</Text>
-                )}
-              </View>
-              <TouchableOpacity
-                disabled={!table.joinable}
-                onPress={() => handleEnterTable(table)}
-                style={[s.joinIconBtn, { backgroundColor: table.joinable ? 'rgba(141,255,181,0.15)' : 'rgba(255,107,107,0.15)', borderColor: table.joinable ? COLOR.greenHighlight : COLOR.red }]}
-              >
-                <Text style={[s.joinIconTxt, { color: table.joinable ? COLOR.greenHighlight : COLOR.red }]}>
-                  {table.joinable ? '✓' : '✗'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          ))}
 
-          {!loading && !selected && (
-            <Text style={{ color: COLOR.textTertiary, fontSize: 12 }}>— ยังไม่ได้เลือก Tier —</Text>
+          {selected === 'all' && (
+            <Text style={{ color: COLOR.textTertiary, fontSize: 12, textAlign: 'center', paddingVertical: 24, ...textOnGlass }}>
+              Select a Tier below to start playing
+            </Text>
+          )}
+
+          {!selected && (
+            <Text style={{ color: COLOR.textTertiary, fontSize: 12, ...textOnGlass }}>— No Tier selected —</Text>
           )}
         </ScrollView>
       </View>
@@ -361,16 +546,7 @@ export default function LobbyScreen() {
           onPress={() => setSelected('all')}
           style={[s.allBtn, selected === 'all' && s.allBtnActive]}
         >
-          <Text style={s.allBtnTxt}>🌐 All Tables (ทุก Tier)</Text>
-        </TouchableOpacity>
-
-        
-        {/* VIP Only: Select Skin Button */}
-        <TouchableOpacity
-          onPress={() => setShowSkinModal(true)}
-          style={s.skinSelectorBtn}
-        >
-          <Text style={s.skinSelectorBtnTxt}>🎨 Select Skin (VIP)</Text>
+          <Text style={s.allBtnTxt}>🌐 All Tables (All Tiers)</Text>
         </TouchableOpacity>
 
         <View style={s.tierRowsWrap}>
@@ -391,75 +567,56 @@ export default function LobbyScreen() {
           <Text style={s.footerSub}>The Sage Unicorn Studio Co., Ltd.</Text>
         </View>
       </View>
-    
-      
-            {/* VIP Skin Selector */}
-      <VIPSkinSelector
-        visible={showSkinModal}
-        onClose={() => setShowSkinModal(false)}
-        unlockedSkins={unlocked}
-        activeSkin={active}
-      />
 
       </View>
+    </ThemedBackground>
   );
 }
 
 const s = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: COLOR.bgPrimary,
+    backgroundColor: 'transparent', // VipBackground ครอบพื้นหลังแล้ว — Free เห็น bgPrimary ผ่าน VipBackground fallback
     paddingHorizontal: 16,
     paddingTop: 16,
     overflow: 'hidden',
     ...(Platform.OS === 'web' ? { height: '100vh' as any } : {}),
   },
-  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
-  header: { color: COLOR.goldPrimary, fontSize: 20, fontWeight: '800', letterSpacing: 1, fontFamily: 'Cinzel' },
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, marginBottom: 12 }, // เดิม marginTop:50 hardcode ชดเชย status bar เอง — VipBackground มี SafeAreaView(top) ให้แล้ว เหลือแค่ breathing room ปกติ
+  header: { color: COLOR.goldPrimary, fontSize: 20, fontWeight: '800', letterSpacing: 1, fontFamily: 'Cinzel', ...textOnGlass },
   profileBtn: { borderWidth: 1, borderColor: COLOR.goldPrimary, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
-  profileBtnTxt: { color: COLOR.goldPrimary, fontSize: 12, fontWeight: '700' },
+  profileBtnTxt: { color: COLOR.goldPrimary, fontSize: 12, fontWeight: '700', ...textOnGlass },
+
+  menuBar: { flexDirection: 'row', justifyContent: 'space-evenly', alignItems: 'center', marginBottom: 10 }, // Feedback A2: เหลือ 4 ปุ่ม กระจายเต็มความกว้างแทน scroll
 
   // Scroll Zone กิน flex:3 ของพื้นที่ที่เหลือ (~75%), Fixed Bottom Block กิน flex:1 (~25%)
   scrollZone: { flex: 1, minHeight: 0, overflow: 'hidden' },
-  sectionTitle: { color: COLOR.textPrimary, fontSize: 14, fontWeight: '700', marginBottom: 6 },
+  sectionTitle: { color: COLOR.textPrimary, fontSize: 14, fontWeight: '700', marginBottom: 6, ...textOnGlass }, // ลอยตรงบนพื้นหลัง ไม่มี panel รอง
 
   enterBtn: { backgroundColor: COLOR.goldPrimary, borderRadius: 8, paddingVertical: 12, alignItems: 'center', marginBottom: 12 },
   enterBtnTxt: { color: COLOR.bgPrimary, fontWeight: '700', fontSize: 13 },
 
-  tableCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLOR.bgSecondary, borderRadius: 10, padding: 12, borderWidth: 1, borderColor: COLOR.borderPrimary, marginBottom: 10 },
-  tableId: { color: COLOR.textTertiary, fontSize: 10, fontFamily: 'JetBrains Mono' },
-  tierTagSmall: { borderWidth: 1, borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 },
-  tierTagSmallTxt: { fontSize: 8, fontWeight: '700' },
-  seatChip: { backgroundColor: COLOR.bgTertiary, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
-  seatChipTxt: { color: COLOR.textSecondary, fontSize: 9 },
-  timeoutTxt: { color: COLOR.goldPrimary, fontSize: 9, marginTop: 4, fontFamily: 'JetBrains Mono' },
-
-  joinIconBtn: { width: 40, height: 40, borderRadius: 20, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
-  joinIconTxt: { fontSize: 18, fontWeight: '800' },
-
   fixedBottomBlock: { paddingTop: 10, flexShrink: 0 },
 
-  allBtn: { borderRadius: 10, borderWidth: 1.5, borderColor: COLOR.greenHighlight, backgroundColor: COLOR.bgSecondary, paddingVertical: 12, alignItems: 'center', marginBottom: 10 },
-  allBtnActive: { backgroundColor: COLOR.bgTertiary },
+  allBtn: { borderRadius: 10, borderWidth: 1.5, borderColor: COLOR.greenHighlight, backgroundColor: glassPanel.backgroundColor, paddingVertical: 12, alignItems: 'center', marginBottom: 10 }, // เดิม COLOR.bgSecondary ทึบ — คง border เขียว (สื่อความหมาย "all tables") ไว้ตามเดิม
+  allBtnActive: { backgroundColor: glassPanelDense.backgroundColor },
   allBtnTxt: { color: COLOR.greenHighlight, fontWeight: '700', fontSize: 13 },
 
   tierRowsWrap: { gap: 8 },
   tierRow: { flexDirection: 'row', gap: 8 },
-  tierBtn: { flex: 1, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 10, borderWidth: 1.5, backgroundColor: COLOR.bgSecondary, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 },
+  tierBtn: { ...glassPanelDense, flex: 1, paddingHorizontal: 14, paddingVertical: 12, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 }, // เดิม COLOR.bgSecondary ทึบ — dense เพราะโชว์ Buy-in price
   tierBtnFull: { flex: 1 },
   tierBtnLocked: { opacity: 0.35 },
   tierBtnTxt: { color: COLOR.textPrimary, fontWeight: '700', fontSize: 13 },
   tierBtnTxtLocked: { color: COLOR.textTertiary },
+  buyInLabel: { color: COLOR.goldDark, fontSize: 9, fontFamily: 'JetBrainsMono_400Regular', marginTop: 2 },
   comingSoonTag: { color: COLOR.goldDark, fontSize: 8, marginTop: 2, fontWeight: '700', position: 'absolute', bottom: 2, right: 6 },
   badgeDot: { width: 6, height: 6, borderRadius: 3 },
 
   footer: { alignItems: 'center', paddingVertical: 10, borderTopWidth: 1, borderTopColor: COLOR.borderPrimary, marginTop: 10 },
   footerLogo: { width: 28, height: 28, opacity: 0.9, marginBottom: 4 },
-  footerText: { color: COLOR.goldPrimary, fontSize: 12, fontWeight: '800', letterSpacing: 1, fontFamily: 'Cinzel' },
-  footerSub: { color: COLOR.textTertiary, fontSize: 8, marginTop: 2 },
-
-    skinSelectorBtn: { backgroundColor: COLOR.goldPrimary, borderRadius: 10, paddingVertical: 12, alignItems: 'center', marginBottom: 10 },
-  skinSelectorBtnTxt: { color: COLOR.bgPrimary, fontWeight: '700', fontSize: 13 },
+  footerText: { color: COLOR.goldPrimary, fontSize: 12, fontWeight: '800', letterSpacing: 1, fontFamily: 'Cinzel', ...textOnGlass }, // ลอยตรงบนพื้นหลัง ไม่มี panel รอง
+  footerSub: { color: COLOR.textTertiary, fontSize: 8, marginTop: 2, ...textOnGlass },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.7)', justifyContent: 'flex-end' },
   modalContent: { backgroundColor: COLOR.bgSecondary, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingTop: 20, paddingHorizontal: 16, paddingBottom: 20 },
@@ -469,5 +626,28 @@ const s = StyleSheet.create({
   modalInfo: { color: COLOR.textSecondary, fontSize: 13, marginBottom: 20, lineHeight: 20 },
   modalCloseButton: { backgroundColor: COLOR.goldPrimary, borderRadius: 8, paddingVertical: 12, alignItems: 'center' },
   modalCloseButtonTxt: { color: COLOR.bgPrimary, fontSize: 14, fontWeight: '700' },
+
+  celebrateOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999,
+    backgroundColor: 'rgba(5,10,8,0.92)', alignItems: 'center', justifyContent: 'center', padding: 20,
+  },
+  celebrateCard: {
+    ...glassPanelDense, // เดิม COLOR.bgSecondary ทึบ — dialog มักโชว์ตัวเลข token (Not Enough Tokens/Entry Buy-in) จึงใช้ dense
+    width: '100%', maxWidth: 320, alignItems: 'center',
+    paddingVertical: 32, paddingHorizontal: 20,
+  },
+  celebrateIcon: { fontSize: 48, marginBottom: 10 },
+  celebrateTitle: { color: COLOR.goldPrimary, fontSize: 20, fontWeight: '900', letterSpacing: 2 },
+  celebrateTierName: { color: COLOR.textPrimary, fontSize: 15, fontWeight: '700', marginTop: 8, marginBottom: 22 },
+  celebrateBtn: { borderWidth: 1.5, borderColor: COLOR.goldPrimary, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 28, alignItems: 'center' },
+  celebrateBtnTxt: { color: COLOR.goldPrimary, fontWeight: '800', letterSpacing: 1 },
+
+  toastBanner: {
+    position: 'absolute', top: 60, left: 16, right: 16, zIndex: 1000,
+    backgroundColor: glassPanel.backgroundColor, // เดิม COLOR.bgSecondary ทึบ — คง border แดง (สื่อความหมาย alert) ไว้ตามเดิม
+    borderWidth: 1.5, borderColor: COLOR.red, borderRadius: 10,
+    paddingVertical: 10, paddingHorizontal: 16,
+  },
+  toastText: { color: COLOR.textPrimary, fontSize: 12, fontWeight: '700', textAlign: 'center' },
 
 });

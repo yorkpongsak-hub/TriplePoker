@@ -80,12 +80,16 @@ describe('checkFoul — Card Count (กฎ 3-3-5)', () => {
     expect(result.foulPile).toBe(2)
   })
 
-  // Pile 3 มีไพ่ผิดจำนวน → Foul
-  test('Pile 3 มี 4 ใบ (ไม่ใช่ 5 หรือ 3) → Foul', () => {
+  // Pile 3 มีไพ่น้อยกว่า 3 ใบ → Foul
+  // Patch (2026-07-16): เดิม test นี้เช็คว่า pile3=4 ใบต้อง Foul (สมมติฐานเก่า
+  // ที่ยอมรับแค่ 5 หรือ 3 ใบเท่านั้น) — ตาม CLAUDE.md บั๊ก #9 ที่แก้ไปแล้ว
+  // pile3 มีได้ 3/5/6 ใบตามจริง (6 ใบกรณีชนะประมูล ก่อน Discard) กติกาจริงคือ
+  // "น้อยกว่า 3 ใบ" เท่านั้นถึง Foul — เปลี่ยน test ให้ตรงกับกติกาปัจจุบัน
+  test('Pile 3 มีน้อยกว่า 3 ใบ (2 ใบ) → Foul', () => {
     const arrangement: PlayerArrangement = {
       pile1: [c(2, S), c(5, H), c(9, D)],
       pile2: [c(3, S), c(3, H), c(6, D)],
-      pile3: [c(7, S), c(7, H), c(8, D), c(4, C)],              // ❌ 4 ใบ
+      pile3: [c(7, S), c(7, H)],                                // ❌ 2 ใบ (< 3)
     }
     const community: CommunityCards = {
       row1: [c(11, C), c(13, S)],

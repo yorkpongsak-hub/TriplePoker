@@ -2,13 +2,23 @@
 // Profile Screen -- TriplePoker (Merged: Arena layout + Brand theme colors)
 // The Sage Unicorn Studio Co., Ltd.
 
-import React, { useState } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   View, Text, TouchableOpacity,
-  StyleSheet, Platform, StatusBar, ScrollView,
+  StyleSheet, StatusBar, ScrollView, Image,
 } from 'react-native'
-import { router } from 'expo-router'
+import { LinearGradient } from 'expo-linear-gradient'
+import { router, useFocusEffect } from 'expo-router'
 import { useAuthStore } from '../../src/store/authStore'
+import { useBgm } from '../../src/services/bgmService'
+import { ActionButton } from '../../src/components/ui/ActionButton'
+import { MenuButton } from '../../src/components/ui/MenuButton'
+import { ThemedBackground } from '../../src/components/ui/ThemedBackground'
+import { glassPanel, glassPanelDense } from '../../src/ui/glassStyles'
+import { getTierFromToken, TierKey } from '../../src/config/tierConfig'
+import { supabase } from '../../src/services/supabaseService'
+import ProfilePicturePicker from '../../src/components/profile/ProfilePicturePicker'
+import { AvatarDisplay, PRESET_AVATARS, AvatarConfig } from '../../src/components/profile/AvatarPicker'
 
 // ─── ธีมสีหลัก (Website Theme Spec v1.0) ─────────────────────
 const C = {
@@ -31,45 +41,14 @@ const C = {
   white:       '#0F2418',
 }
 
-// ─── Mock data (เปลี่ยนเป็น real data ตอนเชื่อม DB) ──────────
+// ─── Fallback ก่อน profile จาก Supabase โหลดเสร็จ ─────────────
 const MOCK = {
-  name:           'York',
-  avatar:         '🐉',
-  tier:           'S' as 'D' | 'C' | 'B' | 'A' | 'S',
-  vipStatus:      'pro' as 'free' | 'vip' | 'pro',
-  token:          425_000,
-  crown:          12,
-  streakDays:     7,
-  rank:           12,
-  debt:           0,
-  xpNow:          15_400,
-  xpNext:         18_000,
-  winRate:        68,
-  totalMatches:   142,
-  bestHand:       'Royal Flush',
-  recentMatches: [
-    { id: 1, result: 'win',  opponent: 'Reaper',     delta: +850,  ago: '5m ago'     },
-    { id: 2, result: 'lose', opponent: 'Crag',       delta: -200,  ago: '1h ago'     },
-    { id: 3, result: 'win',  opponent: 'Adept Bot',  delta: +1200, ago: 'yesterday'  },
-  ],
-  achievements: [
-    { id: 1, icon: '🏆', name: 'First Win',       date: 'May 12, 2026' },
-    { id: 2, icon: '🃏', name: 'Royal Flush',     date: 'Jun 03, 2026' },
-    { id: 3, icon: '🔥', name: '30-day Streak',   date: 'Jun 15, 2026' },
-  ],
-  bossesConquered: [
-    { id: 'iron_wall',   name: 'Iron Wall',   icon: '🛡️', conquered: true  },
-    { id: 'chivalry',    name: 'Chivalry',    icon: '⚔️', conquered: true  },
-    { id: 'war_lord',    name: 'War Lord',    icon: '👹', conquered: true  },
-    { id: 'phantom',     name: 'Phantom',     icon: '👤', conquered: false },
-    { id: 'dark_shark',  name: 'Dark Shark',  icon: '🦈', conquered: false },
-    { id: 'oracle',      name: 'Oracle',      icon: '🔮', conquered: false },
-    { id: 'jester',      name: 'Jester',      icon: '🃏', conquered: false },
-    { id: 'phoenix',     name: 'Phoenix',     icon: '🔥', conquered: false },
-    { id: 'black_magic', name: 'Black Magic', icon: '🧙', conquered: false },
-  ],
-  following: 24,
-  followers: 8,
+  name:       'York',
+  avatar:     '🐉',
+  token:      425_000,
+  crown:      12,
+  streakDays: 7,
+  xpNow:      15_400,
 }
 
 // ─── Tier / VIP config ────────────────────────────────────────
@@ -83,36 +62,123 @@ const TIER_INFO: Record<string, { label: string; color: string }> = {
   'S+': { label: 'LAST BOSS',  color: C.goldDark },
 }
 
+// Map TierKey (คำนวณสดจาก token_balance ใน tierConfig.ts) -> letter grade ของ TIER_INFO ด้านบน
+// Ascendant(S)/Last Boss(S+) ไม่อยู่ใน map นี้เพราะไม่ใช่ token-threshold tier (คำนวณสดไม่ได้ — ยัง stub)
+const TIER_KEY_LETTER: Record<TierKey, string> = {
+  initiate:   'C',
+  adept:      'B',
+  mastermind: 'A',
+  highNoble:  'A+',
+}
+
 const VIP_INFO: Record<string, { label: string; color: string } | null> = {
   none:    null,
   vip:     { label: 'VIP',     color: C.gold     },
   vip_pro: { label: 'VIP PRO', color: C.goldDark },
 }
 
+// LobbyMatchmaking_Spec_v1_0 §1.3 — key ตรงกับ tier_unlock_celebrated ที่ lobby.tsx เขียนลง DB (server-authoritative)
+const TIER_UNLOCK_CONFIG: Record<string, { label: string; letter: string; color: string }> = {
+  initiate:   { label: 'Initiate',      letter: 'C',  color: C.green },
+  adept:      { label: 'Adept',         letter: 'B',  color: C.blue },
+  mastermind: { label: 'Mastermind',    letter: 'A',  color: C.purple },
+  high_noble: { label: 'High Noble',    letter: 'A+', color: C.gold }, // letter เดิม 'S' — แก้ให้ตรงกับ Top Bar badge (canon High Noble = A+, S สงวนไว้ให้ Ascendant)
+  last_boss:  { label: 'The Last Boss', letter: 'S+', color: C.goldDark },
+}
+
 const fmt = (n: number) => n.toLocaleString('en-US')
+
+// Monarch_Spec_v1_3 §4/§5 — Performance Score + Ascendant Gate ปลดล็อคตั้งแต่ Tier A+ (highNoble) ขึ้นไปเท่านั้น
+const ASCENDANT_TOKEN_MIN = 600_000
+const ASCENDANT_TOKEN_MAX = 999_999
 
 type TabKey = 'stats' | 'bosses' | 'history' | 'social'
 
 export default function ProfileScreen() {
+  useBgm() // LobbyMatchmaking_Spec_v1_0 §2 — BGM เล่นต่อเนื่องข้าม Profile/Shop/Lobby/Hall of Fame
   const signOut = useAuthStore(s => s.signOut)
   const profile = useAuthStore(s => s.profile)
+  const refreshProfile = useAuthStore(s => s.refreshProfile)
+  const authUser = useAuthStore(s => s.user)
   const [activeTab, setActiveTab] = useState<TabKey>('stats')
 
+  // Safety net: token อาจเปลี่ยนนอก flow แมตช์ (admin แก้ DB ตรง, ซื้อ token ใน Shop, ad reward ฯลฯ)
+  // refetch ทุกครั้งที่กลับมาโฟกัสหน้านี้ — debounce 3 วิ กันยิงรัวถ้าสลับหน้าเร็วๆ
+  const lastFocusFetchRef = useRef(0)
+  useFocusEffect(
+    useCallback(() => {
+      const now = Date.now()
+      if (now - lastFocusFetchRef.current < 3000) return
+      lastFocusFetchRef.current = now
+      refreshProfile()
+    }, [refreshProfile])
+  )
+
   // ─── Real data จาก authStore (fallback MOCK เผื่อ profile ยังโหลดไม่เสร็จ) ───
-  const displayName = profile?.display_name || MOCK.name
-  const avatar      = profile?.avatar_url   || MOCK.avatar
-  const tier        = profile?.tier         || MOCK.tier
-  const vipStatus   = profile?.vip_status   || 'none'
+  const displayName = profile?.display_name  || MOCK.name
+  const avatar      = profile?.avatar_url    || MOCK.avatar
+  const vipStatus   = profile?.vip_status    || 'none'
   const token       = profile?.token_balance ?? MOCK.token
   const crown       = profile?.crown_balance ?? MOCK.crown
-  const xpNow       = profile?.xp           ?? MOCK.xpNow
+  const xpNow       = profile?.xp            ?? MOCK.xpNow
+  // Patch (2026-07-17): ยืนยันแล้วว่า streak_count มีอยู่จริงบน live DB (ลุงเช็ค Table Editor
+  // ให้แล้ว) — comment เดิมที่บอกว่าคอลัมน์ไม่มีล้าสมัยไปแล้ว ต่อสายเป็นค่าจริงจาก authStore
+  const streakDays  = profile?.streak_count ?? MOCK.streakDays
 
-  const pct = Math.round((xpNow / MOCK.xpNext) * 100)
+  // Tier คำนวณสดจาก token เสมอ — เลิกอ่าน profile.tier ตรงๆ เพราะคอลัมน์นั้นไม่มี pipeline ไหนอัปเดตจริง
+  // (ดูปัญหาเดิม: Top Bar ไม่ตรงกับ Tiers Unlocked) getTierFromToken คืนแค่ 4 tier หลัก ไม่มี crash เพราะ token
+  // เป็นตัวเลขเสมอ (fallback MOCK.token ถ้า profile ยังโหลดไม่เสร็จ)
+  const liveTier  = getTierFromToken(token)
+  const tierLetter = TIER_KEY_LETTER[liveTier]
 
-  const tierInfo = TIER_INFO[tier] ?? TIER_INFO['C']
+  // Monarch_Spec_v1_3 §4/§5 — ต้องรัน supabase/migrations/006_monarch_spawn_reward.sql ก่อน คอลัมน์นี้ถึงจะมีค่าจริง
+  const careerPS = profile?.performance_score ?? 0   // Career PS — lifetime, ห้ามรีเซ็ต
+  const seasonPS = profile?.ps_season ?? 0            // Season PS — เกณฑ์แข่งขัน/Ascendant Star, รีเซ็ตตาม tournament
+  const monarchVictories = profile?.monarch_victories ?? 0
+  const isPSUnlocked     = liveTier === 'highNoble' // Ascendant/Last Boss ยัง stub — ยังคำนวณสดไม่ได้ (ดู tierConfig.ts)
+  const isMonarchSlayer  = monarchVictories >= 1
+  const showAscendantHint = isPSUnlocked && !isMonarchSlayer && token >= ASCENDANT_TOKEN_MIN && token <= ASCENDANT_TOKEN_MAX
+
+  const tierInfo = TIER_INFO[tierLetter] ?? TIER_INFO['C']
   const vipInfo  = VIP_INFO[vipStatus]
-  const isVip    = vipStatus !== 'none'
-  const conqueredCount = MOCK.bossesConquered.filter(b => b.conquered).length
+  const unlockedTiers = profile?.tier_unlock_celebrated ?? []
+  const isVip    = vipStatus !== 'none' // VIP Shimmer Effect — ใช้ vip_status ที่มีอยู่แล้ว ไม่สร้าง state/query ใหม่
+
+  // avatar_url อาจเป็น preset key ใหม่ ('wolf', 'avatar_vip_01' ฯลฯ) หรือ emoji ดิบของเก่า (ก่อนระบบ
+  // preset) — เช็ค key ที่รู้จักก่อนค่อยเลือก component render ให้ถูก (กัน render "wolf" เป็น text ตรงๆ)
+  const isKnownAvatarPreset = !!profile?.avatar_url && PRESET_AVATARS.some(p => p.key === profile.avatar_url)
+  const avatarConfig: AvatarConfig = { type: 'preset', presetKey: profile?.avatar_url ?? undefined, frameKey: 'default' }
+
+  // --- Profile Picture (VIP real image) --- เก็บ path ใน DB, ขอ signed URL สดตอน render
+  const [picModalVisible, setPicModalVisible] = useState(false)
+  const [profileImageSignedUrl, setProfileImageSignedUrl] = useState<string | null>(null)
+  const profileImagePath = profile?.profile_image_url ?? null
+  useEffect(() => {
+    let cancelled = false
+    if (!isVip || !profileImagePath) {
+      setProfileImageSignedUrl(null)
+      return
+    }
+    supabase.storage
+      .from('avatars')
+      .createSignedUrl(profileImagePath, 3600)
+      .then(({ data }) => {
+        if (!cancelled) setProfileImageSignedUrl(data?.signedUrl ?? null)
+      })
+      .catch(() => {
+        if (!cancelled) setProfileImageSignedUrl(null)
+      })
+    return () => { cancelled = true }
+  }, [isVip, profileImagePath])
+
+  // ─── Toast: Coming Soon (ปุ่มที่ระบบหลังบ้านยังไม่มี) — pattern เดียวกับ lobby.tsx ───
+  const [comingSoonMsg, setComingSoonMsg] = useState<string | null>(null)
+  useEffect(() => {
+    if (!comingSoonMsg) return
+    const id = setTimeout(() => setComingSoonMsg(null), 2500)
+    return () => clearTimeout(id)
+  }, [comingSoonMsg])
+  const handleComingSoon = (label: string) => setComingSoonMsg(`${label} — Coming Soon`)
 
   const handleLogout = async () => {
     await signOut()
@@ -120,11 +186,13 @@ export default function ProfileScreen() {
   }
 
   const handleSettings = () => {
-    console.log('Settings pressed')
+    // ยังไม่มีหน้า Settings จริง -- ใช้ปุ่มนี้เปิด Onboarding ซ้ำไปก่อน (label เปลี่ยนเป็น "How to Play" แล้ว)
+    // วันหลังมีหน้า Settings จริงค่อยคืน label + onPress กลับเป็นของเดิม
+    router.push('/(auth)/onboarding')
   }
 
   const handleEditProfile = () => {
-    router.push('/(auth)/setup-profile')
+    setPicModalVisible(true)
   }
 
   const handlePlay = () => {
@@ -141,37 +209,68 @@ export default function ProfileScreen() {
   }
 
   return (
+    <ThemedBackground isVip={isVip}>
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
+
+      {/* ─── Toast: Coming Soon (Friends/Ranking/Legends) — pattern เดียวกับ lobby.tsx ─── */}
+      {comingSoonMsg && (
+        <View style={s.toastBanner}>
+          <Text style={s.toastText}>{comingSoonMsg}</Text>
+        </View>
+      )}
 
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 
         {/* ═══════════════ TOP HEADER ═══════════════ */}
         <View style={s.topHeader}>
-          <TouchableOpacity onPress={handleSettings} style={s.iconBtn}>
-            <Text style={s.iconText}>⚙</Text>
-          </TouchableOpacity>
-          <View style={{ flex: 1 }} />
-          <TouchableOpacity onPress={handleLogout} style={s.iconBtn}>
-            <Text style={s.iconText}>🚪</Text>
-          </TouchableOpacity>
+          <MenuButton icon="settings" label="How to Play" size="xs" onPress={handleSettings} vipShimmer={isVip} />
+          <View style={s.playerProfileLabel}>
+            <LinearGradient
+              colors={[C.goldDark, C.gold]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFill}
+            />
+            <Text style={s.playerProfileLabelText}>Player Profile</Text>
+          </View>
+          <MenuButton icon="exit" label="Logout" size="xs" onPress={handleLogout} vipShimmer={isVip} />
         </View>
 
         {/* ═══════════════ HERO PLAYER CARD ═══════════════ */}
         <GoldCard style={s.heroCard}>
           <TouchableOpacity onPress={handleEditProfile} style={s.avatarFrame} activeOpacity={0.85}>
-            <Text style={s.avatarEmoji}>{avatar}</Text>
+            {profileImageSignedUrl ? (
+              <Image
+                source={{ uri: profileImageSignedUrl }}
+                style={{ width: '100%', height: '100%', borderRadius: 999 }}
+              />
+            ) : isKnownAvatarPreset ? (
+              <AvatarDisplay config={avatarConfig} size={82} showFrame={false} />
+            ) : (
+              // avatar_url เก่าเป็น emoji ดิบ (ก่อนระบบ preset) — render ตรงๆ เหมือนเดิม ไม่ crash
+              <Text style={s.avatarEmoji}>{avatar}</Text>
+            )}
             <View style={s.editBubble}>
               <Text style={s.editIcon}>✎</Text>
             </View>
           </TouchableOpacity>
+
+          <ProfilePicturePicker
+            visible={picModalVisible}
+            onClose={() => setPicModalVisible(false)}
+            isVip={isVip}
+            userId={authUser?.id ?? ''}
+            onUploaded={refreshProfile}
+            onChooseAvatar={() => router.push('/(auth)/setup-profile')}
+          />
 
           <View style={s.heroInfo}>
             <Text style={s.userName} numberOfLines={1}>{displayName}</Text>
             <View style={s.badgeRow}>
               <View style={[s.tierBadge, { borderColor: tierInfo.color }]}>
                 <Text style={[s.tierBadgeText, { color: tierInfo.color }]}>
-                  [{tier}] {tierInfo.label}
+                  [{tierLetter}] {tierInfo.label}
                 </Text>
               </View>
               {vipInfo && (
@@ -179,18 +278,13 @@ export default function ProfileScreen() {
                   <Text style={[s.vipBadgeText, { color: vipInfo.color }]}>{vipInfo.label} ♛</Text>
                 </View>
               )}
+              {isMonarchSlayer && (
+                <View style={[s.vipBadge, { borderColor: C.purple, backgroundColor: `${C.purple}22` }]}>
+                  <Text style={[s.vipBadgeText, { color: C.purple }]}>MONARCH SLAYER 👑</Text>
+                </View>
+              )}
             </View>
-
-            <View style={s.rankRow}>
-              <Text style={s.rankIcon}>🏆</Text>
-              <Text style={s.rankLabel}>GLOBAL RANK</Text>
-              <Text style={s.rankValue}>#{MOCK.rank}</Text>
-            </View>
-
-            <View style={s.progressTrack}>
-              <View style={[s.progressFill, { width: `${pct}%` }]} />
-            </View>
-            <Text style={s.progressSub}>{fmt(xpNow)} / {fmt(MOCK.xpNext)} XP to Mythic</Text>
+            <Text style={s.xpLine}>⭐ {fmt(xpNow)} XP</Text>
           </View>
         </GoldCard>
 
@@ -203,25 +297,49 @@ export default function ProfileScreen() {
           <ResourceBox icon="💎" label="VIP STATUS" value={vipInfo?.label ?? 'FREE'} valueColor={vipInfo?.color ?? C.textPrimary} />
         </GoldCard>
 
-        {/* ═══════════════ DEBT BADGE ═══════════════ */}
-        {MOCK.debt > 0 && (
-          <View style={s.debtBadge}>
-            <Text style={s.debtTitle}>⚠ DEBT {fmt(MOCK.debt)} TOKEN</Text>
-            <Text style={s.debtSub}>Auto-deduct 20% from pot wins</Text>
-            <TouchableOpacity style={s.debtBtn}>
-              <Text style={s.debtBtnText}>PAY</Text>
-            </TouchableOpacity>
+        {/* ═══════════════ TIERS UNLOCKED (LobbyMatchmaking_Spec_v1_0 §1.3 — ย้ายมาจาก popup ใน Lobby) ═══════════════ */}
+        {unlockedTiers.length > 0 && (
+          <GoldCard style={s.tiersUnlockedCard}>
+            <Text style={s.tiersUnlockedLabel}>TIERS UNLOCKED</Text>
+            <View style={s.tiersUnlockedRow}>
+              {unlockedTiers.map(t => {
+                const cfg = TIER_UNLOCK_CONFIG[t]
+                if (!cfg) return null
+                return (
+                  <View key={t} style={[s.tierUnlockChip, { borderColor: cfg.color, backgroundColor: `${cfg.color}14` }]}>
+                    <Text style={[s.tierUnlockChipText, { color: cfg.color }]}>[{cfg.letter}] {cfg.label}</Text>
+                  </View>
+                )
+              })}
+            </View>
+          </GoldCard>
+        )}
+
+        {/* ═══════════════ PERFORMANCE SCORE — Dual-Track (Tier A+ ขึ้นไปเท่านั้น — Monarch_Spec_v1_3 §4) ═══════════════ */}
+        {/* Season PS เด่น (เกณฑ์แข่งขัน/Ascendant Star) + Career PS รอง (lifetime, ห้ามรีเซ็ต) — TODO: font JetBrains Mono ตาม spec ยังไม่ได้ load เข้า expo-font ในโปรเจกต์ */}
+        {isPSUnlocked && (
+          <GoldCard style={s.psCard}>
+            <View style={s.psSeasonRow}>
+              <Text style={s.psSeasonLabel}>📊 SEASON PS</Text>
+              <Text style={s.psSeasonValue}>{fmt(seasonPS)}</Text>
+            </View>
+            <Text style={s.psCareerValue}>Career PS (lifetime): {fmt(careerPS)}</Text>
+          </GoldCard>
+        )}
+
+        {/* ═══════════════ ASCENDANT HINT (token 600k-999,999 ผ่าน A+ แต่ยังไม่ชนะ Monarch) ═══════════════ */}
+        {showAscendantHint && (
+          <View style={s.ascendantHint}>
+            <Text style={s.ascendantHintText}>Defeat the Monarch to unlock Ascendant</Text>
           </View>
         )}
 
         {/* ═══════════════ MAIN ACTIONS ═══════════════ */}
-        <View style={s.actionRow}>
-          <ActionButton icon="🂡" title="PLAY" sub="QUICK MATCH" color={C.blue} onPress={handlePlay} />
-          <ActionButton icon="👑" title="Shop" sub="SKINS & ITEMS" color={C.gold} darkText onPress={handleShop} />
-          <ActionButton icon="🏅" title="Table of The Legends" sub="LEGENDS & RANKING" color={C.card} onPress={handleTableOfLegends} />
+        <View style={s.playHeroWrap}>
+          <ActionButton icon="play_royal_flush" label="PLAY" onPress={handlePlay} vipShimmer={isVip} labelStyle={s.playLabel} />
         </View>
 
-        {/* ═══════════════ TABS ═══════════════ */}
+        {/* ═══════════════ TABS (ย้ายขึ้นมาต่อจากปุ่ม Play — ผู้เล่นเห็นสถิติง่ายขึ้น) ═══════════════ */}
         <View style={s.tabsRow}>
           <TabButton label="STATS" active={activeTab === 'stats'} onPress={() => setActiveTab('stats')} />
           <TabButton label="BOSSES" active={activeTab === 'bosses'} onPress={() => setActiveTab('bosses')} />
@@ -229,24 +347,26 @@ export default function ProfileScreen() {
           <TabButton label="SOCIAL" active={activeTab === 'social'} onPress={() => setActiveTab('social')} />
         </View>
 
-        {activeTab === 'stats' && (
-          isVip ? <StatsPanel /> : <VipLockedPanel onUpgrade={() => router.push('/(home)/shop')} />
+        {activeTab === 'stats' && <StatsPanel streakDays={streakDays} />}
+        {activeTab === 'bosses' && (
+          <ComingSoonPanel icon="🗿" title="HALL OF BOSSES" sub="The Nine Sentinels are coming in a future update" />
         )}
-        {activeTab === 'bosses' && <BossesPanel conqueredCount={conqueredCount} />}
-        {activeTab === 'history' && <RecentActivityPanel />}
-        {activeTab === 'social' && <SocialPanel />}
+        {activeTab === 'history' && (
+          <ComingSoonPanel icon="📜" title="MATCH HISTORY" sub="Your recent matches will appear here soon" />
+        )}
+        {activeTab === 'social' && (
+          <ComingSoonPanel icon="👥" title="SOCIAL" sub="Following & followers are coming in a future update" />
+        )}
 
-        {activeTab === 'stats' && isVip && (
-          <>
-            <View style={s.twoColumnRow}>
-              <RecentActivityPanel />
-              <AchievementsPanel />
-            </View>
-            <BossesPanel compact conqueredCount={conqueredCount} />
-          </>
-        )}
+        <View style={s.secondaryRow}>
+          <MenuButton icon="friends" label="Friends" size="sm" onPress={() => handleComingSoon('Friends')} vipShimmer={isVip} />
+          <MenuButton icon="ranking" label="Ranking" size="sm" onPress={() => router.push('/(home)/stats')} vipShimmer={isVip} />
+          <MenuButton icon="shop" label="Shop" size="sm" onPress={handleShop} vipShimmer={isVip} />
+          <MenuButton icon="hall_of_fame" label="Legends" size="sm" onPress={handleTableOfLegends} vipShimmer={isVip} />
+        </View>
       </ScrollView>
     </View>
+    </ThemedBackground>
   )
 }
 
@@ -266,16 +386,6 @@ function ResourceBox({ icon, label, value, valueColor }: { icon: string; label: 
   )
 }
 
-function ActionButton({ icon, title, sub, color, darkText, onPress }: { icon: string; title: string; sub: string; color: string; darkText?: boolean; onPress: () => void }) {
-  return (
-    <TouchableOpacity activeOpacity={0.85} onPress={onPress} style={[s.actionBtn, { backgroundColor: color }]}>
-      <Text style={s.actionIcon}>{icon}</Text>
-      <Text style={[s.actionTitle, darkText ? { color: C.bg } : null]}>{title}</Text>
-      <Text style={[s.actionSub, darkText ? { color: C.header } : null]}>{sub}</Text>
-    </TouchableOpacity>
-  )
-}
-
 function TabButton({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
   return (
     <TouchableOpacity onPress={onPress} style={[s.tabBtn, active && s.tabBtnActive]} activeOpacity={0.8}>
@@ -284,29 +394,27 @@ function TabButton({ label, active, onPress }: { label: string; active: boolean;
   )
 }
 
-function VipLockedPanel({ onUpgrade }: { onUpgrade: () => void }) {
+// ── ที่ยังไม่มีระบบหลังบ้านจริง (match history, achievements, bosses conquered, social) ──
+function ComingSoonPanel({ icon, title, sub }: { icon: string; title: string; sub: string }) {
   return (
-    <GoldCard style={s.vipLockedPanel}>
-      <Text style={s.vipLockedIcon}>🔒</Text>
-      <Text style={s.vipLockedTitle}>MATCH STATS — VIP ONLY</Text>
-      <Text style={s.vipLockedSub}>Unlock win rate, match history, and best hand tracking</Text>
-      <TouchableOpacity style={s.unlockVipBtn} onPress={onUpgrade}>
-        <Text style={s.unlockVipText}>UNLOCK WITH VIP →</Text>
-      </TouchableOpacity>
+    <GoldCard style={s.comingSoonPanel}>
+      <Text style={s.comingSoonIcon}>{icon}</Text>
+      <Text style={s.comingSoonTitle}>{title}</Text>
+      <Text style={s.comingSoonSub}>{sub}</Text>
     </GoldCard>
   )
 }
 
-function StatsPanel() {
+function StatsPanel({ streakDays }: { streakDays: number }) {
   return (
     <GoldCard style={s.statsPanel}>
-      <StatItem icon="🎯" label="WIN RATE" value={`${MOCK.winRate}%`} sub="TOP 22%" />
+      <StatItem icon="🎯" label="WIN RATE" value="—" sub="COMING SOON" small />
       <View style={s.vLine} />
-      <StatItem icon="⚔️" label="MATCHES" value={`${MOCK.totalMatches}`} sub="TOTAL PLAYED" />
+      <StatItem icon="⚔️" label="MATCHES" value="—" sub="COMING SOON" small />
       <View style={s.vLine} />
-      <StatItem icon="♠" label="BEST HAND" value={MOCK.bestHand} sub="HIGHEST" small />
+      <StatItem icon="♠" label="BEST HAND" value="—" sub="COMING SOON" small />
       <View style={s.vLine} />
-      <StatItem icon="🔥" label="STREAK" value={`${MOCK.streakDays} Days`} sub="CURRENT" small />
+      <StatItem icon="🔥" label="STREAK" value={`${streakDays} Days`} sub="CURRENT" small />
     </GoldCard>
   )
 }
@@ -322,114 +430,48 @@ function StatItem({ icon, label, value, sub, small }: { icon: string; label: str
   )
 }
 
-function RecentActivityPanel() {
-  return (
-    <GoldCard style={s.listPanel}>
-      <View style={s.panelHeader}>
-        <Text style={s.panelTitle}>RECENT ACTIVITY</Text>
-        <Text style={s.viewAll}>VIEW ALL ›</Text>
-      </View>
-      {MOCK.recentMatches.map(m => (
-        <View key={m.id} style={s.activityRow}>
-          <View style={s.enemyCircle}><Text style={s.enemyIcon}>{m.result === 'win' ? '☠️' : '👹'}</Text></View>
-          <View style={{ flex: 1 }}>
-            <Text style={s.activityTitle}>vs {m.opponent}</Text>
-            <Text style={s.activityTime}>{m.ago}</Text>
-          </View>
-          <View style={{ alignItems: 'flex-end' }}>
-            <Text style={[s.resultText, { color: m.result === 'win' ? C.green : C.red }]}>{m.result.toUpperCase()}</Text>
-            <Text style={[s.deltaText, { color: m.delta > 0 ? C.green : C.red }]}>{m.delta > 0 ? '+' : ''}{fmt(m.delta)}</Text>
-          </View>
-        </View>
-      ))}
-    </GoldCard>
-  )
-}
-
-function AchievementsPanel() {
-  return (
-    <GoldCard style={s.listPanel}>
-      <View style={s.panelHeader}>
-        <Text style={s.panelTitle}>ACHIEVEMENTS</Text>
-        <Text style={s.viewAll}>VIEW ALL ›</Text>
-      </View>
-      {MOCK.achievements.map(a => (
-        <View key={a.id} style={s.achievementRow}>
-          <Text style={s.achievementIcon}>{a.icon}</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={s.achievementName}>{a.name}</Text>
-            <Text style={s.achievementDate}>{a.date}</Text>
-          </View>
-          <Text style={s.checkIcon}>✓</Text>
-        </View>
-      ))}
-    </GoldCard>
-  )
-}
-
-function BossesPanel({ compact, conqueredCount }: { compact?: boolean; conqueredCount: number }) {
-  return (
-    <GoldCard style={compact ? s.bossPanelCompact : s.bossPanel}>
-      <View style={s.panelHeader}>
-        <Text style={s.panelTitle}>HALL OF BOSSES</Text>
-        <Text style={s.conqueredText}>{conqueredCount} / {MOCK.bossesConquered.length} CONQUERED</Text>
-      </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.bossScroll}>
-        {MOCK.bossesConquered.map(b => (
-          <View key={b.id} style={[s.bossCard, !b.conquered && s.bossLocked]}>
-            <Text style={s.bossIcon}>{b.conquered ? b.icon : '🗿'}</Text>
-            <View style={[s.bossStatus, b.conquered ? s.bossStatusWin : s.bossStatusLock]}>
-              <Text style={s.bossStatusText}>{b.conquered ? '✓' : '🔒'}</Text>
-            </View>
-            <Text style={s.bossName} numberOfLines={1}>{b.name}</Text>
-          </View>
-        ))}
-      </ScrollView>
-    </GoldCard>
-  )
-}
-
-function SocialPanel() {
-  return (
-    <GoldCard style={s.socialPanel}>
-      <StatItem icon="👥" label="FOLLOWING" value={`${MOCK.following}`} sub="PLAYERS" />
-      <View style={s.vLine} />
-      <StatItem icon="🌟" label="FOLLOWERS" value={`${MOCK.followers}`} sub="FANS" />
-    </GoldCard>
-  )
-}
-
 // ─── Styles ──────────────────────────────────────────────────
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.bg },
+  root: { flex: 1, backgroundColor: 'transparent' }, // VipBackground ครอบพื้นหลังแล้ว — Free เห็น C.bg ผ่าน VipBackground fallback
   scroll: { paddingHorizontal: 14, paddingBottom: 34 },
 
   topHeader: {
-    minHeight: 70,
-    backgroundColor: C.header,
+    minHeight: 76, // เดิม 92 — Settings/Logout เล็กลง (size xs=48) เพิ่ม Player Profile label panel ตรงกลาง — Feedback B2
+    backgroundColor: glassPanel.backgroundColor, // เดิมพื้นทึบ C.header — เหลือแค่ backgroundColor เพราะเป็นแถบเต็มขอบจอ (border/radius เดิมของบาร์ไม่แตะ)
     marginHorizontal: -14,
     paddingHorizontal: 20,
-    paddingTop: Platform.OS === 'web' ? 22 : 24,
-    paddingBottom: 8,
+    paddingTop: 12, // เดิม hardcode ชดเชย status bar เอง (16/18) — VipBackground มี SafeAreaView(top) ให้แล้ว เหลือแค่ breathing room ปกติ
+    paddingBottom: 10,
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: 10,
     borderBottomWidth: 1,
     borderBottomColor: C.border,
   },
-  iconBtn: {
-    width: 40, height: 40, borderRadius: 10,
-    backgroundColor: C.card,
-    borderWidth: 1.5, borderColor: C.border,
-    alignItems: 'center', justifyContent: 'center',
+  playerProfileLabel: {
+    // Feedback B2 — label header เฉยๆ ระหว่าง Settings/Logout กว้างเต็มพื้นที่ที่เหลือ ไม่มี action
+    flex: 1,
+    height: 48,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: C.goldDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
   },
-  iconText: { fontSize: 18, color: C.textPrimary },
+  playerProfileLabelText: {
+    fontFamily: 'Cinzel',
+    color: C.bg,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+    textShadowColor: 'rgba(255,255,255,0.35)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 1,
+  },
 
   goldCard: {
-    backgroundColor: C.surface,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    borderColor: C.borderHi,
+    ...glassPanel, // เดิมพื้นทึบ C.surface — เปลี่ยนเป็นกระจกฝ้ากลาง (ห้าม hardcode rgba เอง)
   },
   heroCard: {
     marginTop: -20,
@@ -468,20 +510,10 @@ const s = StyleSheet.create({
     borderRadius: 6, borderWidth: 1.5,
   },
   vipBadgeText: { fontSize: 9, fontWeight: '900', letterSpacing: 1 },
-  rankRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  rankIcon: { fontSize: 14 },
-  rankLabel: { color: C.textSec, fontSize: 10, fontWeight: '800', letterSpacing: 1 },
-  rankValue: { color: C.gold, fontSize: 15, fontWeight: '900', marginLeft: 2 },
-  progressTrack: {
-    height: 8, borderRadius: 4,
-    borderWidth: 1, borderColor: C.border,
-    backgroundColor: C.bg,
-    overflow: 'hidden',
-  },
-  progressFill: { height: '100%', backgroundColor: C.gold, borderRadius: 4 },
-  progressSub: { color: C.textDim, fontSize: 10, marginTop: 5, fontWeight: '600' },
+  xpLine: { color: C.textSec, fontSize: 11, fontWeight: '800' },
 
   resourceCard: {
+    ...glassPanelDense, // Token/Crown bar — ตัวเลขสำคัญ ใช้กระจกทึบกว่า
     marginTop: 12,
     padding: 14,
     flexDirection: 'row',
@@ -494,66 +526,68 @@ const s = StyleSheet.create({
   resourceValue: { color: C.textPrimary, fontSize: 15, fontWeight: '900', marginTop: 2 },
   vLine: { width: 1, minHeight: 36, backgroundColor: C.border },
 
-  debtBadge: {
+  tiersUnlockedCard: {
     marginTop: 10,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,107,107,0.12)',
-    borderWidth: 1.5,
-    borderColor: C.red,
-    padding: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    padding: 12,
   },
-  debtTitle: { color: C.red, fontWeight: '900', fontSize: 11 },
-  debtSub: { color: C.textSec, flex: 1, fontSize: 10 },
-  debtBtn: { backgroundColor: C.red, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6 },
-  debtBtnText: { color: '#fff', fontWeight: '900', fontSize: 10 },
+  tiersUnlockedLabel: { color: C.textSec, fontSize: 9, fontWeight: '800', letterSpacing: 1, marginBottom: 8 },
+  tiersUnlockedRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  tierUnlockChip: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1.5 },
+  tierUnlockChipText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
 
-  actionRow: { flexDirection: 'row', gap: 8, marginTop: 14 },
-  actionBtn: {
-    flex: 1,
-    minHeight: 84,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: C.borderHi,
-    paddingVertical: 12,
-    paddingHorizontal: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
+  psCard: {
+    marginTop: 10,
+    padding: 12,
+    borderColor: C.purple,
   },
-  actionIcon: { fontSize: 22, marginBottom: 4 },
-  actionTitle: { color: C.textPrimary, fontSize: 12, fontWeight: '900', letterSpacing: 0.3, textAlign: 'center' },
-  actionSub: { color: C.textSec, fontSize: 8, fontWeight: '800', marginTop: 2, textAlign: 'center' },
+  psSeasonRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  psSeasonLabel: { color: C.textSec, fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  psSeasonValue: { color: C.purple, fontSize: 20, fontWeight: '900' },
+  psCareerValue: { color: C.textDim, fontSize: 10, fontWeight: '700', marginTop: 4, textAlign: 'right' },
+  ascendantHint: {
+    ...glassPanel, // เดิม backgroundColor/borderColor hardcode เอง — เปลี่ยนมาใช้กระจกฝ้ากลาง
+    marginTop: 10,
+    padding: 12,
+    alignItems: 'center',
+  },
+  ascendantHintText: { color: C.gold, fontSize: 11, fontWeight: '800', letterSpacing: 0.3, textAlign: 'center' },
+
+  playHeroWrap: { marginTop: 16 },
+  playLabel: {
+    // Feedback B1 — ขยับ "PLAY" ขึ้น 20px + ฟอนต์ใหญ่ขึ้น 25% (16 -> 20) เฉพะปุ่มนี้ ไม่กระทบ ActionButton อื่น (Ready/Auto Sort)
+    fontSize: 20,
+    transform: [{ translateY: -20 }],
+  },
+  secondaryRow: {
+    // Feedback B3 — เพิ่ม Friends/Ranking นำหน้า Shop/Legends รวม 4 ปุ่ม — ลด size เป็น sm + space-evenly กันล้นจอ
+    // marginTop 14 -> 16: ย้ายมาต่อจาก tab content panel (การ์ดมีขอบชัดเจน) แทนปุ่ม Play ลอยๆ เดิม เพิ่มระยะหายใจอีกนิด
+    flexDirection: 'row',
+    justifyContent: 'space-evenly',
+    marginTop: 16,
+  },
 
   tabsRow: { flexDirection: 'row', marginTop: 14 },
   tabBtn: {
     flex: 1,
-    backgroundColor: C.surface,
-    borderWidth: 1, borderColor: C.border,
+    backgroundColor: glassPanel.backgroundColor, // เดิม C.surface — radius แบบ top-only เดิมไม่แตะ (ต่อกับ panel ด้านล่าง)
+    borderWidth: 1, borderColor: glassPanel.borderColor,
     paddingVertical: 11,
     alignItems: 'center',
     borderTopLeftRadius: 10,
     borderTopRightRadius: 10,
     marginRight: -1,
   },
-  tabBtnActive: { backgroundColor: C.card, borderColor: C.gold },
+  tabBtnActive: { backgroundColor: glassPanelDense.backgroundColor, borderColor: C.gold },
   tabText: { color: C.textDim, fontSize: 11, fontWeight: '900' },
   tabTextActive: { color: C.gold },
 
-  vipLockedPanel: {
+  comingSoonPanel: {
     borderTopLeftRadius: 0, borderTopRightRadius: 0,
-    padding: 20, alignItems: 'center', borderColor: C.gold,
+    padding: 24, alignItems: 'center',
   },
-  vipLockedIcon: { fontSize: 28, marginBottom: 6 },
-  vipLockedTitle: { color: C.gold, fontSize: 12, fontWeight: '900', letterSpacing: 1, marginBottom: 4 },
-  vipLockedSub: { color: C.textSec, fontSize: 10, textAlign: 'center', marginBottom: 12 },
-  unlockVipBtn: {
-    backgroundColor: 'rgba(255,215,106,0.10)',
-    borderWidth: 1.5, borderColor: C.gold, borderStyle: 'dashed',
-    borderRadius: 8, paddingVertical: 10, paddingHorizontal: 20,
-  },
-  unlockVipText: { color: C.gold, fontSize: 11, fontWeight: '800', letterSpacing: 1 },
+  comingSoonIcon: { fontSize: 28, marginBottom: 8, opacity: 0.6 },
+  comingSoonTitle: { color: C.textSec, fontSize: 12, fontWeight: '900', letterSpacing: 1, marginBottom: 4 },
+  comingSoonSub: { color: C.textDim, fontSize: 10, textAlign: 'center' },
 
   statsPanel: {
     borderTopLeftRadius: 0, borderTopRightRadius: 0,
@@ -567,63 +601,12 @@ const s = StyleSheet.create({
   statValueSmall: { fontSize: 11 },
   statSub: { color: C.textDim, fontSize: 8, fontWeight: '700', marginTop: 4, textAlign: 'center' },
 
-  twoColumnRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
-  listPanel: { flex: 1, padding: 12 },
-  panelHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  panelTitle: { flex: 1, color: C.textPrimary, fontSize: 11, fontWeight: '900' },
-  viewAll: { color: C.gold, fontSize: 10, fontWeight: '900' },
-  activityRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingVertical: 8, borderTopWidth: 1, borderTopColor: C.border,
+  toastBanner: {
+    // Feedback B3 — Coming Soon toast, pattern เดียวกับ lobby.tsx
+    position: 'absolute', top: 60, left: 16, right: 16, zIndex: 1000,
+    backgroundColor: glassPanel.backgroundColor,
+    borderWidth: 1.5, borderColor: C.red, borderRadius: 10,
+    paddingVertical: 10, paddingHorizontal: 16,
   },
-  enemyCircle: {
-    width: 34, height: 34, borderRadius: 17,
-    backgroundColor: C.card, borderWidth: 1, borderColor: C.border,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  enemyIcon: { fontSize: 16 },
-  activityTitle: { color: C.textPrimary, fontSize: 11, fontWeight: '800' },
-  activityTime: { color: C.textDim, fontSize: 9, marginTop: 2 },
-  resultText: { fontSize: 9, fontWeight: '900' },
-  deltaText: { fontSize: 11, fontWeight: '900', marginTop: 3 },
-  achievementRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingVertical: 8, borderTopWidth: 1, borderTopColor: C.border,
-  },
-  achievementIcon: { fontSize: 22 },
-  achievementName: { color: C.textPrimary, fontSize: 11, fontWeight: '900' },
-  achievementDate: { color: C.textDim, fontSize: 9, marginTop: 2 },
-  checkIcon: {
-    width: 22, height: 22, borderRadius: 11,
-    backgroundColor: 'rgba(141,255,181,0.15)',
-    color: C.green, borderWidth: 1, borderColor: C.green,
-    textAlign: 'center', lineHeight: 20, fontSize: 14, fontWeight: '900',
-  },
-
-  bossPanel: { marginTop: 12, padding: 14 },
-  bossPanelCompact: { marginTop: 12, padding: 14 },
-  conqueredText: { color: C.textSec, fontSize: 10, fontWeight: '900' },
-  bossScroll: { gap: 8, paddingTop: 4, paddingRight: 8 },
-  bossCard: {
-    width: 70, minHeight: 88,
-    backgroundColor: C.card,
-    borderRadius: 10, borderWidth: 1.5, borderColor: C.border,
-    alignItems: 'center', paddingTop: 8, paddingHorizontal: 4,
-  },
-  bossLocked: { opacity: 0.45 },
-  bossIcon: { fontSize: 28 },
-  bossStatus: {
-    position: 'absolute', right: 4, top: 4,
-    width: 18, height: 18, borderRadius: 9,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  bossStatusWin: { backgroundColor: C.green },
-  bossStatusLock: { backgroundColor: C.textDim },
-  bossStatusText: { color: C.bg, fontSize: 9, fontWeight: '900' },
-  bossName: { color: C.textPrimary, fontSize: 9, fontWeight: '800', marginTop: 6, textAlign: 'center' },
-
-  socialPanel: {
-    borderTopLeftRadius: 0, borderTopRightRadius: 0,
-    padding: 16, flexDirection: 'row', alignItems: 'center',
-  },
+  toastText: { color: C.textPrimary, fontSize: 12, fontWeight: '700', textAlign: 'center' },
 })

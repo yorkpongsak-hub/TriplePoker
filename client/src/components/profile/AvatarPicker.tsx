@@ -1,8 +1,11 @@
 // src/components/profile/AvatarPicker.tsx
-// Avatar Picker — เลือก Avatar 2 แบบ:
-//   Tab A: Initial + Frame (ตัวอักษรย่อ + กรอบ) — Frame บางอันเป็น VIP/Shop
-//   Tab B: Preset Avatar (รูปสำเร็จรูป 24 แบบ) — บางอัน VIP Only
-// ใช้ใน: setup-profile.tsx (ครั้งแรก) และ profile settings (เปลี่ยนภายหลัง)
+// Avatar Picker — Preset Avatar (รูปสำเร็จรูป 33 แบบ: 24 เดิม emoji + 9 ใหม่รูปภาพ VIP)
+//   Free 12 · VIP 18 (12 emoji + 6 รูปภาพ) · VIP PRO Exclusive 3 (รูปภาพ)
+// ใช้ใน: setup-profile.tsx (ครั้งแรก) และ profile.tsx (เปลี่ยนภายหลัง) — บันทึกผ่าน POST /profile/avatar เท่านั้น
+//
+// MVP VIP Avatar Preset (2026-07-17): Tab "Initial + Frame" ซ่อนชั่วคราว — รอผูก Frame ownership
+// กับ Shop inventory ก่อน (AVATAR_FRAMES เป็น cosmetic ที่ควรซื้อ/ปลดล็อคแยก ไม่ใช่ผูกกับ vip_status
+// ตรงๆ เหมือน Preset Avatar) โค้ด Tab A ยังอยู่ครบด้านล่าง (comment ไว้ ไม่ลบ) รอ Shop inventory พร้อมค่อยเปิดกลับ
 
 import React, { useState, useRef } from 'react'
 import {
@@ -14,6 +17,7 @@ import {
   StyleSheet,
   Dimensions,
   Modal,
+  Image,
 } from 'react-native'
 
 const { width: SW } = Dimensions.get('window')
@@ -114,44 +118,60 @@ export const AVATAR_FRAMES: AvatarFrame[] = [
   },
 ]
 
-// ── Preset Avatar configs — 24 แบบ
+// ── Preset Avatar configs — 33 แบบ (24 emoji เดิม + 9 รูปภาพ VIP ใหม่)
+// tier: 'free' ใช้ได้ทุกคน | 'vip' ต้องเป็น VIP ขึ้นไป | 'vip_pro' ต้องเป็น VIP PRO เท่านั้น (Pro Exclusive)
+// ต้องตรงกับ server/src/constants/avatarPresets.ts เป๊ะ (key + tier) — แก้ที่นี่ต้องแก้ที่นั่นด้วย
+export type AvatarTier = 'free' | 'vip' | 'vip_pro'
+
 export interface PresetAvatar {
   key: string
-  emoji: string
+  emoji?: string       // emoji preset (24 แบบเดิม)
+  image?: any          // require() รูปภาพ preset (VIP ใหม่ 9 แบบ ที่ assets/avatars/)
   label: string
   bgColor: string
-  isVipOnly: boolean
+  tier: AvatarTier
   unlockHint?: string
 }
 
 export const PRESET_AVATARS: PresetAvatar[] = [
   // Free — 12 แบบ
-  { key: 'wolf',     emoji: '🐺', label: 'Wolf',      bgColor: '#2a3a4a', isVipOnly: false },
-  { key: 'fox',      emoji: '🦊', label: 'Fox',       bgColor: '#4a2a1a', isVipOnly: false },
-  { key: 'owl',      emoji: '🦉', label: 'Owl',       bgColor: '#2a2a4a', isVipOnly: false },
-  { key: 'snake',    emoji: '🐍', label: 'Snake',     bgColor: '#1a3a1a', isVipOnly: false },
-  { key: 'shark',    emoji: '🦈', label: 'Shark',     bgColor: '#1a2a3a', isVipOnly: false },
-  { key: 'panther',  emoji: '🐆', label: 'Panther',   bgColor: '#1a1a1a', isVipOnly: false },
-  { key: 'eagle',    emoji: '🦅', label: 'Eagle',     bgColor: '#3a2a1a', isVipOnly: false },
-  { key: 'bear',     emoji: '🐻', label: 'Bear',      bgColor: '#3a2a1a', isVipOnly: false },
-  { key: 'raven',    emoji: '🐦‍⬛', label: 'Raven', bgColor: '#1a1a2a', isVipOnly: false },
-  { key: 'tiger',    emoji: '🐯', label: 'Tiger',     bgColor: '#3a2a0a', isVipOnly: false },
-  { key: 'skull',    emoji: '💀', label: 'Skull',     bgColor: '#2a1a1a', isVipOnly: false },
-  { key: 'joker',    emoji: '🃏', label: 'Joker',     bgColor: '#1a1a3a', isVipOnly: false },
+  { key: 'wolf',     emoji: '🐺', label: 'Wolf',      bgColor: '#2a3a4a', tier: 'free' },
+  { key: 'fox',      emoji: '🦊', label: 'Fox',       bgColor: '#4a2a1a', tier: 'free' },
+  { key: 'owl',      emoji: '🦉', label: 'Owl',       bgColor: '#2a2a4a', tier: 'free' },
+  { key: 'snake',    emoji: '🐍', label: 'Snake',     bgColor: '#1a3a1a', tier: 'free' },
+  { key: 'shark',    emoji: '🦈', label: 'Shark',     bgColor: '#1a2a3a', tier: 'free' },
+  { key: 'panther',  emoji: '🐆', label: 'Panther',   bgColor: '#1a1a1a', tier: 'free' },
+  { key: 'eagle',    emoji: '🦅', label: 'Eagle',     bgColor: '#3a2a1a', tier: 'free' },
+  { key: 'bear',     emoji: '🐻', label: 'Bear',      bgColor: '#3a2a1a', tier: 'free' },
+  { key: 'raven',    emoji: '🐦‍⬛', label: 'Raven', bgColor: '#1a1a2a', tier: 'free' },
+  { key: 'tiger',    emoji: '🐯', label: 'Tiger',     bgColor: '#3a2a0a', tier: 'free' },
+  { key: 'skull',    emoji: '💀', label: 'Skull',     bgColor: '#2a1a1a', tier: 'free' },
+  { key: 'joker',    emoji: '🃏', label: 'Joker',     bgColor: '#1a1a3a', tier: 'free' },
 
-  // VIP Only — 12 แบบ
-  { key: 'dragon',   emoji: '🐉', label: 'Dragon',    bgColor: '#3a1a0a', isVipOnly: true, unlockHint: 'VIP Only' },
-  { key: 'unicorn',  emoji: '🦄', label: 'Unicorn',   bgColor: '#2a1a3a', isVipOnly: true, unlockHint: 'VIP Only' },
-  { key: 'phoenix',  emoji: '🦅', label: 'Phoenix',   bgColor: '#3a1a0a', isVipOnly: true, unlockHint: 'VIP Only' },
-  { key: 'demon',    emoji: '👹', label: 'Demon',     bgColor: '#2a0a0a', isVipOnly: true, unlockHint: 'VIP Only' },
-  { key: 'ninja',    emoji: '🥷', label: 'Ninja',     bgColor: '#0a0a0a', isVipOnly: true, unlockHint: 'VIP Only' },
-  { key: 'samurai',  emoji: '⛩',  label: 'Samurai',  bgColor: '#2a1a1a', isVipOnly: true, unlockHint: 'VIP Only' },
-  { key: 'wizard',   emoji: '🧙', label: 'Wizard',    bgColor: '#1a0a2a', isVipOnly: true, unlockHint: 'VIP Only' },
-  { key: 'robot',    emoji: '🤖', label: 'Robot',     bgColor: '#0a1a2a', isVipOnly: true, unlockHint: 'VIP Only' },
-  { key: 'ghost',    emoji: '👻', label: 'Ghost',     bgColor: '#1a1a2a', isVipOnly: true, unlockHint: 'VIP Only' },
-  { key: 'alien',    emoji: '👾', label: 'Alien',     bgColor: '#0a2a0a', isVipOnly: true, unlockHint: 'VIP Only' },
-  { key: 'crown',    emoji: '👑', label: 'Crown',     bgColor: '#2a1a0a', isVipOnly: true, unlockHint: 'VIP Only' },
-  { key: 'reaper',   emoji: '💀', label: 'Reaper',    bgColor: '#1a0a0a', isVipOnly: true, unlockHint: 'Defeat The Last Boss' },
+  // VIP Only — 12 แบบเดิม (emoji)
+  { key: 'dragon',   emoji: '🐉', label: 'Dragon',    bgColor: '#3a1a0a', tier: 'vip', unlockHint: 'VIP Only' },
+  { key: 'unicorn',  emoji: '🦄', label: 'Unicorn',   bgColor: '#2a1a3a', tier: 'vip', unlockHint: 'VIP Only' },
+  { key: 'phoenix',  emoji: '🦅', label: 'Phoenix',   bgColor: '#3a1a0a', tier: 'vip', unlockHint: 'VIP Only' },
+  { key: 'demon',    emoji: '👹', label: 'Demon',     bgColor: '#2a0a0a', tier: 'vip', unlockHint: 'VIP Only' },
+  { key: 'ninja',    emoji: '🥷', label: 'Ninja',     bgColor: '#0a0a0a', tier: 'vip', unlockHint: 'VIP Only' },
+  { key: 'samurai',  emoji: '⛩',  label: 'Samurai',  bgColor: '#2a1a1a', tier: 'vip', unlockHint: 'VIP Only' },
+  { key: 'wizard',   emoji: '🧙', label: 'Wizard',    bgColor: '#1a0a2a', tier: 'vip', unlockHint: 'VIP Only' },
+  { key: 'robot',    emoji: '🤖', label: 'Robot',     bgColor: '#0a1a2a', tier: 'vip', unlockHint: 'VIP Only' },
+  { key: 'ghost',    emoji: '👻', label: 'Ghost',     bgColor: '#1a1a2a', tier: 'vip', unlockHint: 'VIP Only' },
+  { key: 'alien',    emoji: '👾', label: 'Alien',     bgColor: '#0a2a0a', tier: 'vip', unlockHint: 'VIP Only' },
+  { key: 'crown',    emoji: '👑', label: 'Crown',     bgColor: '#2a1a0a', tier: 'vip', unlockHint: 'VIP Only' },
+  { key: 'reaper',   emoji: '💀', label: 'Reaper',    bgColor: '#1a0a0a', tier: 'vip', unlockHint: 'Defeat The Last Boss' },
+
+  // VIP ใหม่ (รูปภาพ) — 01-06 VIP ธรรมดา, 07-09 VIP PRO Exclusive
+  { key: 'avatar_vip_01', image: require('../../../assets/avatars/avatar_vip_01.png'), label: 'VIP I',    bgColor: '#3a2a0a', tier: 'vip', unlockHint: 'VIP Only' },
+  { key: 'avatar_vip_02', image: require('../../../assets/avatars/avatar_vip_02.png'), label: 'VIP II',   bgColor: '#1a2a3a', tier: 'vip', unlockHint: 'VIP Only' },
+  { key: 'avatar_vip_03', image: require('../../../assets/avatars/avatar_vip_03.png'), label: 'VIP III',  bgColor: '#3a1a2a', tier: 'vip', unlockHint: 'VIP Only' },
+  { key: 'avatar_vip_04', image: require('../../../assets/avatars/avatar_vip_04.png'), label: 'VIP IV',   bgColor: '#1a3a2a', tier: 'vip', unlockHint: 'VIP Only' },
+  { key: 'avatar_vip_05', image: require('../../../assets/avatars/avatar_vip_05.png'), label: 'VIP V',    bgColor: '#2a1a3a', tier: 'vip', unlockHint: 'VIP Only' },
+  { key: 'avatar_vip_06', image: require('../../../assets/avatars/avatar_vip_06.png'), label: 'VIP VI',   bgColor: '#3a2a1a', tier: 'vip', unlockHint: 'VIP Only' },
+  { key: 'avatar_vip_07', image: require('../../../assets/avatars/avatar_vip_07.png'), label: 'PRO I',    bgColor: '#332800', tier: 'vip_pro', unlockHint: 'VIP PRO Only' },
+  { key: 'avatar_vip_08', image: require('../../../assets/avatars/avatar_vip_08.png'), label: 'PRO II',   bgColor: '#332800', tier: 'vip_pro', unlockHint: 'VIP PRO Only' },
+  { key: 'avatar_vip_09', image: require('../../../assets/avatars/avatar_vip_09.png'), label: 'PRO III',  bgColor: '#332800', tier: 'vip_pro', unlockHint: 'VIP PRO Only' },
 ]
 
 // ── Avatar Display Component (ใช้ใน GameTable + Profile)
@@ -199,9 +219,16 @@ export const AvatarDisplay: React.FC<{
         },
       ]}>
         {config.type === 'preset' && preset ? (
-          <Text style={[avatarStyles.emoji, { fontSize: innerSize * 0.5 }]}>
-            {preset.emoji}
-          </Text>
+          preset.image ? (
+            <Image
+              source={preset.image}
+              style={{ width: innerSize, height: innerSize, borderRadius: innerSize / 2 }}
+            />
+          ) : (
+            <Text style={[avatarStyles.emoji, { fontSize: innerSize * 0.5 }]}>
+              {preset.emoji}
+            </Text>
+          )
         ) : (
           <Text style={[avatarStyles.initial, { fontSize: innerSize * 0.4, color: frame.color }]}>
             {config.initial?.charAt(0)?.toUpperCase() ?? '?'}
@@ -227,47 +254,45 @@ const avatarStyles = StyleSheet.create({
 })
 
 // ── Main AvatarPicker Component
+export type VipStatus = 'none' | 'vip' | 'vip_pro'
+
 interface AvatarPickerProps {
-  isVip: boolean
-  initial: string          // ตัวอักษรแรกของชื่อ
+  vipStatus: VipStatus
+  initial: string          // ตัวอักษรแรกของชื่อ (สำรองไว้ให้ Tab "Initial + Frame" ตอนกลับมาเปิดใช้)
   currentConfig?: AvatarConfig
   onSelect: (config: AvatarConfig) => void
 }
 
 const AvatarPicker: React.FC<AvatarPickerProps> = ({
-  isVip,
+  vipStatus,
   initial,
   currentConfig,
   onSelect,
 }) => {
-  const [activeTab, setActiveTab] = useState<'initial' | 'preset'>('initial')
-  const [selectedFrame, setSelectedFrame] = useState(
-    currentConfig?.frameKey ?? 'default'
-  )
+  const isVipPro = vipStatus === 'vip_pro'
+
   const [selectedPreset, setSelectedPreset] = useState(
     currentConfig?.presetKey ?? ''
   )
   const [previewConfig, setPreviewConfig] = useState<AvatarConfig>(
-    currentConfig ?? { type: 'initial', initial, frameKey: 'default' }
+    currentConfig ?? { type: 'preset', presetKey: PRESET_AVATARS[0].key, frameKey: 'default' }
   )
 
-  // เลือก Frame
-  const handleFrameSelect = (frame: AvatarFrame) => {
-    if (frame.isVipOnly && !isVip) return
-    setSelectedFrame(frame.key)
-    const config: AvatarConfig = { type: 'initial', initial, frameKey: frame.key }
-    setPreviewConfig(config)
-    onSelect(config)
+  // ล็อคตาม tier: 'free' ไม่ล็อค | 'vip' ล็อคถ้า vipStatus==='none' | 'vip_pro' ล็อคถ้าไม่ใช่ vip_pro
+  const isPresetLocked = (preset: PresetAvatar): boolean => {
+    if (preset.tier === 'free') return false
+    if (preset.tier === 'vip_pro') return !isVipPro
+    return vipStatus === 'none'
   }
 
-  // เลือก Preset
+  // เลือก Preset — frameKey คงเป็น 'default' เสมอใน MVP นี้ (ระบบ Frame ยังไม่เปิดใช้งาน ดูด้านล่าง)
   const handlePresetSelect = (preset: PresetAvatar) => {
-    if (preset.isVipOnly && !isVip) return
+    if (isPresetLocked(preset)) return
     setSelectedPreset(preset.key)
     const config: AvatarConfig = {
       type:      'preset',
       presetKey: preset.key,
-      frameKey:  selectedFrame,
+      frameKey:  'default',
     }
     setPreviewConfig(config)
     onSelect(config)
@@ -282,7 +307,11 @@ const AvatarPicker: React.FC<AvatarPickerProps> = ({
         <Text style={styles.previewLabel}>PREVIEW</Text>
       </View>
 
-      {/* Tabs */}
+      {/*
+        Tab "Initial + Frame" ซ่อนชั่วคราว (MVP VIP Avatar Preset, 2026-07-17) — รอผูก Frame
+        ownership กับ Shop inventory ก่อน (AVATAR_FRAMES เป็น cosmetic ที่ควรซื้อ/ปลดล็อคแยก
+        ไม่ใช่ผูกกับ vip_status ตรงๆ เหมือน Preset Avatar) ห้ามลบโค้ดส่วนนี้ — รอเปิดกลับทีหลัง
+
       <View style={styles.tabRow}>
         {(['initial', 'preset'] as const).map(tab => (
           <TouchableOpacity
@@ -297,16 +326,14 @@ const AvatarPicker: React.FC<AvatarPickerProps> = ({
         ))}
       </View>
 
-      {/* Content */}
       {activeTab === 'initial' ? (
-        /* ── Frame Grid */
         <View>
           <Text style={styles.sectionNote}>
             Your initial "{initial.toUpperCase()}" with a custom frame
           </Text>
           <View style={styles.grid}>
             {AVATAR_FRAMES.map(frame => {
-              const isLocked = frame.isVipOnly && !isVip
+              const isLocked = frame.isVipOnly && vipStatus === 'none'
               const isSelected = selectedFrame === frame.key
 
               return (
@@ -343,60 +370,75 @@ const AvatarPicker: React.FC<AvatarPickerProps> = ({
             })}
           </View>
         </View>
-      ) : (
-        /* ── Preset Grid */
-        <View>
-          <Text style={styles.sectionNote}>
-            Choose a character · {isVip ? 'All unlocked' : '12 free · 12 VIP'}
-          </Text>
-          <View style={styles.grid}>
-            {PRESET_AVATARS.map(preset => {
-              const isLocked = preset.isVipOnly && !isVip
-              const isSelected = selectedPreset === preset.key
+      ) : null}
+      */}
 
-              return (
-                <TouchableOpacity
-                  key={preset.key}
-                  style={[
-                    styles.presetCard,
-                    isSelected && { borderColor: C.gold },
-                    isLocked && styles.frameCardLocked,
-                  ]}
-                  onPress={() => handlePresetSelect(preset)}
-                  activeOpacity={isLocked ? 1 : 0.8}
-                >
-                  <View style={[
-                    styles.presetEmojiBg,
-                    { backgroundColor: preset.bgColor },
-                  ]}>
+      {/* Preset Avatar Grid — UI หลักของ MVP นี้ */}
+      <View>
+        <Text style={styles.sectionNote}>
+          Choose a character · {
+            isVipPro ? 'All unlocked'
+              : vipStatus === 'vip' ? '12 free · 18 VIP · 3 VIP PRO'
+              : '12 free · 21 locked'
+          }
+        </Text>
+        <View style={styles.grid}>
+          {PRESET_AVATARS.map(preset => {
+            const isLocked = isPresetLocked(preset)
+            const isProLocked = isLocked && preset.tier === 'vip_pro'
+            const isSelected = selectedPreset === preset.key
+
+            return (
+              <TouchableOpacity
+                key={preset.key}
+                style={[
+                  styles.presetCard,
+                  isSelected && { borderColor: C.gold },
+                  isLocked && styles.frameCardLocked,
+                ]}
+                onPress={() => handlePresetSelect(preset)}
+                activeOpacity={isLocked ? 1 : 0.8}
+              >
+                <View style={[
+                  styles.presetEmojiBg,
+                  { backgroundColor: preset.bgColor },
+                ]}>
+                  {preset.image ? (
+                    <Image source={preset.image} style={styles.presetImage} />
+                  ) : (
                     <Text style={styles.presetEmoji}>{preset.emoji}</Text>
-                    {isLocked && (
-                      <View style={styles.presetLockOverlay}>
-                        <Text style={styles.presetLockIcon}>🔒</Text>
-                      </View>
-                    )}
-                  </View>
-                  <Text style={[
-                    styles.presetLabel,
-                    isLocked && { color: C.textDim },
-                  ]}>
-                    {preset.label}
-                  </Text>
-                  {isSelected && (
-                    <View style={styles.selectedDotPreset} />
                   )}
-                </TouchableOpacity>
-              )
-            })}
-          </View>
+                  {isLocked && (
+                    <View style={styles.presetLockOverlay}>
+                      <Text style={styles.presetLockIcon}>🔒</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={[
+                  styles.presetLabel,
+                  isLocked && { color: C.textDim },
+                ]}>
+                  {preset.label}
+                </Text>
+                {isProLocked && (
+                  <Text style={styles.proOnlyBadge}>VIP PRO ONLY</Text>
+                )}
+                {isSelected && (
+                  <View style={styles.selectedDotPreset} />
+                )}
+              </TouchableOpacity>
+            )
+          })}
         </View>
-      )}
+      </View>
 
       {/* VIP hint */}
-      {!isVip && (
+      {!isVipPro && (
         <View style={styles.vipHint}>
           <Text style={styles.vipHintText}>
-            🔒 Upgrade to VIP to unlock all frames and avatars
+            {vipStatus === 'none'
+              ? '🔒 Upgrade to VIP to unlock more avatars'
+              : '🔒 Upgrade to VIP PRO to unlock exclusive avatars'}
           </Text>
         </View>
       )}
@@ -523,6 +565,7 @@ const styles = StyleSheet.create({
     overflow:      'hidden',
   },
   presetEmoji:  { fontSize: 26 },
+  presetImage:  { width: 52, height: 52, borderRadius: 26 },
   presetLockOverlay: {
     position:        'absolute',
     top: 0, left: 0, right: 0, bottom: 0,
@@ -545,6 +588,13 @@ const styles = StyleSheet.create({
     height:          6,
     borderRadius:    3,
     backgroundColor: C.gold,
+  },
+  proOnlyBadge: {
+    color:         C.gold,
+    fontSize:      7,
+    fontWeight:    '800',
+    letterSpacing: 0.4,
+    textAlign:     'center',
   },
 
   // VIP hint

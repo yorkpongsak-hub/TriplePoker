@@ -14,6 +14,8 @@ const mockFrom = jest.fn(() => ({ update: mockUpdate }))
 jest.mock('../../src/config/supabase', () => ({
   supabase: {
     auth: { getUser: mockGetUser },
+  },
+  supabaseAdmin: {
     from: mockFrom,
   },
 }))

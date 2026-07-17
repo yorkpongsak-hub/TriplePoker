@@ -10,7 +10,9 @@ import { evaluateHand, compareHands, HandResult } from './handEvaluator'
 import { checkFoul, PlayerArrangement, CommunityCards } from './foulChecker'
 
 // ── Types ────────────────────────────────────────────────────
-export type AIPersonality = 'sage' | 'reckless' | 'ghost' | 'reaper' | 'crag' | 'cortex' | 'cipher'
+export type AIPersonality =
+  | 'sage' | 'reckless' | 'ghost' | 'reaper' | 'crag' | 'cortex' | 'cipher'
+  | 'iron_wall' | 'chivalry' | 'war_lord' | 'phantom' | 'dark_shark' | 'oracle' | 'jester' | 'phoenix' | 'black_magic'
 
 export interface AIConfig {
   id: string
@@ -34,9 +36,47 @@ export const FOUR_GODS: AIConfig[] = [
   { id: 'AI_CIPHER', name: 'Cipher',    emoji: '🎭', personality: 'cipher' },
 ]
 
+// Patch Mastermind Conquest: The Nine Sentinels — ผู้เล่นเลือกเองจาก select.tsx (ไม่สุ่มแบบ Four Gods)
+// bossId (key) ต้องตรงกับชื่อไฟล์ asset boss_[key].png และ route param จาก client ทุกจุด
+// P2/P4: LobbyMatchmaking_Spec_v1_0 §5 เปลี่ยนจาก AI_CONFIGS (Sage/Reckless/Ghost) เดิม → Minion สุ่ม 2 ใน 25
+// (ดู MINION_NAMES/pickRandomMinions ด้านล่าง + getEffectiveAIConfig ใน gameLoop.ts) — Sentinel แทนที่นั่ง Boss (P3) เท่านั้น ไม่เปลี่ยน
+export const NINE_SENTINELS: (AIConfig & { bossId: string })[] = [
+  { id: 'AI_IRON_WALL',   bossId: 'iron_wall',   name: 'Iron Wall',   emoji: '🛡️', personality: 'iron_wall'   },
+  { id: 'AI_CHIVALRY',    bossId: 'chivalry',    name: 'Chivalry',    emoji: '⚔️', personality: 'chivalry'    },
+  { id: 'AI_WAR_LORD',    bossId: 'war_lord',    name: 'War Lord',    emoji: '🪓', personality: 'war_lord'    },
+  { id: 'AI_PHANTOM',     bossId: 'phantom',     name: 'Phantom',     emoji: '🌫️', personality: 'phantom'     },
+  { id: 'AI_DARK_SHARK',  bossId: 'dark_shark',  name: 'Dark Shark',  emoji: '🦈', personality: 'dark_shark'  },
+  { id: 'AI_ORACLE',      bossId: 'oracle',      name: 'Oracle',      emoji: '🔮', personality: 'oracle'      },
+  { id: 'AI_JESTER',      bossId: 'jester',      name: 'Jester',      emoji: '🤡', personality: 'jester'      },
+  { id: 'AI_PHOENIX',     bossId: 'phoenix',     name: 'Phoenix',     emoji: '🔥', personality: 'phoenix'     },
+  { id: 'AI_BLACK_MAGIC', bossId: 'black_magic', name: 'Black Magic', emoji: '🪄', personality: 'black_magic' },
+]
+
+// LobbyMatchmaking_Spec_v1_0 §5: Minion Avatars 25 ตัว (bot_minion_[nn]_[name].png ที่ client/assets/minions/ —
+// เดิม bot_adept_ เปลี่ยนชื่อแล้ว 2026-07-17 เพราะ reuse ข้าม Adept/Mastermind/High Noble ไม่ใช่ Adept อย่างเดียว)
+// ใช้เป็น P2/P4 filler ของ Mastermind — ชื่อต้องตรงกับ suffix ไฟล์เป๊ะ (ตัวพิมพ์เล็ก) ห้ามลบชื่อกลุ่ม pride flag
+// (Prim, Xander, Yuri) ออกจาก roster นี้เด็ดขาด
+export const MINION_NAMES: string[] = [
+  'Alex', 'Bella', 'Charlie', 'Diana', 'Edward', 'Fiona', 'Gabriel', 'Hana', 'Ivan', 'Julia',
+  'Kevin', 'Lily', 'Max', 'Natalie', 'Oliver', 'Prim', 'Queenie', 'Ryan', 'Sophia', 'Tom',
+  'Uma', 'Vincent', 'Willow', 'Xander', 'Yuri',
+]
+
+// สุ่ม Minion `count` ตัวแบบไม่ซ้ำกันจาก MINION_NAMES (Fisher-Yates แบบย่อ)
+export function pickRandomMinions(count: number): string[] {
+  const pool = [...MINION_NAMES]
+  const picked: string[] = []
+  for (let i = 0; i < count && pool.length > 0; i++) {
+    const idx = Math.floor(Math.random() * pool.length)
+    picked.push(pool[idx])
+    pool.splice(idx, 1)
+  }
+  return picked
+}
+
 // ── Helper: First-Valid Arrangement (สำหรับ Initiate) ─────────
 // สุ่มจัดไพ่จนผ่าน Foul → ใช้เลย (ไม่ optimize) — AI อ่อนมาก เหมาะกับผู้เล่นใหม่
-function firstValidArrangement(cards: Card[], community: CommunityCards): PlayerArrangement {
+export function firstValidArrangement(cards: Card[], community: CommunityCards): PlayerArrangement {
   const maxAttempts = 100
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const shuffled = [...cards].sort(() => Math.random() - 0.5)
@@ -52,10 +92,10 @@ function firstValidArrangement(cards: Card[], community: CommunityCards): Player
   return bestArrangement(cards, community)
 }
 
-// ── Helper: Greedy Arrangement (สำหรับ Adept) ─────────────
+// ── Helper: Greedy Arrangement (สำหรับ Adept + Mastermind Minions) ─────────────
 // เลือกทีละกอง: กอง 3 ดีสุดก่อน → กอง 2 จากที่เหลือ → กอง 1 ที่เหลือทั้งหมด
 // ดีกว่า First-Valid แต่พลาดกรณีที่ต้อง swap ข้ามกอง
-function greedyArrangement(cards: Card[], community: CommunityCards): PlayerArrangement {
+export function greedyArrangement(cards: Card[], community: CommunityCards): PlayerArrangement {
   const n = cards.length
   let bestP3Score = -Infinity
   let bestP3: Card[] = cards.slice(n - 5) // fallback
@@ -257,6 +297,24 @@ function arrangeByPersonality(
       const w1 = Math.floor(Math.random() * 5) + 1
       const w2 = Math.floor(Math.random() * 5) + 1
       const w3 = Math.floor(Math.random() * 5) + 1
+      return bestArrangement(cards, community, { w1, w2, w3 })
+    }
+
+    // ── The Nine Sentinels (Mastermind Conquest Boss เท่านั้น) ──────
+    // Weight canon จาก MasterPlan v1.1 — ห้ามแก้ค่า (ยกเว้น Jester ที่สุ่มใหม่ทุกครั้งตามสเปค)
+    case 'iron_wall':   return bestArrangement(cards, community, { w1: 4, w2: 4, w3: 2 })
+    case 'chivalry':    return bestArrangement(cards, community, { w1: 2, w2: 3, w3: 5 })
+    case 'war_lord':    return bestArrangement(cards, community, { w1: 1, w2: 2, w3: 7 })
+    case 'phantom':     return bestArrangement(cards, community, { w1: 2, w2: 3, w3: 5 })
+    case 'dark_shark':  return bestArrangement(cards, community, { w1: 2, w2: 4, w3: 4 })
+    case 'oracle':      return bestArrangement(cards, community, { w1: 2, w2: 3, w3: 5 })
+    case 'phoenix':     return bestArrangement(cards, community, { w1: 2, w2: 3, w3: 5 })
+    case 'black_magic': return bestArrangement(cards, community, { w1: 3, w2: 3, w3: 4 })
+
+    case 'jester': { // ตัวตลก — สุ่ม weight 1-10 ใหม่ทุกเกม (pattern เดียวกับ Cipher แต่ range กว้างกว่า)
+      const w1 = Math.floor(Math.random() * 10) + 1
+      const w2 = Math.floor(Math.random() * 10) + 1
+      const w3 = Math.floor(Math.random() * 10) + 1
       return bestArrangement(cards, community, { w1, w2, w3 })
     }
   }

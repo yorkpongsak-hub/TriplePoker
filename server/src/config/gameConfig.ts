@@ -11,18 +11,23 @@ export const gameConfig = {
 
   // ─── Tier Ranges ─────────────────────────────────────────────
   // กำหนดช่วง Token ของแต่ละ Tier — ใช้สำหรับ matchmaking และ feature gate
+  // ⚠️ Threshold ชุดนี้ต้องตรงกับ client/src/config/tierConfig.ts (TIER_CONFIG.minToken) เสมอ — แก้ที่นี่ต้องแก้อีกที่ด้วย
+  // getTierFromToken() ด้านล่างยังเป็น dead code (ไม่มีใครเรียกใช้จริงในปัจจุบัน) — แก้ค่าให้ถูกไว้กันบั๊กตอน Matchmaking เริ่มเรียกใช้จริงในอนาคต
   tierRanges: {
-    initiate:   { min: 100,      max: 49_999   },  // Tier 1 — เรียนรู้เกม (~6 วัน)
-    adept:      { min: 50_000,   max: 149_999  },  // Tier 2 — เริ่มเจอคนจริง (~12 วัน)
-    mastermind: { min: 150_000,  max: 399_999  },  // Tier 3 — ปลดล็อค Auction + Betting (~31 วัน)
-    highNoble:  { min: 400_000,  max: Infinity },  // Tier 4 — Full experience + จตุรเทพ AI
-    lastBoss:   { min: 400_000,  max: Infinity },  // Tier 5 — Special encounter
+    initiate:   { min: 100,      max: 9_999    },  // Tier 1 — เรียนรู้เกม
+    adept:      { min: 10_000,   max: 39_999   },  // Tier 2 — เริ่มเจอคนจริง
+    mastermind: { min: 40_000,   max: 99_999   },  // Tier 3 — ปลดล็อค Auction + Betting
+    highNoble:  { min: 100_000,  max: Infinity },  // Tier 4 — Full experience + จตุรเทพ AI
+    lastBoss:   { min: 400_000,  max: Infinity },  // ย้ายไป The Arena แล้ว — ห้ามใช้ใน matchmaking แอปหลัก (ยังไม่ลบ กัน import พัง — ค่อยเก็บกวาดตอน refactor Ascendant)
   },
 
   // ─── Token Economy (Daily) ──────────────────────────────────
   // ระบบ Token รายวัน — ปรับตาม burn ratio monitoring
   dailyEconomy: {
-    newUserBonus:      1_000,   // Token ที่ผู้สมัครใหม่ได้ทันที
+    newUserBonus:      3_000,   // Token ที่ผู้สมัครใหม่ได้ทันที — ⚠️ ค่านี้ยังไม่มีที่ไหนอ่านจริง
+                                 // ตัวที่มีผลจริงคือ users.token_balance DEFAULT บน Supabase (ดู
+                                 // supabase/migrations/003_starting_token_3000.sql) แก้ที่นี่ไว้เผื่อ
+                                 // อนาคตมีคนเอามาต่อยอด ไม่ให้เห็นเลขเก่าค้าง
     newUserXpBonus:    1,       // XP +1 เมื่อสมัครใหม่
     dailyRefill:       500,     // Token ฟรีต่อวัน (ทุกคน)
     minTokenToPlay:    100,     // Token ต่ำกว่านี้ → รอข้ามวัน หรือดู Ad
@@ -46,8 +51,9 @@ export const gameConfig = {
       highNoble:  { pile1: 500, pile2: 1_000,pile3: 1_500,call: 3_000 },
       lastBoss:   { pile1: 1_000,pile2: 2_000,pile3: 3_000,call: 6_000 },
     },
-    rake:        0.05,  // 5% หักจากทุก Pot ปกติ
-    rakeJackpot: 0.10,  // 10% หักเฉพาะ Triple Sweep round
+    // Patch (2026-07-17): ยกเลิก rakeJackpot 10% ของ Triple Sweep — ใช้ rake อัตราเดียว 5% ทุกกรณี
+    // ทุก Tier (ดู gameLoop.ts/highNobleMultiEngine.ts ที่คำนวณ jackpotRake)
+    rake:        0.05,  // 5% หักจากทุก Pot ทุกกรณี รวม Triple Sweep
 
     // S1/S2: 3 Human + 1 AI
     s1s2: {
@@ -68,6 +74,18 @@ export const gameConfig = {
       clanSpirit:          true,        // ระบุว่าเป็น Clan mode
     },
   },
+
+  // ─── Buy-in per Tier (Escrow Model — TriplePoker_BuyIn_Spec_v1_0 §2/§5) ───
+  // หักจาก users.token_balance ครั้งเดียวตอนเข้าโต๊ะ (escrow) — settle กลับครั้งเดียวตอนจบแมตช์
+  // ค่านี้แทนที่ baseline 5000 เดิมที่ hardcode กระจายอยู่ทั่ว gameLoop.ts/highNobleMultiEngine.ts ทั้งหมด
+  buyIn: {
+    initiate:   500,
+    adept:      2_000,  // Buy-in Spec v1.1 — แก้บั๊ก game balance: worst case จริง 1,500 > buy-in เดิม 1,000
+    mastermind: 9_000,
+    highNoble:  30_000,
+    lastBoss:   60_000,  // reserve — Arena Phase 3
+  },
+  adRescueAmount: 500,  // token ต่อ 1 rewarded ad ตอน token < buyIn (Buy-in Spec §3 — คนละ mechanism กับ debtRecovery.adReward แต่ค่าเท่ากัน)
 
   // ─── Progressive Game Mechanics ─────────────────────────────
   // *** ADDED v1.1 — ต้องอ่าน block นี้ก่อน execute ทุก phase ***
@@ -286,6 +304,66 @@ export const gameConfig = {
     4: { id: 4, name: 'Bamboo Rice Field', tiers: ['highNoble'], assetPath: 'assets/tables/skin_4_bamboo.png' }
   },
 
+  // ─── Monarch (TriplePoker_Monarch_Spec_v1_3) ──────────────────
+  // บอสลับตัวที่ 5 ของ Tier A+ (High Noble) — สุ่ม Base 3% + Pity Counter ต่อผู้เล่น (max ของโต๊ะ)
+  monarchConfig: {
+    spawnRateBase:   0.03,   // 3% พื้นฐาน
+    pityStepPerGame: 0.005,  // +0.5% ต่อเกม High Noble ที่ไม่เจอ Monarch (นับจาก reset ล่าสุด)
+    pityGuaranteeAt: 30,     // เกมที่ 30 นับจาก reset ยังไม่เจอ → บังคับ spawn (effective rate = 100%)
+    potMultiplier:   2.0,    // Pot ×2 เมื่อผู้เล่น human ชนะ Monarch — ส่วนต่าง House mint ไม่หักจากผู้เล่นอื่น
+    // น้ำหนักสุ่ม Boss ปกติของ High Noble (รวม Monarch, รวมกัน = 100) — ไม่ใช่ Monarch → normalize 4 ตัวที่เหลือตามสัดส่วนเดิม
+    bossWeights: { reaper: 28, crag: 25, cortex: 25, cipher: 19, monarch: 3 },
+    // Personality Lock ของ Monarch — แบ่ง Total Hand Strength (bestArrangement) เป็น 4 ช่วงด้วย quartile threshold
+    // (Spec v1.3 ให้แค่คำบรรยายเชิงคุณภาพ "แข็งมาก/ปานกลาง/ปานกลางค่อนอ่อน/อ่อน" — ตัวเลขนี้เป็นค่าเริ่มต้นที่ปรับจูนได้หลัง playtest จริง)
+    handStrengthQuartile: { veryStrong: 0.75, medium: 0.5, mediumWeak: 0.25 },
+  },
+
+  // ─── Performance Score (PS) ────────────────────────────────────
+  // Active ตั้งแต่ Tier A+ ขึ้นไป (เดิม dormant รอ Arena) — ใช้คัดเลือก "Ascendant Star" ใน Ascendant Tier
+  psConfig: {
+    highNobleWin:        5,   // อันดับ 1 ในโต๊ะ High Noble (ชนะ Four Gods)
+    highNobleMonarchWin: 10,  // อันดับ 1 + Boss เป็น Monarch (×2 เสมอ)
+    ascendantWin:        7,
+    ascendantMonarchWin: 14,  // ×2 เสมอ เช่นเดียวกับ A+
+    notWinNonNegative:   2,   // ไม่ชนะ แต่ token สุทธิของเกมนั้นไม่ติดลบ
+    negative:            0,   // token สุทธิติดลบ — ไม่มี PS ติดลบใน Main App
+    monarchMultiplier:   2,   // กฎล็อค: Monarch = x2 ของค่าชนะปกติในระดับตนเสมอ
+  },
+
+  // ─── XP Rewards (End-of-Match Stats Recording MVP) ────────────
+  // completion = จบเกม (ไม่ว่าแพ้ชนะ) / win = ชนะ match (แทนที่ completion ไม่บวกซ้อน) /
+  // tripleSweepBonus = บวกเพิ่มถ้าชนะทั้ง 3 กอง (Triple Sweep) ในรอบใดก็ได้ของแมตช์นี้
+  xpRewards: {
+    initiate:   { completion: 5,  win: 15, tripleSweepBonus: 20 },
+    adept:      { completion: 10, win: 25, tripleSweepBonus: 35 },
+    mastermind: { completion: 15, win: 40, tripleSweepBonus: 60 },
+    highNoble:  { completion: 20, win: 60, tripleSweepBonus: 90 },
+    // D1 Hook: games_played กลายเป็น 1 (เกมแรกของผู้เล่นใหม่) — บวกครั้งเดียว
+    d1Hook: { xpBonus: 50, streakShieldBonus: 1 },
+    // เงื่อนไข XP ขั้นต่ำสำหรับปลดล็อก Ascendant — กันผู้เล่นซื้อ token อย่างเดียว
+    // ยังไม่มีใครเรียกใช้ จะถูกใช้ตอน implement Ascendant Trigger
+    ascendantXpRequirement: 12000,
+  },
+
+  // ─── Monarch Identity (Canon Locked v1.2) ──────────────────────
+  monarchIdentity: {
+    name:     'Monarch',
+    title:    'The Faceless King',
+    hookLine: 'My mask is the hand I am dealt.',
+    emoji:    '👑',
+    // Asset มีอยู่แล้วใน client/assets/bosses/ — ชื่อไฟล์ตัว M พิมพ์ใหญ่ (ต่างจากจตุรเทพที่เป็นตัวเล็กหมด) ห้ามเปลี่ยนชื่อไฟล์
+    assetMain:   'boss_Monarch.png',
+    assetAvatar: 'boss_Monarch_avatar.png',
+  },
+
+  // ─── Ascendant Gate (Monarch_Spec_v1_3 §5 — ทับ MasterPlan §5 เดิม) ─
+  // Ascendant ยังไม่ใช่ tier เต็มรูปแบบใน tierRanges/getTierFromToken() — ใช้ค่านี้ตรงใน ascendantGate.ts เท่านั้น
+  ascendantConfig: {
+    tokenMin:              600_000,
+    tokenMax:              999_999,
+    requireMonarchVictory: true,   // ต้องมี monarch_victories >= 1 ก่อนเริ่มนับหน้าต่าง (badge ต้องได้ก่อนเข้า ไม่ใช่ระหว่างนับเวลา)
+    windowDays:            30,     // ต้องขึ้น Tier S (token >= 1M) ภายใน 30 วันหลังเข้า Ascendant
+  },
 
 } as const;
 

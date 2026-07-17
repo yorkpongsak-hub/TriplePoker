@@ -9,6 +9,7 @@ import type { Session, User } from '@supabase/supabase-js'
 import { supabase, onAuthStateChange } from '../services/supabaseService'
 
 interface UserProfile {
+  profile_image_url?: string | null; // รูปโปรไฟล์จริง (VIP) — แยกจาก avatar_url (emoji)
   user_id: string
   display_name: string | null
   vip_status: 'none' | 'vip' | 'vip_pro'
@@ -17,6 +18,11 @@ interface UserProfile {
   token_balance: number | null
   crown_balance: number | null
   xp: number | null
+  performance_score: number | null    // Monarch_Spec_v1_3 §4 — Career PS (lifetime, ห้ามรีเซ็ต) active ตั้งแต่ Tier A+ ขึ้นไป
+  ps_season: number | null            // Monarch_Spec_v1_3 §4.2 — Season PS (เกณฑ์แข่งขัน/Ascendant Star, รีเซ็ตตาม tournament)
+  monarch_victories: number | null    // Monarch_Spec_v1_3 §3/§5 — Badge "Monarch Slayer" (>=1) + เงื่อนไข Ascendant Gate
+  tier_unlock_celebrated: string[] | null  // LobbyMatchmaking_Spec_v1_0 §1.3 — Tier ที่เคยแสดง Unlock Celebration แล้ว
+  streak_count: number | null         // matchStatsService.ts อัปเดตทุกจบแมตช์ (Asia/Bangkok) — ยืนยันแล้วว่าคอลัมน์มีจริงบน live DB
 }
 
 interface AuthState {
@@ -71,16 +77,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   // ดึง profile จาก table users
   refreshProfile: async () => {
     const user = get().user
+    console.log('[authStore] refreshProfile called, get().user =', user?.id ?? null)
     if (!user) {
+      console.log('[authStore] refreshProfile: no user in store, bailing with profile=null')
       set({ profile: null })
       return
     }
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('users')
-        .select('user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp')
+        .select('user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp, performance_score, ps_season, monarch_victories, tier_unlock_celebrated, streak_count')
         .eq('user_id', user.id)
         .maybeSingle()
+      console.log('[authStore] refreshProfile query result:', { data, error, queriedUserId: user.id })
       set({ profile: data as UserProfile | null })
     } catch (e) {
       console.error('[authStore] refreshProfile failed:', e)
