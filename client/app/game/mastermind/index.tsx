@@ -832,10 +832,10 @@ const GameTableLive: React.FC = () => {
   const startDealAnimation = () => {
     // ตำแหน่งปลายทาง: Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย
     const targets = [
-      { x: 0,    y: -240 }, // Boss AI (บน)
-      { x: 140,  y: -10  }, // P4 (ขวา)
-      { x: 0,    y: 200  }, // User (ล่าง)
-      { x: -140, y: -10  }, // P2 (ซ้าย)
+      { x: -50,  y: -240 }, // Boss AI (บน)
+      { x: 90,   y: -10  }, // P4 (ขวา)
+      { x: -50,  y: 200  }, // User (ล่าง)
+      { x: -190, y: -10  }, // P2 (ซ้าย)
     ]
     // reset ทุกใบ
     dealAnims.forEach(a => {
@@ -1522,14 +1522,14 @@ const GameTableLive: React.FC = () => {
               {dealAnims.map((a, i) => (
                 <Animated.View key={i} style={{
                   position: 'absolute',
-                  width: 50, height: 72, borderRadius: 6,
+                  width: 25, height: 36, borderRadius: 6,
                   backgroundColor: '#091808',
                   borderWidth: 1, borderColor: 'rgba(201,168,76,.5)',
                   overflow: 'hidden',
                   opacity: a.opacity,
                   transform: [{ translateX: a.x }, { translateY: a.y }, { scale: a.scale }, { rotate: '90deg' }], // Patch Mastermind: หมุน 90deg ให้สอดรับกับไพ่ที่ซ้อนกัน (270deg)
                 }}>
-                  <Image source={cardBackImg} style={{ width: 50, height: 72 }} resizeMode="cover" />
+                  <Image source={cardBackImg} style={{ width: 25, height: 36 }} resizeMode="cover" />
                 </Animated.View>
               ))}
               <Text style={{ color: 'rgba(201,168,76,0.4)', fontSize: 10, letterSpacing: 2, marginTop: 80 }}>DEALING...</Text>
@@ -1537,20 +1537,20 @@ const GameTableLive: React.FC = () => {
               {[0,1,2,3].map(playerIdx => {
                 const count = Math.floor(dealCount / 4) + (dealCount % 4 > playerIdx ? 1 : 0)
                 const positions = [
-                  { x: 195, y: 80 },   // Boss
-                  { x: 350, y: 300 },  // P4
-                  { x: 195, y: 520 },  // User
-                  { x: 40,  y: 300 },  // P2
+                  { x: 145, y: 80 },   // Boss
+                  { x: 300, y: 300 },  // P4
+                  { x: 145, y: 520 },  // User
+                  { x: -10, y: 300 },  // P2
                 ]
                 const pos = positions[playerIdx]
                 return Array.from({ length: Math.min(count, 11) }).map((_, ci) => (
                   <View key={`p${playerIdx}c${ci}`} style={{
-                    position: 'absolute', left: pos.x - 25 + ci * 4, top: pos.y - 36 + ci * 3,
-                    width: 50, height: 72, borderRadius: 6, overflow: 'hidden',
+                    position: 'absolute', left: pos.x - 12 + ci * 4, top: pos.y - 18 + ci * 3,
+                    width: 25, height: 36, borderRadius: 6, overflow: 'hidden',
                     borderWidth: 1, borderColor: 'rgba(201,168,76,.5)', backgroundColor: '#091808',
                     transform: [{ rotate: '270deg' }], // Patch Mastermind: มุมซ้อนไพ่ตอนแจก ต่างจาก Tier ก่อนหน้า
                   }}>
-                    <Image source={cardBackImg} style={{ width: 50, height: 72 }} resizeMode="cover" />
+                    <Image source={cardBackImg} style={{ width: 25, height: 36 }} resizeMode="cover" />
                   </View>
                 ))
               })}
