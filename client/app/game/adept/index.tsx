@@ -73,6 +73,8 @@ const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 const DEV_FAKE_USER_ID = __DEV__ ? process.env.EXPO_PUBLIC_DEV_FAKE_USER_ID : undefined
 
 interface CardData { id: string; key: string }
+// Patch (2026-07-17): ใช้แทนที่นั่งคู่แข่งทั้งหมดแล้ว ไม่ใช่แค่ AI (id เป็น userId จริงถ้า Human,
+// emoji เป็น avatarUrl ของ Human ถ้ามี — ดู round_start handler ที่ map จาก data.seats)
 interface AIInfo   { id: string; name: string; emoji: string }
 
 // =================================================================
@@ -215,6 +217,10 @@ const GameTableLive: React.FC = () => {
   // แทนเพื่อบังคับ trigger startDealAnimation ทุกครั้งที่ round_start มาถึงจริง ไม่ว่าค่า phase จะซ้ำเดิมหรือไม่
   const [dealTrigger, setDealTrigger] = useState(0)
   const [connectionError, setConnectionError] = useState<string | null>(null)
+  // A5 — Bug A fix (2026-07-17): Reconnect UI state
+  const [isReconnecting, setIsReconnecting] = useState(false)
+  const [afkNotice, setAfkNotice] = useState<string | null>(null)
+  const afkNoticeTimeoutRef = useRef<any>(null)
   const [dealDone, setDealDone]         = useState(false)
   const [dealCount, setDealCount]       = useState(0)
   const [roundNumber, setRoundNumber] = useState(1)
@@ -371,19 +377,32 @@ const GameTableLive: React.FC = () => {
       console.warn('[game] Using DEV_FAKE_USER_ID for PLAYER_ID:', PLAYER_ID)
     }
 
-    const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: false })
+    // A5 (Bug A fix, 2026-07-17): เปิด reconnection จริง (เดิม false — เน็ตสะดุดแป๊บเดียวก็ค้างจอถาวร
+    // ไม่มีทางกลับมาเองเลย) ค่า attempts/delay ตามที่ socketService.ts ใช้อยู่แล้วที่อื่นในโปรเจค
+    const socket = io(SERVER_URL, {
+      transports: ['websocket'], reconnection: true, reconnectionAttempts: 5, reconnectionDelay: 1000,
+    })
     socketRef.current = socket
 
     // Patch Multiplayer: ห้องถูกสร้าง + startMultiplayerMatch ถูกเรียกจาก server แล้ว
     // (ตอน room_auto_match / room_join_private ทำให้ห้องเต็ม) — client แค่ join room + รอ round_start
+    // 'connect' ยิงทั้งตอน connect ครั้งแรกและตอน reconnect สำเร็จ — game_join ทำหน้าที่คืนที่นั่งให้
+    // อัตโนมัติทั้งสองกรณี (ดู resendRoundStartToPlayer ฝั่ง server ที่ยกเลิก grace timer ให้เอง)
     socket.on('connect', () => {
       setConnectionError(null)
-      // Patch Multiplayer: บอก server ว่าเราพร้อมรับไพ่แล้ว (join user room + ขอ round_start ปัจจุบัน)
+      setIsReconnecting(false)
       socket.emit('game_join', { roomId: ROOM_ID, userId: PLAYER_ID })
     })
 
     socket.on('connect_error', (err: any) => {
       setConnectionError(err?.message || 'Cannot reach the game server.')
+    })
+
+    // A5: เน็ตหลุดกลางเกม — โชว์ "Reconnecting..." ระหว่างรอ socket.io ต่อเองอัตโนมัติ (reconnection:true
+    // ด้านบน) ยกเว้นตอนที่เราเป็นคน disconnect เอง (unmount/ออกจากหน้านี้ — ดู cleanup ท้าย useEffect)
+    socket.on('disconnect', (reason: string) => {
+      if (reason === 'io client disconnect') return
+      setIsReconnecting(true)
     })
 
     // Buy-in Spec §4 safety net — server ปฏิเสธเข้าโต๊ะเพราะ token ไม่พอ (ปกติ Lobby เช็คไว้ก่อนแล้ว)
@@ -395,6 +414,14 @@ const GameTableLive: React.FC = () => {
           : 'Something went wrong. Please try again.',
         [{ text: 'OK', onPress: () => router.replace('/(home)/lobby') }]
       )
+    })
+
+    // A5: อีกคนหลุด (AI เล่นแทนทันที ระหว่าง grace 60s รอ reconnect) — แจ้งผู้เล่นที่เหลือเฉยๆ ไม่บล็อกจอ
+    socket.on('player_disconnected_replaced', (data: { roomId: string; disconnectedUserId: string; displayName?: string; graceSeconds?: number }) => {
+      if (data.disconnectedUserId === PLAYER_ID) return // ตัวเองไม่ต้องเห็น notice ของตัวเอง
+      if (afkNoticeTimeoutRef.current) clearTimeout(afkNoticeTimeoutRef.current)
+      setAfkNotice(`${data.displayName ?? 'A player'} disconnected — AI takes over`)
+      afkNoticeTimeoutRef.current = setTimeout(() => setAfkNotice(null), 4000)
     })
 
     socket.on('round_start', (data: any) => {
@@ -420,12 +447,19 @@ const GameTableLive: React.FC = () => {
       fadeCards.stopAnimation(() => { fadeCards.setValue(0) })
       setBlind([]); setDealCount(0)
       setTokenBalance(data.tokenBalance ?? {})
-      const aiNames = data.aiNames ?? []
-      setAiList(aiNames)
-      aiListRef.current = aiNames
+      // Bug B/C fix (2026-07-17): server เปลี่ยนจาก aiNames (AI-only) เป็น seats (4 ที่นั่งเรียงตาม
+      // ห้องจริง รวม Human) — เดิม Adept 2H+2AI มี AI แค่ 2 ตัว ทำให้ p4AI (index 2) ว่างเปล่าเวลาที่นั่ง
+      // นั้นเป็น Human จริง (หลังไพ่/avatar/ชื่อไม่โชว์เลย) map เป็นรูปแบบ AIInfo เดิมให้ bossAI/p2AI/p4AI
+      // derivation ทำงานถูกต้องเสมอไม่ว่าที่นั่งจะเป็น Human หรือ AI — ตัวแปรชื่อ aiList ยังคงไว้ (ไม่ rename
+      // ทั้งไฟล์) แต่ตอนนี้หมายถึง "คู่แข่งทั้งหมด" ไม่ใช่แค่ AI แล้ว
+      const opponents: AIInfo[] = (data.seats ?? [])
+        .filter((seat: any) => seat.userId !== PLAYER_ID)
+        .map((seat: any) => ({ id: seat.userId, name: seat.displayName, emoji: seat.avatarUrl || seat.emoji || '👤' }))
+      setAiList(opponents)
+      aiListRef.current = opponents
 
       const init: Record<string, string> = {}
-      data.aiNames?.forEach((a: any) => { init[a.id] = 'Arranging...' })
+      opponents.forEach((o) => { init[o.id] = 'Arranging...' })
       setAiStatus(init)
 
       setComm({
@@ -598,6 +632,7 @@ const GameTableLive: React.FC = () => {
       if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop()
       stopMatchEndAnimations()
       if (jackpotTimeoutRef.current) clearTimeout(jackpotTimeoutRef.current)
+      if (afkNoticeTimeoutRef.current) clearTimeout(afkNoticeTimeoutRef.current)
       socket.disconnect()
     }
   }, [])
@@ -1161,6 +1196,8 @@ const GameTableLive: React.FC = () => {
     )
   })
 
+  // Bug B fix: index 0 = ที่นั่ง Boss (Sage เสมอตามโครงสร้างห้อง Adept — ดู buildAdeptInitialSeats
+  // ฝั่ง server) index 1/2 = P2/P4 ซึ่งอาจเป็น Human หรือ AI ก็ได้ ไม่ใช่ AI เสมอไปเหมือนเดิม
   const bossAI = aiList[0]; const p2AI = aiList[1]; const p4AI = aiList[2]
   const userRevealed = allCards[PLAYER_ID]
   const isRevealed   = userRevealed && Object.keys(userRevealed).length > 0
@@ -1202,6 +1239,18 @@ const GameTableLive: React.FC = () => {
               {connectionError && (
                 <View style={{ marginTop: 16, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: 'rgba(255,107,107,0.15)', borderWidth: 1, borderColor: 'rgba(255,107,107,0.4)', borderRadius: 10 }}>
                   <Text style={{ color: '#FF6B6B', fontSize: 11, textAlign: 'center' }}>Connection failed. Please check your network and try again.</Text>
+                </View>
+              )}
+              {/* A5 — Bug A fix: เน็ตหลุด กำลังต่อใหม่อัตโนมัติ */}
+              {isReconnecting && (
+                <View style={{ position: 'absolute', top: 12, alignSelf: 'center', zIndex: 999, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: 'rgba(255,199,87,0.15)', borderWidth: 1, borderColor: 'rgba(255,199,87,0.5)', borderRadius: 10 }}>
+                  <Text style={{ color: '#FFC857', fontSize: 12, fontWeight: '700', textAlign: 'center' }}>Reconnecting...</Text>
+                </View>
+              )}
+              {/* A5 — Bug A fix: อีกคนหลุด/AI เล่นแทน แจ้งเตือนสั้นๆ */}
+              {afkNotice && (
+                <View style={{ position: 'absolute', top: 12, alignSelf: 'center', zIndex: 999, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: 'rgba(15,36,24,0.85)', borderWidth: 1, borderColor: 'rgba(255,215,106,0.5)', borderRadius: 10 }}>
+                  <Text style={{ color: '#F5F2E8', fontSize: 12, fontWeight: '600', textAlign: 'center' }}>{afkNotice}</Text>
                 </View>
               )}
               {/* Boss AI — แสดงจำนวนไพ่ที่ได้รับ */}
@@ -1246,8 +1295,8 @@ const GameTableLive: React.FC = () => {
           {/* ── DISCARD OVERLAY ── */}
           {showDiscard && (
             <View style={s.overlay}>
-              <Text style={s.discardTitle}>เลือก 2 ใบที่จะทิ้งจาก Pile 3</Text>
-              <Text style={s.discardSub}>({discardSelected.length}/2 ใบที่เลือก)</Text>
+              <Text style={s.discardTitle}>Choose 2 cards to discard from Pile 3</Text>
+              <Text style={s.discardSub}>({discardSelected.length}/2 cards selected)</Text>
               <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'center', marginBottom: 20 }}>
                 {piles[2].map((card, idx) => {
                   const isSel = discardSelected.includes(idx)
@@ -1382,7 +1431,7 @@ const GameTableLive: React.FC = () => {
                   textAlign: 'center',
                 }}>⚡ TRIPLE SWEEP JACKPOT! ⚡</Animated.Text>
                 <Text style={{ marginTop: 10, fontSize: 16, color: '#8DFFB5', fontWeight: '800' }}>
-                  {emoji} {label} ชนะครบทั้ง 3 กอง!
+                  {emoji} {label} won all 3 piles!
                 </Text>
               </View>
             )
@@ -1510,7 +1559,7 @@ const GameTableLive: React.FC = () => {
           <Text style={{ fontSize: 14, color: '#FFB74D', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>⚡ TRIPLE SWEEP JACKPOT</Text>
           <Row label="Winner Payout" value={`${t.jackpot.payout} tokens`} valueColor="#FFD76A" />
           <Row label="Loser Penalty" value={`${t.jackpot.penalty} tokens each`} valueColor="#FFB74D" />
-          <Row label="Rake" value="10% (burn)" valueColor="#FFB74D" />
+          <Row label="Rake" value="5% (burn)" valueColor="#FFB74D" />
 
           {/* Features */}
           <Text style={{ fontSize: 14, color: '#8DFFB5', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>FEATURES</Text>
@@ -1527,7 +1576,7 @@ const GameTableLive: React.FC = () => {
     </ScrollView>
 
     <TouchableOpacity style={[s.continueBtn, { marginTop: 12, backgroundColor: '#102218', borderColor: '#FFD76A' }]} onPress={() => setShowTierInfo(false)}>
-      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>ปิด</Text>
+      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>Close</Text>
     </TouchableOpacity>
   </View>
 )}
@@ -1566,7 +1615,7 @@ const GameTableLive: React.FC = () => {
     <View style={{ height: 16 }} />
     </ScrollView>
     <TouchableOpacity style={[s.continueBtn, { marginTop: 12, backgroundColor: '#102218', borderColor: '#FFD76A' }]} onPress={() => setShowRankTable(false)}>
-      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>ปิด</Text>
+      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>Close</Text>
     </TouchableOpacity>
   </View>
 )}
@@ -1642,7 +1691,7 @@ const GameTableLive: React.FC = () => {
 
           {/* USER AREA */}
           <View style={[s.userArea, { opacity: (phase === 'countdown' || phase === 'showdown' || phase === 'result') ? 0 : 1 }]}>
-            <Text style={[s.swapHint, { opacity: selected ? 1 : 0 }]}>กดไพ่ใบที่ต้องการสลับตำแหน่ง</Text>
+            <Text style={[s.swapHint, { opacity: selected ? 1 : 0 }]}>Tap the cards you want to swap</Text>
             {hasFoul[PLAYER_ID] && <Text style={s.foulText}>⚠️ FOUL{foulReasons[PLAYER_ID] ? ` — ${foulReasons[PLAYER_ID]}` : ''}</Text>}
 
 

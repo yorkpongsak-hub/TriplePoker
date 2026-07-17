@@ -23,6 +23,7 @@ import { ActionButton } from '../../../src/components/ui/ActionButton'
 import { MenuButton } from '../../../src/components/ui/MenuButton'
 import { ResultPanel } from '../../../src/components/ui/ResultPanel'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
+import { GuideOverlay } from '../../../src/components/onboarding/GuideOverlay'
 
 // Feedback C5 — Showdown result ครอบด้วยพื้นหลังชุดเดียวกับ Profile/Lobby (bg free/vip ตาม isVip)
 const SHOWDOWN_BG_FREE = require('../../../assets/backgrounds/bg_main_free.png')
@@ -240,6 +241,10 @@ const GameTableLive: React.FC = () => {
   const [selected, setSelected] = useState<{ pi: number; ci: number } | null>(null)
   const [sortDone, setSortDone] = useState(false)
   const [isReady, setIsReady]   = useState(false)
+
+  // ── Onboarding Guide Overlay (state ล้วนๆ ไม่กระทบ game logic เดิม) ──
+  // คุมลำดับโชว์ guide "Ready" ให้ต่อจาก guide "Arrangement" ในรอบเดียวกัน (ทั้งคู่ anchor ที่ phase==='arrangement')
+  const [showReadyGuide, setShowReadyGuide] = useState(false)
 
   // ── Community + Blind
   const [comm, setComm]   = useState({ p1: ['',''], p2: ['',''], p3: ['',''] })
@@ -1260,8 +1265,8 @@ const GameTableLive: React.FC = () => {
           {/* ── DISCARD OVERLAY ── */}
           {showDiscard && (
             <View style={s.overlay}>
-              <Text style={s.discardTitle}>เลือก 2 ใบที่จะทิ้งจาก Pile 3</Text>
-              <Text style={s.discardSub}>({discardSelected.length}/2 ใบที่เลือก)</Text>
+              <Text style={s.discardTitle}>Choose 2 cards to discard from Pile 3</Text>
+              <Text style={s.discardSub}>({discardSelected.length}/2 cards selected)</Text>
               <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'center', marginBottom: 20 }}>
                 {piles[2].map((card, idx) => {
                   const isSel = discardSelected.includes(idx)
@@ -1299,7 +1304,29 @@ const GameTableLive: React.FC = () => {
             <Text style={s.countdownSub}>All piles reveal!</Text>
           </View>
 
-
+          {/* ── ONBOARDING GUIDE OVERLAYS (ครั้งแรกครั้งเดียวต่อ phase) ── */}
+          {/* Arrangement + Ready ต่างอยู่ phase 'arrangement' เหมือนกัน แต่ต้องโชว์ทีละอันเรียงกัน */}
+          <GuideOverlay
+            visible={phase === 'arrangement' && !showReadyGuide}
+            storageKey="guide_arrangement_seen"
+            message="Sort your 11 cards into 3 piles -- Left pile must be weakest, Right pile strongest!"
+            onDismiss={() => setShowReadyGuide(true)}
+          />
+          <GuideOverlay
+            visible={phase === 'arrangement' && showReadyGuide}
+            storageKey="guide_ready_seen"
+            message="Tap Ready when done -- all piles reveal at once!"
+          />
+          <GuideOverlay
+            visible={phase === 'showdown'}
+            storageKey="guide_showdown_seen"
+            message="All piles flip at the same time -- highest Hand wins each pot!"
+          />
+          <GuideOverlay
+            visible={phase === 'result'}
+            storageKey="guide_result_seen"
+            message="Win a pile -> earn its pot. Lose -> no reward. Foul -> lose everything!"
+          />
 
           {/* ── MATCH END OVERLAY ── */}
           {phase === 'end' && matchResult && (
@@ -1396,7 +1423,7 @@ const GameTableLive: React.FC = () => {
                   textAlign: 'center',
                 }}>⚡ TRIPLE SWEEP JACKPOT! ⚡</Animated.Text>
                 <Text style={{ marginTop: 10, fontSize: 16, color: '#8DFFB5', fontWeight: '800' }}>
-                  {emoji} {label} ชนะครบทั้ง 3 กอง!
+                  {emoji} {label} won all 3 piles!
                 </Text>
               </View>
             )
@@ -1524,7 +1551,7 @@ const GameTableLive: React.FC = () => {
           <Text style={{ fontSize: 14, color: '#FFB74D', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>⚡ TRIPLE SWEEP JACKPOT</Text>
           <Row label="Winner Payout" value={`${t.jackpot.payout} tokens`} valueColor="#FFD76A" />
           <Row label="Loser Penalty" value={`${t.jackpot.penalty} tokens each`} valueColor="#FFB74D" />
-          <Row label="Rake" value="10% (burn)" valueColor="#FFB74D" />
+          <Row label="Rake" value="5% (burn)" valueColor="#FFB74D" />
 
           {/* Features */}
           <Text style={{ fontSize: 14, color: '#8DFFB5', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>FEATURES</Text>
@@ -1541,7 +1568,7 @@ const GameTableLive: React.FC = () => {
     </ScrollView>
 
     <TouchableOpacity style={[s.continueBtn, { marginTop: 12, backgroundColor: '#102218', borderColor: '#FFD76A' }]} onPress={() => setShowTierInfo(false)}>
-      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>ปิด</Text>
+      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>Close</Text>
     </TouchableOpacity>
   </View>
 )}
@@ -1580,7 +1607,7 @@ const GameTableLive: React.FC = () => {
     <View style={{ height: 16 }} />
     </ScrollView>
     <TouchableOpacity style={[s.continueBtn, { marginTop: 12, backgroundColor: '#102218', borderColor: '#FFD76A' }]} onPress={() => setShowRankTable(false)}>
-      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>ปิด</Text>
+      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>Close</Text>
     </TouchableOpacity>
   </View>
 )}
@@ -1656,7 +1683,7 @@ const GameTableLive: React.FC = () => {
 
           {/* USER AREA */}
           <View style={[s.userArea, { opacity: (phase === 'countdown' || phase === 'showdown' || phase === 'result') ? 0 : 1 }]}>
-            <Text style={[s.swapHint, { opacity: selected ? 1 : 0 }]}>กดไพ่ใบที่ต้องการสลับตำแหน่ง</Text>
+            <Text style={[s.swapHint, { opacity: selected ? 1 : 0 }]}>Tap the cards you want to swap</Text>
             {hasFoul[PLAYER_ID] && <Text style={s.foulText}>⚠️ FOUL{foulReasons[PLAYER_ID] ? ` — ${foulReasons[PLAYER_ID]}` : ''}</Text>}
 
 

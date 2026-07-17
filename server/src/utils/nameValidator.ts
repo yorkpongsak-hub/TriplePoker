@@ -41,11 +41,12 @@ export async function validateDisplayName(
   // ─── 1. ตรวจ format ก่อน ────────────────────────────────────────────
   const trimmed = inputName.trim()
 
-  if (trimmed.length < 3 || trimmed.length > 30) {
+  // Patch (2026-07-17): จำกัดความยาว 30 → 9 ตัวอักษร ตามมติใหม่
+  if (trimmed.length < 3 || trimmed.length > 9) {
     return {
       allowed: false,
       reason: 'INVALID_FORMAT',
-      message: 'Name must be 3–30 characters.',
+      message: 'Name must be 3–9 characters.',
     }
   }
 

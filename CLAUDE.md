@@ -40,7 +40,17 @@
 - **Client:** React Native + Expo (Android only MVP) + Zustand + Reanimated 4
 - **Server:** Node.js + Fastify + Socket.IO + TypeScript
 - **DB:** Supabase PostgreSQL (project ref: `aeinnlaxscikarzupprn`) + Upstash Redis (REST client)
-- **Env:** WSL2 บน Windows | รัน Expo จาก `/client` ด้วย `npx expo start --tunnel --clear`
+- **Env:** WSL2 บน Windows | รัน Expo จาก `/client` ด้วย `npx expo start --clear` (LAN mode)
+
+## 🌐 Dev Networking (updated 2026-07-13)
+
+- WSL2 ใช้ mirrored networking mode (`.wslconfig`: `networkingMode=mirrored`) — WSL ได้ IP เดียวกับ Windows
+- Server: Fastify port 3001, bind `0.0.0.0`
+- Client ชี้ `http://192.168.1.106:3001` (LAN IP ของเครื่อง MSI, router อาจแจกใหม่ได้ — ถ้าต่อไม่ได้ให้เช็ค `ipconfig` ก่อน)
+- Expo ใช้ LAN mode: `npx expo start --clear` (เลิกใช้ `--tunnel`)
+- Firewall rules มีแล้ว: port 3001 (server), 8081 (Metro), Hyper-V VM firewall ตั้ง `DefaultInboundAction=Allow` แล้ว
+- **ห้ามแนะนำ/ตั้ง `netsh portproxy` หรือ localtunnel อีก** — เป็นวิธีเก่าที่เลิกใช้แล้ว
+- ทดสอบ: มือถือเปิด `http://192.168.1.106:3001/health` ต้องได้ response (คอมตัวเองอาจเข้า LAN IP ไม่ได้ — เป็น quirk ของ mirrored mode ให้ใช้ `localhost` แทน ไม่ใช่บั๊ก)
 
 ---
 
@@ -76,7 +86,7 @@
 
 - **Tier structure:** Initiate (2★) → Adept (3★) → Mastermind (4★) → High Noble (5★) → Last Boss (5★+⚡ #FFD76A, แอปแยก)
 - **Blind Auction** ปลดล็อกที่ Mastermind ขึ้นไป
-- **Triple Sweep Jackpot:** ชนะ 3 กอง = Pot ×2, Rake 10%, Penalty หาร 3 (ทุก Tier)
+- **Triple Sweep Jackpot:** ชนะ 3 กอง = Pot ×2, Rake 5% (ยกเลิก Rake 10% แยกแล้ว — 2026-07-17), Penalty หาร 3 (ทุก Tier)
 - **Auto Sort Fee** (ยังไม่โค้ด): Initiate ฟรี | Adept 30 | Mastermind 100 | High Noble 250 | Last Boss 500 — client counter ใน AsyncStorage, backend หักตอน submit + คง `freeRoundsForNewUser=10`
 - **Monarch spawn rate** (High Noble): Monarch 3% / Reaper 28% / Crag 25% / Cortex 25% / Cipher 19% — adaptive personality ล็อกตอน deal
 - **Nine Sentinels** (Mastermind Conquest): Iron Wall / Chivalry / War Lord / Phantom / Dark Shark / Oracle / Jester / Phoenix / Black Magic — reuse pattern Four Gods, Jester สุ่ม weight 1-10 ใหม่ทุกเกม (pattern เดียวกับ Cipher)

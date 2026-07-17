@@ -1,4 +1,6 @@
 # TriplePoker — Buy-in & Match Settlement Spec
+> ⚠️ DEPRECATED — ใช้ v1.1 แทน (docs/TriplePoker_BuyIn_Spec_v1_1.md)
+> Buy-in Adept ในไฟล์นี้ (1,000) เป็นค่าเก่าที่มีบั๊ก game balance — ถูกแก้เป็น 2,000 ใน v1.1 แล้ว
 > Version 1.0 | The Sage Unicorn Studio Co., Ltd. | Updated: July 12, 2026
 > Canon Decisions confirmed by Founder — สอดคล้อง CoreRules v1.2 (Ante/Pot/Call/Debt Recovery)
 

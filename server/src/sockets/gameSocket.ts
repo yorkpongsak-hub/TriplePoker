@@ -10,7 +10,7 @@
 import { Server, Socket } from "socket.io";
 import { dealCards, validateDeal } from "../game/cardEngine";
 import { startMatch, submitArrangement, submitArrangementRound2, resolveContinue, submitAuctionBid, submitDiscard, submitGrandFinaleAction, settleAndEndSoloMatch } from "../game/gameLoop";
-import { startMultiplayerMatch, submitMultiArrangement, replaceMultiPlayerWithAI, resendRoundStartToPlayer } from "../game/gameLoop";
+import { startMultiplayerMatch, submitMultiArrangement, markPlayerAFK, resendRoundStartToPlayer, settleAndEndMultiMatch } from "../game/gameLoop";
 import { getMatchState, getMultiMatchState, settleEscrow } from "../game/gameLoop";
 import {
   startHighNobleMultiMatch, submitHNArrangement, submitHNAuctionBid, submitHNArrangementRound2,
@@ -26,8 +26,8 @@ import {
   fillRemainingWithAI, getTimedOutRooms, markInProgress, finalizeBossSeat,
   getRoomsNeedingTimeoutChoice, markAwaitingTimeoutChoice, extendRoomWait,
   getExpiredExtendedRooms, deleteRoomCompletely, fillWithMinion, humanCount,
-  markAwaitingDeadlockChoice,
-  type Tier as RoomTier,
+  markAwaitingDeadlockChoice, getAdeptGraceExpiredRoomIds, resolveAdeptGraceExpiry,
+  type Tier as RoomTier, type GameRoom,
 } from "../game/roomRegistry";
 import { broadcastTableUpdate } from "./lobbySocket";
 
@@ -45,6 +45,33 @@ function toCards(keys: string[]) {
 
 // ─── Multiplayer: track socket -> {userId, roomId} สำหรับ disconnect handling ───
 const socketUserMap = new Map<string, { userId: string; roomId: string; tier: string }>();
+
+// ห้องเต็มแล้ว → finalize (สุ่ม Boss จริงถ้า High Noble) + emit room_ready + เริ่มเกม
+// ใช้ร่วมกัน 3 จุด: room_auto_match, room_join_private, Adept grace-period AI-fill
+//
+// A2 (Bug A fix, 2026-07-17): Adept ต้องหัก escrow ให้ครบทุกคน "ก่อน" broadcast room_ready เสมอ —
+// เดิม room_ready ยิงก่อน escrow loop ใน startMultiplayerMatch ทำให้ทุกคน navigate เข้าเกมไปแล้ว
+// ก่อนรู้ว่า escrow ใครคนหนึ่งล้มเหลว (เช่น ACTIVE_MATCH_EXISTS จากห้องก่อนหน้าที่ยังไม่ settle) — พอ
+// ล้มเหลวจริงจะไม่มีใครเห็น error เลยเพราะ socket lobby เดิมถูก disconnect ไปแล้วตอน navigate
+async function finalizeAndStartRoom(io: Server, room: GameRoom): Promise<void> {
+  const finalRoom = room.tier === 'highNoble' ? await finalizeBossSeat(room) : room;
+  await markInProgress(finalRoom.roomId);
+
+  if (finalRoom.tier === 'adept') {
+    const result = await startMultiplayerMatch(io, finalRoom.roomId, finalRoom.seats, 'adept');
+    if (!result.ok) {
+      // room_ready ไม่เคยถูก broadcast เลย — client ทุกคนยังอยู่ที่ lobby socket เดิม ได้ยิน room_error
+      // แน่นอน (handler เดิมของ lobby.tsx อยู่แล้ว ไม่ต้องเพิ่ม client listener ใหม่)
+      io.to(finalRoom.roomId).emit("room_error", { message: result.reason ?? "Could not start the match. Please try again." });
+      await deleteRoomCompletely(finalRoom.roomId); // กันห้องค้างสถานะ in_progress ทั้งที่ไม่มี match จริง
+      return;
+    }
+    io.to(finalRoom.roomId).emit("room_ready", { roomId: finalRoom.roomId, seats: finalRoom.seats });
+  } else if (finalRoom.tier === 'highNoble') {
+    io.to(finalRoom.roomId).emit("room_ready", { roomId: finalRoom.roomId, seats: finalRoom.seats });
+    await startHighNobleMultiMatch(io, finalRoom.roomId, finalRoom.seats);
+  }
+}
 
 // ============================================================
 // Main Socket Handler — register ที่ server/index.ts
@@ -85,15 +112,15 @@ export function registerGameSocket(io: Server): void {
     }
   }, 10_000);
 
-  // Waiting Timeout Dialog (LobbyMatchmaking_Spec_v1_0 §4.4/§6.1) — Adept + High Noble ทุก 10 วิ:
-  //   รอบแรก (3 นาที) หมด → ถาม dialog "Wait 2 More Minutes" / "Delete Table"
-  //     (Adept: ใครก็ตอบได้ — มี Human รอแค่คนเดียวเสมอ / High Noble: เฉพาะ Host เท่านั้น)
+  // Waiting Timeout Dialog (LobbyMatchmaking_Spec_v1_0 §4.4/§6.1) — High Noble เท่านั้นทุก 10 วิ
+  // (Adept ไม่ใช้ dialog นี้อีกแล้ว — เปลี่ยนไปใช้ Adept Dynamic Capacity grace period แทน ดู
+  // setInterval ใหม่ด้านล่างที่เรียก getAdeptGraceExpiredRoomIds/resolveAdeptGraceExpiry):
+  //   รอบแรก (3 นาที) หมด → ถาม dialog "Wait 2 More Minutes" / "Delete Table" (เฉพาะ Host)
   //   รอบขยาย (2 นาที) หมด:
-  //     Adept → ลบโต๊ะทันที ไม่ถามซ้ำ
-  //     High Noble → Human >=2: Deadlock dialog "Start Now (Fill 1 Minion AI)"/"Delete Table" (Host เท่านั้น, §6.1)
-  //                  Human =1: ลบโต๊ะทันทีเหมือน Adept
+  //     Human >=2: Deadlock dialog "Start Now (Fill 1 Minion AI)"/"Delete Table" (Host เท่านั้น, §6.1)
+  //     Human =1: ลบโต๊ะทันที
   setInterval(async () => {
-    const dialogTiers: RoomTier[] = ['adept', 'highNoble'];
+    const dialogTiers: RoomTier[] = ['highNoble'];
     for (const tier of dialogTiers) {
       const needChoice = await getRoomsNeedingTimeoutChoice(tier);
       for (const room of needChoice) {
@@ -120,6 +147,29 @@ export function registerGameSocket(io: Server): void {
       }
     }
   }, 10_000);
+
+  // Adept Dynamic Capacity grace period — เฉพาะโต๊ะ public (auto-match) เท่านั้น (private ไม่เคยอยู่
+  // ใน openSetKey เลย ไม่โดนกระทบ ยังคงพฤติกรรมเดิม 2H+2AI ตายตัวใน joinRoom()) โพลถี่กว่า loop อื่น
+  // (3 วิ แทน 10 วิ) เพราะ grace window สั้นแค่ ~40 วิ ไม่ใช่หลักนาทีเหมือน loop ด้านบน
+  setInterval(async () => {
+    const roomIds = await getAdeptGraceExpiredRoomIds();
+    for (const roomId of roomIds) {
+      try {
+        const result = await resolveAdeptGraceExpiry(roomId);
+        if (result.action === 'cancelled') {
+          io.to(roomId).emit('room_deleted', {
+            roomId,
+            message: 'No second player joined in time — table has been removed. Please try Auto Match again.',
+          });
+        } else if (result.action === 'ai_filled' && result.room.status === 'full') {
+          await finalizeAndStartRoom(io, result.room);
+        }
+        // 'noop' — มี join แทรกเข้ามาระหว่าง scan กับตอนนี้พอดี (resolveAdeptGraceExpiry เช็คสดแล้วเจอว่าไม่หมดเวลาจริง) ไม่ต้องทำอะไร
+      } catch (err) {
+        console.error('[ADEPT_GRACE] failed for room', roomId, err);
+      }
+    }
+  }, 3_000);
 
   io.on("connection", (socket: Socket) => {
 
@@ -275,8 +325,10 @@ export function registerGameSocket(io: Server): void {
         newTokenBalance = await settleEscrow(soloState.humanPlayerId, soloState.escrowId, soloState.tokenBalance[soloState.humanPlayerId] ?? soloState.buyInAmount);
         deleteTable(roomId);
       } else if (multiState) {
-        const escrowId = multiState.escrowIds[playerId];
-        if (escrowId) newTokenBalance = await settleEscrow(playerId, escrowId, multiState.tokenBalance[playerId] ?? multiState.buyInAmount);
+        // A3/A4 (Bug A fix, 2026-07-17): settle escrow ให้ Human "ทุกคน" ในห้อง ไม่ใช่แค่ playerId ที่
+        // leave (เดิมพลาดจุดนี้ — คนที่เหลือมี match_escrow ค้าง status='in_match' ไปกวนโต๊ะใหม่ทีหลัง
+        // ผ่าน ACTIVE_MATCH_EXISTS) ในตัวเดียวกันนี้ก็ลบ multiMatchStates กันหน่วยความจำรั่วด้วย
+        newTokenBalance = await settleAndEndMultiMatch(roomId, playerId);
         await deleteRoomCompletely(roomId);
       } else if (hnState) {
         const escrowId = hnState.escrowIds[playerId];
@@ -423,13 +475,15 @@ export function registerGameSocket(io: Server): void {
 
     // Auto-Match: หาห้อง public ที่เปิดอยู่ก่อน ถ้าไม่มีสร้างใหม่
     socket.on("room_auto_match", async (data: {
-      tier: RoomTier; userId: string; userName: string;
+      tier: RoomTier; userId: string; userName: string; avatarUrl?: string;
     }) => {
-      const { tier, userId, userName } = data;
+      const { tier, userId, userName, avatarUrl } = data;
       try {
-        const result = await findOrCreateRoomAndJoin(tier, userId, userName);
+        const result = await findOrCreateRoomAndJoin(tier, userId, userName, avatarUrl);
         if (!result.ok || !result.room) {
-          socket.emit("room_error", { message: "เข้าห้องไม่สำเร็จ กรุณาลองใหม่" });
+          // Patch (2026-07-17): แก้ข้อความเป็นภาษาอังกฤษ (canon บังคับ UI/error message ทั้งหมดเป็น
+          // อังกฤษ — เจอเป็นภาษาไทยค้างอยู่ระหว่างแก้ A2)
+          socket.emit("room_error", { message: "Could not join the table. Please try again." });
           return;
         }
         socket.join(result.room.roomId);
@@ -439,19 +493,10 @@ export function registerGameSocket(io: Server): void {
         io.to(result.room.roomId).emit("room_status", { room: result.room });
 
         if (result.room.status === 'full') {
-          // Monarch Spec v1.3: สุ่ม Boss จริง (weighted + pity) ตอนรู้ user_id Human ครบ 3 คนแล้ว
-          const finalRoom = tier === 'highNoble' ? await finalizeBossSeat(result.room) : result.room;
-          await markInProgress(finalRoom.roomId);
-          io.to(finalRoom.roomId).emit("room_ready", { roomId: finalRoom.roomId, seats: finalRoom.seats });
-          // Patch Multiplayer: เริ่มเกมทันทีเมื่อห้องเต็ม
-          if (tier === 'adept') {
-            await startMultiplayerMatch(io, finalRoom.roomId, finalRoom.seats, 'adept');
-          } else if (tier === 'highNoble') {
-            await startHighNobleMultiMatch(io, finalRoom.roomId, finalRoom.seats);
-          }
+          await finalizeAndStartRoom(io, result.room);
         }
       } catch (err: any) {
-        socket.emit("room_error", { message: err.message ?? "เกิดข้อผิดพลาด" });
+        socket.emit("room_error", { message: err.message ?? "Something went wrong. Please try again." });
       }
     });
 
@@ -484,15 +529,7 @@ export function registerGameSocket(io: Server): void {
         io.to(roomId).emit("room_status", { room: result.room });
 
         if (result.room.status === 'full') {
-          // Monarch Spec v1.3: สุ่ม Boss จริง (weighted + pity) ตอนรู้ user_id Human ครบ 3 คนแล้ว
-          const finalRoom = result.room.tier === 'highNoble' ? await finalizeBossSeat(result.room) : result.room;
-          await markInProgress(roomId);
-          io.to(roomId).emit("room_ready", { roomId, seats: finalRoom.seats });
-          if (finalRoom.tier === 'adept') {
-            await startMultiplayerMatch(io, roomId, finalRoom.seats, 'adept');
-          } else if (finalRoom.tier === 'highNoble') {
-            await startHighNobleMultiMatch(io, roomId, finalRoom.seats);
-          }
+          await finalizeAndStartRoom(io, result.room);
         }
       }
     });
@@ -628,13 +665,21 @@ export function registerGameSocket(io: Server): void {
       const info = socketUserMap.get(socket.id);
       if (info) {
         console.log('[DISCONNECT]', info.userId, 'from room', info.roomId);
-        if (info.tier === 'adept') {
-          await replaceMultiPlayerWithAI(io, info.roomId, info.userId);
-        } else if (info.tier === 'highNoble') {
-          await replaceHNPlayerWithAI(io, info.roomId, info.userId);
-        } else if (info.tier === 'initiate' || info.tier === 'mastermind') {
-          // Buy-in Spec §4: solo tier ไม่มี Human อื่นให้เล่นต่อ — settle ทันทีด้วย stack ปัจจุบันแล้วปิดแมตช์
-          await settleAndEndSoloMatch(info.roomId);
+        // Bug A fix (2026-07-17): ครอบ try/catch — เดิมไม่มีเลย ถ้า replace/AFK logic throw กลางทาง
+        // socketUserMap.delete() ด้านล่างจะไม่ทำงาน ทิ้ง entry ค้างตลอดไป
+        try {
+          if (info.tier === 'adept') {
+            // A5: mark AFK + ให้ AI ตอบแทนทันที (ไม่ settle escrow ตรงนี้แล้ว — รอ grace 60s ก่อน
+            // reconnect ได้ ดู markPlayerAFK/finalizeAFKReplacement ใน gameLoop.ts)
+            await markPlayerAFK(io, info.roomId, info.userId);
+          } else if (info.tier === 'highNoble') {
+            await replaceHNPlayerWithAI(io, info.roomId, info.userId);
+          } else if (info.tier === 'initiate' || info.tier === 'mastermind') {
+            // Buy-in Spec §4: solo tier ไม่มี Human อื่นให้เล่นต่อ — settle ทันทีด้วย stack ปัจจุบันแล้วปิดแมตช์
+            await settleAndEndSoloMatch(info.roomId);
+          }
+        } catch (err) {
+          console.error('[DISCONNECT] handler failed for', info.userId, 'in', info.roomId, err);
         }
         socketUserMap.delete(socket.id);
       } else {

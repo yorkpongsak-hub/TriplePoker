@@ -1,5 +1,12 @@
 // ============================================================
 // gameStats.ts — games_played / games_won counters (Player Stats Leaderboard)
+//
+// ⚠️ DEPRECATED — replaced by matchStatsService.ts (recordMatchStats) ⚠️
+// ไม่มีจุดไหนใน gameLoop.ts/highNobleMultiEngine.ts เรียก recordGameResults() แล้ว
+// (games_played/games_won ถูกรวมเข้า UPDATE เดียวกับ xp/streak/best_hands/debt recovery
+// ใน matchStatsService.ts แทน) — คงไฟล์นี้ไว้เป็น fallback กัน production crash เท่านั้น
+// ห้ามลบไฟล์นี้ ตามหลักมีไฟล์สำรองกัน production crash
+//
 // เรียกจากจุด match_end ปกติเท่านั้น (จบครบ totalRounds) — ไม่นับ disconnect/player_leave
 // กลางเกม เพราะ "เล่นจบ 1 เกม" ควรหมายถึงแมตช์ที่ตัดสินผลจริง ไม่ใช่ออกกลางคัน
 // pattern เดียวกับ psEngine.ts (awardPerformanceScore) — batch read + batch upsert, .eq/.in ด้วย

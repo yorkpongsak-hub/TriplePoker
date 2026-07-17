@@ -32,20 +32,21 @@
 | High Noble | 100,000+ | ✅ | ✅ | ✅ | ✅ | ✅ | จตุรเทพ (DDE) |
 | The Last Boss | ตามเงื่อนไข | ✅ | ✅ | ✅ | ✅ | ✅ | DDE/MCTS |
  
-**Arrangement Timer:** Initiate 90s · Adept 75s · Mastermind 60s · High Noble 50s · The Last Boss 75s
-> หมายเหตุ: Last Boss แยกเวลาจาก High Noble — ให้เวลาคิดมากขึ้นเพราะ AI เก่งระดับ DDE/MCTS, ความยากอยู่ที่ฝีมือไม่ใช่ time pressure
+**Arrangement Timer:** Initiate 90s · Adept 75s · Mastermind 60s · High Noble 35s · The Last Boss 75s
+> หมายเหตุ: Last Boss แยกเวลาจาก High Noble — ให้เวลาคิดมากขึ้นเพราะ AI เก่งระดับ DDE/MCTS, ความยากอยู่ที่ฝีมือไม่ใช่ time pressure (แก้ High Noble 50s→35s ให้ตรง gameConfig.ts จริง — 2026-07-16)
  
-**Ante/Pot (S1/S2, ดูรายละเอียดเต็มใน CoreRules v1.2):**
+**Ante/Pot (S1/S2, ดูรายละเอียดเต็มใน CoreRules v1.3):**
+> ตัวเลขอ้างอิง CoreRules v1.3 + BuyIn_Spec v1.1 (sync กับ gameConfig.ts จริง — แก้จากเลขเก่าที่ค้างมาจาก v1.2/v1.0)
  
 | Tier | Ante รวม/คน | Pot Pile1/2/3 |
 |---|---|---|
 | Initiate | 70 | 40 / 80 / 160 |
-| Adept | 170 | 80 / 200 / 400 |
-| Mastermind | 530 | 320 / 600 / 1,200 |
-| High Noble | 1,750 | 1,000 / 2,000 / 4,000 |
-| The Last Boss | 3,500 | 2,000 / 4,000 / 8,000 |
+| Adept | 300 | 240 / 400 / 560 |
+| Mastermind | 1,000 | 800 / 1,200 / 2,000 |
+| High Noble | 3,000 | 2,000 / 4,000 / 6,000 |
+| The Last Boss | 6,000 | 4,000 / 8,000 / 12,000 |
  
-**Triple Sweep Jackpot** (ทุก Tier): ชนะ 3 กองในรอบเดียว = Pot ×2, Rake 10%, Penalty หาร 3
+**Triple Sweep Jackpot** (ทุก Tier): ชนะ 3 กองในรอบเดียว = Pot ×2, Rake 5% (ยกเลิก Rake 10% แยกแล้ว — 2026-07-17), Penalty/คน = floor(Pot÷3)
  
 ---
  

@@ -52,7 +52,8 @@ export const NINE_SENTINELS: (AIConfig & { bossId: string })[] = [
   { id: 'AI_BLACK_MAGIC', bossId: 'black_magic', name: 'Black Magic', emoji: '🪄', personality: 'black_magic' },
 ]
 
-// LobbyMatchmaking_Spec_v1_0 §5: Minion Avatars 25 ตัว (bot_adept_[nn]_[name].png ที่ client/assets/minions/)
+// LobbyMatchmaking_Spec_v1_0 §5: Minion Avatars 25 ตัว (bot_minion_[nn]_[name].png ที่ client/assets/minions/ —
+// เดิม bot_adept_ เปลี่ยนชื่อแล้ว 2026-07-17 เพราะ reuse ข้าม Adept/Mastermind/High Noble ไม่ใช่ Adept อย่างเดียว)
 // ใช้เป็น P2/P4 filler ของ Mastermind — ชื่อต้องตรงกับ suffix ไฟล์เป๊ะ (ตัวพิมพ์เล็ก) ห้ามลบชื่อกลุ่ม pride flag
 // (Prim, Xander, Yuri) ออกจาก roster นี้เด็ดขาด
 export const MINION_NAMES: string[] = [
@@ -75,7 +76,7 @@ export function pickRandomMinions(count: number): string[] {
 
 // ── Helper: First-Valid Arrangement (สำหรับ Initiate) ─────────
 // สุ่มจัดไพ่จนผ่าน Foul → ใช้เลย (ไม่ optimize) — AI อ่อนมาก เหมาะกับผู้เล่นใหม่
-function firstValidArrangement(cards: Card[], community: CommunityCards): PlayerArrangement {
+export function firstValidArrangement(cards: Card[], community: CommunityCards): PlayerArrangement {
   const maxAttempts = 100
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const shuffled = [...cards].sort(() => Math.random() - 0.5)

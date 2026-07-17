@@ -43,7 +43,7 @@ describe('itemPhaseController — Enable/Disable ตาม Phase', () => {
   test('Case 1: Swap enabled during deal phase', () => {
     const inv = makeInventory('swap')
     const lock = createGameLockState()
-    const result = getItemHudState('swap', 'deal', 'pro', inv, lock, TODAY)
+    const result = getItemHudState('swap', 'deal', 'mastermind', inv, lock, TODAY)
     expect(result.state).toBe('enabled')
   })
 
@@ -51,7 +51,7 @@ describe('itemPhaseController — Enable/Disable ตาม Phase', () => {
   test('Case 2: Vision disabled during deal phase', () => {
     const inv = makeInventory('vision')
     const lock = createGameLockState()
-    const result = getItemHudState('vision', 'deal', 'pro', inv, lock, TODAY)
+    const result = getItemHudState('vision', 'deal', 'mastermind', inv, lock, TODAY)
     expect(result.state).toBe('disabled')
     expect(result.reason).toContain('deal')
   })
@@ -62,7 +62,7 @@ describe('itemPhaseController — Enable/Disable ตาม Phase', () => {
     const inv = makeInventory('chrono_shard')
     const lock = createGameLockState()
     phases.forEach(phase => {
-      const result = getItemHudState('chrono_shard', phase, 'pro', inv, lock, TODAY)
+      const result = getItemHudState('chrono_shard', phase, 'mastermind', inv, lock, TODAY)
       expect(result.state).toBe('enabled')
     })
   })
@@ -72,10 +72,10 @@ describe('itemPhaseController — Enable/Disable ตาม Phase', () => {
     const inv = makeInventory('alliance_of_fate')
     const lock = createGameLockState()
 
-    const enabledResult = getItemHudState('alliance_of_fate', 'pile_3', 'pro', inv, lock, TODAY)
+    const enabledResult = getItemHudState('alliance_of_fate', 'pile_3', 'mastermind', inv, lock, TODAY)
     expect(enabledResult.state).toBe('enabled')
 
-    const disabledResult = getItemHudState('alliance_of_fate', 'auction', 'pro', inv, lock, TODAY)
+    const disabledResult = getItemHudState('alliance_of_fate', 'auction', 'mastermind', inv, lock, TODAY)
     expect(disabledResult.state).toBe('disabled')
   })
 
@@ -84,10 +84,10 @@ describe('itemPhaseController — Enable/Disable ตาม Phase', () => {
     const inv = makeInventory('auction_peek')
     const lock = createGameLockState()
 
-    const enabledResult = getItemHudState('auction_peek', 'auction', 'pro', inv, lock, TODAY)
+    const enabledResult = getItemHudState('auction_peek', 'auction', 'mastermind', inv, lock, TODAY)
     expect(enabledResult.state).toBe('enabled')
 
-    const disabledResult = getItemHudState('auction_peek', 'pile_1_2', 'pro', inv, lock, TODAY)
+    const disabledResult = getItemHudState('auction_peek', 'pile_1_2', 'mastermind', inv, lock, TODAY)
     expect(disabledResult.state).toBe('disabled')
   })
 
@@ -95,7 +95,7 @@ describe('itemPhaseController — Enable/Disable ตาม Phase', () => {
   test('Case 6: Vision enabled during pile_1_2 phase', () => {
     const inv = makeInventory('vision')
     const lock = createGameLockState()
-    const result = getItemHudState('vision', 'pile_1_2', 'pro', inv, lock, TODAY)
+    const result = getItemHudState('vision', 'pile_1_2', 'mastermind', inv, lock, TODAY)
     expect(result.state).toBe('enabled')
   })
 
@@ -105,7 +105,7 @@ describe('itemPhaseController — Enable/Disable ตาม Phase', () => {
     const lock = createGameLockState()
     items.forEach(item => {
       const inv = makeInventory(item)
-      const result = getItemHudState(item, 'end', 'pro', inv, lock, TODAY)
+      const result = getItemHudState(item, 'end', 'mastermind', inv, lock, TODAY)
       expect(result.state).toBe('disabled')
     })
   })
@@ -122,7 +122,7 @@ describe('itemPhaseController — Stock และ Usage Limit', () => {
   test('Case 8: Stock 0 returns empty state', () => {
     const inv = makeInventory('vision', { stock: 0 })
     const lock = createGameLockState()
-    const result = getItemHudState('vision', 'pile_1_2', 'pro', inv, lock, TODAY)
+    const result = getItemHudState('vision', 'pile_1_2', 'mastermind', inv, lock, TODAY)
     expect(result.state).toBe('empty')
   })
 
@@ -130,7 +130,7 @@ describe('itemPhaseController — Stock และ Usage Limit', () => {
   test('Case 9: Used-per-game item disabled if already used this game', () => {
     const inv = makeInventory('swap', { usedThisGame: true })
     const lock = createGameLockState()
-    const result = getItemHudState('swap', 'deal', 'pro', inv, lock, TODAY)
+    const result = getItemHudState('swap', 'deal', 'mastermind', inv, lock, TODAY)
     expect(result.state).toBe('disabled')
   })
 
@@ -138,7 +138,7 @@ describe('itemPhaseController — Stock และ Usage Limit', () => {
   test('Case 10: Vision disabled if used this round', () => {
     const inv = makeInventory('vision', { usedThisRound: true })
     const lock = createGameLockState()
-    const result = getItemHudState('vision', 'pile_1_2', 'pro', inv, lock, TODAY)
+    const result = getItemHudState('vision', 'pile_1_2', 'mastermind', inv, lock, TODAY)
     expect(result.state).toBe('disabled')
   })
 
@@ -146,7 +146,7 @@ describe('itemPhaseController — Stock และ Usage Limit', () => {
   test('Case 11: Eye of Demon disabled if already used today', () => {
     const inv = makeInventory('super_vision', { lastUsedDate: TODAY })
     const lock = createGameLockState()
-    const result = getItemHudState('super_vision', 'pile_1_2', 'pro', inv, lock, TODAY)
+    const result = getItemHudState('super_vision', 'pile_1_2', 'mastermind', inv, lock, TODAY)
     expect(result.state).toBe('disabled')
   })
 
@@ -162,7 +162,7 @@ describe('itemPhaseController — Lock Logic', () => {
   test('Case 12: Loot Box locked item returns locked state', () => {
     const inv = makeInventory('vision', { is_locked: true })
     const lock = createGameLockState()
-    const result = getItemHudState('vision', 'pile_1_2', 'pro', inv, lock, TODAY)
+    const result = getItemHudState('vision', 'pile_1_2', 'mastermind', inv, lock, TODAY)
     expect(result.state).toBe('locked')
     expect(result.reason).toContain('VIP')
   })
@@ -171,7 +171,7 @@ describe('itemPhaseController — Lock Logic', () => {
   test('Case 13: Using Eye of Demon locks Thief\'s Glance', () => {
     const lock = applyMutualLock('super_vision', createGameLockState())
     const inv = makeInventory('auction_peek')
-    const result = getItemHudState('auction_peek', 'auction', 'pro', inv, lock, TODAY)
+    const result = getItemHudState('auction_peek', 'auction', 'mastermind', inv, lock, TODAY)
     expect(result.state).toBe('locked')
     expect(result.reason).toContain('Locked this game')
   })
@@ -180,7 +180,7 @@ describe('itemPhaseController — Lock Logic', () => {
   test('Case 14: Using Thief\'s Glance locks Eye of Demon', () => {
     const lock = applyMutualLock('auction_peek', createGameLockState())
     const inv = makeInventory('super_vision')
-    const result = getItemHudState('super_vision', 'pile_1_2', 'pro', inv, lock, TODAY)
+    const result = getItemHudState('super_vision', 'pile_1_2', 'mastermind', inv, lock, TODAY)
     expect(result.state).toBe('locked')
   })
 
@@ -192,8 +192,8 @@ describe('itemPhaseController — Lock Logic', () => {
 
 describe('itemPhaseController — Beginner Tier และ Helpers', () => {
 
-  // Case 15: Beginner Tier → Auction-related items auto-disable
-  test('Case 15: Auction-related items auto-disabled in Beginner tier', () => {
+  // Case 15: Initiate Tier (ชื่อเดิม Beginner) → Auction-related items auto-disable
+  test('Case 15: Auction-related items auto-disabled in Initiate tier', () => {
     const lock = createGameLockState()
     const auctionItems: CompetitiveItemKey[] = ['auction_veil', 'auction_peek']
 
@@ -201,19 +201,22 @@ describe('itemPhaseController — Beginner Tier และ Helpers', () => {
       const inv = makeInventory(item)
       // auction_veil ใช้ได้ใน pile_1_2 และ auction phase ปกติ
       // auction_peek ใช้ได้ใน auction phase ปกติ
-      // แต่ใน Beginner ทั้งคู่ต้อง disable
-      const result = getItemHudState(item, 'auction', 'beginner', inv, lock, TODAY)
+      // แต่ใน Initiate ทั้งคู่ต้อง disable
+      const result = getItemHudState(item, 'auction', 'initiate', inv, lock, TODAY)
       expect(result.state).toBe('disabled')
       expect(result.reason).toContain('Beginner')
     })
   })
 
   // Helper: Free Sort Price ตาม Tier
+  // Patch (2026-07-17): rename tier string ตาม TableTier ปัจจุบัน (beginner→initiate,
+  // pro→mastermind, boss→highNoble) — ตัด 'adept'/'lastBoss' ออกจากเทสนี้เพราะ
+  // getFreeSortPrice() ยังไม่มี case รองรับจริง (dead code รอ Auto Sort Fee sprint
+  // ในอนาคต ตาม CLAUDE.md pending #7) ไม่ใช่ scope ของงานแก้ test suite รอบนี้
   test('Helper: Free Sort price matches tier correctly', () => {
-    expect(getFreeSortPrice('beginner')).toBe(15)
-    expect(getFreeSortPrice('pro')).toBe(40)
-    expect(getFreeSortPrice('boss')).toBe(80)
-    expect(getFreeSortPrice('last_boss')).toBe(80)
+    expect(getFreeSortPrice('initiate')).toBe(15)
+    expect(getFreeSortPrice('mastermind')).toBe(40)
+    expect(getFreeSortPrice('highNoble')).toBe(80)
   })
 
   // getAllItemHudStates: คืน 10 items ครบทุกตัว
@@ -223,7 +226,7 @@ describe('itemPhaseController — Beginner Tier และ Helpers', () => {
       makeInventory('chrono_shard'),
     ]
     const lock = createGameLockState()
-    const results = getAllItemHudStates('pile_1_2', 'pro', inventories, lock, TODAY)
+    const results = getAllItemHudStates('pile_1_2', 'mastermind', inventories, lock, TODAY)
     expect(results).toHaveLength(10)
   })
 

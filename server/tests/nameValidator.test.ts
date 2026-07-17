@@ -60,8 +60,9 @@ describe('validateDisplayName — format check', () => {
     expect(mockFrom).not.toHaveBeenCalled()
   })
 
-  test('Case 6: ยาวกว่า 30 ตัวอักษร → INVALID_FORMAT', async () => {
-    const result = await validateDisplayName('a'.repeat(31))
+  // Patch (2026-07-17): ความยาวสูงสุดเปลี่ยนจาก 30 → 9 ตัวอักษร
+  test('Case 6: ยาวกว่า 9 ตัวอักษร → INVALID_FORMAT', async () => {
+    const result = await validateDisplayName('a'.repeat(10))
     expect(result.allowed).toBe(false)
     expect(result.reason).toBe('INVALID_FORMAT')
     expect(mockFrom).not.toHaveBeenCalled()
@@ -80,7 +81,9 @@ describe('validateDisplayName — format check', () => {
       .mockResolvedValueOnce({ data: null, error: null })
       .mockResolvedValueOnce({ data: null, error: null })
 
-    const result = await validateDisplayName('ยอร์คผู้ยิ่งใหญ่')
+    // Patch (2026-07-17): เดิมใช้ชื่อไทยยาว ("ยอร์คผู้ยิ่งใหญ่") เกิน 9 ตัวอักษรไปแล้วตามกติกาใหม่ —
+    // เปลี่ยนเป็นชื่อสั้นลงที่ยังทดสอบ intent เดิม (ภาษาไทยผ่าน FORMAT_REGEX ได้)
+    const result = await validateDisplayName('ยอร์ค')
     expect(result.allowed).toBe(true)
   })
 })
@@ -105,7 +108,9 @@ describe('validateDisplayName — 3-layer check', () => {
       .mockResolvedValueOnce({ data: null, error: null })
       .mockResolvedValueOnce({ data: { id: 'grave-1' }, error: null })
 
-    const result = await validateDisplayName('Some Old Boss')
+    // Patch (2026-07-17): "Some Old Boss" เกิน 9 ตัวอักษร — เปลี่ยนเป็นชื่อสั้นลง (mock DB response
+    // ไม่ได้อิงชื่อจริงอยู่แล้ว แค่ทดสอบ code path Layer 2)
+    const result = await validateDisplayName('OldBoss1')
     expect(result.allowed).toBe(false)
     expect(result.reason).toBe('GRAVEYARD_NAME')
     expect(mockFrom).toHaveBeenCalledTimes(2)
@@ -132,15 +137,18 @@ describe('validateDisplayName — 3-layer check', () => {
       .mockResolvedValueOnce({ data: null, error: null })
       .mockResolvedValueOnce({ data: null, error: null })
 
-    const result = await validateDisplayName('Regular Player')
+    // Patch (2026-07-17): "Regular Player" เกิน 9 ตัวอักษร — เปลี่ยนเป็นชื่อสั้นลง
+    const result = await validateDisplayName('Player1')
     expect(result).toEqual({ allowed: true })
   })
 
   test('Case 13: normalize ก่อนเทียบ — เว้นวรรค/ตัวพิมพ์ต่างกันยังต้องจับได้', async () => {
     mockMaybeSingle.mockResolvedValueOnce({ data: { id: 'boss-1' }, error: null })
 
-    await validateDisplayName('  i   AM   york  ')
-    expect(mockEq).toHaveBeenCalledWith('normalized_name', 'i am york')
+    // Patch (2026-07-17): เดิม '  i   AM   york  ' trim แล้วยาว 13 ตัวอักษร เกิน limit ใหม่ (9) ไปแล้ว
+    // ก่อนถึง DB เลย — เปลี่ยนเป็นสตริงสั้นลงที่ยังทดสอบ trim/collapse-space/lowercase เหมือนเดิม
+    await validateDisplayName('  Hi  Bob  ')
+    expect(mockEq).toHaveBeenCalledWith('normalized_name', 'hi bob')
   })
 })
 

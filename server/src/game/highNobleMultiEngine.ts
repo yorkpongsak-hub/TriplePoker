@@ -25,7 +25,7 @@ import { Seat as RoomSeat } from './roomRegistry'
 import { lockMonarchPersonality } from './monarchAI'
 import { recordMonarchVictory } from './monarchSpawn'
 import { awardPerformanceScore } from './psEngine'
-import { recordGameResults } from './gameStats'
+import { recordMatchStats, BestHandCandidate } from './matchStatsService'
 
 // ── Local copies of small pure helpers (ตั้งใจ duplicate จาก gameLoop.ts แทนการ import
 //    เพื่อไม่ให้ engine ใหม่นี้ผูกกับการแก้ไขไฟล์เดิมในอนาคต — ของเดิมพิสูจน์แล้วว่าถูกต้อง) ──
@@ -50,6 +50,19 @@ function resolvePile(
     if (hand.score > bestScore) { bestScore = hand.score; winnerId = pid }
   }
   return winnerId
+}
+
+// End-of-Match Stats: อัปเดต bestHandThisMatch ของ seat นี้ (ต่อ userId) ถ้า hand รอบนี้ดีกว่าเดิม
+// High Noble ใช้ Sequential Showdown เหมือน Mastermind — state.results ไม่เก็บ arrangements/community
+// ครบ ต้อง live-track ตอนประเมิน hand จริงเท่านั้น (ดู resolveHNDiscardComplete/finalizeHNGrandFinale)
+function trackBestHandLive(
+  state: HNMatchState, userId: string, hand: HandResult, cards: Card[], pile: 1 | 2 | 3, won: boolean,
+): void {
+  if (!state.bestHandThisMatch) state.bestHandThisMatch = {}
+  const prev = state.bestHandThisMatch[userId]
+  if (!prev || hand.score > prev.hand.score) {
+    state.bestHandThisMatch[userId] = { hand, cards: cards.map(c => cardKey(c).toUpperCase()), pile, won }
+  }
 }
 
 function calcDeltas(
@@ -175,6 +188,9 @@ interface HNMatchState {
   finalPile3?: Record<string, Card[]>
   pendingPile12?: { pile1Winner: string; pile2Winner: string; allArrangements: Record<string, PlayerArrangement>; community: CommunityCards; fouled: Record<string, boolean>; playerIds: string[] }
   grandFinale?: HNGrandFinaleState
+  // End-of-Match Stats Recording — live tracking ต่อ human seat (userId) ตลอดแมตช์
+  bestHandThisMatch?: Record<string, BestHandCandidate>
+  tripleSweepThisMatch?: Set<string>
 }
 
 const hnMatchStates = new Map<string, HNMatchState>()
@@ -266,9 +282,9 @@ export async function startHighNobleMultiMatch(
   // Escrow Buy-in ทีละคน (sequential — ไม่ Promise.all) เพื่อ rollback ได้ถูกต้องถ้าคนใดคนหนึ่ง token ไม่พอ
   for (const s of seats.filter(s => s.isHuman)) {
     const escrow = await escrowBuyIn(s.id, roomId, 'highNoble')
-    if (!escrow) {
+    if (!escrow.ok) {
       await Promise.all(Object.entries(escrowIds).map(([doneUid, escrowId]) => refundEscrow(doneUid, escrowId, buyInAmount)))
-      io.to(roomId).emit('match_error', { roomId, message: 'INSUFFICIENT_TOKENS' })
+      io.to(roomId).emit('match_error', { roomId, message: escrow.reason })
       return
     }
     escrowIds[s.id] = escrow.escrowId
@@ -684,6 +700,12 @@ async function resolveHNDiscardComplete(io: Server, roomId: string): Promise<voi
     arrangements: revealWinnerOnly(allArrangements, 1, pile1Winner),
     fouled: state.foulMap, foulReasons: state.foulReasons,
   })
+  // End-of-Match Stats: เก็บ hand ของ human seat แต่ละคนเอง (ไม่ใช่แค่ผู้ชนะ) ไว้เทียบ best_hands ตอน settle
+  humanSeats(state).forEach(seat => {
+    if (state.foulMap![seat.id]) return
+    const cards1 = [...allArrangements[seat.id].pile1, ...state.community!.row1]
+    trackBestHandLive(state, seat.id, evaluateHand(cards1), cards1, 1, pile1Winner === seat.id)
+  })
   await delay(revealTime)
 
   const pile2Winner = resolvePile(2, allArrangements, state.community!, state.foulMap!)
@@ -693,6 +715,11 @@ async function resolveHNDiscardComplete(io: Server, roomId: string): Promise<voi
     winnerHandRank: hand2 ? handRankLabel(hand2) : '',
     arrangements: revealWinnerOnly(allArrangements, 2, pile2Winner),
     fouled: state.foulMap, foulReasons: state.foulReasons,
+  })
+  humanSeats(state).forEach(seat => {
+    if (state.foulMap![seat.id]) return
+    const cards2 = [...allArrangements[seat.id].pile2, ...state.community!.row2]
+    trackBestHandLive(state, seat.id, evaluateHand(cards2), cards2, 2, pile2Winner === seat.id)
   })
   await delay(revealTime)
 
@@ -990,13 +1017,27 @@ function finalizeHNGrandFinale(
     if (winnerId && !burned && p1w === winnerId && p2w === winnerId) jackpotWinner = winnerId // Triple Sweep (Pile1+2+3 คนเดียว)
   }
 
-  // Triple Sweep Jackpot: bonus = pile3 ante × (n-1) จากผู้แพ้ทุกคน, rake 10% จากยอดรวม
+  // End-of-Match Stats: เก็บ hand pile3 ของ human seat แต่ละคนเอง (ถ้ามีไพ่จริง ไม่ fold/foul) + triple sweep flag
+  const community3ForStats = state.community!.row3
+  humanSeats(state).forEach(seat => {
+    const pile3Cards = (state.finalPile3 ?? {})[seat.id]
+    if (pile3Cards && pile3Cards.length === 3) {
+      const hand3Cards = [...pile3Cards, ...community3ForStats]
+      trackBestHandLive(state, seat.id, evaluateHand(hand3Cards), hand3Cards, 3, winnerId === seat.id)
+    }
+  })
+  if (jackpotWinner) {
+    if (!state.tripleSweepThisMatch) state.tripleSweepThisMatch = new Set()
+    state.tripleSweepThisMatch.add(jackpotWinner)
+  }
+
+  // Triple Sweep Jackpot: bonus = pile3 ante × (n-1) จากผู้แพ้ทุกคน, rake 5% จากยอดรวม
+  // Patch (2026-07-17): ยกเลิก rakeJackpot 10% เดิม — ใช้ rake ตัวเดียวกับ pot ปกติ (5%) แล้ว
   let jackpotBonus = 0, jackpotRake = 0
   if (jackpotWinner) {
-    const rakeJackpot = gameConfig.tokenPot.rakeJackpot ?? 0.10
     jackpotBonus = stakes.pile3 * (allPlayerIds.length - 1)
     const jackpotSubtotal = pile1Pot + pile2Pot + Math.floor(pile3Pot * (1 - rake)) + jackpotBonus
-    jackpotRake = Math.floor(jackpotSubtotal * rakeJackpot)
+    jackpotRake = Math.floor(jackpotSubtotal * rake)
     deltas[jackpotWinner] += (jackpotBonus - jackpotRake)
     allPlayerIds.forEach(id => { if (id !== jackpotWinner) deltas[id] += -stakes.pile3 })
   }
@@ -1037,6 +1078,7 @@ function finalizeHNGrandFinale(
       // Buy-in Spec §6: client ResultPanel ต้องโชว์ยอด "Returned" จริงที่เข้า DB — ถ้าใช้ state.tokenBalance ตรงๆ
       // จะผิดเฉพาะเคส Monarch ×2 (payout ถูกคูณแล้วก่อน settle แต่ state.tokenBalance ไม่เคยถูกเขียนทับ)
       const finalStackByHuman: Record<string, number> = {}
+      const newTokenBalances: Record<string, number | null> = {}
       await Promise.all(humanSeats(state).map(async s => {
         const netDelta = (state.tokenBalance[s.id] ?? state.buyInAmount) - state.buyInAmount
         humanNetDeltas[s.id] = netDelta
@@ -1044,10 +1086,18 @@ function finalizeHNGrandFinale(
         const escrowId = state.escrowIds[s.id]
         const finalStack = state.buyInAmount + payout
         finalStackByHuman[s.id] = finalStack
-        if (escrowId) await settleEscrow(s.id, escrowId, finalStack)
+        if (escrowId) newTokenBalances[s.id] = await settleEscrow(s.id, escrowId, finalStack)
       }))
-      // Player Stats Leaderboard — นับ games_played/games_won เฉพาะแมตช์ที่จบครบ totalRounds จริง
-      await recordGameResults(humanSeats(state).map(s => s.id), finalWinner)
+      // End-of-Match Stats Recording — แทนที่ recordGameResults() เดิม (games_played/won รวมเข้า xp/streak/
+      // best_hands/debt recovery เป็น UPDATE เดียวต่อคน) — ไม่แตะ awardPerformanceScore() ด้านล่าง ยังคงแยก
+      // ต่างหากเหมือนเดิมทุกกรณี (เทสผ่านแล้ว ห้าม duplicate formula)
+      await recordMatchStats(humanSeats(state).map(s => ({
+        userId: s.id,
+        tier: 'highNoble' as const,
+        won: finalWinner === s.id,
+        isTripleSweep: state.tripleSweepThisMatch?.has(s.id) ?? false,
+        bestHandThisMatch: state.bestHandThisMatch?.[s.id] ?? null,
+      })))
 
       // Badge "Monarch Slayer" + เงื่อนไข Ascendant Gate (Spec v1.3 §5)
       if (isMonarchMatch && isHumanWinner) {
@@ -1062,7 +1112,7 @@ function finalizeHNGrandFinale(
         humanNetDeltas,
       })
 
-      io.to(roomId).emit('match_end', { roomId, finalWinner, tokenBalance: state.tokenBalance, results: state.results, totalRounds: state.totalRounds, buyInAmount: state.buyInAmount, finalStackByHuman })
+      io.to(roomId).emit('match_end', { roomId, finalWinner, tokenBalance: state.tokenBalance, results: state.results, totalRounds: state.totalRounds, buyInAmount: state.buyInAmount, finalStackByHuman, newTokenBalances })
       hnMatchStates.delete(roomId)
     } else {
       state.roundNumber++

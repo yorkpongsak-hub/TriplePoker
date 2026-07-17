@@ -13,6 +13,7 @@ import {
   Platform,
   StatusBar,
   ScrollView,
+  KeyboardAvoidingView,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
@@ -84,7 +85,15 @@ export default function LoginScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
 
-      <ScrollView contentContainerStyle={styles.scroll}>
+      {/* KeyboardAvoidingView — ดันฟอร์มขึ้นพ้นคีย์บอร์ดตอนโฟกัสช่อง input (iOS ใช้ padding, Android ใช้ height) */}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1 }}
+      >
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+      >
 
         {/* Logo */}
         <Image
@@ -163,6 +172,7 @@ export default function LoginScreen() {
         </TouchableOpacity>
 
       </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   )
 }
@@ -175,7 +185,7 @@ const styles = StyleSheet.create({
   scroll: {
     flexGrow:          1,
     alignItems:        'center',
-    justifyContent:    'center',
+    // เดิม justifyContent: 'center' ดันฟอร์มลงกลางจอ — เอาออกให้เนื้อหาไหลชิดใต้โลโก้แทน (ต้นเหตุคีย์บอร์ดบังช่อง input)
     paddingHorizontal: 24,
     paddingVertical:   40,
   },

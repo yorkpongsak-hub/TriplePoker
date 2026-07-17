@@ -8,8 +8,9 @@
 // placeholder ต่อไปก่อน (ดู comment กำกับตรง const แต่ละตัว) ไม่สร้าง backend ให้ตอนนี้เพราะทั้งหน้า
 // Shop ยังเป็น UI shell รอ RevenueCat/IAP Sprint 7 อยู่ดี
 //
-// สถานะ backend (จาก Phase 1 audit): server/src/routes/shop.ts ยังไม่ได้ register ใน index.ts (dead route)
-// และ vipGuard.ts ยังเช็คแค่ is_vip boolean คอลัมน์เดียว ไม่รองรับ vip_pro — ปุ่มซื้อทุกปุ่มในไฟล์นี้
+// สถานะ backend (อัปเดต 2026-07-17 — VIP Avatar Preset Phase 3 audit): server/src/routes/shop.ts
+// ยังไม่ได้ register ใน index.ts (dead route) — vipGuard.ts แก้แล้วให้รองรับ vip_pro จริง
+// (assertVipPro ใหม่) แต่ route ยังไม่ถูกเรียกใช้งานอยู่ดี ปุ่มซื้อทุกปุ่มในไฟล์นี้
 // จึงเป็น UI shell ที่โชว์ toast "Coming Soon" แทนการยิง API จริง (กัน UX หลอกว่าเงินถูกหักแต่ backend ไม่ทำงาน)
 // ยกเว้น interaction ที่ canon บังคับให้มี UI จริง: VIP PRO lock bottom sheet + Loot Box odds modal ก่อนซื้อ
 
@@ -392,7 +393,7 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
   const isVipPro   = vipStatus === 'vip_pro'
   const tokenBalance = profile?.token_balance ?? 0
 
-  // ยังไม่มี backend ที่ใช้งานได้จริง (shopRoutes ไม่ได้ register + vipGuard เช็คแค่ is_vip เดี่ยว) —
+  // ยังไม่มี backend ที่ใช้งานได้จริง (shopRoutes ไม่ได้ register ใน index.ts — ดู comment บนไฟล์) —
   // ทุกปุ่มซื้อตอนนี้โชว์ toast แทนการยิง API เพื่อไม่ให้ผู้เล่นเข้าใจผิดว่าโดนหักเงินจริง
   const handleComingSoon = (label: string) => setToastMsg(`${label} — Coming Soon`)
 

@@ -13,7 +13,7 @@ import { aiDecideArrangement, AI_CONFIGS, AIConfig, AIPersonality, FOUR_GODS, NI
 import { Card } from './deck'
 import { gameConfig } from '../config/gameConfig'
 import { supabaseAdmin } from '../config/supabase'
-import { recordGameResults } from './gameStats'
+import { recordMatchStats, BestHandCandidate, StatsTier } from './matchStatsService'
 
 // ── Types ────────────────────────────────────────────────────
 export interface RoundResult {
@@ -49,6 +49,10 @@ export interface MatchState {
     playerIds: string[]
   }
   humanArrangement?: PlayerArrangement
+  // End-of-Match Stats Recording — live tracking เฉพาะ Tier ที่ RoundResult ไม่เก็บ arrangements/community
+  // ครบ (Mastermind/Last Boss ใช้ Sequential Showdown) เพราะ derive ย้อนหลังจาก state.results ไม่ได้
+  bestHandThisMatch?: BestHandCandidate
+  tripleSweepThisMatch?: boolean
 }
 
 // เก็บ MatchState ใน memory (production ใช้ Redis)
@@ -81,6 +85,44 @@ function resolvePile(
     }
   }
   return winnerId
+}
+
+// ── Helper: End-of-Match Stats -- อัปเดต bestHandThisMatch ของ human ถ้า hand รอบนี้ดีกว่าเดิม
+// (เฉพาะ Mastermind/Last Boss ที่ RoundResult ไม่เก็บ arrangements/community ครบพอจะ derive ย้อนหลัง)
+function trackBestHandLive(
+  state: MatchState, hand: ReturnType<typeof evaluateHand>, cards: Card[], pile: 1 | 2 | 3, won: boolean,
+): void {
+  if (!state.bestHandThisMatch || hand.score > state.bestHandThisMatch.hand.score) {
+    state.bestHandThisMatch = { hand, cards: cards.map(c => cardKey(c).toUpperCase()), pile, won }
+  }
+}
+
+// ── Helper: End-of-Match Stats — derive best hand + triple sweep ของ userId จาก state.results ย้อนหลัง
+// ใช้ได้เฉพาะ Tier ที่ RoundResult เก็บ arrangements/community ครบ (Initiate/Adept — Simultaneous Showdown)
+function deriveBestHandFromResults(
+  results: RoundResult[], userId: string,
+): { bestHand: BestHandCandidate | null; tripleSweep: boolean } {
+  let bestHand: BestHandCandidate | null = null
+  let tripleSweep = false
+
+  for (const r of results) {
+    const arr = r.arrangements[userId]
+    if (!arr) continue
+    if (r.pile1Winner === userId && r.pile2Winner === userId && r.pile3Winner === userId) tripleSweep = true
+
+    const piles: Array<{ cards: Card[]; row: Card[]; num: 1 | 2 | 3; won: boolean }> = [
+      { cards: arr.pile1, row: r.community.row1, num: 1, won: r.pile1Winner === userId },
+      { cards: arr.pile2, row: r.community.row2, num: 2, won: r.pile2Winner === userId },
+      { cards: arr.pile3.slice(0, 3), row: r.community.row3, num: 3, won: r.pile3Winner === userId },
+    ]
+    for (const p of piles) {
+      const hand = evaluateHand([...p.cards, ...p.row])
+      if (!bestHand || hand.score > bestHand.hand.score) {
+        bestHand = { hand, cards: [...p.cards, ...p.row].map(c => cardKey(c).toUpperCase()), pile: p.num, won: p.won }
+      }
+    }
+  }
+  return { bestHand, tripleSweep }
 }
 
 // ── Helper: คำนวณ token delta ────────────────────────────────
@@ -126,48 +168,127 @@ function toEscrowTier(tier: string): EscrowTier {
   return (['initiate', 'adept', 'mastermind', 'highNoble', 'lastBoss'].includes(tier) ? tier : 'initiate') as EscrowTier
 }
 
-// หัก Buy-in จาก users.token_balance + สร้างแถว match_escrow (status='in_match') — คืน null ถ้า token ไม่พอ
+const STALE_ESCROW_MS = 60 * 60 * 1000 // 60 นาที — เกินนี้ถือว่า client หลุด/crash กลางแมตช์ (Buy-in Spec §4 fail-safe)
+
+// กู้คืน escrow ที่ค้างสถานะ 'in_match' เกิน 60 นาที (client force-close/crash กลางแมตช์ ไม่เคย settle)
+// คืน token เต็มจำนวน + status='refunded' — เรียกซ้ำ/พร้อมกันได้ปลอดภัย (idempotent)
+// เพราะ UPDATE มีเงื่อนไข status='in_match' ในสเตตเมนต์เดียว: ถ้า affected rows = 0 แปลว่ามีคน refund ไปแล้ว ข้ามเงียบๆ
+export async function recoverStaleEscrow(userId: string): Promise<{ recovered: boolean; totalRefunded: number }> {
+  const staleThresholdISO = new Date(Date.now() - STALE_ESCROW_MS).toISOString()
+  try {
+    const { data: staleRows, error } = await supabaseAdmin
+      .from('match_escrow')
+      .update({ status: 'refunded', settled_at: new Date().toISOString() })
+      .eq('user_id', userId)
+      .eq('status', 'in_match')
+      .lt('created_at', staleThresholdISO)
+      .select('escrow_id, buyin_amount')
+
+    if (error) {
+      console.error('[ESCROW] recoverStaleEscrow update error for', userId, error)
+      return { recovered: false, totalRefunded: 0 }
+    }
+    if (!staleRows || staleRows.length === 0) return { recovered: false, totalRefunded: 0 }
+
+    const totalRefunded = staleRows.reduce((sum, r: any) => sum + r.buyin_amount, 0)
+    const { data: userData } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
+    const newBalance = (userData?.token_balance ?? 0) + totalRefunded
+    await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
+
+    console.log('[ESCROW] Recovered stale escrow(s) for', userId, '| escrow_ids:', staleRows.map((r: any) => r.escrow_id), '| refunded:', totalRefunded, '| New balance:', newBalance)
+    return { recovered: true, totalRefunded }
+  } catch (err) {
+    console.error('[ESCROW] Error in recoverStaleEscrow for', userId, err)
+    return { recovered: false, totalRefunded: 0 }
+  }
+}
+
+type EscrowFailureReason = 'INSUFFICIENT_TOKENS' | 'ACTIVE_MATCH_EXISTS' | 'SERVER_ERROR'
+type EscrowResult =
+  | { ok: true; escrowId: string; buyInAmount: number }
+  | { ok: false; reason: EscrowFailureReason }
+
+// หัก Buy-in จาก users.token_balance + สร้างแถว match_escrow (status='in_match')
 // (Phase 2 client เช็คก่อนเข้าโต๊ะแล้ว — เช็คนี้เป็น safety net ฝั่ง server เท่านั้น)
+//
+// ลำดับต้อง insert escrow ก่อนเสมอ แล้วค่อยหัก token_balance ทีหลัง (ตรงข้ามกับของเดิมที่หักก่อน)
+// เหตุผล: ถ้า insert escrow ล้ม (ตารางหาย/constraint ผิด/connection พัง) แล้วยังไม่มีอะไรถูกหักไปเลย
+// ไม่ต้อง rollback อะไร — ตัด class of bug ที่ rollback เองก็ล้มตาม (connection เดียวกันที่พังไปแล้ว)
+// ทำให้ token หายลอยโดยไม่มี escrow record อ้างอิงเลย
 export async function escrowBuyIn(
   userId: string, roomId: string, tier: string,
-): Promise<{ escrowId: string; buyInAmount: number } | null> {
+): Promise<EscrowResult> {
   const validTier = toEscrowTier(tier)
   const buyInAmount = gameConfig.buyIn[validTier]
   try {
-    const { data: userData } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
+    // กู้คืน escrow เก่าที่ค้างเกิน 60 นาทีก่อนเสมอ — กันเคส escrow ค้างจาก session ก่อนหน้าบัง single-active-escrow ด้านล่างอยู่ทั้งที่จริงๆ จบไปนานแล้ว
+    await recoverStaleEscrow(userId)
+
+    // Single active escrow — กันหักซ้ำระหว่างมีแมตช์ค้างอยู่จริง (escrow ที่ยังไม่ stale = กำลังเล่นอยู่จริงหรืออีกเครื่อง)
+    const { data: activeEscrow, error: activeCheckError } = await supabaseAdmin
+      .from('match_escrow')
+      .select('escrow_id')
+      .eq('user_id', userId)
+      .eq('status', 'in_match')
+      .limit(1)
+      .maybeSingle()
+    if (activeCheckError) {
+      console.error('[ESCROW] Failed to check active escrow for', userId, activeCheckError)
+      return { ok: false, reason: 'SERVER_ERROR' }
+    }
+    if (activeEscrow) {
+      console.warn('[ESCROW] Active match already exists for', userId, '| escrow', activeEscrow.escrow_id)
+      return { ok: false, reason: 'ACTIVE_MATCH_EXISTS' }
+    }
+
+    const { data: userData, error: userFetchError } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
+    if (userFetchError) {
+      console.error('[ESCROW] Failed to read token_balance for', userId, userFetchError)
+      return { ok: false, reason: 'SERVER_ERROR' }
+    }
     const currentBalance = userData?.token_balance ?? 0
     if (currentBalance < buyInAmount) {
       console.warn('[ESCROW] Insufficient tokens for', userId, '| have', currentBalance, '| need', buyInAmount)
-      return null
+      return { ok: false, reason: 'INSUFFICIENT_TOKENS' }
     }
 
-    const newBalance = currentBalance - buyInAmount
-    await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
-
-    const { data: escrowRow, error } = await supabaseAdmin
+    // Insert escrow ก่อน — ยังไม่แตะ token_balance เลย ณ จุดนี้
+    const { data: escrowRow, error: insertError } = await supabaseAdmin
       .from('match_escrow')
       .insert({ user_id: userId, room_id: roomId, tier: validTier, buyin_amount: buyInAmount, status: 'in_match' })
       .select('escrow_id')
       .single()
 
-    if (error || !escrowRow) {
-      // insert escrow ไม่สำเร็จ → rollback การหักทันที กัน token หายลอย
-      await supabaseAdmin.from('users').update({ token_balance: currentBalance }).eq('user_id', userId)
-      console.error('[ESCROW] Failed to insert match_escrow, rolled back deduction for', userId, error)
-      return null
+    if (insertError || !escrowRow) {
+      console.error('[ESCROW] Failed to insert match_escrow for', userId, '| room', roomId, '| tier', validTier, insertError)
+      return { ok: false, reason: 'SERVER_ERROR' }
+    }
+
+    const newBalance = currentBalance - buyInAmount
+    const { error: deductError } = await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
+
+    if (deductError) {
+      // escrow insert สำเร็จแต่หัก token ไม่ได้ — ยังไม่มีเงินถูกหักไปจริง จึงแค่ mark escrow นี้เป็น
+      // 'refunded' (เทียบเท่า "voided" — status enum มีแค่ 3 ค่า ไม่มี column ให้เพิ่ม 'failed' แยก)
+      // กัน escrow ค้างสถานะ in_match ทั้งที่ไม่เคยมีเงินถูกหักไปเลย
+      await supabaseAdmin.from('match_escrow').update({ status: 'refunded', settled_at: new Date().toISOString() }).eq('escrow_id', escrowRow.escrow_id)
+      console.error('[ESCROW] Failed to deduct token_balance for', userId, '| escrow', escrowRow.escrow_id, 'voided (no deduction occurred)', deductError)
+      return { ok: false, reason: 'SERVER_ERROR' }
     }
 
     console.log('[ESCROW] Buy-in', buyInAmount, 'deducted from', userId, '| escrow', escrowRow.escrow_id, '| New balance:', newBalance)
-    return { escrowId: escrowRow.escrow_id, buyInAmount }
+    return { ok: true, escrowId: escrowRow.escrow_id, buyInAmount }
   } catch (err) {
     console.error('[ESCROW] Error in escrowBuyIn for', userId, err)
-    return null
+    return { ok: false, reason: 'SERVER_ERROR' }
   }
 }
 
 // Settle escrow ครั้งเดียว — token += finalStack (buyin ถูกหักไปแล้วตอน escrowBuyIn), update match_escrow เป็น settled
 // finalStack = stack ปัจจุบันตอน settle (จบแมตช์ปกติ, หลุด, หรือกด Lobby กลางเกม — Spec §4 ทั้งหมดใช้ path นี้)
-export async function settleEscrow(userId: string, escrowId: string, finalStack: number): Promise<void> {
+// คืนยอด token_balance ใหม่หลัง write สำเร็จ (null ถ้า error) — ให้ผู้เรียกแนบไปกับ event ที่ส่งผลแมตช์
+// ให้ client แทน ห้าม client คำนวณเองจาก buyin/stack (bug: Profile ค้างยอดเก่าเพราะ client ไม่เคยรู้ยอดจริงหลัง settle)
+export async function settleEscrow(userId: string, escrowId: string, finalStack: number): Promise<number | null> {
   try {
     const { data: userData } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
     const newBalance = (userData?.token_balance ?? 0) + finalStack
@@ -176,8 +297,10 @@ export async function settleEscrow(userId: string, escrowId: string, finalStack:
       .update({ status: 'settled', final_stack: finalStack, settled_at: new Date().toISOString() })
       .eq('escrow_id', escrowId)
     console.log('[ESCROW] Settled', userId, '| finalStack', finalStack, '| New balance:', newBalance)
+    return newBalance
   } catch (err) {
     console.error('[ESCROW] Error settling escrow for', userId, err)
+    return null
   }
 }
 
@@ -212,8 +335,8 @@ export async function startMatch(
 
   // ── Escrow Buy-in: หัก DB ครั้งเดียว, AI ได้ virtual stack เท่ากัน (Buy-in Spec §2) ──
   const escrow = await escrowBuyIn(humanPlayerId, roomId, tier)
-  if (!escrow) {
-    io.to(roomId).emit('match_error', { roomId, message: 'INSUFFICIENT_TOKENS' })
+  if (!escrow.ok) {
+    io.to(roomId).emit('match_error', { roomId, message: escrow.reason })
     return
   }
   const { escrowId, buyInAmount } = escrow
@@ -464,11 +587,21 @@ export async function submitArrangement(
       (state.tokenBalance[a] ?? 0) > (state.tokenBalance[b] ?? 0) ? a : b
     )
     // ── Settle Escrow ครั้งเดียว (Buy-in Spec §4 — จบแมตช์ปกติ) ──
+    let newTokenBalance: number | null = null
     if (state.escrowId) {
-      await settleEscrow(state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount)
+      newTokenBalance = await settleEscrow(state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount)
     }
-    // Player Stats Leaderboard — นับ games_played/games_won เฉพาะแมตช์ที่จบครบ totalRounds จริง
-    await recordGameResults([state.humanPlayerId], finalWinner)
+    // End-of-Match Stats Recording (games_played/won, xp, streak, best_hands, debt recovery)
+    // แทนที่ recordGameResults() เดิม — Initiate ใช้ Simultaneous Showdown, derive จาก state.results ได้ตรงๆ
+    const { bestHand: initiateBestHand, tripleSweep: initiateTripleSweep } =
+      deriveBestHandFromResults(state.results, state.humanPlayerId)
+    await recordMatchStats([{
+      userId: state.humanPlayerId,
+      tier: 'initiate',
+      won: finalWinner === state.humanPlayerId,
+      isTripleSweep: initiateTripleSweep,
+      bestHandThisMatch: initiateBestHand,
+    }])
 
     io.to(roomId).emit('match_end', {
       roomId,
@@ -477,6 +610,7 @@ export async function submitArrangement(
       results: state.results,
       totalRounds: state.totalRounds,
       buyInAmount: state.buyInAmount,
+      newTokenBalance,
     })
   } else {
     state.roundNumber++
@@ -519,6 +653,11 @@ async function resolveMastermindPile12(
     fouled,
     foulReasons,
   })
+  // End-of-Match Stats: เก็บ hand ของ human เอง (ไม่ใช่แค่ผู้ชนะ) ไว้เทียบ best_hands ตอน settle
+  if (!fouled[state.humanPlayerId]) {
+    const humanPile1 = [...allArrangements[state.humanPlayerId].pile1, ...community.row1]
+    trackBestHandLive(state, evaluateHand(humanPile1), humanPile1, 1, pile1Winner === state.humanPlayerId)
+  }
   await delay(revealTime)
 
   // ── Pile 2 ──────────────────────────────────────────────
@@ -533,6 +672,10 @@ async function resolveMastermindPile12(
     fouled,
     foulReasons,
   })
+  if (!fouled[state.humanPlayerId]) {
+    const humanPile2 = [...allArrangements[state.humanPlayerId].pile2, ...community.row2]
+    trackBestHandLive(state, evaluateHand(humanPile2), humanPile2, 2, pile2Winner === state.humanPlayerId)
+  }
   await delay(revealTime)
 
   // ── Fog of War ───────────────────────────────────────────
@@ -1552,22 +1695,35 @@ function finalizeGrandFinale(
   // Jackpot: ใครก็ตามที่ชนะทั้ง 3 กอง
   const jackpotWinner = (pile1Winner && pile1Winner === pile2Winner && pile2Winner === winnerId) ? winnerId : null
 
-  // Patch Triple Sweep Jackpot v1.2: ชนะทั้ง 3 กอง → Bonus + Rake 10%
+  // End-of-Match Stats: เก็บ hand pile3 ของ human เอง (ถ้ามีไพ่จริง ไม่ fold/foul) + triple sweep flag
+  {
+    const community3ForStats: Card[] = ((state as any)._community as CommunityCards).row3
+    const finalPile3ForStats: Record<string, Card[]> = (state as any)._finalPile3 ?? {}
+    const humanPile3 = finalPile3ForStats[state.humanPlayerId]
+    if (humanPile3 && humanPile3.length === 3) {
+      const humanHand3Cards = [...humanPile3, ...community3ForStats]
+      trackBestHandLive(state, evaluateHand(humanHand3Cards), humanHand3Cards, 3, winnerId === state.humanPlayerId)
+    }
+    if (jackpotWinner === state.humanPlayerId) state.tripleSweepThisMatch = true
+  }
+
+  // Patch Triple Sweep Jackpot v1.2: ชนะทั้ง 3 กอง → Bonus + Rake
+  // Patch (2026-07-17): ยกเลิก Rake 10% เฉพาะ Jackpot round — ใช้ rake อัตราเดียว 5% (ตัวเดียวกับ
+  // pot ปกติ) ทุกกรณีแล้ว
   // Formula: bonus = stakes.pile3 × (n_players-1) เก็บจากผู้แพ้คนละ stakes.pile3
   //          jackpot_total = pot_net (จาก 3 piles หัก rake 5%) + bonus
-  //          rake_jackpot = jackpot_total × 10% burn
+  //          rake_jackpot = jackpot_total × 5% burn
   //          winner_extra = bonus - rake_jackpot (เพิ่มจาก delta เดิมที่ได้จาก pot ปกติ)
   let jackpotBonus = 0
   let jackpotRake = 0
   if (jackpotWinner) {
-    const rakeJackpot = (gameConfig.tokenPot as any).rakeJackpot ?? 0.10
     jackpotBonus = stakes.pile3 * (allPlayerIds.length - 1) // ผู้แพ้ 3 คน × pile3 ante
     // pot_net รวม 3 piles (ค่าที่ winner ได้จาก pot ปกติแล้ว — ก่อนลบ ante ของตัวเอง)
     const potNet1 = Math.floor(stakes.pile1 * allPlayerIds.length * (1 - rake))
     const potNet2 = Math.floor(stakes.pile2 * allPlayerIds.length * (1 - rake))
     const potNet3 = Math.floor(pile3Pot * (1 - rake)) // pile3Pot รวม Call amounts ที่จ่ายระหว่าง Grand Finale
     const jackpotSubtotal = potNet1 + potNet2 + potNet3 + jackpotBonus
-    jackpotRake = Math.floor(jackpotSubtotal * rakeJackpot)
+    jackpotRake = Math.floor(jackpotSubtotal * rake)
     // ปรับ delta: winner ได้ bonus เพิ่ม - rake_jackpot
     deltas[jackpotWinner] += (jackpotBonus - jackpotRake)
     // ผู้แพ้ทุกคน จ่าย bonus เพิ่มคนละ stakes.pile3
@@ -1589,7 +1745,7 @@ function finalizeGrandFinale(
     pile2Pot: pile2Winner ? Math.floor(stakes.pile2 * allPlayerIds.length * (1 - rake)) : 0,
     jackpotWinner,
     jackpotBonus, // Patch: bonus ที่ winner ได้รับเพิ่ม (สำหรับแสดง UI)
-    jackpotRake,  // Patch: rake 10% ที่ burn (สำหรับแสดง UI)
+    jackpotRake,  // Patch: rake 5% ที่ burn (สำหรับแสดง UI)
     tokenDeltas: deltas,
     tokenBalance: state.tokenBalance,
   })
@@ -1620,11 +1776,22 @@ function finalizeGrandFinale(
         (state.tokenBalance[a] ?? 0) > (state.tokenBalance[b] ?? 0) ? a : b
       )
       // ── Settle Escrow ครั้งเดียว (Buy-in Spec §4 — จบแมตช์ปกติ) ──
+      let newTokenBalance: number | null = null
       if (state.escrowId) {
-        await settleEscrow(state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount)
+        newTokenBalance = await settleEscrow(state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount)
       }
-      // Player Stats Leaderboard — นับ games_played/games_won เฉพาะแมตช์ที่จบครบ totalRounds จริง
-      await recordGameResults([state.humanPlayerId], finalWinner)
+      // End-of-Match Stats Recording — แทนที่ recordGameResults() เดิม — Mastermind ใช้ Sequential Showdown
+      // (Fog of War/Auction/Grand Finale) ดังนั้น bestHandThisMatch/tripleSweepThisMatch ต้องมาจาก live
+      // tracking ระหว่างเกม (resolveMastermindPile12/finalizeGrandFinale) ไม่ใช่ derive จาก state.results
+      const statsTier: StatsTier = (['initiate', 'adept', 'mastermind', 'highNoble'].includes(state.tier)
+        ? state.tier : 'mastermind') as StatsTier
+      await recordMatchStats([{
+        userId: state.humanPlayerId,
+        tier: statsTier,
+        won: finalWinner === state.humanPlayerId,
+        isTripleSweep: state.tripleSweepThisMatch ?? false,
+        bestHandThisMatch: state.bestHandThisMatch ?? null,
+      }])
 
       // Patch Mastermind Conquest: ผู้เล่นได้อันดับ 1 → บันทึก conquered_sentinels (กันซ้ำ)
       let sentinelConquered = false
@@ -1664,6 +1831,7 @@ function finalizeGrandFinale(
         sentinelConquered,
         allSentinelsConquered,
         buyInAmount: state.buyInAmount,
+        newTokenBalance,
       })
     } else {
       state.roundNumber++
@@ -1740,6 +1908,25 @@ function waitForContinue(roomId: string): Promise<void> {
 // ระบบแยกจาก single-player เดิมทั้งหมด (ไม่แตะ startMatch/submitArrangement เดิม)
 // ============================================================
 
+// Seat snapshot ตอนเริ่มแมตช์ (ไม่เปลี่ยนระหว่างเกม แม้คนหลุด/AI เล่นแทน — ที่นั่งยังโชว์เป็นคนเดิม
+// เพราะ AI แค่ "เล่นแทน" ไม่ใช่ "เปลี่ยนตัวละคร") ใช้ทั้งแก้ Bug B (P4 ไม่โชว์หลังไพ่) และ Bug C
+// (avatar/ชื่อผู้เล่นคนอื่นไม่โชว์) — client render จาก field นี้แทนการเดา index จาก aiNames
+interface MultiSeatInfo {
+  seat: number
+  userId: string        // userId จริงถ้า Human, aiConfigId ถ้า AI
+  displayName: string
+  avatarUrl?: string     // เฉพาะ Human ที่ส่งมา — AI ไม่มี
+  isHuman: boolean
+  emoji?: string         // เฉพาะ AI (จาก AI_CONFIGS) — client ใช้ avatarUrl ก่อนถ้ามี ไม่งั้น fallback emoji
+}
+
+// A5: Grace Period 60s — เก็บว่า userId ไหนกำลัง "หลุดชั่วคราว" อยู่ (ยังไม่ถูกไล่ออกจาก humanPlayerIds
+// จริง รอ reconnect ได้) graceTimer ยิง finalizeAFKReplacement เมื่อครบ 60s ไม่มี reconnect
+interface AFKInfo {
+  disconnectedAt: number
+  graceTimer: NodeJS.Timeout
+}
+
 interface MultiMatchState {
   roomId: string
   tier: 'adept'
@@ -1755,17 +1942,40 @@ interface MultiMatchState {
   submittedArrangements: Record<string, PlayerArrangement>
   community?: CommunityCards
   cardsMap?: Record<string, Card[]>
+  seatOrder: MultiSeatInfo[]      // snapshot ตอน startMultiplayerMatch — คงที่ตลอดแมตช์
+  afkPlayers: Record<string, AFKInfo>
 }
 
 const multiMatchStates = new Map<string, MultiMatchState>()
 
-// เรียกจาก gameSocket.ts ตอน room เต็ม (room_ready)
+// Audit 2026-07-17 (Bug A): ต้องเช็คจุดนี้ก่อนทุกจุดที่ game loop รอ action จาก userId คนหนึ่ง —
+// ถ้า AFK อยู่ ห้ามรอ ต้องให้ AI ตอบแทนทันที ไม่งั้นโต๊ะจะค้างระหว่าง grace period (60s)
+function isPlayerAFK(state: MultiMatchState, userId: string): boolean {
+  return !!state.afkPlayers[userId]
+}
+
+// ให้ AI ตัดสินใจ arrangement แทน userId ที่กำลัง AFK อยู่ (ที่นั่งยังโชว์เป็นคนเดิม — แค่ตัดสินใจแทน)
+// ใช้ทั้งตอน markPlayerAFK (หลุดกลาง arrangement phase) และตอน startMultiRound (รอบใหม่เริ่มขณะยังไม่กลับมา)
+function autoSubmitArrangementForAFKPlayer(state: MultiMatchState, userId: string): void {
+  if (!state.community || !state.cardsMap || state.submittedArrangements[userId]) return
+  const decisionConfig = AI_CONFIGS[state.humanPlayerIds.indexOf(userId) % AI_CONFIGS.length] ?? AI_CONFIGS[0]
+  state.submittedArrangements[userId] = aiDecideArrangement(
+    decisionConfig, state.cardsMap[userId], state.community, state.roundNumber, state.tier, 0,
+  )
+}
+
+// A2: escrow ต้องผ่านครบก่อนถึงจะให้ผู้เรียก (gameSocket.ts) broadcast room_ready — ฟังก์ชันนี้เอง
+// "ไม่" emit อะไรตอน escrow ล้มเหลวอีกแล้ว (เดิม emit match_error ตรงนี้ แต่ผู้เล่นอาจ navigate ไป
+// หน้าเกมไปแล้วตั้งแต่ room_ready ยิงก่อนหน้า ไม่ทันเห็น) — คืนผลลัพธ์ให้ผู้เรียกตัดสินใจแทน
+export type StartMultiplayerMatchResult = { ok: true } | { ok: false; reason?: string }
+
+// เรียกจาก gameSocket.ts ตอน room เต็ม (room_ready) — เรียก "ก่อน" broadcast room_ready เสมอ (A2)
 export async function startMultiplayerMatch(
   io: Server,
   roomId: string,
-  seats: Array<{ type: 'human' | 'ai' | 'empty'; userId?: string; name: string; aiConfigId?: string }>,
+  seats: Array<{ type: 'human' | 'ai' | 'empty'; userId?: string; name: string; aiConfigId?: string; avatarUrl?: string }>,
   tier: 'adept',
-): Promise<void> {
+): Promise<StartMultiplayerMatchResult> {
   const humanSeats = seats.filter(s => s.type === 'human' && s.userId)
   const aiSeatsFromRoom = seats.filter(s => s.type === 'ai')
 
@@ -1782,16 +1992,25 @@ export async function startMultiplayerMatch(
   // Escrow Buy-in ทีละคน (sequential — ไม่ Promise.all) เพื่อ rollback ได้ถูกต้องถ้าคนใดคนหนึ่ง token ไม่พอ
   for (const uid of humanPlayerIds) {
     const escrow = await escrowBuyIn(uid, roomId, tier)
-    if (!escrow) {
-      // rollback คนที่หักไปแล้วก่อนหน้าในกลุ่มเดียวกัน
+    if (!escrow.ok) {
+      // rollback คนที่หักไปแล้วก่อนหน้าในกลุ่มเดียวกัน — ไม่ emit เอง ให้ gameSocket.ts จัดการแจ้ง client
+      // (ตอนนี้ room ยังไม่ถูกประกาศ room_ready เลย ไม่มีใคร navigate ไปไหนที่จะพลาด error)
       await Promise.all(Object.entries(escrowIds).map(([doneUid, escrowId]) => refundEscrow(doneUid, escrowId, buyInAmount)))
-      io.to(roomId).emit('match_error', { roomId, message: 'INSUFFICIENT_TOKENS' })
-      return
+      return { ok: false, reason: escrow.reason }
     }
     escrowIds[uid] = escrow.escrowId
     tokenBalance[uid] = escrow.buyInAmount
   }
   aiPlayerIds.forEach(id => tokenBalance[id] = buyInAmount)
+
+  // Bug B/C: seatOrder เก็บ snapshot ที่นั่งทั้ง 4 ตามลำดับจริงในห้อง — คงที่ตลอดแมตช์ ไม่เปลี่ยนตาม AFK/AI takeover
+  const seatOrder: MultiSeatInfo[] = seats.map((s, i) => {
+    if (s.type === 'human' && s.userId) {
+      return { seat: i, userId: s.userId, displayName: s.name, avatarUrl: s.avatarUrl, isHuman: true }
+    }
+    const aiConfig = AI_CONFIGS.find(a => a.id === s.aiConfigId) ?? AI_CONFIGS[0]
+    return { seat: i, userId: aiConfig.id, displayName: aiConfig.name, isHuman: false, emoji: aiConfig.emoji }
+  })
 
   const state: MultiMatchState = {
     roomId, tier, humanPlayerIds, aiPlayerIds,
@@ -1800,10 +2019,13 @@ export async function startMultiplayerMatch(
     results: [],
     phase: 'waiting',
     submittedArrangements: {},
+    seatOrder,
+    afkPlayers: {},
   }
   multiMatchStates.set(roomId, state)
 
   await startMultiRound(io, roomId)
+  return { ok: true }
 }
 
 async function startMultiRound(io: Server, roomId: string): Promise<void> {
@@ -1833,6 +2055,12 @@ async function startMultiRound(io: Server, roomId: string): Promise<void> {
   })
   state.submittedArrangements = { ...aiArrangements }
 
+  // A5 patch: \u0e04\u0e19\u0e17\u0e35\u0e48\u0e22\u0e31\u0e07 AFK \u0e2d\u0e22\u0e39\u0e48\u0e02\u0e49\u0e32\u0e21\u0e23\u0e2d\u0e1a (grace period \u0e22\u0e31\u0e07\u0e44\u0e21\u0e48\u0e2b\u0e21\u0e14\u0e15\u0e2d\u0e19\u0e23\u0e2d\u0e1a\u0e43\u0e2b\u0e21\u0e48\u0e40\u0e23\u0e34\u0e48\u0e21) \u0e15\u0e49\u0e2d\u0e07\u0e43\u0e2b\u0e49 AI \u0e15\u0e31\u0e14\u0e2a\u0e34\u0e19\u0e43\u0e08
+  // \u0e17\u0e31\u0e19\u0e17\u0e35 \u0e44\u0e21\u0e48\u0e07\u0e31\u0e49\u0e19\u0e23\u0e2d\u0e1a\u0e43\u0e2b\u0e21\u0e48\u0e08\u0e30\u0e23\u0e2d submit \u0e02\u0e2d\u0e07\u0e04\u0e19\u0e17\u0e35\u0e48\u0e44\u0e21\u0e48\u0e21\u0e35\u0e17\u0e32\u0e07\u0e2a\u0e48\u0e07\u0e2d\u0e30\u0e44\u0e23\u0e21\u0e32\u0e2d\u0e35\u0e01\u0e41\u0e25\u0e49\u0e27\u0e08\u0e19\u0e01\u0e27\u0e48\u0e32 grace timer \u0e08\u0e30\u0e2b\u0e21\u0e14 (\u0e42\u0e15\u0e4a\u0e30\u0e04\u0e49\u0e32\u0e07)
+  state.humanPlayerIds.forEach(uid => {
+    if (isPlayerAFK(state, uid)) autoSubmitArrangementForAFKPlayer(state, uid)
+  })
+
   const timer = (gameConfig.arrangementTimer as Record<string, number>)[state.tier] ?? gameConfig.arrangementTimer.adept
 
   state.humanPlayerIds.forEach(uid => {
@@ -1846,15 +2074,17 @@ async function startMultiRound(io: Server, roomId: string): Promise<void> {
         pile2: community.row2.map(cardKey),
         pile3: community.row3.map(cardKey),
       },
-      aiNames: state.aiPlayerIds.map(id => {
-        const cfg = AI_CONFIGS.find(a => a.id === id)
-        return { id, name: cfg?.name ?? id, emoji: cfg?.emoji ?? '\ud83e\udd16' }
-      }),
+      seats: state.seatOrder,
       tokenBalance: state.tokenBalance,
       timer,
       ...(state.roundNumber === 1 ? { buyInAmount: state.buyInAmount } : {}),
     })
   })
+
+  // Edge case: ถ้า Human ทุกคนในห้องดัน AFK พร้อมกันพอดีตอนรอบใหม่เริ่ม (เช่น 2 คนหลุดพร้อมกัน)
+  // AI ตอบแทนครบทุกคนไปแล้วข้างบน — ต้อง resolve เองเลย ไม่งั้นไม่มีใครส่ง player_ready_multi มาอีก
+  const allAlreadySubmitted = state.humanPlayerIds.every(uid => state.submittedArrangements[uid])
+  if (allAlreadySubmitted) await resolveMultiShowdown(io, roomId)
 }
 
 export async function submitMultiArrangement(
@@ -1938,17 +2168,32 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
     const finalWinner = playerIds.reduce((a, b) => (state.tokenBalance[a] ?? 0) > (state.tokenBalance[b] ?? 0) ? a : b)
 
     // ── Settle Escrow ครั้งเดียวต่อคน (Buy-in Spec §4 — จบแมตช์ปกติ) ──
-    await Promise.all(state.humanPlayerIds.map(uid =>
-      settleEscrow(uid, state.escrowIds[uid], state.tokenBalance[uid] ?? state.buyInAmount)
-    ))
-    // Player Stats Leaderboard — นับ games_played/games_won เฉพาะแมตช์ที่จบครบ totalRounds จริง
-    await recordGameResults(state.humanPlayerIds, finalWinner)
+    const newTokenBalances: Record<string, number | null> = {}
+    await Promise.all(state.humanPlayerIds.map(async uid => {
+      newTokenBalances[uid] = await settleEscrow(uid, state.escrowIds[uid], state.tokenBalance[uid] ?? state.buyInAmount)
+    }))
+    // End-of-Match Stats Recording — แทนที่ recordGameResults() เดิม — Adept ใช้ Simultaneous Showdown
+    // เหมือน Initiate, derive best_hands/triple sweep จาก state.results ได้ตรงๆ ต่อ human ทุกคน
+    await recordMatchStats(state.humanPlayerIds.map(uid => {
+      const { bestHand, tripleSweep } = deriveBestHandFromResults(state.results, uid)
+      return {
+        userId: uid,
+        tier: 'adept' as StatsTier,
+        won: finalWinner === uid,
+        isTripleSweep: tripleSweep,
+        bestHandThisMatch: bestHand,
+      }
+    }))
 
     io.to(roomId).emit('match_end', {
       roomId, finalWinner, tokenBalance: state.tokenBalance,
       results: state.results, totalRounds: state.totalRounds,
       buyInAmount: state.buyInAmount,
+      newTokenBalances,
     })
+    // เคลียร์ grace timer ที่อาจค้างอยู่ (คนหลุดรอบสุดท้ายแต่ยังไม่ครบ 60s ตอนแมตช์จบพอดี) กัน
+    // finalizeAFKReplacement ยิงซ้ำใส่ state ที่ลบไปแล้ว (แม้จะปลอดภัยอยู่แล้วเพราะเช็ค !state ก็ตาม)
+    Object.values(state.afkPlayers).forEach(afk => clearTimeout(afk.graceTimer))
     multiMatchStates.delete(roomId)
   } else {
     state.roundNumber++
@@ -1957,12 +2202,44 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
   }
 }
 
-// Disconnect — แทน Human ด้วย AI ทันที
-// Buy-in Spec §4: settle ทันทีด้วย stack ปัจจุบัน (ante ที่จ่ายเข้า Pot ไปแล้วไม่คืน — เปลี่ยนจาก burn ทั้งก้อนเดิม)
-export async function replaceMultiPlayerWithAI(io: Server, roomId: string, userId: string): Promise<void> {
+// A5 (Grace Period 60s): Disconnect — "ไม่" settle/ไล่ออกจาก humanPlayerIds ทันทีอีกต่อไป (นั่นคือบั๊ก
+// A1 เดิม — settleEscrow blocking อยู่หน้า logic ที่ unblock รอบ) แค่ mark AFK + ให้ AI ตอบแทน action
+// ปัจจุบันทันที (ถ้ามี) แล้วตั้งเวลา 60s รอ reconnect ก่อนค่อย finalize จริงจัง
+export async function markPlayerAFK(io: Server, roomId: string, userId: string): Promise<void> {
   const state = multiMatchStates.get(roomId)
   if (!state) return
   if (!state.humanPlayerIds.includes(userId)) return
+  if (isPlayerAFK(state, userId)) return // กันซ้ำ (เช่น disconnect event ยิงซ้ำ)
+
+  const seatInfo = state.seatOrder.find(s => s.userId === userId)
+  state.afkPlayers[userId] = {
+    disconnectedAt: Date.now(),
+    graceTimer: setTimeout(() => { finalizeAFKReplacement(io, roomId, userId).catch(err => {
+      console.error('[AFK] finalizeAFKReplacement failed for', userId, 'in', roomId, err)
+    }) }, 60_000),
+  }
+
+  io.to(roomId).emit('player_disconnected_replaced', {
+    roomId, disconnectedUserId: userId, displayName: seatInfo?.displayName ?? userId, graceSeconds: 60,
+  })
+
+  // ตัวจุดเดียวที่ Adept multiplayer รอ action จาก Human จริง — ต้องให้ AI ตอบแทนทันที ไม่รอ
+  // arrangementTimer เต็ม (75s) ไม่งั้นโต๊ะค้างระหว่าง grace period ทั้งที่ตั้งใจให้ AI เล่นแทนได้เลย
+  if (state.phase === 'arrangement') {
+    autoSubmitArrangementForAFKPlayer(state, userId)
+    const allSubmitted = state.humanPlayerIds.every(uid => state.submittedArrangements[uid])
+    if (allSubmitted) await resolveMultiShowdown(io, roomId)
+  }
+}
+
+// Grace period หมด 60s ไม่มี reconnect — เอาออกจาก humanPlayerIds จริง, เติม AI ถาวรแทน, settle
+// escrow ตอนนี้เท่านั้น (ย้ายออกจาก markPlayerAFK แล้ว — A1: ห้าม DB latency บล็อกคนที่เหลือ)
+async function finalizeAFKReplacement(io: Server, roomId: string, userId: string): Promise<void> {
+  const state = multiMatchStates.get(roomId)
+  if (!state) return
+  if (!isPlayerAFK(state, userId)) return // reconnect ไปแล้วก่อนหน้านี้ — ไม่ต้องทำอะไร
+
+  delete state.afkPlayers[userId]
 
   const escrowId = state.escrowIds[userId]
   if (escrowId) {
@@ -1974,26 +2251,34 @@ export async function replaceMultiPlayerWithAI(io: Server, roomId: string, userI
   state.aiPlayerIds.push(replacementAI.id)
   state.tokenBalance[replacementAI.id] = state.tokenBalance[userId] ?? state.buyInAmount
 
-  if (state.phase === 'arrangement' && state.cardsMap && state.community) {
-    const arr = aiDecideArrangement(replacementAI, state.cardsMap[userId], state.community, state.roundNumber, state.tier, 0)
-    state.submittedArrangements[replacementAI.id] = arr
+  // รอบปัจจุบัน (ถ้ามี arrangement ค้างอยู่) — AI ตัดสินใจแทนไปแล้วตอน markPlayerAFK ใต้ userId เดิม
+  // ย้าย submission นั้นไปอยู่ใต้ replacementAI.id แทน ให้สอดคล้องกับ humanPlayerIds ที่เปลี่ยนไปแล้ว
+  if (state.submittedArrangements[userId]) {
+    state.submittedArrangements[replacementAI.id] = state.submittedArrangements[userId]
     delete state.submittedArrangements[userId]
-
-    io.to(roomId).emit('player_disconnected_replaced', {
-      roomId, disconnectedUserId: userId, replacedWithAI: replacementAI.id, aiName: replacementAI.name,
-    })
-
-    const allSubmitted = state.humanPlayerIds.every(uid => state.submittedArrangements[uid])
-    if (allSubmitted) await resolveMultiShowdown(io, roomId)
-  } else {
-    io.to(roomId).emit('player_disconnected_replaced', {
-      roomId, disconnectedUserId: userId, replacedWithAI: replacementAI.id, aiName: replacementAI.name,
-    })
   }
 }
 
 export function getMultiMatchState(roomId: string): MultiMatchState | undefined {
   return multiMatchStates.get(roomId)
+}
+
+// เรียกตอน player_leave (ออกกลางเกม) — A3/A4: settle escrow ให้ Human "ทุกคน" ในห้อง ไม่ใช่แค่คนที่ leave
+// (เดิมพลาดจุดนี้ ทำให้คนที่เหลือมี match_escrow ค้าง status='in_match' ไปกวนโต๊ะใหม่ทีหลัง) + ลบ
+// multiMatchStates กันหน่วยความจำรั่ว (เดิมไม่เคยลบตอน leave กลางเกมเลย มีแต่ตอนจบแมตช์ปกติ)
+export async function settleAndEndMultiMatch(roomId: string, leavingPlayerId: string): Promise<number | null> {
+  const state = multiMatchStates.get(roomId)
+  if (!state) return null
+
+  let leavingBalance: number | null = null
+  await Promise.all(Object.entries(state.escrowIds).map(async ([uid, escrowId]) => {
+    const bal = await settleEscrow(uid, escrowId, state.tokenBalance[uid] ?? state.buyInAmount)
+    if (uid === leavingPlayerId) leavingBalance = bal
+  }))
+
+  Object.values(state.afkPlayers).forEach(afk => clearTimeout(afk.graceTimer))
+  multiMatchStates.delete(roomId)
+  return leavingBalance
 }
 
 
@@ -2004,8 +2289,19 @@ export async function resendRoundStartToPlayer(io: Server, roomId: string, userI
   const state = multiMatchStates.get(roomId)
   if (!state) return
   if (!state.humanPlayerIds.includes(userId)) return
-  if (state.phase !== 'arrangement') return
-  if (!state.community || !state.cardsMap) return
+
+  // A5: ยกเลิก grace timer ทันทีถ้า userId นี้กำลัง AFK อยู่ (คือ reconnect จริง) — คืนที่นั่งให้ควบคุมเอง
+  // ต่อ ทำก่อนเช็ค phase เสมอ (เดิม resend ทำงานแค่ phase 'arrangement' เท่านั้น ทำให้ reconnect ตอน
+  // phase อื่นไม่ได้ยกเลิก grace เลย ค้างจนกว่า 60s หมดทั้งที่ผู้เล่นกลับมาแล้วจริงๆ)
+  const afk = state.afkPlayers[userId]
+  if (afk) {
+    clearTimeout(afk.graceTimer)
+    delete state.afkPlayers[userId]
+  }
+
+  // ข้อมูลที่มีให้ resend จริงมีแค่ตอน phase 'arrangement' เท่านั้น (phase อื่นสั้นมาก/ไม่มี state ค้าง
+  // ให้ต้องส่งคืน — ผู้เล่นจะได้ round_start/match_end ตามปกติจาก broadcast รอบถัดไปเอง)
+  if (state.phase !== 'arrangement' || !state.community || !state.cardsMap) return
 
   const community = state.community
   const cardsMap = state.cardsMap
@@ -2021,10 +2317,7 @@ export async function resendRoundStartToPlayer(io: Server, roomId: string, userI
       pile2: community.row2.map(cardKey),
       pile3: community.row3.map(cardKey),
     },
-    aiNames: state.aiPlayerIds.map(id => {
-      const cfg = AI_CONFIGS.find(a => a.id === id)
-      return { id, name: cfg?.name ?? id, emoji: cfg?.emoji ?? '🤖' }
-    }),
+    seats: state.seatOrder,
     tokenBalance: state.tokenBalance,
     timer,
     ...(state.roundNumber === 1 ? { buyInAmount: state.buyInAmount } : {}),

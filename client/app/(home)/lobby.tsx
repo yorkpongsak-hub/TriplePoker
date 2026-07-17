@@ -9,19 +9,17 @@ import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Image, Platform, 
 import { io, Socket } from 'socket.io-client';
 import { useUserStore } from '../../src/store/userStore';
 import { router } from 'expo-router';
-import VIPSkinSelector from './components/VIPSkinSelector'
-import { useUserSkins } from '../../src/hooks/useUserSkins'
-import { useBgm, fadeOutBgm, playApplauseSfx } from '../../src/services/bgmService'
+import { useBgm, fadeOutBgm } from '../../src/services/bgmService'
 import { useAuthStore } from '../../src/store/authStore'
 import { MenuButton } from '../../src/components/ui/MenuButton'
 import { ThemedBackground } from '../../src/components/ui/ThemedBackground'
 import { glassPanel, glassPanelDense, textOnGlass } from '../../src/ui/glassStyles'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { BUY_IN, BuyInTier, AD_RESCUE_AMOUNT } from '../../src/config/buyInConfig'
+import { Tier, TIER_CONFIG, isEligible, meetsLastBossCondition } from '../../src/config/tierConfig'
 
 const studioLogo = require('../../assets/images/sage_unicorn_logo_transparent.png');
 
-type Tier = 'demo' | 'initiate' | 'adept' | 'mastermind' | 'high_noble' | 'last_boss';
 type Selection = Tier | 'all';
 
 const COLOR = {
@@ -39,25 +37,12 @@ const COLOR = {
   borderSecondary: '#3A5A44',
 };
 
-const TIER_CONFIG: Record<Tier, { label: string; letter: string; minToken: number; implemented: boolean; badgeColor: string }> = {
-  demo:        { label: 'Demo',          letter: 'D',  minToken: 0,       implemented: false, badgeColor: COLOR.greenHighlight },
-  initiate:    { label: 'Initiate',      letter: 'C',  minToken: 100,     implemented: true,  badgeColor: COLOR.greenHighlight },
-  adept:       { label: 'Adept',         letter: 'B',  minToken: 10_000,  implemented: true,  badgeColor: COLOR.goldPrimary },
-  mastermind:  { label: 'Mastermind',    letter: 'A',  minToken: 40_000,  implemented: true,  badgeColor: COLOR.goldPrimary },
-  high_noble:  { label: 'High Noble',    letter: 'S',  minToken: 100_000, implemented: true,  badgeColor: COLOR.red },
-  last_boss:   { label: 'The Last Boss', letter: 'S+', minToken: 0,       implemented: false, badgeColor: COLOR.goldDark },
-};
+// TIER_CONFIG/isEligible ย้ายไปไว้ที่ src/config/tierConfig.ts แล้ว (single source of truth ฝั่ง client)
 
 // TriplePoker_BuyIn_Spec_v1_0 §2 — เทียบ Tier type ของ Lobby (snake_case) กับ key ของ BUY_IN (camelCase ตรงกับ server)
 const TIER_TO_BUYIN_KEY: Partial<Record<Tier, BuyInTier>> = {
   initiate: 'initiate', adept: 'adept', mastermind: 'mastermind', high_noble: 'highNoble', last_boss: 'lastBoss',
 };
-
-function meetsLastBossCondition(_token: number): boolean { return false; }
-function isEligible(tier: Tier, token: number): boolean {
-  if (tier === 'last_boss') return meetsLastBossCondition(token);
-  return token >= TIER_CONFIG[tier].minToken;
-}
 
 const TIER_ROWS: Tier[][] = [
   ['last_boss'],
@@ -69,7 +54,6 @@ const TIER_ROWS: Tier[][] = [
 export default function LobbyScreen() {
   useBgm(); // LobbyMatchmaking_Spec_v1_0 §2 — BGM เล่นต่อเนื่องข้าม Profile/Shop/Lobby/Hall of Fame
   const [selected, setSelected] = useState<Selection | null>(null);
-  const [showSkinModal, setShowSkinModal] = useState(false);
 
   // ── Multiplayer Matchmaking (Adept) ──────────────────────────
   const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001';
@@ -103,54 +87,41 @@ export default function LobbyScreen() {
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
   }, [mmStatus, mmTimeoutAt]);
-  const { unlocked, active, loading: skinsLoading } = useUserSkins();
 
   const lastBossVisible = useMemo(() => meetsLastBossCondition(tokenBalance), [tokenBalance]);
 
-  // ── Tier Unlock Celebration (ครั้งเดียวต่อ Tier — LobbyMatchmaking_Spec_v1_0 §1.3) ──
+  // ── Tier Unlock Tracking (LobbyMatchmaking_Spec_v1_0 §1.3) ──
+  // ไม่มี popup ใน Lobby แล้ว (การแสดงผล Tier ที่ปลดล็อกย้ายไปหน้า Profile) — เหลือแค่ mark
+  // tier_unlock_celebrated เงียบๆ กัน newlyUnlocked ถูกคำนวณ/ยิงซ้ำทุกครั้งที่ profile/tokenBalance เปลี่ยน
   const session = useAuthStore(s => s.session);
   const profile = useAuthStore(s => s.profile);
   const refreshProfile = useAuthStore(s => s.refreshProfile);
-  const [celebrateQueue, setCelebrateQueue] = useState<Tier[]>([]);
-  const [celebrating, setCelebrating] = useState<Tier | null>(null);
   const celebratedCheckedRef = useRef(false);
 
-  // เช็คครั้งเดียวหลัง profile โหลดเสร็จ — เทียบ tier ที่ unlock แล้ว (token ถึง) กับ tier_unlock_celebrated เดิม
   useEffect(() => {
     if (!profile || celebratedCheckedRef.current) return;
     celebratedCheckedRef.current = true;
     const celebrated = new Set(profile.tier_unlock_celebrated ?? []);
     const newlyUnlocked = (Object.keys(TIER_CONFIG) as Tier[])
       .filter(t => t !== 'demo' && isEligible(t, tokenBalance) && !celebrated.has(t));
-    if (newlyUnlocked.length > 0) setCelebrateQueue(newlyUnlocked);
-  }, [profile, tokenBalance]);
-
-  // ดึงคิวทีละ Tier — โชว์ celebration ทีละอันจนครบคิว
-  useEffect(() => {
-    if (celebrating || celebrateQueue.length === 0) return;
-    const [next, ...rest] = celebrateQueue;
-    setCelebrating(next);
-    setCelebrateQueue(rest);
-    playApplauseSfx();
-  }, [celebrateQueue, celebrating]);
-
-  const handleCelebrationDismiss = async () => {
-    const tier = celebrating;
-    setCelebrating(null);
-    if (!tier) return;
+    if (newlyUnlocked.length === 0) return;
     const token = session?.access_token;
     if (!token) return;
-    try {
-      await fetch(`${SERVER_URL}/profile/celebrate-tier`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ tier }),
-      });
+    (async () => {
+      for (const tier of newlyUnlocked) {
+        try {
+          await fetch(`${SERVER_URL}/profile/celebrate-tier`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ tier }),
+          });
+        } catch (e) {
+          console.error('[Lobby] celebrate-tier failed:', e);
+        }
+      }
       await refreshProfile();
-    } catch (e) {
-      console.error('[Lobby] celebrate-tier failed:', e);
-    }
-  };
+    })();
+  }, [profile, tokenBalance]);
 
   const handleEnterInitiate = () => { fadeOutBgm(); router.push('/game/initiate'); };
   const handleEnterMastermind = () => { fadeOutBgm(); router.push('/game/mastermind/select'); };
@@ -242,7 +213,9 @@ export default function LobbyScreen() {
     socketRef.current = socket;
 
     socket.on('connect', () => {
-      socket.emit('room_auto_match', { tier, userId, userName: displayName });
+      // Bug C fix (2026-07-17): ส่ง avatarUrl ไปด้วย — server เก็บลง Seat แล้วส่งต่อให้ผู้เล่นคนอื่นเห็น
+      // avatar กันใน round_start (เดิมไม่เคยส่ง เลยมีแต่ userName แต่ไม่มี avatar ของคนอื่นเลย)
+      socket.emit('room_auto_match', { tier, userId, userName: displayName, avatarUrl: profile?.avatar_url ?? undefined });
     });
 
     socket.on('room_matched', (data: { room: any; seatIndex: number }) => {
@@ -364,28 +337,11 @@ export default function LobbyScreen() {
   const sectionTitle =
     selected === 'all' ? 'All Tiers'
     : selected ? TIER_CONFIG[selected].label
-    : 'เลือก Tier ด้านล่างเพื่อดูโต๊ะ';
+    : 'Select a Tier below to view tables';
 
   return (
     <ThemedBackground isVip={isVip}>
     <View style={s.root}>
-
-      {/* ─── Tier Unlock Celebration (ครั้งเดียวต่อ Tier — §1.3) ───
-          TODO: ใช้ sprite_tier_up.png (VFX ArtSpec v1.0) แทน placeholder นี้เมื่อมี asset จริง */}
-      {celebrating && (
-        <View style={s.celebrateOverlay}>
-          <View style={s.celebrateCard}>
-            <Text style={s.celebrateIcon}>🎉</Text>
-            <Text style={s.celebrateTitle}>TIER UNLOCKED!</Text>
-            <Text style={s.celebrateTierName}>
-              [{TIER_CONFIG[celebrating].letter}] {TIER_CONFIG[celebrating].label}
-            </Text>
-            <TouchableOpacity onPress={handleCelebrationDismiss} style={s.celebrateBtn}>
-              <Text style={s.celebrateBtnTxt}>Continue</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
 
       {/* ─── Waiting Timeout Dialog (§4.4/§6.1) — stage='first' (Wait 2 More/Delete) หรือ stage='deadlock'
           (Start Now Fill Minion AI/Delete, เฉพาะ High Noble) — High Noble จำกัดสิทธิ์กดเฉพาะ Host ─── */}
@@ -505,25 +461,25 @@ export default function LobbyScreen() {
 
           {selected === 'initiate' && (
             <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('initiate', handleEnterInitiate)}>
-              <Text style={s.enterBtnTxt}>▶ เริ่มเล่น (สร้างโต๊ะของคุณ)</Text>
+              <Text style={s.enterBtnTxt}>▶ Play (Create Your Table)</Text>
             </TouchableOpacity>
           )}
 
           {selected === 'mastermind' && (
             <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('mastermind', handleEnterMastermind)}>
-              <Text style={s.enterBtnTxt}>▶ เริ่มเล่น (1 Human + AI)</Text>
+              <Text style={s.enterBtnTxt}>▶ Play (1 Human + AI)</Text>
             </TouchableOpacity>
           )}
 
           {selected === 'high_noble' && mmStatus === 'idle' && (
             <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('high_noble', handleEnterHighNoble)}>
-              <Text style={s.enterBtnTxt}>▶ เริ่มเล่น (Auto-Match 3 Human + จตุรเทพ AI)</Text>
+              <Text style={s.enterBtnTxt}>▶ Play (Auto-Match 3 Human + Four Gods AI)</Text>
             </TouchableOpacity>
           )}
 
           {selected === 'adept' && mmStatus === 'idle' && (
             <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('adept', handleAutoMatchAdept)}>
-              <Text style={s.enterBtnTxt}>▶ เริ่มเล่น (Auto-Match 3 Human + AI)</Text>
+              <Text style={s.enterBtnTxt}>▶ Play (Auto-Match 3 Human + AI)</Text>
             </TouchableOpacity>
           )}
 
@@ -533,7 +489,7 @@ export default function LobbyScreen() {
               padding: 16, alignItems: 'center', marginBottom: 12,
             }}>
               <Text style={{ color: COLOR.goldPrimary, fontSize: 14, fontWeight: '800', marginBottom: 10 }}>
-                🔍 กำลังหาผู้เล่น...
+                🔍 Finding players...
               </Text>
               <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
                 {[0, 1, 2, 3].map(i => {
@@ -554,12 +510,12 @@ export default function LobbyScreen() {
               </View>
               {mmSecondsLeft > 0 && (
                 <Text style={{ color: COLOR.textSecondary, fontSize: 11, marginBottom: 10 }}>
-                  AI จะเข้ามาแทนที่ในอีก {mmSecondsLeft} วินาที ถ้าหา Human ไม่ครบ
+                  AI will fill in {mmSecondsLeft}s if not enough Humans join
                 </Text>
               )}
               <TouchableOpacity onPress={handleCancelMatchmaking}
                 style={{ borderWidth: 1, borderColor: COLOR.red, borderRadius: 8, paddingHorizontal: 20, paddingVertical: 8 }}>
-                <Text style={{ color: COLOR.red, fontSize: 12, fontWeight: '700' }}>ยกเลิก</Text>
+                <Text style={{ color: COLOR.red, fontSize: 12, fontWeight: '700' }}>Cancel</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -567,19 +523,19 @@ export default function LobbyScreen() {
           {(selected === 'adept' || selected === 'high_noble') && mmStatus === 'idle' && (
             <View style={{ paddingVertical: 24, paddingHorizontal: 16, alignItems: 'center' }}>
               <Text style={{ color: COLOR.textSecondary, fontSize: 12, textAlign: 'center', lineHeight: 18, ...textOnGlass }}>
-                ยังไม่มีห้องที่เปิดอยู่{'\n'}กด "เริ่มเล่น" เพื่อสร้างห้องใหม่
+                No open rooms yet{'\n'}Tap "Play" to create a new room
               </Text>
             </View>
           )}
 
           {selected === 'all' && (
             <Text style={{ color: COLOR.textTertiary, fontSize: 12, textAlign: 'center', paddingVertical: 24, ...textOnGlass }}>
-              เลือก Tier ด้านล่างเพื่อเริ่มเล่น
+              Select a Tier below to start playing
             </Text>
           )}
 
           {!selected && (
-            <Text style={{ color: COLOR.textTertiary, fontSize: 12, ...textOnGlass }}>— ยังไม่ได้เลือก Tier —</Text>
+            <Text style={{ color: COLOR.textTertiary, fontSize: 12, ...textOnGlass }}>— No Tier selected —</Text>
           )}
         </ScrollView>
       </View>
@@ -590,16 +546,7 @@ export default function LobbyScreen() {
           onPress={() => setSelected('all')}
           style={[s.allBtn, selected === 'all' && s.allBtnActive]}
         >
-          <Text style={s.allBtnTxt}>🌐 All Tables (ทุก Tier)</Text>
-        </TouchableOpacity>
-
-        
-        {/* VIP Only: Select Skin Button */}
-        <TouchableOpacity
-          onPress={() => setShowSkinModal(true)}
-          style={s.skinSelectorBtn}
-        >
-          <Text style={s.skinSelectorBtnTxt}>🎨 Select Skin (VIP)</Text>
+          <Text style={s.allBtnTxt}>🌐 All Tables (All Tiers)</Text>
         </TouchableOpacity>
 
         <View style={s.tierRowsWrap}>
@@ -620,15 +567,6 @@ export default function LobbyScreen() {
           <Text style={s.footerSub}>The Sage Unicorn Studio Co., Ltd.</Text>
         </View>
       </View>
-    
-      
-            {/* VIP Skin Selector */}
-      <VIPSkinSelector
-        visible={showSkinModal}
-        onClose={() => setShowSkinModal(false)}
-        unlockedSkins={unlocked}
-        activeSkin={active}
-      />
 
       </View>
     </ThemedBackground>
@@ -644,8 +582,8 @@ const s = StyleSheet.create({
     overflow: 'hidden',
     ...(Platform.OS === 'web' ? { height: '100vh' as any } : {}),
   },
-  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginTop: 8, marginBottom: 12 }, // เดิม marginTop:50 hardcode ชดเชย status bar เอง — VipBackground มี SafeAreaView(top) ให้แล้ว เหลือแค่ breathing room ปกติ | justifyContent เปลี่ยนเป็น flex-end เพราะ header ย้ายไป absolute-center แล้ว (Feedback A1)
-  header: { position: 'absolute', left: 0, right: 0, textAlign: 'center', color: COLOR.goldPrimary, fontSize: 20, fontWeight: '800', letterSpacing: 1, fontFamily: 'Cinzel', ...textOnGlass }, // Feedback A1: จัดกึ่งกลางแนวนอน — ลอยตรงบนพื้นหลัง ไม่มี panel รอง
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, marginBottom: 12 }, // เดิม marginTop:50 hardcode ชดเชย status bar เอง — VipBackground มี SafeAreaView(top) ให้แล้ว เหลือแค่ breathing room ปกติ
+  header: { color: COLOR.goldPrimary, fontSize: 20, fontWeight: '800', letterSpacing: 1, fontFamily: 'Cinzel', ...textOnGlass },
   profileBtn: { borderWidth: 1, borderColor: COLOR.goldPrimary, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
   profileBtnTxt: { color: COLOR.goldPrimary, fontSize: 12, fontWeight: '700', ...textOnGlass },
 
@@ -679,9 +617,6 @@ const s = StyleSheet.create({
   footerLogo: { width: 28, height: 28, opacity: 0.9, marginBottom: 4 },
   footerText: { color: COLOR.goldPrimary, fontSize: 12, fontWeight: '800', letterSpacing: 1, fontFamily: 'Cinzel', ...textOnGlass }, // ลอยตรงบนพื้นหลัง ไม่มี panel รอง
   footerSub: { color: COLOR.textTertiary, fontSize: 8, marginTop: 2, ...textOnGlass },
-
-    skinSelectorBtn: { backgroundColor: COLOR.goldPrimary, borderRadius: 10, paddingVertical: 12, alignItems: 'center', marginBottom: 10 },
-  skinSelectorBtnTxt: { color: COLOR.bgPrimary, fontWeight: '700', fontSize: 13 },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.7)', justifyContent: 'flex-end' },
   modalContent: { backgroundColor: COLOR.bgSecondary, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingTop: 20, paddingHorizontal: 16, paddingBottom: 20 },

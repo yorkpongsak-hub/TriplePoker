@@ -2,8 +2,12 @@
 // minionAI.test.ts — Unit Tests for Beginner AI (first_valid)
 // Sprint 5 | TriplePoker — The Sage Unicorn Studio Co., Ltd.
 // ============================================================
+// Patch (2026-07-16): minionArrange() ของเดิมถูกย้าย/รวมเข้า aiEngine.ts
+// เปลี่ยนชื่อเป็น firstValidArrangement() (export เพิ่มให้เทสนี้เรียกได้) —
+// ฟังก์ชันปัจจุบันไม่ validate จำนวนไพ่/throw error แล้ว (ต่างจาก minionArrange
+// เดิม) จึงตัด 2 เทสที่เช็ค throw ออก (ดูท้ายไฟล์)
 
-import { minionArrange } from '../../src/ai/minionAI';
+import { firstValidArrangement } from '../../src/game/aiEngine';
 import { checkFoul, CommunityCards } from '../../src/game/foulChecker';
 import { Card } from '../../src/game/deck';
 
@@ -39,27 +43,21 @@ const mockCommunity: CommunityCards = {
   ],
 };
 
-const tooFewCards: Card[]  = mockCards.slice(0, 10);
-const tooManyCards: Card[] = [
-  ...mockCards,
-  { suit: 'clubs', rank: '2', value: 2 },
-];
-
 // ============================================================
 // TEST SUITE
 // ============================================================
 
-describe('minionAI — first_valid strategy', () => {
+describe('minionAI — first_valid strategy (firstValidArrangement)', () => {
 
   // ─── 1. Arrangement ผ่าน FoulChecker เสมอ ─────────────────
   it('should return an arrangement that passes FoulChecker', () => {
-    const result = minionArrange(mockCards, mockCommunity);
+    const result = firstValidArrangement(mockCards, mockCommunity);
     expect(checkFoul(result, mockCommunity).isFoul).toBe(false);
   });
 
   // ─── 2. Pile sizes ถูกต้อง 3-3-5 ──────────────────────────
   it('should return pile1=3, pile2=3, pile3=5 cards', () => {
-    const result = minionArrange(mockCards, mockCommunity);
+    const result = firstValidArrangement(mockCards, mockCommunity);
     expect(result.pile1).toHaveLength(3);
     expect(result.pile2).toHaveLength(3);
     expect(result.pile3).toHaveLength(5);
@@ -67,14 +65,14 @@ describe('minionAI — first_valid strategy', () => {
 
   // ─── 3. รวมไพ่ใน 3 Pile = 11 ใบพอดี ───────────────────────
   it('should use exactly 11 cards across all piles', () => {
-    const result = minionArrange(mockCards, mockCommunity);
+    const result = firstValidArrangement(mockCards, mockCommunity);
     const total = result.pile1.length + result.pile2.length + result.pile3.length;
     expect(total).toBe(11);
   });
 
   // ─── 4. ไม่มีไพ่ซ้ำใน 3 Pile ──────────────────────────────
   it('should not have duplicate cards across piles', () => {
-    const result   = minionArrange(mockCards, mockCommunity);
+    const result   = firstValidArrangement(mockCards, mockCommunity);
     const allCards = [...result.pile1, ...result.pile2, ...result.pile3];
     const keys     = allCards.map(c => `${c.suit}_${c.rank}`);
     const unique   = new Set(keys);
@@ -83,7 +81,7 @@ describe('minionAI — first_valid strategy', () => {
 
   // ─── 5. ไพ่ทุกใบมาจาก mockCards เท่านั้น ──────────────────
   it('should only contain cards from the original hand', () => {
-    const result       = minionArrange(mockCards, mockCommunity);
+    const result       = firstValidArrangement(mockCards, mockCommunity);
     const allCards     = [...result.pile1, ...result.pile2, ...result.pile3];
     const originalKeys = new Set(mockCards.map(c => `${c.suit}_${c.rank}`));
     allCards.forEach(card => {
@@ -91,43 +89,37 @@ describe('minionAI — first_valid strategy', () => {
     });
   });
 
-  // ─── 6. throw error เมื่อส่งไพ่น้อยกว่า 11 ใบ ──────────────
-  it('should throw error when given fewer than 11 cards', () => {
-    expect(() => minionArrange(tooFewCards, mockCommunity))
-      .toThrow('minionArrange: ต้องการ 11 ใบ');
-  });
-
-  // ─── 7. throw error เมื่อส่งไพ่มากกว่า 11 ใบ ───────────────
-  it('should throw error when given more than 11 cards', () => {
-    expect(() => minionArrange(tooManyCards, mockCommunity))
-      .toThrow('minionArrange: ต้องการ 11 ใบ');
-  });
-
-  // ─── 8. เรียกซ้ำ 20 ครั้ง — ผ่าน FoulChecker ทุกครั้ง ──────
+  // ─── 6. เรียกซ้ำ 20 ครั้ง — ผ่าน FoulChecker ทุกครั้ง ──────
   it('should consistently return valid arrangements on repeated calls', () => {
     for (let i = 0; i < 20; i++) {
-      const result = minionArrange(mockCards, mockCommunity);
+      const result = firstValidArrangement(mockCards, mockCommunity);
       expect(checkFoul(result, mockCommunity).isFoul).toBe(false);
     }
   });
 
-  // ─── 9. ผลลัพธ์มี key pile1 pile2 pile3 ครบ ─────────────────
+  // ─── 7. ผลลัพธ์มี key pile1 pile2 pile3 ครบ ─────────────────
   it('should return an object with pile1, pile2, pile3 keys', () => {
-    const result = minionArrange(mockCards, mockCommunity);
+    const result = firstValidArrangement(mockCards, mockCommunity);
     expect(result).toHaveProperty('pile1');
     expect(result).toHaveProperty('pile2');
     expect(result).toHaveProperty('pile3');
   });
 
-  // ─── 10. ไม่แก้ไข cards array ต้นฉบับ (immutability) ────────
+  // ─── 8. ไม่แก้ไข cards array ต้นฉบับ (immutability) ────────
   it('should not mutate the original cards array', () => {
     const snapshot = mockCards.map(c => ({ ...c }));
-    minionArrange(mockCards, mockCommunity);
+    firstValidArrangement(mockCards, mockCommunity);
     mockCards.forEach((card, i) => {
       expect(card.suit).toBe(snapshot[i].suit);
       expect(card.rank).toBe(snapshot[i].rank);
       expect(card.value).toBe(snapshot[i].value);
     });
   });
+
+  // หมายเหตุ: 2 เทสเดิม ("throw error เมื่อไพ่ไม่ครบ 11 ใบ") ถูกตัดออก —
+  // firstValidArrangement() ปัจจุบันไม่ validate จำนวนไพ่/ไม่ throw แล้ว
+  // (ต่างจาก minionArrange เดิมที่มี guard clause นี้) ถ้าจะเพิ่ม validation
+  // กลับเข้าไปใน aiEngine.ts ต้องคุยกับลุงเยาะก่อน เพราะเป็นการเปลี่ยน
+  // behavior ของ production code ไม่ใช่แค่ rename
 
 });

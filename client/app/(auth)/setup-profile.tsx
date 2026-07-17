@@ -10,10 +10,15 @@ import {
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '../../src/services/supabaseService'
 import { useAuthStore } from '../../src/store/authStore'
+import AvatarPicker, { AvatarConfig, AvatarDisplay, PRESET_AVATARS, VipStatus } from '../../src/components/profile/AvatarPicker'
 
 const triplePokerLogo = require('../../assets/images/triple_poker_icon.png')
+
+// ต้องตรงกับ server/src/constants/avatarPresets.ts DEFAULT_AVATAR_KEY
+const DEFAULT_AVATAR_KEY = 'wolf'
 
 // ─── ธีมสีหลักของแอป ──────────────────────────────────────
 const C = {
@@ -31,20 +36,12 @@ const C = {
   errorRed:    '#FF6B6B',
 }
 
-// ─── Emoji preset 25 ตัว: Grid 5 x 5 ─────────────────────
-const AVATARS = [
-  '🐱','🐶','🐺','🦊','🐯',
-  '🦁','🐻','🐼','🦅','🐉',
-  '🦄','🐢','🦉','🦍','🐲',
-  '👑','🥷','🧙','🧝','🧛',
-  '🦹','🤡','👻','💀','🤖',
-]
-
 // ─── Validate display name (pattern + length) ─────────────
+// Patch (2026-07-17): จำกัดความยาว 20 → 9 ตัวอักษร ตามมติใหม่ (ตรงกับ server nameValidator.ts)
 function validateNamePattern(name: string): string | null {
   const t = name.trim()
   if (t.length < 3) return 'Name must be at least 3 characters'
-  if (t.length > 20) return 'Name must be at most 20 characters'
+  if (t.length > 9) return 'Name must be at most 9 characters'
   // อนุญาต: A-Z a-z 0-9 ไทย _ -
   if (!/^[A-Za-z0-9_\-฀-๿]+$/.test(t)) {
     return 'Only letters, numbers, Thai, _ and - are allowed'
@@ -57,7 +54,10 @@ export default function SetupProfileScreen() {
   const refreshProfile = useAuthStore(s => s.refreshProfile)
 
   const [displayName, setDisplayName] = useState('')
-  const [selectedAvatar, setSelectedAvatar] = useState<string>(AVATARS[9])
+  const [avatarConfig, setAvatarConfig] = useState<AvatarConfig>({
+    type: 'preset', presetKey: DEFAULT_AVATAR_KEY, frameKey: 'default',
+  })
+  const [vipStatus, setVipStatus] = useState<VipStatus>('none')
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -68,11 +68,16 @@ export default function SetupProfileScreen() {
       if (!session) return
       const { data } = await supabase
         .from('users')
-        .select('display_name, avatar_url')
+        .select('display_name, avatar_url, vip_status')
         .eq('user_id', session.user.id)
         .maybeSingle()
       if (data?.display_name) setDisplayName(data.display_name)
-      if (data?.avatar_url && AVATARS.includes(data.avatar_url)) setSelectedAvatar(data.avatar_url)
+      if (data?.vip_status) setVipStatus(data.vip_status as VipStatus)
+      // avatar_url เก่าบางบัญชีเป็น emoji ดิบ (ก่อนระบบ preset) ไม่ตรง key ไหนเลย — เช็คก่อน
+      // ไม่งั้น fall back ไป default preset เฉยๆ (กัน crash ไม่ต้องพยายาม render emoji เก่า)
+      if (data?.avatar_url && PRESET_AVATARS.some(p => p.key === data.avatar_url)) {
+        setAvatarConfig({ type: 'preset', presetKey: data.avatar_url, frameKey: 'default' })
+      }
     })()
   }, [])
 
@@ -88,7 +93,8 @@ export default function SetupProfileScreen() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { setError('Session expired. Please sign in again.'); return }
 
-      // 2) เช็คชื่อซ้ำใน DB (case-insensitive, ยกเว้นชื่อเดิมของตัวเอง)
+      // 2) เช็คชื่อซ้ำใน DB (case-insensitive, ยกเว้นชื่อเดิมของตัวเอง) — คนละเรื่องกับ 3-layer
+      // name protection ด้านล่าง (bosses/graveyard/reserved_names ไม่เช็ค uniqueness กับผู้เล่นทั่วไป)
       const { data: existing } = await supabase
         .from('users')
         .select('user_id')
@@ -97,30 +103,43 @@ export default function SetupProfileScreen() {
         .maybeSingle()
       if (existing) { setError('This name is already taken'); return }
 
-      // 3) บันทึก display_name + avatar_url
-      const { data: updated, error: updateErr } = await supabase
-        .from('users')
-        .update({
-          display_name: displayName.trim(),
-          avatar_url:   selectedAvatar,
-        })
-        .eq('user_id', session.user.id)
-        .select('user_id, display_name, avatar_url')
-
-      console.log('[setup-profile] update result:', { updated, updateErr })
-
-      if (updateErr) { setError(updateErr.message ?? 'Save failed'); return }
-      if (!updated || updated.length === 0) {
-        setError('Save did not affect any row — check RLS UPDATE policy on users table')
+      // 3) Patch (2026-07-17): ตรวจ 3-layer name protection (bosses/graveyard/reserved_names) ผ่าน
+      // server จริง — เดิมหน้านี้เขียน display_name ลง Supabase ตรงๆ ไม่เคยเรียก nameValidator.ts
+      // เลยสักครั้ง (dead code จากมุมผู้เล่นจริง) ต้องผ่าน endpoint นี้ก่อนถึงจะบันทึกชื่อได้
+      const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
+      const registerRes = await fetch(`${SERVER_URL}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ displayName: displayName.trim() }),
+      })
+      const registerData = await registerRes.json()
+      if (!registerRes.ok) {
+        setError(registerData.message ?? 'This name cannot be used')
         return
       }
 
-      // 4) refresh authStore profile cache + ไปหน้า Profile
+      // 4) บันทึก avatar preset แยก ผ่าน POST /profile/avatar เท่านั้น (endpoint /auth/register
+      // ข้างบนจัดการแค่ display_name) — server validate VIP/VIP PRO tier อีกชั้น กัน bypass client-side lock
+      const avatarRes = await fetch(`${SERVER_URL}/profile/avatar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ avatarKey: avatarConfig.presetKey ?? DEFAULT_AVATAR_KEY }),
+      })
+      const avatarData = await avatarRes.json()
+      if (!avatarRes.ok) {
+        setError(avatarData.message ?? 'Could not save avatar')
+        return
+      }
+
+      // 5) refresh authStore profile cache + ไปหน้า Profile
       console.log('[setup-profile] session.user.id used for save:', session.user.id,
         '| authStore user.id before refresh:', useAuthStore.getState().user?.id ?? null)
       await refreshProfile()
       console.log('[setup-profile] profile after refresh:', useAuthStore.getState().profile)
-      router.replace('/(home)/profile')
+
+      // ผู้เล่นใหม่ (ยังไม่เคยดู Onboarding) -- ไปหน้า Onboarding ก่อน แล้วค่อยเข้าหน้าหลัก
+      const onboardingSeen = await AsyncStorage.getItem('onboarding_seen')
+      router.replace(onboardingSeen === '1' ? '/(home)/profile' : '/(auth)/onboarding')
 
     } catch (e: any) {
       setError(e?.message ?? 'Unexpected error')
@@ -151,25 +170,23 @@ export default function SetupProfileScreen() {
                 placeholder="Your name"
                 placeholderTextColor={C.textDim}
                 autoCapitalize="none"
-                maxLength={20}
+                maxLength={9}
                 value={displayName}
                 onChangeText={(t) => { setDisplayName(t); setError(null) }}
               />
-              <Text style={styles.charCount}>{displayName.length}/20</Text>
+              <Text style={styles.charCount}>{displayName.length}/9</Text>
             </View>
           </View>
 
           <View style={styles.nameRightCol}>
-            <View style={styles.previewBubble}>
-              <Text style={styles.previewEmoji}>{selectedAvatar}</Text>
-            </View>
+            <AvatarDisplay config={avatarConfig} size={72} showFrame />
             <Text style={styles.previewLabel}>PREVIEW</Text>
           </View>
         </View>
 
         {/* คำอธิบายเกณฑ์ตั้งชื่อ — แยกออกมานอก row เพื่อกางเต็ม 95% ของจอ */}
         <View style={styles.rulesBox}>
-          <Text style={styles.ruleText}>• 3–20 characters</Text>
+          <Text style={styles.ruleText}>• 3–9 characters</Text>
           <Text style={styles.ruleText}>• Letters, numbers, Thai, _ and -</Text>
           <Text style={styles.ruleText}>• No offensive or reserved names</Text>
         </View>
@@ -180,24 +197,15 @@ export default function SetupProfileScreen() {
           </View>
         )}
 
-        {/* ─── Avatar Grid ─── */}
+        {/* ─── Avatar Picker (Preset Avatar — 33 แบบ) ─── */}
         <Text style={styles.sectionLabel}>CHOOSE YOUR AVATAR</Text>
 
-        <View style={styles.avatarGrid}>
-          {AVATARS.map((emoji, index) => {
-            const isSelected = selectedAvatar === emoji
-            return (
-              <TouchableOpacity
-                key={`${emoji}-${index}`}
-                style={[styles.avatarCell, isSelected && styles.avatarCellSelected]}
-                onPress={() => setSelectedAvatar(emoji)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.avatarEmoji}>{emoji}</Text>
-              </TouchableOpacity>
-            )
-          })}
-        </View>
+        <AvatarPicker
+          vipStatus={vipStatus}
+          initial={displayName.charAt(0) || 'U'}
+          currentConfig={avatarConfig}
+          onSelect={setAvatarConfig}
+        />
 
         {/* Save button */}
         <TouchableOpacity
@@ -217,13 +225,7 @@ export default function SetupProfileScreen() {
   )
 }
 
-// คำนวณ CELL_SIZE จากความกว้างจอเพื่อบังคับ 5 คอลัมน์เป๊ะทุกอุปกรณ์
-// (ของเดิมใช้ fixed pixel + flexWrap ทำให้จอกว้างพออาจ wrap เป็น 6 คอลัมน์แทน 5)
-const GRID_COLS  = 5
-const GRID_GAP   = 8
-const H_PADDING  = 20 // ต้องตรงกับ styles.scroll.paddingHorizontal ด้านล่าง
 const SCREEN_W   = Dimensions.get('window').width
-const CELL_SIZE  = Math.floor((SCREEN_W - H_PADDING * 2 - GRID_GAP * (GRID_COLS - 1)) / GRID_COLS)
 
 // rulesBox กาง 95% ของความกว้างจอจริง (ไม่ใช่แค่ความกว้าง column) — ใช้ width คงที่ +
 // alignSelf:'center' แทน percentage string เพราะต้อง bleed ออกนอก paddingHorizontal ของ ScrollView
@@ -311,17 +313,6 @@ const styles = StyleSheet.create({
   ruleText: { color: C.textSec, fontSize: 11 },
 
   // Preview
-  previewBubble: {
-    width:           72,
-    height:          72,
-    borderRadius:    36,
-    backgroundColor: C.surface,
-    borderWidth:     2,
-    borderColor:     C.gold,
-    alignItems:      'center',
-    justifyContent:  'center',
-  },
-  previewEmoji: { fontSize: 38 },
   previewLabel: {
     color:         C.textDim,
     fontSize:      9,
@@ -329,35 +320,6 @@ const styles = StyleSheet.create({
     textAlign:     'center',
     marginTop:     4,
   },
-
-  // Avatar Grid
-  avatarGrid: {
-    flexDirection:  'row',
-    flexWrap:       'wrap',
-    justifyContent: 'center',
-    gap:            GRID_GAP,
-    marginTop:      4,
-  },
-  avatarCell: {
-    width:           CELL_SIZE,
-    height:          CELL_SIZE,
-    borderRadius:    10,
-    backgroundColor: C.surface,
-    borderWidth:     1.5,
-    borderColor:     C.border,
-    alignItems:      'center',
-    justifyContent:  'center',
-  },
-  avatarCellSelected: {
-    backgroundColor: C.card,
-    borderColor:     C.gold,
-    borderWidth:     2,
-    shadowColor:     C.gold,
-    shadowOpacity:   0.35,
-    shadowRadius:    8,
-    elevation:       3,
-  },
-  avatarEmoji: { fontSize: 26 },
 
   // Error
   errorBox: {

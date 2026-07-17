@@ -11,12 +11,14 @@ export const gameConfig = {
 
   // ─── Tier Ranges ─────────────────────────────────────────────
   // กำหนดช่วง Token ของแต่ละ Tier — ใช้สำหรับ matchmaking และ feature gate
+  // ⚠️ Threshold ชุดนี้ต้องตรงกับ client/src/config/tierConfig.ts (TIER_CONFIG.minToken) เสมอ — แก้ที่นี่ต้องแก้อีกที่ด้วย
+  // getTierFromToken() ด้านล่างยังเป็น dead code (ไม่มีใครเรียกใช้จริงในปัจจุบัน) — แก้ค่าให้ถูกไว้กันบั๊กตอน Matchmaking เริ่มเรียกใช้จริงในอนาคต
   tierRanges: {
-    initiate:   { min: 100,      max: 49_999   },  // Tier 1 — เรียนรู้เกม (~6 วัน)
-    adept:      { min: 50_000,   max: 149_999  },  // Tier 2 — เริ่มเจอคนจริง (~12 วัน)
-    mastermind: { min: 150_000,  max: 399_999  },  // Tier 3 — ปลดล็อค Auction + Betting (~31 วัน)
-    highNoble:  { min: 400_000,  max: Infinity },  // Tier 4 — Full experience + จตุรเทพ AI
-    lastBoss:   { min: 400_000,  max: Infinity },  // Tier 5 — Special encounter
+    initiate:   { min: 100,      max: 9_999    },  // Tier 1 — เรียนรู้เกม
+    adept:      { min: 10_000,   max: 39_999   },  // Tier 2 — เริ่มเจอคนจริง
+    mastermind: { min: 40_000,   max: 99_999   },  // Tier 3 — ปลดล็อค Auction + Betting
+    highNoble:  { min: 100_000,  max: Infinity },  // Tier 4 — Full experience + จตุรเทพ AI
+    lastBoss:   { min: 400_000,  max: Infinity },  // ย้ายไป The Arena แล้ว — ห้ามใช้ใน matchmaking แอปหลัก (ยังไม่ลบ กัน import พัง — ค่อยเก็บกวาดตอน refactor Ascendant)
   },
 
   // ─── Token Economy (Daily) ──────────────────────────────────
@@ -49,8 +51,9 @@ export const gameConfig = {
       highNoble:  { pile1: 500, pile2: 1_000,pile3: 1_500,call: 3_000 },
       lastBoss:   { pile1: 1_000,pile2: 2_000,pile3: 3_000,call: 6_000 },
     },
-    rake:        0.05,  // 5% หักจากทุก Pot ปกติ
-    rakeJackpot: 0.10,  // 10% หักเฉพาะ Triple Sweep round
+    // Patch (2026-07-17): ยกเลิก rakeJackpot 10% ของ Triple Sweep — ใช้ rake อัตราเดียว 5% ทุกกรณี
+    // ทุก Tier (ดู gameLoop.ts/highNobleMultiEngine.ts ที่คำนวณ jackpotRake)
+    rake:        0.05,  // 5% หักจากทุก Pot ทุกกรณี รวม Triple Sweep
 
     // S1/S2: 3 Human + 1 AI
     s1s2: {
@@ -77,7 +80,7 @@ export const gameConfig = {
   // ค่านี้แทนที่ baseline 5000 เดิมที่ hardcode กระจายอยู่ทั่ว gameLoop.ts/highNobleMultiEngine.ts ทั้งหมด
   buyIn: {
     initiate:   500,
-    adept:      1_000,
+    adept:      2_000,  // Buy-in Spec v1.1 — แก้บั๊ก game balance: worst case จริง 1,500 > buy-in เดิม 1,000
     mastermind: 9_000,
     highNoble:  30_000,
     lastBoss:   60_000,  // reserve — Arena Phase 3
@@ -325,6 +328,21 @@ export const gameConfig = {
     notWinNonNegative:   2,   // ไม่ชนะ แต่ token สุทธิของเกมนั้นไม่ติดลบ
     negative:            0,   // token สุทธิติดลบ — ไม่มี PS ติดลบใน Main App
     monarchMultiplier:   2,   // กฎล็อค: Monarch = x2 ของค่าชนะปกติในระดับตนเสมอ
+  },
+
+  // ─── XP Rewards (End-of-Match Stats Recording MVP) ────────────
+  // completion = จบเกม (ไม่ว่าแพ้ชนะ) / win = ชนะ match (แทนที่ completion ไม่บวกซ้อน) /
+  // tripleSweepBonus = บวกเพิ่มถ้าชนะทั้ง 3 กอง (Triple Sweep) ในรอบใดก็ได้ของแมตช์นี้
+  xpRewards: {
+    initiate:   { completion: 5,  win: 15, tripleSweepBonus: 20 },
+    adept:      { completion: 10, win: 25, tripleSweepBonus: 35 },
+    mastermind: { completion: 15, win: 40, tripleSweepBonus: 60 },
+    highNoble:  { completion: 20, win: 60, tripleSweepBonus: 90 },
+    // D1 Hook: games_played กลายเป็น 1 (เกมแรกของผู้เล่นใหม่) — บวกครั้งเดียว
+    d1Hook: { xpBonus: 50, streakShieldBonus: 1 },
+    // เงื่อนไข XP ขั้นต่ำสำหรับปลดล็อก Ascendant — กันผู้เล่นซื้อ token อย่างเดียว
+    // ยังไม่มีใครเรียกใช้ จะถูกใช้ตอน implement Ascendant Trigger
+    ascendantXpRequirement: 12000,
   },
 
   // ─── Monarch Identity (Canon Locked v1.2) ──────────────────────

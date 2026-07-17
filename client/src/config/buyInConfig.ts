@@ -6,7 +6,7 @@ export type BuyInTier = 'initiate' | 'adept' | 'mastermind' | 'highNoble' | 'las
 
 export const BUY_IN: Record<BuyInTier, number> = {
   initiate:   500,
-  adept:      1_000,
+  adept:      2_000,  // Buy-in Spec v1.1 — sync กับ server gameConfig.ts (แก้บั๊ก game balance)
   mastermind: 9_000,
   highNoble:  30_000,
   lastBoss:   60_000,

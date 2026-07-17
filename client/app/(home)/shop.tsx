@@ -4,25 +4,9 @@
 
 import { router } from 'expo-router'
 import ShopScreen from '../../src/components/shop/ShopScreen'
-import { useUserStore } from '../../src/store/userStore'
 
 export default function ShopRoute() {
-  // ก่อนหน้านี้ ShopScreen ไม่เคยได้รับ prop เลยแม้แต่ตัวเดียว (ShopScreenProps ทุกตัวเป็น required)
-  // — ผูกเฉพาะ state ที่มีอยู่แล้ว (isVip/tokenBalance) ส่วนที่เหลือ (catalog จริง/IAP flow) ยังไม่มีระบบหลังบ้าน
-  // จึง stub ไว้ก่อนขั้นต่ำสุด ไม่ใช่ scope ของงานนี้
-  const isVip = useUserStore(s => s.isVIP)
-  const tokenBalance = useUserStore(s => s.tokenBalance)
-
-  return (
-    <ShopScreen
-      isVip={isVip}
-      tokenBalance={tokenBalance}
-      items={[]}
-      onBuy={() => {}}
-      onOpenLootBox={() => {}}
-      onOpenTokenPack={() => {}}
-      onUpgradeVip={() => {}}
-      onClose={() => router.back()}
-    />
-  )
+  // ShopScreen รุ่นใหม่ดึง vip_status/token_balance เองจาก authStore (เหมือน profile.tsx)
+  // เพราะ userStore เดิมมีแค่ isVIP boolean เดี่ยว ไม่พอแยก VIP / VIP PRO ตาม canon — ดู Shop rewrite audit
+  return <ShopScreen onClose={() => router.back()} />
 }

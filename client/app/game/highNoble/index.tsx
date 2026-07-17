@@ -1426,8 +1426,8 @@ const GameTableLive: React.FC = () => {
     const raw        = tokenDeltas[PLAYER_ID] ?? 0
     const isWin      = raw > 0
     const isTriple   = pileWinners[1] === PLAYER_ID && pileWinners[2] === PLAYER_ID && pileWinners[3] === PLAYER_ID
-    // Triple Sweep: Rake 10% (ตาม CoreRules) / ชนะปกติ: Rake 5%
-    const rakeRate   = isTriple ? 0.10 : 0.05
+    // Patch (2026-07-17): ยกเลิก Rake 10% ของ Triple Sweep — ใช้ Rake 5% อัตราเดียวทุกกรณีแล้ว
+    const rakeRate   = 0.05
     const rake       = isWin ? Math.round(raw * rakeRate) : 0
     const netToken   = isWin ? raw - rake : raw
     const potWin     = isTriple ? Math.round(raw / 2) : raw  // ประมาณ
@@ -1494,7 +1494,8 @@ const GameTableLive: React.FC = () => {
                 const raw   = tokenDeltas[PLAYER_ID] ?? 0
                 const isWin = raw > 0
                 const isTriple = pileWinners[1] === PLAYER_ID && pileWinners[2] === PLAYER_ID && pileWinners[3] === PLAYER_ID
-                const rakeRate = isTriple ? 0.10 : 0.05
+                // Patch (2026-07-17): ยกเลิก Rake 10% ของ Triple Sweep — ใช้ Rake 5% อัตราเดียวทุกกรณีแล้ว
+                const rakeRate = 0.05
                 const rake  = isWin ? Math.round(raw * rakeRate) : 0
                 const net   = isWin ? raw - rake : raw
                 return (
@@ -1642,7 +1643,7 @@ const GameTableLive: React.FC = () => {
               <Text style={s.discardTitle}>🔮 BLIND AUCTION</Text>
               {phase === 'blind_auction' && (
                 <Text style={[s.discardSub, { color: auctionTimeLeft <= 2 ? '#f87171' : '#FFD76A' }]}>
-                  เลือกราคาภายใน {auctionTimeLeft}s
+                  Choose a price within {auctionTimeLeft}s
                 </Text>
               )}
               <View style={{ flexDirection: 'row', gap: 28, marginTop: 16 }}>
@@ -1699,12 +1700,12 @@ const GameTableLive: React.FC = () => {
                           {result?.winnerId ? (
                             <>
                               <Text style={{ fontSize: 11, color: isWinner ? '#8DFFB5' : '#FF6B6B', fontWeight: '700' }}>
-                                {isWinner ? '🏆 คุณชนะ!' : `${winAI?.emoji ?? '🤖'} ${winAI?.name ?? 'AI'} ชนะ`}
+                                {isWinner ? '🏆 You win!' : `${winAI?.emoji ?? '🤖'} ${winAI?.name ?? 'AI'} wins`}
                               </Text>
                               <Text style={{ fontSize: 10, color: '#a89060' }}>-{result.amount} tokens</Text>
                             </>
                           ) : (
-                            <Text style={{ fontSize: 11, color: '#a89060' }}>ไม่มีใครประมูล</Text>
+                            <Text style={{ fontSize: 11, color: '#a89060' }}>No one bid</Text>
                           )}
                         </View>
                       )}
@@ -1763,7 +1764,7 @@ const GameTableLive: React.FC = () => {
                     {gfFinalResult.burned ? (
                       <>
                         <Text style={{ fontSize: 24, color: '#f87171', fontWeight: '900', letterSpacing: 2 }}>🔥 POT BURNED</Text>
-                        <Text style={{ fontSize: 12, color: '#a89060', marginTop: 8 }}>ทุกคน Foul — Pot {gfFinalResult.pile3Pot} ถูกเบิร์น</Text>
+                        <Text style={{ fontSize: 12, color: '#a89060', marginTop: 8 }}>Everyone fouled — Pot {gfFinalResult.pile3Pot} burned</Text>
                       </>
                     ) : gfFinalResult.winnerId === PLAYER_ID ? (
                       <>
@@ -1829,7 +1830,7 @@ const GameTableLive: React.FC = () => {
                       <Text style={{ color: '#FFC857', fontSize: 14, fontWeight: '900', letterSpacing: 1 }}>
                         🎰 JACKPOT! {winnerName(gfFinalResult.jackpotWinner)}
                       </Text>
-                      <Text style={{ color: '#a89060', fontSize: 10, marginTop: 2 }}>คว้าทั้ง 3 กอง!</Text>
+                      <Text style={{ color: '#a89060', fontSize: 10, marginTop: 2 }}>Swept all 3 piles!</Text>
                     </View>
                   )}
                   {/* Your delta */}
@@ -1865,9 +1866,9 @@ const GameTableLive: React.FC = () => {
           {/* ── DISCARD OVERLAY ── */}
           {showDiscard && !isHNDiscard && (
             <View style={s.overlay}>
-              <Text style={s.discardTitle}>เลือกไพ่ที่จะทิ้ง (เหลือ 3 ใบ)</Text>
+              <Text style={s.discardTitle}>Choose cards to discard (keep 3)</Text>
               <Text style={[s.discardSub, { color: discardTimeLeft <= 3 ? '#f87171' : '#FFD76A' }]}>
-                {discardSelected.length}/{discardHandKeys.length - 3} ใบที่เลือก — เหลือ {discardTimeLeft}s
+                {discardSelected.length}/{discardHandKeys.length - 3} selected — {discardTimeLeft}s left
               </Text>
               {/* Patch: โชว์ Community Pile3 ประกอบการตัดสินใจ (บังคับรวมในการประเมิน Hand เสมอ) */}
               <View style={{ alignItems: 'center', marginTop: 6, marginBottom: 4 }}>
@@ -1882,8 +1883,8 @@ const GameTableLive: React.FC = () => {
               </View>
               {/* Patch: แยก 2 แถว — ไม่แนะนำให้ทิ้ง (เก็บ) / แนะนำให้ทิ้ง */}
               {([
-                { label: 'ไม่แนะนำให้ทิ้ง', filterFn: (key: string) => discardSuggested.includes(key) },
-                { label: 'แนะนำให้ทิ้ง', filterFn: (key: string) => !discardSuggested.includes(key) },
+                { label: 'Not recommended to discard', filterFn: (key: string) => discardSuggested.includes(key) },
+                { label: 'Recommended to discard', filterFn: (key: string) => !discardSuggested.includes(key) },
               ]).map((group, gi) => {
                 const items = discardHandKeys
                   .map((key, idx) => ({ key, idx }))
@@ -1929,14 +1930,14 @@ const GameTableLive: React.FC = () => {
               && discardSelByPile.pile3.length === discardNeed.pile3
             return (
               <View style={s.overlay}>
-                <Text style={s.discardTitle}>เลือกไพ่ที่จะทิ้ง (ให้เหลือกองละ 3 ใบ)</Text>
+                <Text style={s.discardTitle}>Choose cards to discard (keep 3 per pile)</Text>
                 <Text style={[s.discardSub, { color: discardTimeLeft <= 3 ? '#f87171' : '#FFD76A' }]}>
-                  เหลือ {discardTimeLeft}s
+                  {discardTimeLeft}s left
                 </Text>
                 {(['pile1', 'pile2', 'pile3'] as const).map((pile, pIdx) => (
                   <View key={pile} style={{ alignItems: 'center', marginBottom: 10 }}>
                     <Text style={[s.pileLabel, { marginBottom: 4, color: discardSelByPile[pile].length === discardNeed[pile] ? '#8DFFB5' : '#FFC857' }]}>
-                      PILE {pIdx + 1} — เลือกทิ้ง {discardSelByPile[pile].length}/{discardNeed[pile]}
+                      PILE {pIdx + 1} — Discard {discardSelByPile[pile].length}/{discardNeed[pile]}
                     </Text>
                     <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
                       {discardPiles[pile].map((key, idx) => {
@@ -2176,7 +2177,7 @@ const GameTableLive: React.FC = () => {
           <Text style={{ fontSize: 14, color: '#FFB74D', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>⚡ TRIPLE SWEEP JACKPOT</Text>
           <Row label="Winner Payout" value={`${t.jackpot.payout} tokens`} valueColor="#FFD76A" />
           <Row label="Loser Penalty" value={`${t.jackpot.penalty} tokens each`} valueColor="#FFB74D" />
-          <Row label="Rake" value="10% (burn)" valueColor="#FFB74D" />
+          <Row label="Rake" value="5% (burn)" valueColor="#FFB74D" />
 
           {/* Features */}
           <Text style={{ fontSize: 14, color: '#8DFFB5', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>FEATURES</Text>
@@ -2193,7 +2194,7 @@ const GameTableLive: React.FC = () => {
     </ScrollView>
 
     <TouchableOpacity style={[s.continueBtn, { marginTop: 12, backgroundColor: '#102218', borderColor: '#FFD76A' }]} onPress={() => setShowTierInfo(false)}>
-      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>ปิด</Text>
+      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>Close</Text>
     </TouchableOpacity>
   </View>
 )}
@@ -2232,7 +2233,7 @@ const GameTableLive: React.FC = () => {
     <View style={{ height: 16 }} />
     </ScrollView>
     <TouchableOpacity style={[s.continueBtn, { marginTop: 12, backgroundColor: '#102218', borderColor: '#FFD76A' }]} onPress={() => setShowRankTable(false)}>
-      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>ปิด</Text>
+      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>Close</Text>
     </TouchableOpacity>
   </View>
 )}
@@ -2414,7 +2415,7 @@ const GameTableLive: React.FC = () => {
             { opacity: (phase === 'countdown' || phase === 'showdown' || phase === 'result' || phase === 'grand_finale' || phase === 'grand_finale_done') ? 0 : 1 },
           ]}>
 
-            <Text style={[s.swapHint, { opacity: selected ? 1 : 0 }]}>กดไพ่ใบที่ต้องการสลับตำแหน่ง</Text>
+            <Text style={[s.swapHint, { opacity: selected ? 1 : 0 }]}>Tap the cards you want to swap</Text>
             {hasFoul[PLAYER_ID] && <Text style={s.foulText}>⚠️ FOUL{foulReasons[PLAYER_ID] ? ` — ${foulReasons[PLAYER_ID]}` : ''}</Text>}
 
 
@@ -2496,7 +2497,7 @@ const GameTableLive: React.FC = () => {
           {/* ACTION BAR */}
           {phase === 'fog_of_war' && (
             <View style={{ alignItems: 'center', paddingVertical: 10 }}>
-              <Text style={{ color: '#8DFFB5', fontSize: 12, fontWeight: '700' }}>🌫 Fog of War — เหลือ Pile 3 ในมือคุณเท่านั้นที่เห็น</Text>
+              <Text style={{ color: '#8DFFB5', fontSize: 12, fontWeight: '700' }}>🌫 Fog of War — Only your Pile 3 is visible</Text>
             </View>
           )}
           {/* ═════════════════════════════════════════════════════════ */}

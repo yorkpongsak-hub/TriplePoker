@@ -1,6 +1,10 @@
 -- TriplePoker — Add missing users.streak_count column
 -- รันไฟล์นี้บน Supabase SQL Editor (dashboard) เอง — ห้าม execute อัตโนมัติ
 --
+-- Patch (2026-07-17): ยืนยันแล้วว่าคอลัมน์นี้ (รวมถึง last_played_date, streak_shields
+-- ที่ matchStatsService.ts ใช้ด้วย) มีอยู่จริงบน live DB แล้ว — ไฟล์นี้น่าจะรันไปแล้วในอดีต
+-- (หรือเพิ่มผ่าน dashboard ตรงๆ) เก็บไว้เป็นประวัติ ไม่ต้องรันซ้ำอีก (มี IF NOT EXISTS กันไว้แล้ว)
+--
 -- สาเหตุ: migrations/001_initial_schema.sql define streak_count ไว้ แต่ live
 -- schema จริงบน Supabase ไม่มีคอลัมน์นี้อยู่จริง (ยืนยันจาก error ตรงๆ ตอน query:
 -- "column users.streak_count does not exist", Postgres code 42703) — เป็น

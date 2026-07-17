@@ -24,14 +24,15 @@ interface UserState {
 }
 
 interface UserStore extends UserState {
-  setUser:          (user: Partial<UserState>) => void;
-  setAuthToken:     (token: string | null) => void;
-  updateBalance:    (delta: number) => void;
-  setDebt:          (amount: number) => void;
-  clearDebt:        () => void;
-  logout:           () => void;
-  setSkins:         (unlocked: number[], active: number) => void;
-  setActiveSkin:    (skinId: number) => void;
+  setUser:            (user: Partial<UserState>) => void;
+  setAuthToken:       (token: string | null) => void;
+  updateBalance:      (delta: number) => void;
+  updateTokenBalance: (newBalance: number) => void;
+  setDebt:            (amount: number) => void;
+  clearDebt:          () => void;
+  logout:             () => void;
+  setSkins:           (unlocked: number[], active: number) => void;
+  setActiveSkin:      (skinId: number) => void;
 }
 
 const initialUser: UserState = {
@@ -75,6 +76,11 @@ export const useUserStore = create<UserStore>((set) => ({
         tier: getTierByToken(newBalance),
       };
     }),
+
+  // ตั้งค่า token_balance ตรงจากยอดที่ server ส่งมา (หลัง settle/refund เขียน DB สำเร็จแล้ว)
+  // ห้ามใช้คำนวณเองฝั่ง client — ใช้ค่าตรงจาก server เท่านั้น
+  updateTokenBalance: (newBalance) =>
+    set({ tokenBalance: newBalance, tier: getTierByToken(newBalance) }),
 
   setDebt: (amount) =>
     set({ hasDebt: amount > 0, debtAmount: Math.max(0, amount) }),
