@@ -180,6 +180,48 @@ export async function findOrCreateRoom(tier: Tier): Promise<GameRoom> {
   return open ?? (await createRoom(tier))
 }
 
+// ─── Distributed lock (Redis SET NX EX) ─────────────────────────
+// กัน race condition: findOrCreateRoom (check-then-act) และ joinRoom (read-modify-write)
+// ไม่ atomic ทั้งคู่ — ถ้า 2 request ชนกันในช่วงเสี้ยววินาที (คนจริงกดคิวพร้อมกัน) อาจได้ห้องแยกกัน
+// หรือที่นั่งถูกเขียนทับเงียบๆ (เจอจริงจากเทส 3-socket เข้า highNoble พร้อมกัน — TestP1/TestP3 ได้ห้อง
+// เดียวกัน แต่ TestP2 หลุดไปอีกห้อง) — ล็อกให้ทำทีละคำขอต่อ lockKey เดียวกันแทน
+async function acquireLock(lockKey: string, ttlSeconds = 5): Promise<boolean> {
+  const result = await redis.set(lockKey, '1', { nx: true, ex: ttlSeconds })
+  return result === 'OK'
+}
+
+async function releaseLock(lockKey: string): Promise<void> {
+  await redis.del(lockKey)
+}
+
+async function withLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
+  const maxWaitMs = 4000
+  const retryDelayMs = 80
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < maxWaitMs) {
+    if (await acquireLock(`lock:${lockKey}`)) {
+      try {
+        return await fn()
+      } finally {
+        await releaseLock(`lock:${lockKey}`)
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, retryDelayMs))
+  }
+  throw new Error('ระบบกำลังมีคนเข้าคิวเยอะ กรุณาลองใหม่อีกครั้ง')
+}
+
+// ─── ใช้แทน findOrCreateRoom() + joinRoom() แยกกันสำหรับ auto-match ───
+// ล็อกต่อ tier ตลอดช่วง find/create + จองที่นั่ง กันสองคำขอชนกันได้ห้องคนละใบ หรือแย่งที่นั่งเดียวกัน
+export async function findOrCreateRoomAndJoin(
+  tier: Tier, userId: string, userName: string,
+): Promise<JoinResult> {
+  return withLock(`matchmaking:${tier}`, async () => {
+    const room = await findOrCreateRoom(tier)
+    return joinRoom(room.roomId, userId, userName)
+  })
+}
+
 // ─── สร้างห้อง Private — host เข้าที่นั่ง Human แรกทันที ────────
 export async function createPrivateRoom(
   tier: Tier,
@@ -250,6 +292,14 @@ export async function joinRoom(
 
   await saveRoom(room)
   return { ok: true, seatIndex: seatIdx, room }
+}
+
+// ล็อกต่อ roomId เดียว (ไม่ล็อกทั้ง tier) — ใช้กับ room_join_private ที่ผู้เล่นรู้ roomId
+// อยู่แล้ว (เข้าห้องเฉพาะที่แชร์ลิงก์/PIN มา) กันแค่ 2 คนแย่งที่นั่งเดียวกันในห้องเดียวกันพร้อมกัน
+export async function joinRoomLocked(
+  roomId: string, userId: string, userName: string, pin?: string,
+): Promise<JoinResult> {
+  return withLock(`room:${roomId}`, () => joinRoom(roomId, userId, userName, pin))
 }
 
 // ─── AI-fill ที่นั่งที่เหลือเมื่อ timeout (Mastermind/HighNoble เท่านั้นในทางปฏิบัติ — Adept เต็มก่อนถึง timeout เสมออยู่แล้ว) ──

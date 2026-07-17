@@ -17,13 +17,12 @@ import {
   submitHNDiscard, submitHNGrandFinaleAction, replaceHNPlayerWithAI, resendHNRoundStartToPlayer,
   getHNMatchState,
 } from "../game/highNobleMultiEngine";
-import { gameConfig, getMechanics, getTierFromToken, type Tier } from "../config/gameConfig";
+import { getTierFromToken } from "../config/gameConfig";
 import { registerLobbySocket } from "./lobbySocket";
-import { supabase } from "../config/supabase";
 import { createTableWithId, setSeat, deleteTable } from "../game/tableRegistry";
 import { createAdeptTable, joinAdeptTable, getTimedOutAdeptTables } from "../game/tableRegistry";
 import {
-  findOrCreateRoom, createPrivateRoom, joinRoom, getRoom as getRoomFromRegistry,
+  findOrCreateRoomAndJoin, createPrivateRoom, joinRoomLocked, getRoom as getRoomFromRegistry,
   fillRemainingWithAI, getTimedOutRooms, markInProgress, finalizeBossSeat,
   getRoomsNeedingTimeoutChoice, markAwaitingTimeoutChoice, extendRoomWait,
   getExpiredExtendedRooms, deleteRoomCompletely, fillWithMinion, humanCount,
@@ -44,227 +43,12 @@ function toCards(keys: string[]) {
   });
 }
 
-// ─── Types ───────────────────────────────────────────────────────
-
-// โครงสร้างไพ่ 1 ใบ
-interface Card {
-  suit: "spades" | "hearts" | "diamonds" | "clubs";
-  rank: number; // 2–14 (14 = Ace)
-}
-
-// การจัดไพ่ 11 ใบลง 3 Pile ของผู้เล่น 1 คน
-interface PlayerArrangement {
-  playerId: string;
-  pile1: Card[]; // 3 ใบ (อ่อนสุด)
-  pile2: Card[]; // 3 ใบ (กลาง)
-  pile3: Card[]; // 5 ใบ (แข็งสุด) — Beginner ใช้ทั้ง 5, Pro+ Discard เหลือ 3
-  isAutoSorted: boolean;
-  foulChecked: boolean; // Client ตรวจแล้ว (Server ตรวจซ้ำที่ Showdown)
-}
-
-// ผลชนะ/แพ้ต่อ Pile
-interface PileResult {
-  pileNumber: 1 | 2 | 3;
-  winnerId: string;        // playerId ที่ชนะ
-  winnerHand: string;      // เช่น "Full House"
-  potAmount: number;       // Token ที่ได้ (หลังหัก Rake แล้ว)
-  hasFoul: boolean;        // มี Foul ใน Pile นี้ไหม
-}
-
-// State ของห้องเกม (เก็บใน Redis)
-interface GameRoom {
-  roomId: string;
-  tier: Tier;
-  players: {
-    id: string;
-    tokenBalance: number;
-    isAI: boolean;
-    isVip: boolean;
-    isReady: boolean;
-    arrangement?: PlayerArrangement;
-  }[];
-  round: number;          // รอบปัจจุบัน (นับตั้งแต่ต้น Match)
-  phase: GamePhase;
-  communityCards: {
-    pile1: Card[];         // Community 2 ใบสำหรับ Pile 1
-    pile2: Card[];         // Community 2 ใบสำหรับ Pile 2
-    pile3: Card[];         // Community 2 ใบสำหรับ Pile 3
-  };
-}
-
-// Phase ทั้งหมดของเกม
-type GamePhase =
-  | "waiting"
-  | "arrangement"
-  | "simultaneous_showdown"  // Beginner เท่านั้น
-  | "pile1_reveal"           // Pro+
-  | "pile2_reveal"           // Pro+
-  | "fog_of_war"             // Pro+
-  | "pre_auction"            // Pro+
-  | "blind_auction"          // Pro+
-  | "discard"                // Pro+
-  | "grand_finale"           // Pro+
-  | "match_end";
-
-// ─── Helper: ดึง GameRoom จาก Redis ─────────────────────────────
-// จริงๆ ต้อง import redis client — stub ไว้เพื่อ Sprint 3
-// Sprint 4 จะ implement เต็มใน gameRoom.ts
-async function getRoom(roomId: string): Promise<GameRoom | null> {
-  // TODO: return await redisClient.get(`room:${roomId}`)
-  return null;
-}
-
-async function saveRoom(room: GameRoom): Promise<void> {
-  // TODO: await redisClient.set(`room:${roomId}`, JSON.stringify(room))
-}
-
 // ─── Multiplayer: track socket -> {userId, roomId} สำหรับ disconnect handling ───
 const socketUserMap = new Map<string, { userId: string; roomId: string; tier: string }>();
-
-// ─── Helper: ตรวจว่าทุกคน Ready แล้วหรือยัง ────────────────────
-function allPlayersReady(room: GameRoom): boolean {
-  return room.players.every((p) => p.isReady);
-}
-
-// ─── Helper: คำนวณ Token ที่ชนะแต่ละ Pile (หลัง Rake) ──────────
-function calcPotAfterRake(tierKey: Tier, pileNumber: 1 | 2 | 3): number {
-  const stakes = gameConfig.tokenPot.tiers[tierKey];
-  const rawStake = pileNumber === 1 ? stakes.pile1 :
-                   pileNumber === 2 ? stakes.pile2 : stakes.pile3;
-  const players = gameConfig.tokenPot.s1s2.potPlayers; // 4 คน (3H + AI)
-  const totalPot = rawStake * players;
-  return Math.floor(totalPot * (1 - gameConfig.tokenPot.rake));
-}
 
 // ============================================================
 // Main Socket Handler — register ที่ server/index.ts
 // ============================================================
-// ============================================================
-// Handler: handleEndOfMatch — ประมวลผลจบ Match + Skin Unlock
-// ============================================================
-async function handleEndOfMatch(
-  io: Server,
-  roomId: string,
-  room: GameRoom,
-  results: PileResult[]
-): Promise<void> {
-  // Step 1: คำนวณ Token deltas
-  const tokenDeltas = calcTokenDeltas(results, room);
-
-  // Step 2: ตรวจสอบ skin unlock ต่อแต่ละ Human player
-  for (const player of room.players) {
-    if (player.isAI) continue; // ข้าม AI
-    
-    const tokenDelta = tokenDeltas[player.id] ?? 0;
-    const isWin = tokenDelta > 0;
-
-    if (!isWin) continue;
-
-    try {
-      const { data: userSkins } = await supabase
-        .from('user_table_skins')
-        .select('*')
-        .eq('user_id', player.id)
-        .single();
-
-      if (!userSkins) {
-        console.warn(`[SKIN] No skin record for ${player.id}`);
-        continue;
-      }
-
-      let unlockedNewSkin = false;
-      let newActiveSkin = userSkins.active_skin;
-
-      // Tier B (Adept) → unlock Skin #2
-      if (room.tier === 'adept' && !userSkins.skin_unlock_b) {
-        const { error } = await supabase
-          .from('user_table_skins')
-          .update({
-            unlocked_skins: [1, 2],
-            active_skin: 2,
-            skin_unlock_b: true,
-            updated_at: new Date().toISOString()
-          })
-          .eq('user_id', player.id);
-
-        if (!error) {
-          unlockedNewSkin = true;
-          newActiveSkin = 2;
-          console.log(`[SKIN] ${player.id} unlocked Skin #2 (Adept)`);
-        }
-      }
-
-      // Tier A (Mastermind) → unlock Skin #3
-      if (room.tier === 'mastermind' && !userSkins.skin_unlock_a) {
-        const { error } = await supabase
-          .from('user_table_skins')
-          .update({
-            unlocked_skins: [1, 2, 3],
-            active_skin: 3,
-            skin_unlock_a: true,
-            updated_at: new Date().toISOString()
-          })
-          .eq('user_id', player.id);
-
-        if (!error) {
-          unlockedNewSkin = true;
-          newActiveSkin = 3;
-          console.log(`[SKIN] ${player.id} unlocked Skin #3 (Mastermind)`);
-        }
-      }
-
-      // Tier A+ (High Noble) → unlock Skin #4
-      if (room.tier === 'highNoble' && !userSkins.skin_unlock_a_plus) {
-        const { error } = await supabase
-          .from('user_table_skins')
-          .update({
-            unlocked_skins: [1, 2, 3, 4],
-            active_skin: 4,
-            skin_unlock_a_plus: true,
-            updated_at: new Date().toISOString()
-          })
-          .eq('user_id', player.id);
-
-        if (!error) {
-          unlockedNewSkin = true;
-          newActiveSkin = 4;
-          console.log(`[SKIN] ${player.id} unlocked Skin #4 (High Noble)`);
-        }
-      }
-
-      if (unlockedNewSkin) {
-        const skinNames: Record<number, string> = {
-          1: 'Marble Luxury',
-          2: 'Ancient Stone Castle',
-          3: 'Cosmic Mystical',
-          4: 'Bamboo Rice Field'
-        };
-
-        io.to(roomId).emit('skin_unlocked', {
-          playerId: player.id,
-          skinId: newActiveSkin,
-          skinName: skinNames[newActiveSkin],
-          tier: room.tier,
-          message: `🎉 ยินดีด้วย! คุณปลดล็อค Skin: ${skinNames[newActiveSkin]}`
-        });
-      }
-    } catch (err) {
-      console.error(`[SKIN] Error processing skin unlock for ${player.id}:`, err);
-    }
-  }
-
-  io.to(roomId).emit('match_end', {
-    roomId,
-    tier: room.tier,
-    finalScores: tokenDeltas,
-    pileResults: results,
-    showAd: room.players.every((p) => !p.isVip),
-    timestamp: Date.now(),
-  });
-
-  await saveRoom(room);
-}
-
 
 export function registerGameSocket(io: Server): void {
 
@@ -412,74 +196,6 @@ export function registerGameSocket(io: Server): void {
     // });
 
     // ──────────────────────────────────────────────────────────
-    // EVENT: arrangement_ready
-    // Client → Server: ผู้เล่นกด Ready ส่งการจัดไพ่มา
-    // ──────────────────────────────────────────────────────────
-    socket.on("arrangement_ready", async (data: {
-      roomId: string;
-      playerId: string;
-      arrangement: PlayerArrangement;
-    }) => {
-      const { roomId, playerId, arrangement } = data;
-      const room = await getRoom(roomId);
-      if (!room) return;
-
-      const mechanics = getMechanics(room.tier);
-
-      // อัปเดต arrangement และ isReady ของผู้เล่นคนนี้
-      const player = room.players.find((p) => p.id === playerId);
-      if (player) {
-        player.arrangement = arrangement;
-        player.isReady = true;
-      }
-      await saveRoom(room);
-
-      // แจ้ง Client คนอื่นว่าคนนี้ Ready แล้ว
-      io.to(roomId).emit("player_ready_ack", { playerId });
-
-      // ตรวจว่าทุกคน (Human + AI) Ready ครบหรือยัง
-      if (!allPlayersReady(room)) return;
-
-      // ─── แตกทางตาม Tier ────────────────────────────────────
-      if (mechanics.showdownStyle === "simultaneous") {
-        // ════ BEGINNER FLOW ════════════════════════════════════
-        // ข้ามทุก phase → Simultaneous Showdown ทันที
-        room.phase = "simultaneous_showdown";
-        await saveRoom(room);
-
-        io.to(roomId).emit("simultaneous_showdown", {
-          roomId,
-          tier: room.tier,
-          countdownSeconds: 3, // นับถอยหลัง 3-2-1 ก่อนหงาย
-          message: "All piles reveal at once!",
-          // Server ส่ง payload ขั้นต่ำ — ผลแท้จริงจะมาใน showdown_result
-          // หลัง Client แสดง animation 3-2-1 ครบ → emit showdown_result
-        });
-
-        // หลัง countdown → Server resolve ทุก Pile พร้อมกัน → emit showdown_result
-        // (ใน production จะมี setTimeout หรือ await ตาม countdown)
-        // สำหรับ Sprint 3: emit ทันที พร้อมกำหนด delay ฝั่ง Client
-        const results = await resolveAllPilesSimultaneous(room);
-
-        await handleEndOfMatch(io, roomId, room, results);
-
-      } else {
-        // ════ PRO+ FLOW ════════════════════════════════════════
-        // เริ่มด้วย Pile 1 Resolution → sequential ต่อใน Sprint 4
-        room.phase = "pile1_reveal";
-        await saveRoom(room);
-
-        io.to(roomId).emit("pile_1_reveal_start", {
-          roomId,
-          tier: room.tier,
-          revealDelayMs: room.tier === "mastermind" ? 6_000 : 5_000,
-        });
-        // Pile 2, Fog of War, Auction, Discard, Grand Finale
-        // → implement ใน Sprint 4 ใน pileResolution.ts + blindAuction.ts
-      }
-    });
-
-    // ──────────────────────────────────────────────────────────
     // EVENT: arrangement_timeout
     // Server → Client: หมดเวลา → Auto-sort ทำงาน
     // (emit จาก timer ใน gameRoom.ts ไม่ใช่ listener)
@@ -554,16 +270,17 @@ export function registerGameSocket(io: Server): void {
       const soloState = getMatchState(roomId);
       const multiState = getMultiMatchState(roomId);
       const hnState = getHNMatchState(roomId);
+      let newTokenBalance: number | null = null;
       if (soloState?.escrowId) {
-        await settleEscrow(soloState.humanPlayerId, soloState.escrowId, soloState.tokenBalance[soloState.humanPlayerId] ?? soloState.buyInAmount);
+        newTokenBalance = await settleEscrow(soloState.humanPlayerId, soloState.escrowId, soloState.tokenBalance[soloState.humanPlayerId] ?? soloState.buyInAmount);
         deleteTable(roomId);
       } else if (multiState) {
         const escrowId = multiState.escrowIds[playerId];
-        if (escrowId) await settleEscrow(playerId, escrowId, multiState.tokenBalance[playerId] ?? multiState.buyInAmount);
+        if (escrowId) newTokenBalance = await settleEscrow(playerId, escrowId, multiState.tokenBalance[playerId] ?? multiState.buyInAmount);
         await deleteRoomCompletely(roomId);
       } else if (hnState) {
         const escrowId = hnState.escrowIds[playerId];
-        if (escrowId) await settleEscrow(playerId, escrowId, hnState.tokenBalance[playerId] ?? hnState.buyInAmount);
+        if (escrowId) newTokenBalance = await settleEscrow(playerId, escrowId, hnState.tokenBalance[playerId] ?? hnState.buyInAmount);
         await deleteRoomCompletely(roomId);
       } else {
         // Patch 04 เดิม: ไม่พบ match state ที่ยัง active (เช่น ยังไม่เริ่มแมตช์จริง) — ลบ table แบบเดิม
@@ -571,10 +288,12 @@ export function registerGameSocket(io: Server): void {
       }
 
       // ถือว่า Leave = ทุกคนกลับ Lobby ตาม spec (ดู CoreRules 1.8)
+      // newTokenBalance เป็นของ playerId ที่ leave เท่านั้น — client อื่นในห้องต้องเช็ค leavingPlayerId ตรงกับตัวเองก่อนใช้ค่านี้
       io.to(roomId).emit("match_end", {
         roomId,
         reason: "player_left",
         leavingPlayerId: playerId,
+        newTokenBalance,
         timestamp: Date.now(),
       });
     });
@@ -708,8 +427,7 @@ export function registerGameSocket(io: Server): void {
     }) => {
       const { tier, userId, userName } = data;
       try {
-        const room = await findOrCreateRoom(tier);
-        const result = await joinRoom(room.roomId, userId, userName);
+        const result = await findOrCreateRoomAndJoin(tier, userId, userName);
         if (!result.ok || !result.room) {
           socket.emit("room_error", { message: "เข้าห้องไม่สำเร็จ กรุณาลองใหม่" });
           return;
@@ -757,7 +475,7 @@ export function registerGameSocket(io: Server): void {
       roomId: string; userId: string; userName: string; pin?: string; tier?: RoomTier;
     }) => {
       const { roomId, userId, userName, pin, tier } = data;
-      const result = await joinRoom(roomId, userId, userName, pin);
+      const result = await joinRoomLocked(roomId, userId, userName, pin);
       socket.emit("room_join_result", result);
       if (result.ok && result.room) {
         socket.join(roomId);
@@ -924,47 +642,4 @@ export function registerGameSocket(io: Server): void {
       }
     });
   });
-}
-
-// ============================================================
-// Internal Resolvers (Stub — Sprint 3)
-// จะ implement เต็มใน Sprint 4 ใน pileResolution.ts
-// ============================================================
-
-// resolve ทุก Pile พร้อมกัน (Beginner)
-// Sprint 4 จะ import จาก pileResolution.ts แทน
-async function resolveAllPilesSimultaneous(room: GameRoom): Promise<PileResult[]> {
-  // TODO Sprint 4: เรียก handEvaluator.ts + foulChecker.ts → คืน PileResult[]
-  // สำหรับ Sprint 3: return stub เพื่อให้ socket flow compile ผ่าน
-  return [
-    { pileNumber: 1, winnerId: "", winnerHand: "", potAmount: calcPotAfterRake(room.tier, 1), hasFoul: false },
-    { pileNumber: 2, winnerId: "", winnerHand: "", potAmount: calcPotAfterRake(room.tier, 2), hasFoul: false },
-    { pileNumber: 3, winnerId: "", winnerHand: "", potAmount: calcPotAfterRake(room.tier, 3), hasFoul: false },
-  ];
-}
-
-// คำนวณ +/- Token ต่อผู้เล่นจากผล Pile ทั้งหมด
-function calcTokenDeltas(
-  results: PileResult[],
-  room: GameRoom
-): Record<string, number> {
-  const deltas: Record<string, number> = {};
-  room.players.forEach((p) => (deltas[p.id] = 0));
-
-  for (const result of results) {
-    if (!result.hasFoul && result.winnerId) {
-      deltas[result.winnerId] = (deltas[result.winnerId] ?? 0) + result.potAmount;
-
-      // หัก Ante จากทุกคน (จ่ายไปแล้วตอนต้น Hand — บันทึกการเปลี่ยนแปลงสุทธิ)
-      const stakes = gameConfig.tokenPot.tiers[room.tier];
-      const ante = result.pileNumber === 1 ? stakes.pile1 :
-                   result.pileNumber === 2 ? stakes.pile2 : stakes.pile3;
-      room.players.forEach((p) => {
-        if (p.id !== result.winnerId) {
-          deltas[p.id] = (deltas[p.id] ?? 0) - ante;
-        }
-      });
-    }
-  }
-  return deltas;
 }
