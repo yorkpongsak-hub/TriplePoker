@@ -1,6 +1,7 @@
 // TokenPackage.tsx
 // Token Package — IAP purchase flow (เงินจริง THB → Token)
-// ทุกคนซื้อได้ (Free & VIP) — ตาม Retention Spec
+// ทุกคนซื้อได้ (Free & VIP)
+// Patch (2026-07-17): ลบการอ้างอิง "Retention Spec" ออก — ค้นทั้ง docs/ แล้วไม่พบไฟล์เอกสารนี้อยู่จริง
 // 5 แพ็กเกจ: Starter / Value / Pro / Elite / Founder's Pack
 // ใช้กับ RevenueCat (Sprint 7) — Sprint 6 นี้สร้าง UI shell ไว้ก่อน
 

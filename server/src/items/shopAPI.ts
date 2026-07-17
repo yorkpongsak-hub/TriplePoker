@@ -2,7 +2,8 @@
 // Shop API — ซื้อสินค้า / เปิด Loot Box / ดู inventory
 // ใช้ vipGuard.ts ตรวจสิทธิ์ก่อน allow purchase
 // ใช้ lootBox.ts สำหรับ randomization
-// Ref: Retention Spec v1.5 §5.0 — VIP Purchase Rules
+// Patch (2026-07-17): ลบการอ้างอิง "Retention Spec v1.5 §5.0" ออก — ค้นทั้ง docs/ แล้วไม่พบ
+// ไฟล์เอกสารนี้อยู่จริง ราคา/กติกา VIP Purchase ด้านล่างคือ canon ปัจจุบันโดยตรง
 
 import { supabase } from '../config/supabase'
 import { assertVip, isVipOnlyCategory } from '../middleware/vipGuard'
