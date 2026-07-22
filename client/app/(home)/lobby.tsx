@@ -51,6 +51,13 @@ const TIER_ROWS: Tier[][] = [
   ['demo'],
 ];
 
+// LobbyMatchmaking_Spec_v1_1 — M:SS format สำหรับ countdown ของ waiting_2nd stage (2 นาที)
+const formatMMSS = (totalSeconds: number): string => {
+  const m = Math.floor(totalSeconds / 60);
+  const sec = totalSeconds % 60;
+  return `${m}:${sec.toString().padStart(2, '0')}`;
+};
+
 export default function LobbyScreen() {
   useBgm(); // LobbyMatchmaking_Spec_v1_0 §2 — BGM เล่นต่อเนื่องข้าม Profile/Shop/Lobby/Hall of Fame
   const [selected, setSelected] = useState<Selection | null>(null);
@@ -70,12 +77,20 @@ export default function LobbyScreen() {
   const [mmTimeoutAt, setMmTimeoutAt] = useState<number | null>(null);
   const [mmSecondsLeft, setMmSecondsLeft] = useState(0);
   const [mmRoomId, setMmRoomId] = useState<string | null>(null);
+  // LobbyMatchmaking_Spec_v1_1 — stage ของ 2-stage wait timer ใหม่ (Adept/HighNoble ทั้งคู่) ใช้เลือก
+  // ข้อความ countdown ที่ถูกต้อง (waiting_2nd = รอ 2 นาทีให้คนที่ 2, waiting_3rd = รอ 15 วิให้คนที่ 3)
+  const [mmWaitStage, setMmWaitStage] = useState<'waiting_2nd' | 'waiting_3rd' | null>(null);
   // §4.4/§6.1: Waiting Timeout Dialog — โชว์ตอนรอบแรก (3 นาที) หมด (stage='first') หรือรอบ Deadlock ของ
   // High Noble (stage='deadlock', §6.1) — สิทธิ์กดจำกัดเฉพาะ Host เท่านั้นสำหรับ High Noble
+  // (v1.1: server ไม่ยิง event นี้ให้ Adept/HighNoble อีกแล้ว — เก็บ state/handler ไว้เฉยๆ ไม่ได้ลบ)
   const [mmTimeoutDialog, setMmTimeoutDialog] = useState(false);
   const [mmDialogStage, setMmDialogStage] = useState<'first' | 'deadlock'>('first');
   const [mmHostUserId, setMmHostUserId] = useState<string | null>(null);
   const [mmDeletedMessage, setMmDeletedMessage] = useState<string | null>(null);
+  // LobbyMatchmaking_Spec_v1_1 — "Table Closed" popup: Human>=2 ไม่ครบภายใน secondHumanWaitMs (2 นาที)
+  // ไม่มี refund เพราะ escrow ไม่เคยถูกหักระหว่างรอ (ยืนยันจาก Step 3 — หักเฉพาะตอนห้องเต็มเท่านั้น)
+  const [mmClosedInsufficientPlayers, setMmClosedInsufficientPlayers] = useState(false);
+  const [mmClosedTier, setMmClosedTier] = useState<MatchmakingTier | null>(null);
 
   useEffect(() => {
     if (mmStatus !== 'queued' || !mmTimeoutAt) return;
@@ -222,11 +237,18 @@ export default function LobbyScreen() {
       setMmRoomId(data.room.roomId);
       setMmSeats(data.room.seats);
       setMmTimeoutAt(data.room.timeoutAt);
+      setMmWaitStage(data.room.waitStage ?? null);
       setMmHostUserId(data.room.hostUserId ?? null);
     });
 
+    // room_status ยิงให้ทุกคนในห้องทุกครั้งที่มีคน join ใหม่ — ต้องอัปเดต timeoutAt/waitStage ด้วย
+    // ไม่ใช่แค่ seats เฉยๆ เพราะ v1.1 เปลี่ยน timer ตอน human คนที่ 2 join (2 นาที → 15 วิ) เดิมโค้ด
+    // ก่อนหน้านี้ไม่เคยอัปเดตพวกนี้เลย ทำให้ผู้เล่นที่รออยู่ก่อนเห็น countdown ค้างของ stage เก่า
     socket.on('room_status', (data: { room: any }) => {
-      if (data.room) setMmSeats(data.room.seats);
+      if (!data.room) return;
+      setMmSeats(data.room.seats);
+      setMmTimeoutAt(data.room.timeoutAt);
+      setMmWaitStage(data.room.waitStage ?? null);
     });
 
     socket.on('room_ready', (data: { roomId: string; seats: any[] }) => {
@@ -262,12 +284,28 @@ export default function LobbyScreen() {
       setMmStatus('idle');
       setMmSeats([]);
       setMmTimeoutAt(null);
+      setMmWaitStage(null);
       setMmRoomId(null);
       setMmHostUserId(null);
       socket.disconnect();
     };
     socket.on('room_wait_timeout_expired', handleRoomRemoved);
     socket.on('room_deleted', handleRoomRemoved);
+
+    // LobbyMatchmaking_Spec_v1_1 — Human>=2 บังคับ ไม่ครบภายใน secondHumanWaitMs (2 นาที) → server ปิดโต๊ะ
+    // ไม่มี refund (escrow ไม่เคยถูกหักระหว่างรอ) — โชว์ popup แยกจาก mmDeletedMessage toast ธรรมดา เพราะ
+    // ต้องเสนอทางเลือกไป Tier รอง (Initiate/Mastermind) ให้ผู้เล่นแทนที่จะปล่อยกลับหน้า Lobby เฉยๆ
+    socket.on('room_closed_insufficient_players', (data: { roomId: string; tier: MatchmakingTier; message: string }) => {
+      setMmClosedTier(data.tier);
+      setMmClosedInsufficientPlayers(true);
+      setMmStatus('idle');
+      setMmSeats([]);
+      setMmTimeoutAt(null);
+      setMmWaitStage(null);
+      setMmRoomId(null);
+      setMmHostUserId(null);
+      socket.disconnect();
+    });
   };
 
   const handleTimeoutChoice = (choice: 'wait_2_more' | 'delete' | 'start_now') => {
@@ -288,9 +326,25 @@ export default function LobbyScreen() {
     setMmStatus('idle');
     setMmSeats([]);
     setMmTimeoutAt(null);
+    setMmWaitStage(null);
     setMmRoomId(null);
     setMmTimeoutDialog(false);
     setMmHostUserId(null);
+  };
+
+  // LobbyMatchmaking_Spec_v1_1 — ปุ่มใน "Table Closed" popup: เสนอ Tier รองแทน (ใช้ handler/buy-in gate
+  // เดิมที่มีอยู่แล้ว ไม่สร้างซ้ำ) หรือกลับไปหน้าเลือก Tier เฉยๆ
+  const handleClosedPlayInitiate = () => {
+    setMmClosedInsufficientPlayers(false);
+    runBuyInGate('initiate', handleEnterInitiate);
+  };
+  const handleClosedPlayMastermind = () => {
+    setMmClosedInsufficientPlayers(false);
+    runBuyInGate('mastermind', handleEnterMastermind);
+  };
+  const handleClosedBackToLobby = () => {
+    setMmClosedInsufficientPlayers(false);
+    setMmClosedTier(null);
   };
 
   // Toast แจ้งโต๊ะถูกลบ (timeout expired / delete) — auto-dismiss เอง
@@ -417,6 +471,33 @@ export default function LobbyScreen() {
         </View>
       )}
 
+      {/* ─── Table Closed — Not Enough Players (LobbyMatchmaking_Spec_v1_1) ───
+          Human>=2 บังคับไม่ครบภายในเวลา — ไม่มี refund เพราะ escrow ยังไม่เคยหักตอน 'waiting' เลย ─── */}
+      {mmClosedInsufficientPlayers && (
+        <View style={s.celebrateOverlay}>
+          <View style={s.celebrateCard}>
+            <Text style={s.celebrateIcon}>🚪</Text>
+            <Text style={s.celebrateTitle}>TABLE CLOSED</Text>
+            <Text style={[s.celebrateTierName, { textAlign: 'center', marginBottom: 20 }]}>
+              Not enough players — this tier requires at least 2 human players.
+            </Text>
+            {mmClosedTier === 'adept' && (
+              <TouchableOpacity onPress={handleClosedPlayInitiate} style={[s.celebrateBtn, { marginBottom: 10 }]}>
+                <Text style={s.celebrateBtnTxt}>Play Initiate instead</Text>
+              </TouchableOpacity>
+            )}
+            {mmClosedTier === 'highNoble' && (
+              <TouchableOpacity onPress={handleClosedPlayMastermind} style={[s.celebrateBtn, { marginBottom: 10 }]}>
+                <Text style={s.celebrateBtnTxt}>Play Mastermind instead</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity onPress={handleClosedBackToLobby} style={[s.celebrateBtn, { borderColor: COLOR.red }]}>
+              <Text style={[s.celebrateBtnTxt, { color: COLOR.red }]}>Back to Lobby</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
       {/* ─── Toast: Buy-in deducted (ครั้งถัดไปหลัง confirm ครั้งแรกแล้ว) ─── */}
       {buyInToast && (
         <View style={s.toastBanner}>
@@ -508,9 +589,16 @@ export default function LobbyScreen() {
                   );
                 })}
               </View>
-              {mmSecondsLeft > 0 && (
+              {/* LobbyMatchmaking_Spec_v1_1 — ข้อความ countdown ตาม waitStage: waiting_2nd (2 นาที รอ
+                  human คนที่ 2, ยังไม่ครบ Human>=2 จะโดนปิดโต๊ะ) vs waiting_3rd (15 วิ รอคนที่ 3 ก่อนเติม AI) */}
+              {mmSecondsLeft > 0 && mmWaitStage === 'waiting_2nd' && (
                 <Text style={{ color: COLOR.textSecondary, fontSize: 11, marginBottom: 10 }}>
-                  AI will fill in {mmSecondsLeft}s if not enough Humans join
+                  Waiting for players... ({formatMMSS(mmSecondsLeft)})
+                </Text>
+              )}
+              {mmSecondsLeft > 0 && mmWaitStage === 'waiting_3rd' && (
+                <Text style={{ color: COLOR.textSecondary, fontSize: 11, marginBottom: 10 }}>
+                  Starting in {mmSecondsLeft}... (waiting for one more player)
                 </Text>
               )}
               <TouchableOpacity onPress={handleCancelMatchmaking}
