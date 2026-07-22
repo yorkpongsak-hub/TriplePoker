@@ -25,6 +25,9 @@ import { ActionButton } from '../../../src/components/ui/ActionButton'
 import { MenuButton } from '../../../src/components/ui/MenuButton'
 import { ResultPanel } from '../../../src/components/ui/ResultPanel'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
+import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
+import PlayerHandView from '../../../src/components/game/PlayerHandView'
+import BossHandRow from '../../../src/components/game/BossHandRow'
 
 // Feedback C5 — Showdown result ครอบด้วยพื้นหลังชุดเดียวกับ Profile/Lobby (bg free/vip ตาม isVip)
 const SHOWDOWN_BG_FREE = require('../../../assets/backgrounds/bg_main_free.png')
@@ -32,40 +35,9 @@ const SHOWDOWN_BG_VIP  = require('../../../assets/backgrounds/bg_main_vip.png')
 
 // ── Assets
 const studioLogo  = require('../../../assets/images/sage_unicorn_logo_transparent.png')
-const cardBackImg = require('../../../assets/images/card_back_default.png')
+const cardBackImg = CARD_BACK_IMG // ใช้หลังไพ่จากไฟล์กลาง cardAssets.ts (คง alias เดิมกันแก้ทุกจุดที่อ้างถึง)
 const tableImg    = require('../../../assets/images/table_default.png')
 const tripleSpade = require('../../../assets/images/triple_poker_icon.png')
-
-// ── Card image map
-const CARD_IMG: Record<string, any> = {
-  as: require('../../../assets/cards/classic/as.png'),
-  '2s': require('../../../assets/cards/classic/2s.png'), '3s': require('../../../assets/cards/classic/3s.png'),
-  '4s': require('../../../assets/cards/classic/4s.png'), '5s': require('../../../assets/cards/classic/5s.png'),
-  '6s': require('../../../assets/cards/classic/6s.png'), '7s': require('../../../assets/cards/classic/7s.png'),
-  '8s': require('../../../assets/cards/classic/8s.png'), '9s': require('../../../assets/cards/classic/9s.png'),
-  '10s': require('../../../assets/cards/classic/10s.png'), js: require('../../../assets/cards/classic/js.png'),
-  qs: require('../../../assets/cards/classic/qs.png'), ks: require('../../../assets/cards/classic/ks.png'),
-  ah: require('../../../assets/cards/classic/ah.png'), '2h': require('../../../assets/cards/classic/2h.png'),
-  '3h': require('../../../assets/cards/classic/3h.png'), '4h': require('../../../assets/cards/classic/4h.png'),
-  '5h': require('../../../assets/cards/classic/5h.png'), '6h': require('../../../assets/cards/classic/6h.png'),
-  '7h': require('../../../assets/cards/classic/7h.png'), '8h': require('../../../assets/cards/classic/8h.png'),
-  '9h': require('../../../assets/cards/classic/9h.png'), '10h': require('../../../assets/cards/classic/10h.png'),
-  jh: require('../../../assets/cards/classic/jh.png'), qh: require('../../../assets/cards/classic/qh.png'),
-  kh: require('../../../assets/cards/classic/kh.png'), ad: require('../../../assets/cards/classic/ad.png'),
-  '2d': require('../../../assets/cards/classic/2d.png'), '3d': require('../../../assets/cards/classic/3d.png'),
-  '4d': require('../../../assets/cards/classic/4d.png'), '5d': require('../../../assets/cards/classic/5d.png'),
-  '6d': require('../../../assets/cards/classic/6d.png'), '7d': require('../../../assets/cards/classic/7d.png'),
-  '8d': require('../../../assets/cards/classic/8d.png'), '9d': require('../../../assets/cards/classic/9d.png'),
-  '10d': require('../../../assets/cards/classic/10d.png'), jd: require('../../../assets/cards/classic/jd.png'),
-  qd: require('../../../assets/cards/classic/qd.png'), kd: require('../../../assets/cards/classic/kd.png'),
-  ac: require('../../../assets/cards/classic/ac.png'), '2c': require('../../../assets/cards/classic/2c.png'),
-  '3c': require('../../../assets/cards/classic/3c.png'), '4c': require('../../../assets/cards/classic/4c.png'),
-  '5c': require('../../../assets/cards/classic/5c.png'), '6c': require('../../../assets/cards/classic/6c.png'),
-  '7c': require('../../../assets/cards/classic/7c.png'), '8c': require('../../../assets/cards/classic/8c.png'),
-  '9c': require('../../../assets/cards/classic/9c.png'), '10c': require('../../../assets/cards/classic/10c.png'),
-  jc: require('../../../assets/cards/classic/jc.png'), qc: require('../../../assets/cards/classic/qc.png'),
-  kc: require('../../../assets/cards/classic/kc.png'),
-}
 
 const CW = 62; const CH = 90; const OVERLAP = -38
 const SIDE_COL_W = 72
@@ -191,7 +163,9 @@ const GameTableLive: React.FC = () => {
   // Patch Multiplayer: roomId/userId มาจาก Lobby (auto-match) ผ่าน route params
   const params = useLocalSearchParams<{ roomId?: string; userId?: string }>()
   const authUserId = useUserStore(s => s.userId)
-  const ROOM_ID   = params.roomId ?? 'Adept1'
+  // roomId ต้องมาจาก matchmaking จริงเท่านั้น — ห้าม fallback เป็นค่าคงที่ 'Adept1' (บั๊กเดิม: 2 ห้องพร้อมกัน
+  // ชน state กัน) ถ้า params.roomId หลุด (เข้าหน้านี้ตรงๆ ไม่ผ่าน Lobby) ให้ block+redirect แทน — ดู guard ด้านล่าง
+  const ROOM_ID = params.roomId ?? ''
   // params.userId มาจาก Lobby matchmaking (ผูก escrow ไว้แล้วตอนห้องเต็ม) — authUserId เป็น fallback กันกรณี
   // route param หลุด แต่ทั้งคู่ต้องไม่ว่างพร้อมกัน ห้าม fallback เงียบเป็น literal เด็ดขาด (ดู DEV_FAKE_USER_ID ด้านบน)
   const usingDevFakeId = !params.userId && !authUserId && !!DEV_FAKE_USER_ID
@@ -383,6 +357,17 @@ const GameTableLive: React.FC = () => {
     }
     if (usingDevFakeId) {
       console.warn('[game] Using DEV_FAKE_USER_ID for PLAYER_ID:', PLAYER_ID)
+    }
+    // Room guard: roomId ว่างแปลว่าเข้าหน้านี้ตรงๆ ไม่ผ่าน Lobby matchmaking (ห้าม fallback เป็น
+    // ค่าคงที่ 'Adept1' เด็ดขาด — บั๊กเดิม: 2 ห้องพร้อมกันชน state กัน ดู Phase 2.2) กลับ Lobby ให้จับคู่ใหม่
+    if (!ROOM_ID) {
+      console.error('[game] roomId missing — entered without matchmaking')
+      Alert.alert(
+        'Table Not Found',
+        'This table could not be found. Please join a table from the lobby.',
+        [{ text: 'OK', onPress: () => router.replace('/(home)/lobby') }]
+      )
+      return
     }
 
     // A5 (Bug A fix, 2026-07-17): เปิด reconnection จริง (เดิม false — เน็ตสะดุดแป๊บเดียวก็ค้างจอถาวร
@@ -819,26 +804,7 @@ const GameTableLive: React.FC = () => {
     return <CardBack key={elKey} w={w} h={h} ml={ml} />
   }
 
-  const AIPiles: React.FC<{ aiId: string }> = ({ aiId }) => {
-    const p1 = allCards[aiId]?.[1] ?? []; const p2 = allCards[aiId]?.[2] ?? []; const p3 = allCards[aiId]?.[3] ?? []
-    const cards = [...p1, ...p2, ...p3]
-    return (
-      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        {([3, 3, 5] as number[]).map((cnt, pi) => (
-          <React.Fragment key={pi}>
-            {pi > 0 && <View style={{ width: 4 }} />}
-            <View style={{ flexDirection: 'row' }}>
-              {Array.from({ length: cnt }).map((_, ci) => {
-                const idx = pi === 0 ? ci : pi === 1 ? 3 + ci : 6 + ci
-                const cardKey = cards[idx]
-                return renderCard(cardKey, 25, 36, ci === 0 ? 0 : -18, `${aiId}-${pi}-${ci}-${cardKey ?? 'back'}`)
-              })}
-            </View>
-          </React.Fragment>
-        ))}
-      </View>
-    )
-  }
+  // (AIPiles เดิมถูกแทนที่ด้วย BossHandRow กลางแล้ว — ดู src/components/game/BossHandRow.tsx)
 
   const SideSeat: React.FC<{ rot: '270deg' | '90deg'; aiId: string }> = ({ rot, aiId }) => {
     const p1 = allCards[aiId]?.[1] ?? []; const p2 = allCards[aiId]?.[2] ?? []; const p3 = allCards[aiId]?.[3] ?? []
@@ -923,17 +889,7 @@ const GameTableLive: React.FC = () => {
     )
   }
 
-  const FaceCard: React.FC<{ card: CardData; pi: number; ci: number; first: boolean }> = ({ card, pi, ci, first }) => {
-    const isSel = selected?.pi === pi && selected?.ci === ci
-    return (
-      <TouchableOpacity onPress={() => handleCardPress(pi, ci)} activeOpacity={0.85}
-        style={[s.userCard, !first && { marginLeft: OVERLAP }, isSel && s.userCardSel, { zIndex: ci }]}>
-        {CARD_IMG[card.key]
-          ? <Image source={CARD_IMG[card.key]} style={{ width: CW, height: CH }} resizeMode="cover" />
-          : <Text style={{ fontSize: 8 }}>{card.key}</Text>}
-      </TouchableOpacity>
-    )
-  }
+  // (FaceCard เดิมถูกแทนที่ด้วย PlayerHandView กลางแล้ว — ดู src/components/game/PlayerHandView.tsx)
 
   // Pile Reveal Overlay — Tab mode ผู้เล่นเลือกดูได้ + Continue button
   const PileRevealOverlay: React.FC<{ pileNum: 1|2|3 }> = ({ pileNum }) => {
@@ -1668,7 +1624,13 @@ const GameTableLive: React.FC = () => {
                 <Text style={s.statusText}>{aiStatus[bossAI?.id ?? ''] ?? 'Arranging...'}</Text>
               </View>
             </View>
-            {bossAI && <View style={{ marginTop: -10 /* Patch 2026-07-18: ยกไพ่บอสขึ้น 10px */ }}><AIPiles aiId={bossAI.id} /></View>}
+            {bossAI && <View style={{ marginTop: -10 /* Patch 2026-07-18: ยกไพ่บอสขึ้น 10px */ }}>
+              <BossHandRow revealed={[
+                ...(allCards[bossAI.id]?.[1] ?? []),
+                ...(allCards[bossAI.id]?.[2] ?? []),
+                ...(allCards[bossAI.id]?.[3] ?? []),
+              ]} />
+            </View>}
           </View>
 
           {/* MAIN AREA */}
@@ -1723,44 +1685,14 @@ const GameTableLive: React.FC = () => {
                 ))}
               </View>
             ) : (
-              <View style={{ gap: 4, marginTop: 20 /* Patch 2026-07-18: เลื่อนไพ่ในมือลง 20px */ }}>
-                {/* แถวบน: Pile 1 + Pile 2 แยกซ้ายขวา */}
-                <View style={{ flexDirection: 'row', gap: 6 }}>
-                  <View style={{ flexDirection: 'column', alignItems: 'center' }}>
-                    <Text style={[s.pileLabel, { marginBottom: 2 }]}>PILE 1</Text>
-                    <View style={{ flexDirection: 'row', marginRight: CW / 2, transform: [{ translateX: 15 }] /* Patch 2026-07-18: จัดซ้าย Pile1 ให้ตรงหลังไพ่ P2 — จูนค่าจากเครื่องจริง */ }}>
-                      {piles[0].map((card, ci) => (
-                        <FaceCard key={card.id} card={card} pi={0} ci={ci} first={ci === 0} />
-                      ))}
-                    </View>
-                  </View>
-                  <View style={{ flexDirection: 'column', alignItems: 'center' }}>
-                    <Text style={[s.pileLabel, { marginBottom: 2 }]}>PILE 2</Text>
-                    <View style={{ flexDirection: 'row', marginLeft: CW / 2 }}>
-                      {piles[1].map((card, ci) => (
-                        <FaceCard key={card.id} card={card} pi={1} ci={ci} first={ci === 0} />
-                      ))}
-                    </View>
-                  </View>
-                </View>
-                {/* แถวล่าง: Pile 3 */}
-                <View style={{ flexDirection: 'column', alignItems: 'center' }}>
-                  <Text style={[s.pileLabel, { marginBottom: 2 }]}>PILE 3</Text>
-                  <View style={{ flexDirection: 'row', alignSelf: 'center' }}>
-                    {piles[2].map((card, ci) => (
-                      <TouchableOpacity key={card.id}
-                        onPress={() => handleCardPress(2, ci)}
-                        activeOpacity={0.85}
-                        style={[s.userCard, ci > 0 && { marginLeft: -24 },
-                          selected?.pi === 2 && selected?.ci === ci && s.userCardSel,
-                          { zIndex: ci }]}>
-                        {CARD_IMG[card.key]
-                          ? <Image source={CARD_IMG[card.key]} style={{ width: CW, height: CH }} resizeMode="cover" />
-                          : <Text style={{ fontSize: 8 }}>{card.key}</Text>}
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </View>
+              // โซนจัดไพ่ในมือ — PlayerHandView กลาง (Free: overlap แถวตรง / VIP: fan arc)
+              <View style={{ width: '100%', marginTop: 20, alignItems: 'center' }}>
+                <PlayerHandView
+                  piles={piles}
+                  selected={selected}
+                  onCardPress={handleCardPress}
+                  isVip={isVip}
+                />
               </View>
             )}
           </View>
@@ -1870,6 +1802,7 @@ const s = StyleSheet.create({
   userCard:     { width: CW, height: CH, borderRadius: 4, backgroundColor: '#fdfaf3', borderWidth: 1, borderColor: 'rgba(201,168,76,.65)', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   userCardSel:  { borderColor: '#6ec87a', borderWidth: 2, transform: [{ translateY: -16 }] },
   swapHint:     { fontSize: 8, color: 'rgba(201,168,76,.9)', textAlign: 'center', marginBottom: 2 },
+  foulText:     { fontSize: 12, color: '#FF6B6B', fontWeight: '800', letterSpacing: 1, textAlign: 'center', marginBottom: 4 },
   actionBar:      { flexDirection: 'row', justifyContent: 'center', gap: 16, paddingHorizontal: 10, paddingTop: 4, paddingBottom: 20, zIndex: 2 },
   actionBtnSize:  { width: 130 },
 
