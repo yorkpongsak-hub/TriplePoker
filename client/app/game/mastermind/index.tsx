@@ -1581,8 +1581,9 @@ const GameTableLive: React.FC = () => {
                   borderColor: isWinner ? '#8DFFB5' : '#2A4A34',
                   backgroundColor: isWinner ? 'rgba(141,255,181,0.08)' : 'rgba(0,0,0,0.3)',
                 }}>
+                  {/* Patch 3.5 Step 7: ตัด Avatar emoji ออก เหลือชื่อ+ตัวเลข — คงความกว้างคอลัมน์ 76px
+                      ไว้เท่าเดิม เพื่อไม่ให้แถวไพ่หงาย (marginLeft: 25 ด้านล่าง) เลื่อนหนี — ห้ามแก้ไฟล์เดียว */}
                   <View style={{ width: 76, alignItems: 'center', marginRight: 8 }}>
-                    <Text style={{ fontSize: 18 }}>{p.emoji}</Text>
                     <Text style={{ fontSize: 9, color: isUser ? '#FFD76A' : '#F5F2E8', fontWeight: '800' }} numberOfLines={1}>
                       {isUser ? myDisplayName : p.label}
                     </Text>
