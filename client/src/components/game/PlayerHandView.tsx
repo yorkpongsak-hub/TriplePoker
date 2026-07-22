@@ -40,11 +40,17 @@ export interface PlayerHandViewProps {
 }
 
 // ── ค่าคงที่ layout ──
-const MIN_CW = 54          // ความกว้างไพ่ขั้นต่ำ (ห้ามเล็กกว่านี้ ยกเว้นจอแคบสุดๆ)
-const MIN_CH = 78          // ความสูงไพ่ขั้นต่ำ
-const HARD_MIN_CW = 46     // เพดานล่างสุดตอนจอแคบจริงๆ (ยอมย่อไพ่เป็นทางเลือกสุดท้าย)
-const MIN_EXPOSED = 28     // ส่วนที่โผล่ให้กด (Free) ต้องกว้างอย่างน้อยเท่านี้ (touch target)
-const MAX_EXPOSED = 40     // ส่วนที่โผล่ต่อใบสูงสุด (Free) — กันไพ่ห่างเวิ้งว้าง
+// Free mode (Phase 3.5 Step 1): เป้าหมาย 62×90 (เท่า .bak เดิม) — MIN_EXPOSED ลดจาก 28→22
+// (เทสจริงพิสูจน์แล้วว่า VIP โผล่ ~17px ยังกดได้ ปลอดภัยที่จะลดพื้น Free ลงมา)
+const FREE_CW = 62; const FREE_CH = 90
+const FREE_HARD_MIN_CW = 54 // เพดานล่างสุดตอนจอแคบจริงๆ (ยอมย่อไพ่เป็นทางเลือกสุดท้าย)
+const FREE_MIN_EXPOSED = 22 // ส่วนที่โผล่ให้กด ต้องกว้างอย่างน้อยเท่านี้ (touch target)
+const MAX_EXPOSED = 40      // ส่วนที่โผล่ต่อใบสูงสุด — กันไพ่ห่างเวิ้งว้าง (ใช้ร่วมกัน)
+// VIP mode: ค่าเดิมจาก Phase 2.1 แช่แข็งไว้ตรงนี้ (ห้ามแตะ — "ลงตัวแล้ว") แยกจาก Free เพื่อไม่ให้
+// การขยายไพ่ Free ใน Step 1 กระทบพัด VIP โดยไม่ตั้งใจ (เดิมทั้งสองโหมดใช้ค่าตั้งต้นชุดเดียวกัน)
+const VIP_CW = 54; const VIP_CH = 78
+const VIP_HARD_MIN_CW = 46
+const VIP_MIN_EXPOSED = 28
 const VIP_OVERLAP_RATIO = 0.65 // โหมด VIP พัดซ้อนกันลึก 65% ของหน้าไพ่ (โผล่ 35%)
 const SELECT_LIFT = 12     // ระยะเด้งขึ้นตอนเลือกไพ่
 const PILE_GAP = 8         // ช่องไฟระหว่างกอง
@@ -54,12 +60,15 @@ const FRAME_W_RATIO = 0.98 // กรอบทองกว้าง 98% ของ
 const PILE_LABELS = ['PILE 1', 'PILE 2', 'PILE 3']
 const AspectView = Animated.createAnimatedComponent(View)
 
+interface LayoutTarget { cw: number; ch: number; hardMinCw: number; minExposed: number; maxExposed: number }
+
 /**
- * คำนวณ layout responsive จากความกว้างจอ
- * ลำดับความสำคัญ (ตามกติกา): คงขนาดไพ่ไว้ก่อน เพิ่ม overlap (ลด exposed) ลงถึง MIN_EXPOSED
+ * คำนวณ layout responsive จากความกว้างจอ (parameterize ด้วย target เพื่อแยก Free/VIP อิสระจากกัน)
+ * ลำดับความสำคัญ (ตามกติกา): คงขนาดไพ่ไว้ก่อน เพิ่ม overlap (ลด exposed) ลงถึง minExposed
  * ถ้าจอแคบจนไม่พอแม้ overlap สุด ค่อยย่อขนาดไพ่เป็นทางเลือกสุดท้าย
  */
-function computeLayout(screenW: number, pileSizes: number[]) {
+function computeLayout(screenW: number, pileSizes: number[], target: LayoutTarget) {
+  const { cw: targetCw, ch: targetCh, hardMinCw, minExposed, maxExposed } = target
   const innerW   = screenW * FRAME_W_RATIO - FRAME_H_PAD * 2
   const gapsW    = Math.max(0, pileSizes.length - 1) * PILE_GAP
   const availW   = innerW - gapsW
@@ -67,8 +76,8 @@ function computeLayout(screenW: number, pileSizes: number[]) {
   // จำนวนใบที่ซ้อน (ทุกใบยกเว้นใบแรกของแต่ละกอง)
   const overlapSlots = pileSizes.reduce((sum, n) => sum + Math.max(0, n - 1), 0)
 
-  let cw = MIN_CW
-  let ch = MIN_CH
+  let cw = targetCw
+  let ch = targetCh
 
   if (overlapSlots === 0) {
     return { cw, ch, exposed: cw }
@@ -76,15 +85,15 @@ function computeLayout(screenW: number, pileSizes: number[]) {
 
   // exposed ที่ "พอดีกรอบ" ถ้าใช้ไพ่ขนาดเต็ม (แบ่งพื้นที่การ์ดที่เหลือหลังหักใบแรกของทุกกอง)
   let exposed = (availW - nPiles * cw) / overlapSlots
-  // clamp บน: ไม่เกิน MAX_EXPOSED (กันไพ่ห่างเวิ้ง) และไม่เกินความกว้างไพ่
-  exposed = Math.min(exposed, MAX_EXPOSED, cw)
+  // clamp บน: ไม่เกิน maxExposed (กันไพ่ห่างเวิ้ง) และไม่เกินความกว้างไพ่
+  exposed = Math.min(exposed, maxExposed, cw)
 
-  if (exposed < MIN_EXPOSED) {
+  if (exposed < minExposed) {
     // จอแคบ: ตรึง exposed ที่ขั้นต่ำ (touch target) แล้วย่อไพ่ให้พอดีเป็นทางเลือกสุดท้าย
-    exposed = MIN_EXPOSED
+    exposed = minExposed
     const fittedCw = (availW - overlapSlots * exposed) / nPiles
-    cw = Math.max(HARD_MIN_CW, Math.min(MIN_CW, fittedCw))
-    ch = Math.round(cw * (MIN_CH / MIN_CW))
+    cw = Math.max(hardMinCw, Math.min(targetCw, fittedCw))
+    ch = Math.round(cw * (targetCh / targetCw))
   }
 
   // การันตีไม่ล้นกรอบ: ผลรวมความกว้างทุกกอง + gap ต้องไม่เกิน innerW
@@ -241,7 +250,11 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
   })
 
   const pileSizes = resolvedPiles.map(p => p.length)
-  const { cw, ch, exposed } = computeLayout(screenW, pileSizes)
+  // Free/VIP คำนวณ layout แยกอิสระกันคนละชุดค่าคงที่ — กันการขยายไพ่ Free (Step 1) กระทบพัด VIP
+  const layoutTarget: LayoutTarget = isVip
+    ? { cw: VIP_CW, ch: VIP_CH, hardMinCw: VIP_HARD_MIN_CW, minExposed: VIP_MIN_EXPOSED, maxExposed: MAX_EXPOSED }
+    : { cw: FREE_CW, ch: FREE_CH, hardMinCw: FREE_HARD_MIN_CW, minExposed: FREE_MIN_EXPOSED, maxExposed: MAX_EXPOSED }
+  const { cw, ch, exposed } = computeLayout(screenW, pileSizes, layoutTarget)
 
   return (
     <View style={styles.frame}>
