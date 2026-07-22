@@ -365,6 +365,40 @@ export const gameConfig = {
     windowDays:            30,     // ต้องขึ้น Tier S (token >= 1M) ภายใน 30 วันหลังเข้า Ascendant
   },
 
+  // ─── Matchmaking Timeouts (LobbyMatchmaking_Spec_v1_1) ─────────
+  // ย้ายมาจาก roomRegistry.ts (เดิม hardcode เป็น local const) ให้ config-driven ตามกติกา —
+  // roomRegistry.ts import ค่าจาก block นี้แทน ไม่มี local const ซ้ำอีก
+  matchmakingTimeouts: {
+    // Mastermind แบบเดิม (waiting timeout รอบแรกก่อน AI-fill) — ห้ามแก้ค่าที่กระทบ Mastermind
+    // (ดู roomRegistry.TIER_ROOM_CONFIG.mastermind.waitTimeoutMs)
+    mastermindWaitTimeoutMs: 120_000,
+
+    // TIER_ROOM_CONFIG.adept.waitTimeoutMs เดิม — ใช้แค่ฝั่ง private room เท่านั้น (2H+2AI ตายตัว,
+    // invite ด้วย PIN ไม่ผ่าน auto-match flow ใหม่ v1.1 เลย ไม่ถูกแตะใน Step 1-3)
+    adeptPrivateWaitTimeoutMs: 3 * 60_000,
+
+    // TIER_ROOM_CONFIG.highNoble.waitTimeoutMs เดิม — รอบแรกของ waiting timeout dialog (§4.4) ก่อนถาม
+    // choice ครั้งแรก (ยังใช้จนกว่า Step 3 จะย้าย HighNoble มาใช้ 2-stage timer ใหม่ทั้งหมด)
+    highNobleWaitTimeoutMs: 3 * 60_000,
+
+    // §4.4: รอบขยายเวลาหลัง Dialog เลือก "Wait 2 More Minutes" (HighNoble เดิม — เก็บไว้ใช้กับ dialog flow เก่าจนกว่า Step 3)
+    waitExtensionMs: 2 * 60_000,
+
+    // Adept public (auto-match) grace period เดิม (v1.0) — เก็บไว้เผื่อ path เก่ายังอ้างอิง ไม่ได้ใช้ต่อใน flow ใหม่ v1.1 แล้ว
+    adeptGraceMs: 40_000,
+
+    // ─── v1.1: 2-stage timer ใหม่ (Human เติมจากหัว / AI เติมจากท้าย) — Adept + HighNoble ใช้ prefix เดียวกัน
+    // ค่าเริ่มต้นเท่ากันทั้ง 2 Tier ตาม Spec — แยก key ต่อ Tier ไว้เผื่อปรับจูนทีหลังไม่เท่ากัน
+    adept: {
+      secondHumanWaitMs: 120_000, // Human คนที่ 1 เข้า → รอ 2 นาที ให้คนที่ 2 เข้า ไม่งั้นปิดโต๊ะ (Human>=2 บังคับ)
+      thirdHumanWaitMs:  15_000,  // Human คนที่ 2 เข้า → รอ 15 วิ ให้คนที่ 3 เข้า ไม่งั้นเติม AI ตัวที่ 2
+    },
+    highNoble: {
+      secondHumanWaitMs: 120_000,
+      thirdHumanWaitMs:  15_000,
+    },
+  },
+
 } as const;
 
 // ─── Type Helpers ────────────────────────────────────────────────

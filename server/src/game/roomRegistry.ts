@@ -12,6 +12,7 @@
 import { redis } from '../config/redis'
 import { FOUR_GODS, AI_CONFIGS, AIConfig, pickRandomMinions } from './aiEngine'
 import { rollHighNobleBoss } from './monarchSpawn'
+import { gameConfig } from '../config/gameConfig'
 
 // ─── Types ───────────────────────────────────────────────────────
 export type Tier = 'adept' | 'mastermind' | 'highNoble'
@@ -49,18 +50,19 @@ export interface GameRoom {
 // humanSeatsRequired: จำนวนที่นั่ง Human ที่ต้องการ — ที่เหลือ (4 - จำนวนนี้) = AI fix ตั้งแต่สร้างห้อง
 // adept.waitTimeoutMs/humanSeatsRequired ตอนนี้ใช้แค่ฝั่ง private room เท่านั้น (2H+2AI ตายตัว) —
 // โต๊ะ public (auto-match) ใช้ ADEPT_GRACE_MS ด้านล่างแทน (dynamic 2-3H, ดู joinRoom/resolveAdeptGraceExpiry)
+// ค่าตัวเลขทั้งหมดย้ายไป gameConfig.matchmakingTimeouts แล้ว (config-driven ตามกติกา) — ไฟล์นี้แค่ import มาใช้
 export const TIER_ROOM_CONFIG: Record<Tier, { waitTimeoutMs: number; humanSeatsRequired: number }> = {
-  adept:      { waitTimeoutMs: 3 * 60_000, humanSeatsRequired: 2 }, // private room เท่านั้น — Sage เข้ารอทันที, Ghost/Reckless สุ่มตอน Human คนที่ 2
-  mastermind: { waitTimeoutMs: 120_000,    humanSeatsRequired: 3 }, // 3H + 1AI
-  highNoble:  { waitTimeoutMs: 3 * 60_000, humanSeatsRequired: 3 }, // 3H + 1AI (Boss = Four Gods ปกติ 97% / Monarch ลับ 3%+pity — ดู monarchSpawn.ts)
+  adept:      { waitTimeoutMs: gameConfig.matchmakingTimeouts.adeptPrivateWaitTimeoutMs, humanSeatsRequired: 2 }, // private room เท่านั้น — Sage เข้ารอทันที, Ghost/Reckless สุ่มตอน Human คนที่ 2
+  mastermind: { waitTimeoutMs: gameConfig.matchmakingTimeouts.mastermindWaitTimeoutMs,    humanSeatsRequired: 3 }, // 3H + 1AI
+  highNoble:  { waitTimeoutMs: gameConfig.matchmakingTimeouts.highNobleWaitTimeoutMs,     humanSeatsRequired: 3 }, // 3H + 1AI (Boss = Four Gods ปกติ 97% / Monarch ลับ 3%+pity — ดู monarchSpawn.ts)
 }
 
 // Adept public (auto-match) grace period — โต๊ะรอ human คนถัดไปนานเท่านี้ก่อนตัดสินใจ
 // ยกเลิกโต๊ะ (ยังมีแค่ 1H) หรือเติม AI (มี 2H แล้ว) ใช้ค่าเดียวกันทั้ง 2 stage
-export const ADEPT_GRACE_MS = 40_000 // tune ได้ในช่วง 30_000-45_000
+export const ADEPT_GRACE_MS = gameConfig.matchmakingTimeouts.adeptGraceMs // tune ได้ในช่วง 30_000-45_000
 
 // §4.4: รอบขยายเวลาหลัง Dialog เลือก "Wait 2 More Minutes"
-export const WAIT_EXTENSION_MS = 2 * 60_000
+export const WAIT_EXTENSION_MS = gameConfig.matchmakingTimeouts.waitExtensionMs
 
 // ─── Redis Key Helpers ──────────────────────────────────────────
 const metaKey = (roomId: string) => `room:${roomId}:meta`
