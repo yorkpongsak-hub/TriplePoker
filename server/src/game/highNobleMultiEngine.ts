@@ -3,12 +3,16 @@
 // แยกไฟล์ใหม่ทั้งหมด ไม่แตะ gameLoop.ts เดิม (single-player + Adept-multi)
 // ตามสถาปัตยกรรม "Tier ใหม่ = copy จาก Tier ที่เสร็จแล้วมาแก้เฉพาะจุด"
 //
-// โครงสร้างที่นั่ง (คงลำดับเดิมจาก single-player highNoble):
+// โครงสร้างที่นั่ง (คงลำดับเดิมจาก single-player highNoble — ปัจจุบันยังตรงกับ roomRegistry seat index
+// เสมอ เพราะ roomRegistry ยัง fix seat[0]=Boss ตายตัว, แต่ startHighNobleMultiMatch() ด้านล่างไม่ผูก
+// role กับ raw index อีกแล้ว — หา boss จาก rs.isBoss flag ตรงๆ เตรียมรองรับ LobbyMatchmaking_Spec_v1_1
+// Step 3 ที่จะเลิก fix seat[0]=Boss):
 //   seat 0 = Boss (จตุรเทพ, AI เสมอ, ห้าม Human เข้า)  — เดิมคือ AI_SAGE / P3
 //   seat 1 = P4  (Human หรือ AI filler)                — เดิมคือ AI_RECKLESS
 //   seat 2 = P1  (Human หรือ AI filler)                — เดิมคือ "humanPlayerId" ตัวเดียว
 //   seat 3 = P2  (Human หรือ AI filler)                — เดิมคือ AI_GHOST
-// ลำดับนี้ตรงกับ turn order เดิมของ Grand Finale (ตามเข็ม P3→P4→P1→P2)
+// ลำดับนี้ตรงกับ turn order เดิมของ Grand Finale (ตามเข็ม P3→P4→P1→P2) — turn order derive จาก
+// state.seats array order ตรงๆ (ไม่ใช่จาก role) ยังไม่ถูกแตะใน Step 2 นี้
 // The Sage Unicorn Studio Co., Ltd.
 // ============================================================
 
@@ -244,11 +248,18 @@ export async function startHighNobleMultiMatch(
   roomId: string,
   roomSeats: [RoomSeat, RoomSeat, RoomSeat, RoomSeat],
 ): Promise<void> {
-  const roles: HNSeat['role'][] = ['boss', 'p4', 'p1', 'p2']
+  // v1.1 prerequisite: role ต้องผูกกับ rs.isBoss/rs.isMonarch flag ตรงๆ ไม่ใช่ raw array index i อีก
+  // ต่อไป (เดิม roles[i] สมมติว่า seat 0 = boss เสมอ — จะพังทันทีถ้า Step 3 ย้าย seat order ของ
+  // HighNoble ให้ Human เติมจากหัวแบบ Adept) — หา boss seat จริงจาก flag ก่อน แล้วไล่แจก p4/p1/p2 ให้
+  // ที่นั่งที่เหลือตามลำดับ index ที่เจอ (ให้ผลลัพธ์เหมือนเดิมทุกกรณีตอนนี้ เพราะ roomRegistry การันตี
+  // seat[0].isBoss=true เสมอในปัจจุบัน — zero behavior change จนกว่า Step 3 จะเปลี่ยน seat order จริง)
+  const bossIdx = roomSeats.findIndex(rs => rs.isBoss)
+  const nonBossRoles: HNSeat['role'][] = ['p4', 'p1', 'p2']
+  let nonBossRoleIdx = 0
   let fillerIdx = 0
 
   const seats = roomSeats.map((rs, i): HNSeat => {
-    const role = roles[i]
+    const role: HNSeat['role'] = i === bossIdx ? 'boss' : nonBossRoles[nonBossRoleIdx++]
     if (rs.type === 'human' && rs.userId) {
       return { id: rs.userId, role, isHuman: true, name: rs.name, emoji: '👤' }
     }
