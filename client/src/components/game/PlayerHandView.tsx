@@ -43,7 +43,9 @@ export interface PlayerHandViewProps {
 const MIN_CW = 54          // ความกว้างไพ่ขั้นต่ำ (ห้ามเล็กกว่านี้ ยกเว้นจอแคบสุดๆ)
 const MIN_CH = 78          // ความสูงไพ่ขั้นต่ำ
 const HARD_MIN_CW = 46     // เพดานล่างสุดตอนจอแคบจริงๆ (ยอมย่อไพ่เป็นทางเลือกสุดท้าย)
-const MIN_EXPOSED = 28     // ส่วนที่โผล่ให้กด ต้องกว้างอย่างน้อยเท่านี้ (touch target)
+const MIN_EXPOSED = 28     // ส่วนที่โผล่ให้กด (Free) ต้องกว้างอย่างน้อยเท่านี้ (touch target)
+const MAX_EXPOSED = 40     // ส่วนที่โผล่ต่อใบสูงสุด (Free) — กันไพ่ห่างเวิ้งว้าง
+const VIP_OVERLAP_RATIO = 0.65 // โหมด VIP พัดซ้อนกันลึก 65% ของหน้าไพ่ (โผล่ 35%)
 const SELECT_LIFT = 12     // ระยะเด้งขึ้นตอนเลือกไพ่
 const PILE_GAP = 8         // ช่องไฟระหว่างกอง
 const FRAME_H_PAD = 6      // paddingHorizontal ของกรอบทอง
@@ -72,17 +74,24 @@ function computeLayout(screenW: number, pileSizes: number[]) {
     return { cw, ch, exposed: cw }
   }
 
-  // exposed ที่พอดีจอถ้าใช้ไพ่ขนาดเต็ม
+  // exposed ที่ "พอดีกรอบ" ถ้าใช้ไพ่ขนาดเต็ม (แบ่งพื้นที่การ์ดที่เหลือหลังหักใบแรกของทุกกอง)
   let exposed = (availW - nPiles * cw) / overlapSlots
-  // ไม่ให้กว้างกว่าความกว้างไพ่ (ไม่มีการเว้นเกินใบ)
-  if (exposed > cw) exposed = cw
+  // clamp บน: ไม่เกิน MAX_EXPOSED (กันไพ่ห่างเวิ้ง) และไม่เกินความกว้างไพ่
+  exposed = Math.min(exposed, MAX_EXPOSED, cw)
 
   if (exposed < MIN_EXPOSED) {
-    // จอแคบ: ตรึง exposed ที่ขั้นต่ำ แล้วย่อไพ่ให้พอดี (ทางเลือกสุดท้าย)
+    // จอแคบ: ตรึง exposed ที่ขั้นต่ำ (touch target) แล้วย่อไพ่ให้พอดีเป็นทางเลือกสุดท้าย
     exposed = MIN_EXPOSED
     const fittedCw = (availW - overlapSlots * exposed) / nPiles
     cw = Math.max(HARD_MIN_CW, Math.min(MIN_CW, fittedCw))
     ch = Math.round(cw * (MIN_CH / MIN_CW))
+  }
+
+  // การันตีไม่ล้นกรอบ: ผลรวมความกว้างทุกกอง + gap ต้องไม่เกิน innerW
+  // (exposed ถูกหักลงด้วย Math.min ข้างบนแล้ว จุดนี้เป็น assert กันพลาดขอบเคส)
+  const totalW = nPiles * cw + overlapSlots * exposed + gapsW
+  if (totalW > innerW && overlapSlots > 0) {
+    exposed = Math.max(0, (availW - nPiles * cw) / overlapSlots)
   }
 
   return { cw, ch, exposed }
@@ -162,7 +171,9 @@ const PileColumn: React.FC<{
   cw: number; ch: number; exposed: number
   images: Record<string, any>
 }> = ({ cards, pi, label, isVip, selected, onCardPress, cw, ch, exposed, images }) => {
-  const overlapML = -(cw - exposed) // marginLeft ติดลบ = ระยะซ้อน
+  // Free: โผล่เท่า exposed ที่คำนวณพอดีกรอบ | VIP: พัดซ้อนลึกกว่า (โผล่แค่ 35% ของหน้าไพ่)
+  const vipExposed = cw * (1 - VIP_OVERLAP_RATIO)
+  const overlapML  = isVip ? -(cw - vipExposed) : -(cw - exposed) // marginLeft ติดลบ = ระยะซ้อน
   const n = cards.length
   const center = n > 1 ? (n - 1) / 2 : 0
   // มุมพัด/ความโค้งตามจำนวนไพ่ (3 ใบ ≈ ±8°, 5 ใบ ≈ ±16°)
