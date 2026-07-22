@@ -280,12 +280,16 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
 
 const styles = StyleSheet.create({
   // กรอบทองครอบ 3 กองแถวเดียว (ดีไซน์เดิม pilesContainerFrame)
+  // Phase 3.5 Step 2: paddingVertical 8->14 ให้กรอบสูงขึ้น (ไพ่/พัด centered อัตโนมัติจาก
+  // alignItems:'center' ด้านล่างอยู่แล้ว ไม่ต้องแก้เพิ่ม) — ระยะห่างกรอบ-ปุ่ม Auto Sort/Ready
+  // เป็นคนละเรื่องกับ paddingVertical ตรงนี้ (ควบคุมโดย userArea.paddingBottom + actionBar.paddingTop
+  // ในแต่ละไฟล์ Tier = 4+4 = 8px อยู่แล้ว ตรวจแล้วอยู่ในช่วง 8-12px ที่ต้องการพอดี ไม่ต้องแตะ)
   frame: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     width: '98%',
-    paddingVertical: 8,
+    paddingVertical: 14,
     paddingHorizontal: FRAME_H_PAD,
     backgroundColor: 'rgba(0, 30, 15, 0.65)',
     borderWidth: 1.5,
