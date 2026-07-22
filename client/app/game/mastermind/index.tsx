@@ -82,7 +82,6 @@ const CARD_IMG: Record<string, any> = {
 const CW = 62; const CH = 90; const OVERLAP = -38
 const SIDE_COL_W = 72
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
-const ROOM_ID    = 'Beginner1'
 // Escrow ผูกกับ user_id จริงใน DB — ห้าม fallback เงียบเป็น literal เด็ดขาด (บั๊กเดิม: 'Human1' ทำ escrow
 // query หา user_id ไม่เจอ ได้ balance เป็น 0 เสมอ ไม่ว่า DB จะมีเท่าไหร่จริง)
 // เปิดทางเทสเร็วไม่ login ได้เฉพาะ __DEV__ + ตั้ง env EXPO_PUBLIC_DEV_FAKE_USER_ID เอง — production build ตัดทิ้งอัตโนมัติ
@@ -203,6 +202,9 @@ const GameTableLive: React.FC = () => {
   const authUserId = useUserStore(s => s.userId)
   const usingDevFakeId = !authUserId && !!DEV_FAKE_USER_ID
   const PLAYER_ID = authUserId || DEV_FAKE_USER_ID || ''
+  // roomId ต้อง unique ต่อผู้เล่น — เดิม hardcode 'Beginner1' ชนกันเหมือน Initiate ถ้ามี 2 Human เข้าพร้อมกัน
+  // (บั๊กเดียวกัน กันปะทุล่วงหน้า — ดู auth guard ที่ block ก่อน emit ใดๆ ถ้า PLAYER_ID ว่าง)
+  const ROOM_ID = `mastermind-${PLAYER_ID}`
   // Feedback C2 — ไฟล์นี้ไม่เคยผูก authStore เลย ทำให้ P1 โชว์ '👤'/'You' hardcode ตลอด — เพิ่มเหมือน initiate/adept
   // Patch 2026-07-18: avatar_url เก็บเป็น preset key — resolve ผ่าน PRESET_AVATARS ก่อน render (pattern Initiate)
   const myAvatarRaw = useAuthStore(s => s.profile?.avatar_url) || '👤'

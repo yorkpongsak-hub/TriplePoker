@@ -43,7 +43,6 @@ const tripleSpade = require('../../../assets/images/triple_poker_icon.png')
 const CW = 62; const CH = 90; const OVERLAP = -38
 const SIDE_COL_W = 72
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
-const ROOM_ID    = 'Initiate1'
 // Escrow ผูกกับ user_id จริงใน DB — ห้าม fallback เงียบเป็น literal เด็ดขาด (บั๊กเดิม: 'Human1' ทำ escrow
 // query หา user_id ไม่เจอ ได้ balance เป็น 0 เสมอ ไม่ว่า DB จะมีเท่าไหร่จริง)
 // เปิดทางเทสเร็วไม่ login ได้เฉพาะ __DEV__ + ตั้ง env EXPO_PUBLIC_DEV_FAKE_USER_ID เอง — production build ตัดทิ้งอัตโนมัติ
@@ -163,6 +162,10 @@ const GameTableLive: React.FC = () => {
   const authUserId = useUserStore(s => s.userId)
   const usingDevFakeId = !authUserId && !!DEV_FAKE_USER_ID
   const PLAYER_ID = authUserId || DEV_FAKE_USER_ID || ''
+  // roomId ต้อง unique ต่อผู้เล่น — เดิม hardcode 'Initiate1' ทำให้ 2 Human เข้าพร้อมกัน
+  // ชน socket-room + matchStates key เดียวกัน (ไพ่คนแรกหาย) PLAYER_ID ว่างได้แค่ก่อน auth guard
+  // ด้านล่าง block ไว้แล้ว (ไม่มี emit เกิดขึ้นก่อนหน้านั้น)
+  const ROOM_ID = `initiate-${PLAYER_ID}`
   // Patch 2026-07-18: avatar_url เก็บเป็น preset key — resolve ผ่าน PRESET_AVATARS ก่อน render
   const myAvatarRaw = useAuthStore(s => s.profile?.avatar_url) || '👤'
   const myPreset = PRESET_AVATARS.find(p => p.key === myAvatarRaw)
@@ -368,7 +371,9 @@ const GameTableLive: React.FC = () => {
       if (matchStarted) return
       matchStarted = true
       // token ไม่ส่งจาก client (server-authoritative — escrowBuyIn คิดจาก users.token_balance สดเท่านั้น)
-      socket.emit('player_join_room', { roomId: ROOM_ID, playerId: PLAYER_ID, isVip: false })
+      // (player_join_room ถูกตัดออก — dead path เดิม: client ไม่เคย listen 'player_joined'/'arrangement_start'
+      // ที่มันคืนมา แถมยังสร้างตาราง tableRegistry ซ้ำด้วย roomId เดิมอีกชั้น start_match ด้านล่างทำ
+      // socket.join(roomId) ให้อยู่แล้วเหมือนกัน)
       // tier ต้องตรงกับ 'initiate' เป๊ะ — aiEngine.ts เช็ค tier === 'initiate' ตรงๆ (ไม่มี normalize)
       // ของเดิมส่ง 'beginner' ทำให้ Beginner's Luck System (subOptimal/firstValid) ไม่เคย trigger เลย
       socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'initiate' })
