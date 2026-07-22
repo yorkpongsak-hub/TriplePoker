@@ -22,14 +22,13 @@ import { PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
 import { useUserStore } from '../../../src/store/userStore'
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
 import { ActionButton } from '../../../src/components/ui/ActionButton'
-import { MenuButton } from '../../../src/components/ui/MenuButton'
-import { ResultPanel } from '../../../src/components/ui/ResultPanel'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
 import { GuideOverlay } from '../../../src/components/onboarding/GuideOverlay'
 import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
 import PlayerHandView from '../../../src/components/game/PlayerHandView'
 import BossHandRow from '../../../src/components/game/BossHandRow'
 import GameTopBar from '../../../src/components/game/GameTopBar'
+import MatchEndOverlay from '../../../src/components/game/MatchEndOverlay'
 
 // Feedback C5 — Showdown result ครอบด้วยพื้นหลังชุดเดียวกับ Profile/Lobby (bg free/vip ตาม isVip)
 const SHOWDOWN_BG_FREE = require('../../../assets/backgrounds/bg_main_free.png')
@@ -1310,52 +1309,26 @@ const GameTableLive: React.FC = () => {
                   })}
                 </View>
               )}
-              <ResultPanel
+              <MatchEndOverlay
                 variant={matchResult.finalWinner === PLAYER_ID ? 'victory' : 'defeat'}
-              >
-                {/* Buy-in Spec §6 — Buy-in/Returned/Net เหนือ Final Token Balance, JetBrains Mono */}
-                {(() => {
-                  const buyIn = matchResult.buyInAmount ?? buyInAmount
-                  const returned = tokenBalance[PLAYER_ID] ?? 0
-                  const net = returned - buyIn
-                  return (
-                    <View style={s.buyInSummaryRow}>
-                      <Text style={s.buyInSummaryText}>
-                        Buy-in <Text style={{ color: '#f87171' }}>−{buyIn.toLocaleString('en-US')}</Text>
-                        {'   '}Returned <Text style={{ color: '#4ade80' }}>+{returned.toLocaleString('en-US')}</Text>
-                        {'   '}Net <Text style={{ color: net >= 0 ? '#4ade80' : '#f87171', fontWeight: '800' }}>
-                          {net >= 0 ? '+' : ''}{net.toLocaleString('en-US')}
-                        </Text>
-                      </Text>
-                    </View>
-                  )
-                })()}
-                {/* ยอด token_balance จริงหลัง settle จาก server (ไม่คำนวณเอง) — ต่างจาก "Final Token Balance"
-                    ด้านล่างที่เป็น leaderboard stack ในแมตช์นี้ (รวม AI ซึ่งไม่มี token_balance จริงใน DB) */}
-                {typeof matchResult.newTokenBalance === 'number' && (
-                  <Text style={[s.buyInSummaryText, { textAlign: 'center', marginBottom: 8 }]}>
-                    Your Token Balance <Text style={{ color: '#c9a84c', fontWeight: '800' }}>{matchResult.newTokenBalance.toLocaleString('en-US')}</Text>
-                  </Text>
-                )}
-                <Text style={s.matchEndSub}>Final Token Balance</Text>
-                {[PLAYER_ID, ...aiList.map(a => a.id)].sort((a, b) => (tokenBalance[b] ?? 0) - (tokenBalance[a] ?? 0)).map(pid => {
-                  const ai  = aiList.find(a => a.id === pid)
-                  const bal = tokenBalance[pid] ?? (matchResult.buyInAmount ?? buyInAmount)
-                  return (
-                    <View key={pid} style={s.matchEndRow}>
-                      <Text style={[s.matchEndName, pid === PLAYER_ID && { color: '#c9a84c' }]} numberOfLines={1}>
-                        {pid === PLAYER_ID ? `${myAvatarEmoji} ${myDisplayName}` : `${ai?.emoji} ${ai?.name}`}
-                      </Text>
-                      <Text style={[s.matchEndBal, { color: bal >= (matchResult.buyInAmount ?? buyInAmount) ? '#4ade80' : '#f87171' }]}>🪙 {bal}</Text>
-                    </View>
-                  )
-                })}
-              </ResultPanel>
-              {/* เลื่อนลงมาทับแนวปุ่ม Auto Sort (s.actionBar) ที่ก้นจอ แทนที่จะลอยอยู่ใน footer ของ ResultPanel */}
-              <View style={[s.actionBar, { position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 150 }]}>
-                <MenuButton icon="rematch" label="Rematch" size="md" onPress={handleRematch} />
-                <MenuButton icon="exit" label="Lobby" size="md" onPress={() => router.replace('/(home)/lobby')} />
-              </View>
+                buyInAmount={matchResult.buyInAmount ?? buyInAmount}
+                returnedAmount={tokenBalance[PLAYER_ID] ?? 0}
+                tokenBalanceDisplay={typeof matchResult.newTokenBalance === 'number' ? matchResult.newTokenBalance : undefined}
+                leaderboard={[PLAYER_ID, ...aiList.map(a => a.id)]
+                  .sort((a, b) => (tokenBalance[b] ?? 0) - (tokenBalance[a] ?? 0))
+                  .map(pid => {
+                    const ai = aiList.find(a => a.id === pid)
+                    return {
+                      id: pid,
+                      label: pid === PLAYER_ID ? myDisplayName : (ai?.name ?? pid),
+                      balance: tokenBalance[pid] ?? (matchResult.buyInAmount ?? buyInAmount),
+                      isSelf: pid === PLAYER_ID,
+                    }
+                  })}
+                onRematch={handleRematch}
+                onBackToLobby={() => router.replace('/(home)/lobby')}
+                insetsBottom={insets.bottom}
+              />
             </>
           )}
 
@@ -1805,14 +1778,6 @@ const s = StyleSheet.create({
   countdownLabel: { fontSize: 13, color: '#c9a84c', letterSpacing: 4, fontWeight: '800', marginBottom: 10 },
   countdownNum:   { fontSize: 88, color: '#fff', fontWeight: '900' },
   countdownSub:   { fontSize: 11, color: 'rgba(201,168,76,0.6)', letterSpacing: 2, marginTop: 10 },
-
-  // Match end
-  buyInSummaryRow:  { alignItems: 'center', marginBottom: 8 },
-  buyInSummaryText: { fontSize: 10, fontFamily: 'JetBrainsMono_400Regular', color: '#C8C4B0', textAlign: 'center' },
-  matchEndSub:   { fontSize: 10, color: 'rgba(201,168,76,0.5)', letterSpacing: 2, marginBottom: 10, textAlign: 'center' },
-  matchEndRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#1e2e22' },
-  matchEndName:  { flexShrink: 1, marginRight: 8, fontSize: 13, color: '#e8dfc0', fontWeight: '600' },
-  matchEndBal:   { flexShrink: 0, fontSize: 13, fontWeight: '800' },
 
   // Server log
   logZone:   { flex: 10, backgroundColor: '#080808', borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,.12)' },

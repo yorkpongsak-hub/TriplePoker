@@ -22,13 +22,12 @@ import { autoSort } from '../../../src/utils/autoSort'
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
 import { MINION_AVATAR } from '../../../src/constants/minionAvatars'
 import { ActionButton } from '../../../src/components/ui/ActionButton'
-import { MenuButton } from '../../../src/components/ui/MenuButton'
-import { ResultPanel } from '../../../src/components/ui/ResultPanel'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
 import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
 import PlayerHandView from '../../../src/components/game/PlayerHandView'
 import BossHandRow from '../../../src/components/game/BossHandRow'
 import GameTopBar from '../../../src/components/game/GameTopBar'
+import MatchEndOverlay from '../../../src/components/game/MatchEndOverlay'
 
 // Feedback C5 — Showdown result ครอบด้วยพื้นหลังชุดเดียวกับ Profile/Lobby (bg free/vip ตาม isVip)
 const SHOWDOWN_BG_FREE = require('../../../assets/backgrounds/bg_main_free.png')
@@ -2133,56 +2132,31 @@ const GameTableLive: React.FC = () => {
                   })}
                 </View>
               )}
-              <ResultPanel
+              <MatchEndOverlay
                 variant={matchResult.finalWinner === PLAYER_ID ? 'victory' : 'defeat'}
-                footer={
-                  <View style={{ flexDirection: 'row', justifyContent: 'center' }}>
-                    <MenuButton icon="exit" label="Lobby" size="md" onPress={() => router.push('/lobby')} />
-                  </View>
+                tierBadge="HIGH NOBLE"
+                buyInAmount={matchResult.buyInAmount ?? buyInAmount}
+                // Returned ใช้ finalStackByHuman จาก server ถ้ามี (ตรงกับยอดจริงที่เข้า DB แม้เจอ Monarch ×2)
+                returnedAmount={matchResult.finalStackByHuman?.[PLAYER_ID] ?? tokenBalance[PLAYER_ID] ?? 0}
+                tokenBalanceDisplay={
+                  typeof (matchResult.newTokenBalances?.[PLAYER_ID] ?? matchResult.newTokenBalance) === 'number'
+                    ? (matchResult.newTokenBalances?.[PLAYER_ID] ?? matchResult.newTokenBalance)
+                    : undefined
                 }
-              >
-                <View style={[s.tierBadge, { alignSelf: 'center', marginBottom: 6 }]}>
-                  <Text style={s.tierText}>HIGH NOBLE</Text>
-                </View>
-                {/* Buy-in Spec §6 — Buy-in/Returned/Net เหนือ Final Token Balance, JetBrains Mono
-                    Returned ใช้ finalStackByHuman จาก server ถ้ามี (ตรงกับยอดจริงที่เข้า DB แม้เจอ Monarch ×2) */}
-                {(() => {
-                  const buyIn = matchResult.buyInAmount ?? buyInAmount
-                  const returned = matchResult.finalStackByHuman?.[PLAYER_ID] ?? tokenBalance[PLAYER_ID] ?? 0
-                  const net = returned - buyIn
-                  return (
-                    <View style={s.buyInSummaryRow}>
-                      <Text style={s.buyInSummaryText}>
-                        Buy-in <Text style={{ color: '#f87171' }}>−{buyIn.toLocaleString('en-US')}</Text>
-                        {'   '}Returned <Text style={{ color: '#4ade80' }}>+{returned.toLocaleString('en-US')}</Text>
-                        {'   '}Net <Text style={{ color: net >= 0 ? '#4ade80' : '#f87171', fontWeight: '800' }}>
-                          {net >= 0 ? '+' : ''}{net.toLocaleString('en-US')}
-                        </Text>
-                      </Text>
-                    </View>
-                  )
-                })()}
-                {/* ยอด token_balance จริงหลัง settle จาก server (ไม่คำนวณเอง) — ต่างจาก "Final Token Balance"
-                    ด้านล่างที่เป็น leaderboard stack ในแมตช์นี้ (รวม AI ซึ่งไม่มี token_balance จริงใน DB) */}
-                {typeof (matchResult.newTokenBalances?.[PLAYER_ID] ?? matchResult.newTokenBalance) === 'number' && (
-                  <Text style={[s.buyInSummaryText, { textAlign: 'center', marginBottom: 8 }]}>
-                    Your Token Balance <Text style={{ color: '#c9a84c', fontWeight: '800' }}>{(matchResult.newTokenBalances?.[PLAYER_ID] ?? matchResult.newTokenBalance).toLocaleString('en-US')}</Text>
-                  </Text>
-                )}
-                <Text style={s.matchEndSub}>Final Token Balance</Text>
-                {[PLAYER_ID, ...aiList.map(a => a.id)].sort((a, b) => (tokenBalance[b] ?? 0) - (tokenBalance[a] ?? 0)).map(pid => {
-                  const ai  = aiList.find(a => a.id === pid)
-                  const bal = tokenBalance[pid] ?? (matchResult.buyInAmount ?? buyInAmount)
-                  return (
-                    <View key={pid} style={s.matchEndRow}>
-                      <Text style={[s.matchEndName, pid === PLAYER_ID && { color: '#c9a84c' }]} numberOfLines={1}>
-                        {pid === PLAYER_ID ? `${myAvatarEmoji} ${myDisplayName}` : `${ai?.emoji} ${ai?.name}`}
-                      </Text>
-                      <Text style={[s.matchEndBal, { color: bal >= (matchResult.buyInAmount ?? buyInAmount) ? '#4ade80' : '#f87171' }]}>🪙 {bal}</Text>
-                    </View>
-                  )
-                })}
-              </ResultPanel>
+                leaderboard={[PLAYER_ID, ...aiList.map(a => a.id)]
+                  .sort((a, b) => (tokenBalance[b] ?? 0) - (tokenBalance[a] ?? 0))
+                  .map(pid => {
+                    const ai = aiList.find(a => a.id === pid)
+                    return {
+                      id: pid,
+                      label: pid === PLAYER_ID ? myDisplayName : (ai?.name ?? pid),
+                      balance: tokenBalance[pid] ?? (matchResult.buyInAmount ?? buyInAmount),
+                      isSelf: pid === PLAYER_ID,
+                    }
+                  })}
+                onBackToLobby={() => router.push('/lobby')}
+                insetsBottom={insets.bottom}
+              />
             </>
           )}
 
@@ -2910,8 +2884,6 @@ const s = StyleSheet.create({
   logoWatermark: { alignItems: 'center', justifyContent: 'center' },
 
   studioLogo: { width: 28, height: 28, opacity: 0.9 },
-  tierBadge:  { borderWidth: 1.5, borderColor: '#38bdf8', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2, backgroundColor: 'rgba(56,189,248,0.12)' },
-  tierText:   { fontSize: 8, color: '#38bdf8', letterSpacing: 2, fontWeight: '800' },
   potBadge:   { borderWidth: 1, borderColor: 'rgba(201,168,76,.4)', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 2, backgroundColor: 'rgba(0,0,0,.4)', alignItems: 'center' },
   stackLabel: { fontSize: 6, fontWeight: '800', letterSpacing: 1, color: 'rgba(201,168,76,.6)', fontFamily: 'JetBrainsMono_400Regular' },
   potText:    { fontSize: 10, fontWeight: '700', color: '#c9a84c' },
@@ -2983,14 +2955,6 @@ const s = StyleSheet.create({
   countdownLabel: { fontSize: 13, color: '#c9a84c', letterSpacing: 4, fontWeight: '800', marginBottom: 10 },
   countdownNum:   { fontSize: 88, color: '#fff', fontWeight: '900' },
   countdownSub:   { fontSize: 11, color: 'rgba(201,168,76,0.6)', letterSpacing: 2, marginTop: 10 },
-
-  // Match end
-  buyInSummaryRow:  { alignItems: 'center', marginBottom: 8 },
-  buyInSummaryText: { fontSize: 10, fontFamily: 'JetBrainsMono_400Regular', color: '#C8C4B0', textAlign: 'center' },
-  matchEndSub:   { fontSize: 10, color: 'rgba(201,168,76,0.5)', letterSpacing: 2, marginBottom: 10, textAlign: 'center' },
-  matchEndRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#1e2e22' },
-  matchEndName:  { flexShrink: 1, marginRight: 8, fontSize: 13, color: '#e8dfc0', fontWeight: '600' },
-  matchEndBal:   { flexShrink: 0, fontSize: 13, fontWeight: '800' },
 
   // Server log
   logZone:   { flex: 10, backgroundColor: '#080808', borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,.12)' },
