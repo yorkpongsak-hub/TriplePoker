@@ -2654,8 +2654,9 @@ const GameTableLive: React.FC = () => {
                         marginLeft: ml,
                         shadowColor: isCalledSlot ? '#FFD76A' : 'transparent',
                         shadowOpacity: isCalledSlot ? 0.8 : 0, shadowRadius: 8,
-                        // Patch: ไพ่ที่ AI Call แล้วยกขึ้น 10px ให้เห็นโดดเด่น
-                        transform: [{ translateY: isCalledSlot ? -10 : 0 }],
+                        // Patch 3.5 Step 5: ไพ่ที่ AI/opponent Call แล้ว เด้งลง 10px แทนเด้งขึ้น
+                        // (แยกทิศจาก P1 — กันดูสับสนว่าใบไหนเป็นของใคร ขนาด offset เท่าเดิม)
+                        transform: [{ translateY: isCalledSlot ? 10 : 0 }],
                       }}>
                         {isCalledSlot
                           ? <Image source={CARD_IMG[calledKeys[revealIdx]]} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />
