@@ -2821,13 +2821,9 @@ const GameTableLive: React.FC = () => {
                 {/* ═══ Center: ตัวอักษร YOUR TURN กลาง — render ผ่าน GRAND FINALE BIG TEXT เดิม ═══ */}
                 {/* ═══ P1 (Human) ล่าง ═══ */}
                 <View style={{ position: 'absolute', bottom: 70, left: 0, right: 0, gap: 6 }} pointerEvents="box-none">
-                  {/* Avatar + Status + Health ชิดซ้าย */}
+                  {/* Patch 3.5 Step 4: ตัด Avatar+ชื่อซ้ำออก — ชุดที่ P1 HUD มุมล่างซ้าย (ซึ่งคงแสดงตลอด
+                      รวม Grand Finale ตาม "มติลุงเยาะ" Patch 2026-07-19) มีอยู่แล้ว เหลือแค่ Status/Health ที่นี่ */}
                   <View style={{ alignItems: 'flex-start', paddingLeft: 14, gap: 2 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      {/* Patch 2026-07-18: ส่ง image ด้วย — VIP preset แบบรูปภาพโชว์ถูกต้องใน Grand Finale overlay */}
-                      <AvatarBubble emoji={myAvatarEmoji} image={myAvatarImage} size={32} />
-                      <Text style={{ color: '#FFD76A', fontSize: 11, fontWeight: '700', letterSpacing: 1 }} numberOfLines={1}>{myDisplayName}</Text>
-                    </View>
                     <GFStatusBadge playerId={PLAYER_ID} />
                     <GFHealthBar playerId={PLAYER_ID} />
                   </View>
