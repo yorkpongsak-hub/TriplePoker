@@ -7,6 +7,7 @@
 import { create } from 'zustand'
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase, onAuthStateChange } from '../services/supabaseService'
+import { useUserStore } from './userStore'
 
 interface UserProfile {
   profile_image_url?: string | null; // รูปโปรไฟล์จริง (VIP) — แยกจาก avatar_url (emoji)
@@ -56,9 +57,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // subscribe ทุก auth state change (login/logout/token refresh)
       onAuthStateChange(async (_event, session) => {
         await get().setSession(session as Session | null)
+        // Patch: session หายเมื่อไหร่ (SIGNED_OUT / token refresh fail กลางคัน) -> เคลียร์ userStore ทันที
+        if (!session) useUserStore.getState().logout()
       })
-    } catch (e) {
+    } catch (e: any) {
       console.error('[authStore] initAuth failed:', e)
+      // Patch 2026-07-17: refresh token เสีย/หาย (เช่น "Invalid Refresh Token: Refresh Token Not Found")
+      // -> ล้าง session ค้างใน AsyncStorage แล้วบูตแอปแบบ logged-out สะอาดๆ แทนการปล่อย error ค้าง
+      const msg = String(e?.message ?? '')
+      if (e?.name === 'AuthApiError' || msg.includes('Refresh Token')) {
+        try { await supabase.auth.signOut() } catch {} // signOut บน session เสียอาจ throw ซ้ำ — กลืนทิ้งได้
+        set({ session: null, user: null, profile: null })
+        useUserStore.getState().logout() // canon: ห้าม userId ค้าง/fallback
+      }
     } finally {
       set({ isLoading: false, isInitialized: true })
     }
@@ -98,7 +109,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   signOut: async () => {
-    await supabase.auth.signOut()
+    // Patch: signOut บน session ที่เสียแล้วจะ throw "Invalid Refresh Token" ซ้ำ -> ห่อไว้ให้ logout สำเร็จเสมอ
+    try { await supabase.auth.signOut() } catch (e) { console.warn('[authStore] signOut error (ignored):', e) }
     set({ session: null, user: null, profile: null })
+    useUserStore.getState().logout()
   },
 }))

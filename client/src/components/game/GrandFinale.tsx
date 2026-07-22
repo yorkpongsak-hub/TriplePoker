@@ -162,13 +162,7 @@ const GrandFinale: React.FC<GrandFinaleProps> = ({
       {hands.map((hand, playerIdx) => (
         <View key={hand.playerId} style={styles.playerRow}>
 
-          {/* ชื่อผู้เล่น */}
-          <Text style={[
-            styles.playerName,
-            hand.isWinner && styles.playerNameWinner,
-          ]}>
-            {hand.displayName}
-          </Text>
+          
 
           {/* ไพ่ 5 ใบของผู้เล่นคนนี้ */}
           <View style={styles.cardsRow}>
@@ -311,6 +305,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 6,
     flexWrap: 'wrap',
+    marginTop: -20,
   },
   cardWrapper: {
     position: 'relative',

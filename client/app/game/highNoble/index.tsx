@@ -14,6 +14,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { io, Socket } from 'socket.io-client'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useAuthStore } from '../../../src/store/authStore'
+// Patch 2026-07-18: resolve avatar preset key → emoji/รูปภาพ (แก้ VIP preset ไม่โชว์ที่โต๊ะ)
+import { PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
+import BossVictoryVFX, { VictoryTier } from '../../../src/components/vfx/BossVictoryVFX'
 import { useUserStore } from '../../../src/store/userStore'
 import { autoSort } from '../../../src/utils/autoSort'
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
@@ -193,6 +196,7 @@ const ServerLog = React.memo(() => {
       Animated.timing(dotAnim, { toValue: 1,    duration: 900, useNativeDriver: true }),
     ]))
     p.start()
+    console.log('[ANIM-DEBUG] START dotAnim (ServerLog, always-mounted)') // ANIM-DEBUG: ลบออกหลังปิดเคส
     return () => { clearTimeout(t); clearInterval(oi); p.stop() }
   }, [addLog])
 
@@ -237,7 +241,11 @@ const GameTableLive: React.FC = () => {
   const usingDevFakeId = !params.userId && !authUserId && !!DEV_FAKE_USER_ID
   const PLAYER_ID = params.userId || authUserId || DEV_FAKE_USER_ID || ''
   // Feedback C2 — ไฟล์นี้ไม่เคยผูก authStore เลย ทำให้ P1 (ตัวผู้เล่นเอง) โชว์ '👤'/'You' hardcode ตลอด
-  const myAvatarEmoji = useAuthStore(s => s.profile?.avatar_url) || '👤'
+  // Patch 2026-07-18: avatar_url เก็บเป็น preset key — resolve ผ่าน PRESET_AVATARS ก่อน render (pattern Initiate)
+  const myAvatarRaw = useAuthStore(s => s.profile?.avatar_url) || '👤'
+  const myPreset = PRESET_AVATARS.find(p => p.key === myAvatarRaw)
+  const myAvatarEmoji = myPreset?.emoji ?? (myPreset?.image ? '' : myAvatarRaw)
+  const myAvatarImage = myPreset?.image
   const myDisplayName = useAuthStore(s => s.profile?.display_name) || 'You'
   const isVip = useAuthStore(s => (s.profile?.vip_status ?? 'none') !== 'none') // Feedback C5 — ใช้ vip_status เดิม ไม่สร้าง state ใหม่
 
@@ -331,7 +339,11 @@ const GameTableLive: React.FC = () => {
 
   // ── Result
   const [tokenBalance, setTokenBalance] = useState<Record<string, number>>({})
+  // Patch 2026-07-18: format ยอดโทเคนเต็มมี comma (มติลุงเยาะ: แบบเต็ม ไม่ย่อ K/M) — pattern Initiate
+  const fmtToken = (v: number | undefined) => (v ?? buyInAmount).toLocaleString('en-US')
   const [tokenDeltas, setTokenDeltas]   = useState<Record<string, number>>({})
+  // Patch 2026-07-18: Boss Victory VFX — god (Four Gods) / monarch ตามบอสของแมตช์
+  const [victoryVfx, setVictoryVfx] = useState<VictoryTier | null>(null)
   const [matchResult, setMatchResult]   = useState<any>(null)
 
   // ── Discard
@@ -347,8 +359,15 @@ const GameTableLive: React.FC = () => {
   const auctionGlowAnim = useRef(new Animated.Value(0)).current
   // Patch: ตัวอักษร FOG OF WAR ใหญ่กลางจอ กะพริบ 5 วิ ก่อนเข้า Auction
   const fogBlinkAnim = useRef(new Animated.Value(1)).current
+  // Patch 2026-07-18: เก็บ Animated.loop ของ fogBlinkAnim ไว้ stop ได้ (pattern เดียวกับ
+  // dealAnimCompositeRef/winPulseLoopRef) — เดิม Animated.loop วิ่งไม่มีวันจบเอง ไม่เคยถูก stop เลย
+  // ถ้า unmount ระหว่าง loop ยังวิ่งอยู่จะชน native attach ("Animated node already attached to a view")
+  const fogBlinkLoopRef = useRef<Animated.CompositeAnimation | null>(null)
   // Patch: เฟดไพ่ผู้ชนะ Pile1+2 ออกก่อนเข้า Auction (เริ่มเฟดที่ 5s, ใช้เวลา 3s, รวม 8s ตรงกับ Backend delay)
   const pileFadeAnim = useRef(new Animated.Value(1)).current
+  // Patch 2026-07-18: เก็บ setTimeout id ของ pileFadeAnim ไว้ clear ได้ตอนออก phase/unmount ก่อน
+  // timeout ทำงาน (เดิมไม่มีทางยกเลิก timeout ที่รอ start animation อยู่เลย)
+  const pileFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Patch: ปุ่ม Confirm discard กะพริบตอนเหลือ 5 วิสุดท้าย
   const confirmBlinkAnim = useRef(new Animated.Value(1)).current
   // Patch Grand Finale: state ทั้งหมด
@@ -392,6 +411,50 @@ const GameTableLive: React.FC = () => {
       rotate: new Animated.Value(0),
     }))
   ).current
+  // Patch 2026-07-18: เก็บ composite animation ของ win-pulse/win-opacity/confetti ไว้ stop ได้ (pattern Adept)
+  // กัน "Animated node already attached to a view" ถ้า component unmount/เล่นซ้ำขณะ loop ยังวิ่งอยู่
+  const winPulseLoopRef = useRef<Animated.CompositeAnimation | null>(null)
+  const winOpacityLoopRef = useRef<Animated.CompositeAnimation | null>(null)
+  const confettiActiveRef = useRef(false)
+  const confettiCompositesRef = useRef<Animated.CompositeAnimation[]>([])
+
+  // ANIM-DEBUG: ลบออกหลังปิดเคส — log mount/unmount ของทุก conditional-mount block ที่มี
+  // Animated.View/Animated.Text ข้างใน (native driver ตัวไหนยังผูกอยู่ ดู START log คู่กัน)
+  useEffect(() => {
+    const active = phase === 'countdown'
+    if (active) console.log('[ANIM-DEBUG] MOUNT countdown-overlay (countAnim), phase=', phase)
+    return () => { if (active) console.log('[ANIM-DEBUG] UNMOUNT countdown-overlay (countAnim), phase=', phase) }
+  }, [phase === 'countdown']) // ANIM-DEBUG: ลบออกหลังปิดเคส
+
+  useEffect(() => {
+    const active = phase === 'fog_of_war'
+    if (active) console.log('[ANIM-DEBUG] MOUNT fog-of-war-memory-cards (pileFadeAnim), phase=', phase)
+    return () => { if (active) console.log('[ANIM-DEBUG] UNMOUNT fog-of-war-memory-cards (pileFadeAnim), phase=', phase) }
+  }, [phase === 'fog_of_war']) // ANIM-DEBUG: ลบออกหลังปิดเคส
+
+  useEffect(() => {
+    const active = phase === 'fog_of_war'
+    if (active) console.log('[ANIM-DEBUG] MOUNT fog-of-war-big-text (fogBlinkAnim), phase=', phase)
+    return () => { if (active) console.log('[ANIM-DEBUG] UNMOUNT fog-of-war-big-text (fogBlinkAnim), phase=', phase) }
+  }, [phase === 'fog_of_war']) // ANIM-DEBUG: ลบออกหลังปิดเคส
+
+  useEffect(() => {
+    const active = phase === 'grand_finale' && !!gfTurnPlayerId
+    if (active) console.log('[ANIM-DEBUG] MOUNT grand-finale-big-text (gfBlinkAnim), phase=', phase)
+    return () => { if (active) console.log('[ANIM-DEBUG] UNMOUNT grand-finale-big-text (gfBlinkAnim), phase=', phase) }
+  }, [phase === 'grand_finale' && !!gfTurnPlayerId]) // ANIM-DEBUG: ลบออกหลังปิดเคส
+
+  useEffect(() => {
+    const active = showDiscard && !isHNDiscard
+    if (active) console.log('[ANIM-DEBUG] MOUNT discard-modal-simple (confirmBlinkAnim), phase=', phase)
+    return () => { if (active) console.log('[ANIM-DEBUG] UNMOUNT discard-modal-simple (confirmBlinkAnim), phase=', phase) }
+  }, [showDiscard && !isHNDiscard]) // ANIM-DEBUG: ลบออกหลังปิดเคส
+
+  useEffect(() => {
+    const active = showDiscard && isHNDiscard
+    if (active) console.log('[ANIM-DEBUG] MOUNT discard-modal-hn (confirmBlinkAnim), phase=', phase)
+    return () => { if (active) console.log('[ANIM-DEBUG] UNMOUNT discard-modal-hn (confirmBlinkAnim), phase=', phase) }
+  }, [showDiscard && isHNDiscard]) // ANIM-DEBUG: ลบออกหลังปิดเคส
 
   // showdown_result มาถึง → แสดง ShowdownResult popup ทันที countdown 15 วิ
   const startContinueCountdown = () => {
@@ -479,7 +542,10 @@ const GameTableLive: React.FC = () => {
       continueValRef.current = 33
       if (continueTimerRef.current) clearInterval(continueTimerRef.current)
       setShowDiscard(false); setDiscardSelected([])
-      fadeCards.setValue(1)
+      // Patch 2026-07-18: ต้อง stopAnimation ก่อน setValue เสมอ กัน native-driven timing ที่ยังค้างจาก
+      // handleContinue ชนกัน — กดไพ่ให้ซ่อน (0) ตอนเริ่มรอบใหม่ ไม่ใช่ 1 (fadeCards bind ค้างแล้ว ไม่มี
+      // literal ternary คอยบังตอน dealing อีกต่อไป — ค่านี้คือตัวซ่อนไพ่จริงตอน dealing)
+      fadeCards.stopAnimation(() => { fadeCards.setValue(0) })
       setBlind([]); setDealCount(0)
       setTokenBalance(data.tokenBalance ?? {})
       // Patch Multiplayer: server ส่ง seats ทั้ง 4 ที่นั่ง (boss เสมอ + อีก 3 ที่อาจเป็น Human หรือ AI)
@@ -563,9 +629,13 @@ const GameTableLive: React.FC = () => {
       const tick = () => {
         setCountdown(c)
         Animated.sequence([
-          Animated.timing(countAnim, { toValue: 1.6, duration: 150, useNativeDriver: true }),
-          Animated.timing(countAnim, { toValue: 1,   duration: 850, useNativeDriver: true }),
+          // Patch 2026-07-18: useNativeDriver false ตาม Adept (adept:520-521) — countdown overlay
+          // ค้าง mount ตลอดเวลาแล้ว (ไม่ conditional-mount อีกต่อไป) แต่ยังคง false ไว้กันความเสี่ยง
+          // native-attach ซ้ำซ้อน เผื่อกรณี tick ถี่เกินจน animation ก่อนหน้ายังไม่จบ
+          Animated.timing(countAnim, { toValue: 1.6, duration: 150, useNativeDriver: false }),
+          Animated.timing(countAnim, { toValue: 1,   duration: 850, useNativeDriver: false }),
         ]).start()
+        console.log('[ANIM-DEBUG] START countAnim (tick c=' + c + '), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
         if (c > 0) { c--; setTimeout(tick, 1000) }
       }
       tick()
@@ -623,23 +693,40 @@ const GameTableLive: React.FC = () => {
     socket.on('fog_of_war', (_data: any) => {
       setPhase('fog_of_war')
       // Patch: reset fadeCards กลับเป็น 1 (เพราะ handleContinue ของ Showdown fade ไป 0 แล้ว ยังไม่ reset)
-      fadeCards.setValue(1)
-      pileFadeAnim.setValue(1)
-      setTimeout(() => {
+      // Patch 2026-07-18: stopAnimation ก่อน setValue เสมอ กัน native-driven timing ค้างจากรอบก่อนชนกัน
+      fadeCards.stopAnimation(() => { fadeCards.setValue(1) })
+      // Patch 2026-07-18: stopAnimation ก่อน setValue/start เสมอ + clear timeout ค้างจากรอบก่อน
+      // กัน native-driven timing ซ้อนกัน ("Animated node already attached to a view")
+      if (pileFadeTimeoutRef.current) clearTimeout(pileFadeTimeoutRef.current)
+      pileFadeAnim.stopAnimation(() => { pileFadeAnim.setValue(1) })
+      pileFadeTimeoutRef.current = setTimeout(() => {
+        pileFadeTimeoutRef.current = null
+        pileFadeAnim.stopAnimation()
         Animated.timing(pileFadeAnim, { toValue: 0, duration: 3000, useNativeDriver: true }).start()
+        console.log('[ANIM-DEBUG] START pileFadeAnim (fog_of_war, +5s one-shot), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
       }, 5000)
+      fogBlinkLoopRef.current?.stop()
       fogBlinkAnim.setValue(1)
-      Animated.loop(
+      fogBlinkLoopRef.current = Animated.loop(
         Animated.sequence([
           Animated.timing(fogBlinkAnim, { toValue: 0.2, duration: 500, useNativeDriver: true }),
           Animated.timing(fogBlinkAnim, { toValue: 1,   duration: 500, useNativeDriver: true }),
         ])
-      ).start()
+      )
+      fogBlinkLoopRef.current.start()
+      console.log('[ANIM-DEBUG] START fogBlinkAnim (Animated.loop, fog_of_war handler), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
     })
     // Patch Blind Auction: เริ่มประมูล
     socket.on('blind_auction_start', (data: any) => {
       // Patch: เผื่อ fadeCards ค้างที่ 0 จาก handleContinue (Showdown popup) - reset กลับเป็น 1
-      fadeCards.setValue(1)
+      // Patch 2026-07-18: stopAnimation ก่อน setValue เสมอ กัน native-driven timing ค้างจากรอบก่อนชนกัน
+      fadeCards.stopAnimation(() => { fadeCards.setValue(1) })
+      // Patch 2026-07-18: ออกจาก fog_of_war phase แล้ว — หยุด fogBlinkAnim loop + pileFadeAnim
+      // (รวม clear timeout ที่อาจยังรออยู่) กัน loop/timing ค้างวิ่งต่อหลัง Fog of War UI unmount
+      if (pileFadeTimeoutRef.current) { clearTimeout(pileFadeTimeoutRef.current); pileFadeTimeoutRef.current = null }
+      pileFadeAnim.stopAnimation()
+      fogBlinkLoopRef.current?.stop()
+      fogBlinkLoopRef.current = null
       setPhase('blind_auction')
       setAuctionBidLevels(data.bidLevels ?? [])
       setAuctionMyBid(null)
@@ -720,10 +807,14 @@ const GameTableLive: React.FC = () => {
         left -= 1
         setDiscardTimeLeft(Math.max(0, left))
         if (left <= 5 && left > 0) {
+          // Patch 2026-07-18: stopAnimation ก่อน start ใหม่ทุกครั้ง กัน tick ถี่เกินจน animation
+          // ก่อนหน้ายังไม่จบซ้อนกัน ("Animated node already attached to a view")
+          confirmBlinkAnim.stopAnimation()
           Animated.sequence([
             Animated.timing(confirmBlinkAnim, { toValue: 0.3, duration: 350, useNativeDriver: true }),
             Animated.timing(confirmBlinkAnim, { toValue: 1,   duration: 350, useNativeDriver: true }),
           ]).start()
+          console.log('[ANIM-DEBUG] START confirmBlinkAnim (discard tick left=' + left + '), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
         }
         if (left <= 0) clearInterval(discardTimerRef.current)
       }, 1000)
@@ -755,16 +846,23 @@ const GameTableLive: React.FC = () => {
         left -= 1
         setDiscardTimeLeft(Math.max(0, left))
         if (left <= 5 && left > 0) {
+          // Patch 2026-07-18: stopAnimation ก่อน start ใหม่ทุกครั้ง กัน tick ถี่เกินจน animation
+          // ก่อนหน้ายังไม่จบซ้อนกัน ("Animated node already attached to a view")
+          confirmBlinkAnim.stopAnimation()
           Animated.sequence([
             Animated.timing(confirmBlinkAnim, { toValue: 0.3, duration: 350, useNativeDriver: true }),
             Animated.timing(confirmBlinkAnim, { toValue: 1,   duration: 350, useNativeDriver: true }),
           ]).start()
+          console.log('[ANIM-DEBUG] START confirmBlinkAnim (discard tick left=' + left + '), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
         }
         if (left <= 0) clearInterval(discardTimerRef.current)
       }, 1000)
     })
     socket.on('discard_phase_result', (data: any) => {
       if (discardTimerRef.current) clearInterval(discardTimerRef.current)
+      // Patch 2026-07-18: discard จบแล้ว modal กำลังจะปิด — หยุด confirmBlinkAnim ก่อนเสมอ
+      // กัน "Animated node already attached to a view" ตอน modal unmount ระหว่าง blink ยังเล่นอยู่
+      confirmBlinkAnim.stopAnimation()
       setShowDiscard(false)
       setPhase('discard_done')
       const myFinalHand: string[] = data.myFinalHand ?? []
@@ -779,7 +877,7 @@ const GameTableLive: React.FC = () => {
     socket.on('grand_finale_start', (data: any) => {
       // Patch High Noble: reset selected card เมื่อเริ่ม Grand Finale
       setGfSelectedCardKey(null)
-      console.error('🟢 [DEBUG] grand_finale_start received!', data)
+      console.log('🟢 [DEBUG] grand_finale_start received!', data)
       setPhase('grand_finale')
       setGfRoundNumber(1)
       setGfPile3Pot(data.pile3Pot ?? 0)
@@ -824,18 +922,19 @@ const GameTableLive: React.FC = () => {
           Animated.timing(gfBlinkAnim, { toValue: 1,   duration: 500, useNativeDriver: true }),
         ])
       ).start()
+      console.log('[ANIM-DEBUG] START gfBlinkAnim (Animated.loop, grand finale turn handler), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
     })
     // Patch Grand Finale: ผล action ของผู้เล่นคนหนึ่ง
     socket.on('grand_finale_action', (data: any) => {
-      console.error('🔴 [DEBUG] grand_finale_action:', data)
+      console.log('🔴 [DEBUG] grand_finale_action:', data)
       if (gfTimerRef.current) clearInterval(gfTimerRef.current)
       gfBlinkAnim.stopAnimation()
       if (data.action === 'fold') {
         setGfFoldedPlayers(prev => [...prev, data.playerId])
       } else if (data.revealedCard) {
-        console.error('🔴 [DEBUG] revealedCard from server:', data.revealedCard, 'playerId:', data.playerId)
+        console.log('🔴 [DEBUG] revealedCard from server:', data.revealedCard, 'playerId:', data.playerId)
         if (data.playerId === PLAYER_ID) {
-          console.error('🔴 [DEBUG] piles[2] keys:', piles[2].map(c => c.key))
+          console.log('🔴 [DEBUG] piles[2] keys:', piles[2].map(c => c.key))
         }
         setGfRevealedCards(prev => ({ ...prev, [data.playerId]: [...(prev[data.playerId] ?? []), data.revealedCard] }))
       }
@@ -879,24 +978,36 @@ const GameTableLive: React.FC = () => {
         useUserStore.getState().updateTokenBalance(myNewBalance)
       }
       if (data.finalWinner === PLAYER_ID) {
-        Animated.loop(Animated.sequence([
-          Animated.timing(winPulse, { toValue: 1.25, duration: 400, useNativeDriver: true }),
-          Animated.timing(winPulse, { toValue: 1,    duration: 400, useNativeDriver: true }),
-        ])).start()
-        Animated.loop(Animated.sequence([
-          Animated.timing(winOpacity, { toValue: 0.4, duration: 300, useNativeDriver: true }),
-          Animated.timing(winOpacity, { toValue: 1,   duration: 300, useNativeDriver: true }),
-        ])).start()
+        // Patch 2026-07-18: VFX ชัยชนะ — Monarch ระดับตำนาน / Four Gods ระดับเทพ
+        setVictoryVfx(bossIntroName === 'Monarch' ? 'monarch' : 'god')
+        // Patch 2026-07-18: หยุด loop/composite ค้างจากรอบก่อน (ถ้ามี) ก่อนเริ่มใหม่เสมอ +
+        // useNativeDriver:false ทุกจุด (pattern Adept) กัน native "already attached to a view"
+        stopMatchEndAnimations()
+        winPulseLoopRef.current = Animated.loop(Animated.sequence([
+          Animated.timing(winPulse, { toValue: 1.25, duration: 400, useNativeDriver: false }),
+          Animated.timing(winPulse, { toValue: 1,    duration: 400, useNativeDriver: false }),
+        ]))
+        winPulseLoopRef.current.start()
+        winOpacityLoopRef.current = Animated.loop(Animated.sequence([
+          Animated.timing(winOpacity, { toValue: 0.4, duration: 300, useNativeDriver: false }),
+          Animated.timing(winOpacity, { toValue: 1,   duration: 300, useNativeDriver: false }),
+        ]))
+        winOpacityLoopRef.current.start()
+        confettiActiveRef.current = true
         const launchConfetti = () => {
+          if (!confettiActiveRef.current) return
+          confettiCompositesRef.current = []
           confettiAnims.forEach((a, i) => {
             a.x.setValue(Math.random() * 360 - 30)
             a.y.setValue(-100); a.opacity.setValue(1); a.rotate.setValue(0)
-            Animated.parallel([
-              Animated.timing(a.y,       { toValue: 700, duration: 2000 + Math.random() * 1500, delay: i * 80, useNativeDriver: true }),
-              Animated.timing(a.opacity, { toValue: 0,   duration: 2500, delay: i * 80, useNativeDriver: true }),
-              Animated.timing(a.rotate,  { toValue: 720, duration: 2000, delay: i * 80, useNativeDriver: true }),
-            ]).start(({ finished }) => {
-              if (finished && i === confettiAnims.length - 1) launchConfetti()
+            const anim = Animated.parallel([
+              Animated.timing(a.y,       { toValue: 700, duration: 2000 + Math.random() * 1500, delay: i * 80, useNativeDriver: false }),
+              Animated.timing(a.opacity, { toValue: 0,   duration: 2500, delay: i * 80, useNativeDriver: false }),
+              Animated.timing(a.rotate,  { toValue: 720, duration: 2000, delay: i * 80, useNativeDriver: false }),
+            ])
+            confettiCompositesRef.current.push(anim)
+            anim.start(({ finished }) => {
+              if (finished && confettiActiveRef.current && i === confettiAnims.length - 1) launchConfetti()
             })
           })
         }
@@ -906,12 +1017,29 @@ const GameTableLive: React.FC = () => {
 
     return () => {
       if (timerRef.current) clearInterval(timerRef.current)
+      if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop() // Patch: หยุด deal anim ตอน unmount
+      // Patch 2026-07-18: หยุด win-pulse/win-opacity/confetti ก่อน unmount เสมอ (pattern Adept) — ไม่งั้น
+      // Animated.loop/confetti recursion ที่ไม่มีวันจบเองจะไปชน native attach ตอน mount รอบถัดไป
+      stopMatchEndAnimations()
+      // Patch 2026-07-18: safety-net หยุด fogBlinkAnim/pileFadeAnim/confirmBlinkAnim/gfBlinkAnim ตอน
+      // unmount เสมอ — เผื่อ component unmount กลาง phase ก่อนถึงจุด stop ปกติใน handler ถัดไป
+      if (pileFadeTimeoutRef.current) { clearTimeout(pileFadeTimeoutRef.current); pileFadeTimeoutRef.current = null }
+      pileFadeAnim.stopAnimation()
+      fogBlinkLoopRef.current?.stop()
+      fogBlinkLoopRef.current = null
+      confirmBlinkAnim.stopAnimation()
+      gfBlinkAnim.stopAnimation()
       socket.disconnect()
     }
   }, [])
 
   // ── Deal Animation
+  // Patch 2026-07-17: composite ref เก็บ Animated.parallel ไว้เรียก .stop() (พอร์ต pattern จาก Adept)
+  const dealAnimCompositeRef = useRef<Animated.CompositeAnimation | null>(null)
+
   const startDealAnimation = () => {
+    // Patch: หยุด animation รอบเก่าก่อนเสมอ — กัน "Animated node is already attached to a view"
+    if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop()
     // ตำแหน่งปลายทาง: Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย
     const targets = [
       { x: -50,  y: -240 }, // Boss AI (บน)
@@ -949,10 +1077,19 @@ const GameTableLive: React.FC = () => {
       setTimeout(() => setDealCount(i + 1), i * delayPerCard + 450)
     })
 
-    Animated.parallel(anims).start(() => {
+    const dealComposite = Animated.parallel(anims)
+    dealAnimCompositeRef.current = dealComposite
+    console.log('[ANIM-DEBUG] START dealAnims composite (dealAnimCompositeRef), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
+    dealComposite.start(({ finished }) => {
+      dealAnimCompositeRef.current = null
+      if (!finished) return // ถูก .stop() กลางทาง — ห้ามแตะ phase (กันเด้งไป arrangement ผิดจังหวะ)
       setDealDone(true)
       setShowLockup(false)
       setPhase('arrangement')
+      // Patch 2026-07-18: เผยไพ่กลับมาให้เห็นหลัง deal เสร็จ (fadeCards ถูกกดไว้ที่ 0 ตอนเริ่ม dealing
+      // ใน processRoundStart) — stopAnimation ก่อนเสมอกันชนกับ timing ค้างจากรอบก่อน (pattern Adept)
+      fadeCards.stopAnimation()
+      Animated.timing(fadeCards, { toValue: 1, duration: 300, useNativeDriver: false }).start()
     })
   }
 
@@ -1009,6 +1146,8 @@ const GameTableLive: React.FC = () => {
     if (discardTimerRef.current) clearInterval(discardTimerRef.current)
     const keepKeys = discardHandKeys.filter((_, i) => !discardSelected.includes(i))
     socketRef.current?.emit('hn_discard_submit', { roomId: ROOM_ID, userId: PLAYER_ID, keepKeys })
+    // Patch 2026-07-18: ปิด modal เอง (กดยืนยันก่อนหมดเวลา) — หยุด confirmBlinkAnim ก่อนเสมอ
+    confirmBlinkAnim.stopAnimation()
     setShowDiscard(false)
   }
 
@@ -1030,6 +1169,8 @@ const GameTableLive: React.FC = () => {
       discardPiles[pile].filter((_, i) => !discardSelByPile[pile].includes(i))
     const keepKeys = [...keepFrom('pile1'), ...keepFrom('pile2'), ...keepFrom('pile3')]
     socketRef.current?.emit('hn_discard_submit', { roomId: ROOM_ID, userId: PLAYER_ID, keepKeys })
+    // Patch 2026-07-18: ปิด modal เอง (กดยืนยันก่อนหมดเวลา) — หยุด confirmBlinkAnim ก่อนเสมอ
+    confirmBlinkAnim.stopAnimation()
     setShowDiscard(false)
     setIsHNDiscard(false)
   }
@@ -1045,6 +1186,17 @@ const GameTableLive: React.FC = () => {
     if (auctionMyBid) return
     setAuctionMyBid({ cardIndex, level })
     socketRef.current?.emit('hn_auction_bid', { roomId: ROOM_ID, userId: PLAYER_ID, cardIndex, level })
+  }
+
+  // Patch 2026-07-18: หยุด win-pulse/win-opacity loop + confetti recursion ทั้งหมด ก่อน unmount/เริ่มรอบใหม่
+  // เสมอ (Animated.loop และ confetti recursion ไม่มีวันจบเอง ถ้าไม่ stop จะไปชน native attach ตอน mount
+  // รอบถัดไป — pattern Adept)
+  const stopMatchEndAnimations = () => {
+    if (winPulseLoopRef.current) winPulseLoopRef.current.stop()
+    if (winOpacityLoopRef.current) winOpacityLoopRef.current.stop()
+    confettiActiveRef.current = false
+    confettiCompositesRef.current.forEach(a => a.stop())
+    confettiCompositesRef.current = []
   }
 
   // ── Continue → emit player_continue รอ server (Mastermind: ไม่ fade ออก เพราะต่อ Flow ใน Round เดียวกัน)
@@ -1260,14 +1412,17 @@ const GameTableLive: React.FC = () => {
           {/* Community cards */}
           {/* two-layer wrapper: View ชั้นนอกถือเงา (ห้ามมี overflow:hidden กันเงาโดนตัดบน iOS) / View ชั้นในคง s.commCard เดิมทุกประการ */}
           {k1 && CARD_IMG[k1] && <View style={pileShadowStyle}><View style={s.commCard}><Image source={CARD_IMG[k1]} style={{ width: 50, height: 72 }} resizeMode="cover" /></View></View>}
-          {k2 && CARD_IMG[k2] && <View style={pileShadowStyle}><View style={s.commCard}><Image source={CARD_IMG[k2]} style={{ width: 50, height: 72 }} resizeMode="cover" /></View></View>}
+          {/* Patch 2026-07-18: ไพ่กองกลางใบ 2 ซ้อนทับใบแรก 1/3 — แยก visual จากไพ่ในมือ + ประหยัดพื้นที่โต๊ะ */}
+          {k2 && CARD_IMG[k2] && <View style={[pileShadowStyle, { marginLeft: -17 }]}><View style={s.commCard}><Image source={CARD_IMG[k2]} style={{ width: 50, height: 72 }} resizeMode="cover" /></View></View>}
           {/* Divider */}
           {hasWinner && <View style={{ width: 1, height: 72, backgroundColor: 'rgba(201,168,76,0.3)', marginHorizontal: 2 }} />}
           {/* Winner cards */}
+          {/* Patch 2026-07-18: ไพ่ผู้ชนะซ้อน 1/3 เท่ากองกลาง — แถว showdown ไม่ยาวล้น */}
           {hasWinner && winCards.map((k, i) => (
             <View key={i} style={[s.commCard, {
               borderColor: isWin ? '#4ade80' : '#f87171',
               borderWidth: 1.5,
+              marginLeft: i > 0 ? -17 : 0,
             }]}>
               {CARD_IMG[k]
                 ? <Image source={CARD_IMG[k]} style={{ width: 50, height: 72 }} resizeMode="cover" />
@@ -1597,8 +1752,8 @@ const GameTableLive: React.FC = () => {
           </View>
 
           {/* ── DEAL ANIMATION ── */}
-          {phase === 'dealing' && (
-            <View style={[StyleSheet.absoluteFill as any, { alignItems: 'center', justifyContent: 'center', zIndex: 50 }]} pointerEvents="none">
+          {/* Patch: opacity-toggle แทน conditional-mount (pattern Adept) — View คง mount ตลอด กัน node attach ซ้ำ */}
+            <View style={[StyleSheet.absoluteFill as any, { alignItems: 'center', justifyContent: 'center', zIndex: 50, opacity: phase === 'dealing' ? 1 : 0 }]} pointerEvents="none">
               {dealAnims.map((a, i) => (
                 <Animated.View key={i} style={{
                   position: 'absolute',
@@ -1635,7 +1790,6 @@ const GameTableLive: React.FC = () => {
                 ))
               })}
             </View>
-          )}
 
           {/* ── BLIND AUCTION OVERLAY ── */}
           {(phase === 'blind_auction' || phase === 'auction_done') && (
@@ -1969,17 +2123,18 @@ const GameTableLive: React.FC = () => {
           })()}
 
           {/* ── COUNTDOWN OVERLAY ── */}
-          {phase === 'countdown' && (
-            <View style={s.overlay}>
-              <Text style={s.countdownLabel}>SHOWDOWN</Text>
-              <Animated.Text style={[s.countdownNum, { transform: [{ scale: countAnim }] }]}>
-                {countdown > 0 ? countdown : (
-                  <Image source={tripleSpade} style={{ width: 80, height: 80 }} resizeMode="contain" />
-                )}
-              </Animated.Text>
-              <Text style={s.countdownSub}>All piles reveal!</Text>
-            </View>
-          )}
+          {/* Patch 2026-07-18: ค้าง mount ไว้เสมอ toggle แค่ opacity (pattern Adept adept:1328-1330) —
+              countAnim ใช้ native driver ถ้า unmount ระหว่าง animation กำลังเล่นอยู่จะชน native attach
+              ("Animated node already attached to a view") ห้ามใช้ && unmount ตรงนี้อีก */}
+          <View style={[s.overlay, { opacity: phase === 'countdown' ? 1 : 0 }]} pointerEvents={phase === 'countdown' ? 'auto' : 'none'}>
+            <Text style={s.countdownLabel}>SHOWDOWN</Text>
+            <Animated.Text style={[s.countdownNum, { transform: [{ scale: countAnim }] }]}>
+              {countdown > 0 ? countdown : (
+                <Image source={tripleSpade} style={{ width: 80, height: 80 }} resizeMode="contain" />
+              )}
+            </Animated.Text>
+            <Text style={s.countdownSub}>All piles reveal!</Text>
+          </View>
 
 
 
@@ -2272,44 +2427,51 @@ const GameTableLive: React.FC = () => {
           <View style={[s.topBar, { paddingTop: isWeb ? 22 : insets.top + 14, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }]}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: 50 }}>
               <View style={{ alignItems: 'center' }}>
-                <View style={s.tierBadge}><Text style={s.tierText}>HIGH NOBLE</Text></View>
-                <Text style={{ fontSize: 13, color: '#FFD76A', marginTop: 2, letterSpacing: 1 }}>★★★★★</Text>
+                {/* Patch 2026-07-19: ดาวย้ายมาต่อท้าย badge แถวเดียวกัน */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <View style={s.tierBadge}><Text style={s.tierText}>HIGH NOBLE</Text></View>
+                  <Text style={{ fontSize: 13, color: '#FFD76A', letterSpacing: 1 }}>★★★★★</Text>
+                </View>
               </View>
-              <Text style={s.roundText}>R{roundNumber}/5</Text>
+              <Text style={[s.roundText, { color: '#FFFFFF' /* Patch 2026-07-19 */ }]}>R{roundNumber}/5</Text>
             </View>
-            <View style={[s.potBadge, { marginLeft: 6 }]}>
-              <Text style={s.stackLabel}>STACK</Text>
-              <Text style={s.potText}>🪙 {tokenBalance[PLAYER_ID] ?? buyInAmount}</Text>
-              {(tokenDeltas[PLAYER_ID] ?? 0) !== 0 && (
-                <Text style={[s.deltaText, { color: (tokenDeltas[PLAYER_ID] ?? 0) > 0 ? '#4ade80' : '#f87171' }]}>
-                  {(tokenDeltas[PLAYER_ID] ?? 0) > 0 ? '+' : ''}{tokenDeltas[PLAYER_ID]}
-                </Text>
-              )}
-            </View>
+            {/* Patch 2026-07-19: ตัด Stack badge — ยอดโทเคนมีใต้ชื่อผู้เล่นแล้ว (มติลุงเยาะ) */}
             <TimerDisplay valRef={timerValRef} />
           </View>
 
-          {/* AI SEAT + MAIN + USER — fade เมื่อ continue, ซ่อนระหว่าง dealing */}
-          <Animated.View style={{ flex: 1, opacity: phase === 'dealing' ? 0 : fadeCards }}>
+          {/* AI SEAT + MAIN + USER — fade เมื่อ continue, ซ่อนระหว่าง dealing
+              Patch 2026-07-18: ห้ามสลับ opacity ระหว่าง literal 0 กับ fadeCards node ตรงนี้ (native driver
+              จะ attach/detach node ทุกครั้งที่สลับ) — bind ค้างไว้กับ fadeCards node เสมอ แล้วให้
+              startDealAnimation/round_start เป็นคน drive ค่า fadeCards เองแทน (pattern Adept) */}
+          <Animated.View style={{ flex: 1, opacity: fadeCards }}>
           <View style={[s.aiSeat, { opacity: (phase === 'countdown' || phase === 'showdown' || phase === 'result' || phase === 'grand_finale' || phase === 'grand_finale_done') ? 0 : 1 }]}>
             {bossAI && <GFStatusBadge playerId={bossAI.id} />}
             {bossAI && <GFHealthBar playerId={bossAI.id} />}
             <View style={s.aiRow}>
-              <AvatarBubble emoji={bossAI?.emoji ?? '🤖'} size={56} glow image={bossAI?.name ? BOSS_AVATAR[bossAI.name] : undefined} />
-              <Text style={s.aiName}>{bossAI?.name ?? 'BOSS AI'}</Text>
+              <View style={{ transform: [{ translateX: -50 }] /* Patch 2026-07-18: ขยับ avatar บอสไปซ้าย 50px (pattern Initiate) */ }}><AvatarBubble emoji={bossAI?.emoji ?? '🤖'} size={56} glow image={bossAI?.name ? BOSS_AVATAR[bossAI.name] : undefined} /></View>
+              <View style={{ transform: [{ translateX: -50 }] /* Patch 2026-07-18: ชื่อ+ยอดโทเคนบอสตาม avatar ไปซ้าย 50px */ }}>
+                <Text style={s.aiName}>{bossAI?.name ?? 'BOSS AI'}</Text>
+                <Text style={s.seatToken}>🪙 {fmtToken(tokenBalance[bossAI?.id ?? ''])}</Text>
+              </View>
               <View style={s.statusBadge}>
                 <Text style={s.statusText}>{aiStatus[bossAI?.id ?? ''] ?? 'Arranging...'}</Text>
               </View>
             </View>
-            {bossAI && <AIPiles aiId={bossAI.id} />}
-            {/* Patch: ไพ่ Call หงาย ย้ายลงมาใต้ AIPiles (ใต้หลังไพ่) */}
-            {bossAI && phase === 'grand_finale' && <GFCardsForPlayer playerId={bossAI.id} size="normal" />}
+            {bossAI && <View style={{ marginTop: -10 /* Patch 2026-07-18: ยกไพ่บอสขึ้น 10px */ }}><AIPiles aiId={bossAI.id} /></View>}
+            {/* Patch 2026-07-19: ไพ่ Call บอสกางลงล่างแบบ absolute — ตาม Mastermind */}
+            {bossAI && phase === 'grand_finale' && (
+              <View style={{ position: 'absolute', bottom: -80, left: 0, right: 0, alignItems: 'center' }}>
+                <GFCardsForPlayer playerId={bossAI.id} size="normal" />
+              </View>
+            )}
           </View>
 
           {/* MAIN AREA */}
           <View style={[s.mainArea, { opacity: (phase === 'countdown' || phase === 'showdown' || phase === 'result' || phase === 'grand_finale' || phase === 'grand_finale_done') ? 0 : 1 }]}>
             <View style={[s.sideCol, { paddingLeft: 10 }]}>
               <Text style={s.sideName}>{p2AI?.emoji ?? 'P2'}</Text>
+              {/* Patch 2026-07-18: ยอดโทเคนคงเหลือใต้ชื่อ (pattern Initiate) */}
+              <Text style={s.seatToken}>🪙 {fmtToken(tokenBalance[p2AI?.id ?? ''])}</Text>
               <View style={{ marginTop: 4, marginBottom: 60 }}>
                 <AvatarBubble emoji={p2AI?.emoji ?? '👤'} size={36} image={p2AI?.name ? MINION_AVATAR[p2AI.name] : undefined} />
                 {p2AI && <GFStatusBadge playerId={p2AI.id} />}
@@ -2318,7 +2480,7 @@ const GameTableLive: React.FC = () => {
               {p2AI && <SideSeat rot="270deg" aiId={p2AI.id} />}
               {/* Patch: ไพ่ Call หงาย — ลอยที่ bottom ของ sideCol ไม่กระทบ SideSeat */}
               {p2AI && phase === 'grand_finale' && (
-                <View style={{ position: 'absolute', bottom: 4, left: 0, right: 0, alignItems: 'center' }}>
+                <View style={{ position: 'absolute', bottom: -80 /* Patch 2026-07-19: กางลงล่าง — ตาม Mastermind */, left: 0, right: 0, alignItems: 'center' }}>
                   <GFCardsForPlayer playerId={p2AI.id} size="normal" />
                 </View>
               )}
@@ -2327,7 +2489,7 @@ const GameTableLive: React.FC = () => {
             <View style={s.commWrap}>
               {/* Patch: ตอน Fog of War — โชว์ไพ่ชุดที่ชนะ Pile1+2 (รวม Community 5 ใบ) ให้จำ ก่อน Auction */}
               {phase === 'fog_of_war' && (
-                <Animated.View style={{ marginBottom: -8, alignItems: 'center', marginLeft: 40, opacity: pileFadeAnim }}>
+                <Animated.View style={{ marginBottom: -8, alignItems: 'center', marginLeft: 15 /* Patch 2026-07-19: จูนรอบ 2 ตาม Mastermind */, opacity: pileFadeAnim }}>
                   {([1, 2] as const).map(pNum => {
                     const winnerId = pileWinners[pNum]
                     const commCards = pNum === 1 ? comm.p1 : comm.p2
@@ -2353,7 +2515,8 @@ const GameTableLive: React.FC = () => {
                 </Animated.View>
               )}
               {/* Auction — จัดกึ่งกลางให้ตรงกับ Pile 3 ด้านล่าง — ซ่อนตอน Grand Finale (Phase นี้ไม่เกี่ยวกับ Auction แล้ว) */}
-              {phase !== 'grand_finale' && phase !== 'grand_finale_done' && (
+              {/* Patch 2026-07-18: แสดงเฉพาะช่วงประมูลจริง — เดิมโชว์ทุก phase ทำให้ทับโซนจัดไพ่ผู้เล่น (ตาม Mastermind) */}
+              {(phase === 'blind_auction' || phase === 'auction_done') && (
                 <View style={{ alignItems: 'center', gap: 3, marginBottom: 4, width: '100%' }}>
                   <Text style={s.auctionLbl}>Auction</Text>
                   <View style={{ flexDirection: 'row', gap: 6 }}>
@@ -2369,10 +2532,8 @@ const GameTableLive: React.FC = () => {
               {(phase === 'arrangement' || phase === 'arrangement_2') && (
                 <View style={{ flexDirection: 'row', gap: 6, marginBottom: 4 }}>
                   <CommRow pileNum={1} k1={comm.p1[0]} k2={comm.p1[1]} />
-                  {/* Patch: Community Row 2 เลื่อนขวา +25px */}
-                  <View style={{ marginLeft: 25 }}>
-                    <CommRow pileNum={2} k1={comm.p2[0]} k2={comm.p2[1]} />
-                  </View>
+                  {/* Patch 2026-07-18: ถอด wrapper marginLeft 25 เดิมออก ให้ตรง Initiate/Adept/Mastermind */}
+                  <CommRow pileNum={2} k1={comm.p2[0]} k2={comm.p2[1]} />
                 </View>
               )}
               {/* Pile 3 แถวล่าง — กึ่งกลางระหว่าง Pile 1 และ Pile 2 */}
@@ -2383,7 +2544,7 @@ const GameTableLive: React.FC = () => {
               {phase === 'fog_of_war' && (
                 <Animated.Text style={{
                   marginTop: 8, alignSelf: 'center',
-                  fontSize: 20, fontWeight: '900', color: '#8DFFB5', letterSpacing: 3,
+                  fontSize: 18, fontWeight: '900', color: '#8DFFB5', letterSpacing: 2, minWidth: 260, textAlign: 'center', /* Patch 2026-07-19: บังคับบรรทัดเดียว */
                   opacity: fogBlinkAnim,
                   textShadowColor: 'rgba(141,255,181,0.6)', textShadowRadius: 10, textShadowOffset: { width: 0, height: 0 },
                 }}>
@@ -2394,6 +2555,8 @@ const GameTableLive: React.FC = () => {
 
             <View style={[s.sideCol, { paddingRight: 10 }]}>
               <Text style={s.sideName}>{p4AI?.emoji ?? 'P4'}</Text>
+              {/* Patch 2026-07-18: ยอดโทเคนคงเหลือใต้ชื่อ (pattern Initiate) */}
+              <Text style={s.seatToken}>🪙 {fmtToken(tokenBalance[p4AI?.id ?? ''])}</Text>
               <View style={{ marginTop: 4, marginBottom: 60 }}>
                 <AvatarBubble emoji={p4AI?.emoji ?? '👤'} size={36} image={p4AI?.name ? MINION_AVATAR[p4AI.name] : undefined} />
                 {p4AI && <GFStatusBadge playerId={p4AI.id} />}
@@ -2402,7 +2565,7 @@ const GameTableLive: React.FC = () => {
               {p4AI && <SideSeat rot="90deg" aiId={p4AI.id} />}
               {/* Patch: ไพ่ Call หงาย — ลอยที่ bottom ของ sideCol ไม่กระทบ SideSeat */}
               {p4AI && phase === 'grand_finale' && (
-                <View style={{ position: 'absolute', bottom: 4, left: 0, right: 0, alignItems: 'center' }}>
+                <View style={{ position: 'absolute', bottom: -80 /* Patch 2026-07-19: กางลงล่าง — ตาม Mastermind */, left: 0, right: 0, alignItems: 'center' }}>
                   <GFCardsForPlayer playerId={p4AI.id} size="normal" />
                 </View>
               )}
@@ -2420,7 +2583,7 @@ const GameTableLive: React.FC = () => {
 
 
             {(isRevealed && phase !== 'fog_of_war' && phase !== 'grand_finale' && phase !== 'grand_finale_done' && phase !== 'blind_auction' && phase !== 'auction_done' && phase !== 'discard' && phase !== 'discard_done') ? ( // Patch: ทุก phase ของ Mastermind หลัง Fog of War ใช้ branch Pile3-only ด้านล่าง
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 20 /* Patch 2026-07-18: เลื่อนไพ่ในมือลง 20px */ }}>
                 {[1, 2, 3].flatMap(pNum => userRevealed[pNum] ?? []).map((key, ci) => (
                   <View key={ci} style={[s.userCard, { zIndex: ci }]}>
                     {CARD_IMG[key] && <Image source={CARD_IMG[key]} style={{ width: CW, height: CH }} resizeMode="cover" />}
@@ -2428,12 +2591,12 @@ const GameTableLive: React.FC = () => {
                 ))}
               </View>
             ) : (
-              <View style={{ gap: 4 }}>
+              <View style={{ gap: 4, marginTop: 20 /* Patch 2026-07-18: เลื่อนไพ่ในมือลง 20px */ }}>
                 {/* แถวบน: Pile 1 + Pile 2 แยกซ้ายขวา — ซ่อนทุก Phase หลัง Fog of War (เฉลยไปแล้ว เหลือแค่ Pile 3) */}
                 {(phase === 'arrangement' || phase === 'arrangement_2') && <View style={{ flexDirection: 'row', gap: 6 }}>
                   <View style={{ flexDirection: 'column', alignItems: 'center' }}>
                     <Text style={[s.pileLabel, { marginBottom: 2 }]}>PILE 1</Text>
-                    <View style={{ flexDirection: 'row', marginRight: CW / 2 }}>
+                    <View style={{ flexDirection: 'row', marginRight: CW / 2, transform: [{ translateX: 15 }] /* Patch 2026-07-18: จัดซ้าย Pile1 ให้ตรงหลังไพ่ P2 — จูนค่าจากเครื่องจริง */ }}>
                       {piles[0].map((card, ci) => (
                         <FaceCard key={card.id} card={card} pi={0} ci={ci} first={ci === 0} />
                       ))}
@@ -2489,9 +2652,13 @@ const GameTableLive: React.FC = () => {
           </Animated.View>
           {/* USER AVATAR — มุมล่างซ้าย (ซ่อนตอน Grand Finale เพราะ Overlay มี Avatar P1 แล้ว) — Feedback C2: ใช้ myAvatarEmoji/myDisplayName จริง */}
           {/* P1 HUD ย้ายลงชิดขอบล่าง — pointerEvents none เพื่อไม่บังปุ่ม actionBar */}
-          <View style={{ position: 'absolute', bottom: Math.max(insets.bottom, 4), left: 10, zIndex: 3, opacity: (phase === 'showdown' || phase === 'result' || phase === 'grand_finale' || phase === 'grand_finale_done') ? 0 : 1, flexDirection: 'row', alignItems: 'center', gap: 6 }} pointerEvents="none">
-            <AvatarBubble emoji={myAvatarEmoji} size={40} />
-            <Text style={s.userNameTag} numberOfLines={1}>{myDisplayName}</Text>
+          <View style={{ position: 'absolute', bottom: Math.max(insets.bottom, 4), left: 10, zIndex: 3, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 /* Patch 2026-07-19: คงตำแหน่ง P1 HUD เดิมตลอดรวม Grand Finale — ตาม Mastermind */, flexDirection: 'row', alignItems: 'center', gap: 6 }} pointerEvents="none">
+            <AvatarBubble emoji={myAvatarEmoji} image={myAvatarImage} size={40} />
+            <View>
+              <Text style={s.userNameTag} numberOfLines={1}>{myDisplayName}</Text>
+              {/* Patch 2026-07-18: ยอดโทเคนคงเหลือใต้ชื่อ (pattern Initiate) */}
+              <Text style={s.seatToken}>🪙 {fmtToken(tokenBalance[PLAYER_ID])}</Text>
+            </View>
           </View>
 
           {/* ACTION BAR */}
@@ -2692,7 +2859,8 @@ const GameTableLive: React.FC = () => {
                   {/* Avatar + Status + Health ชิดซ้าย */}
                   <View style={{ alignItems: 'flex-start', paddingLeft: 14, gap: 2 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <AvatarBubble emoji={myAvatarEmoji} size={32} />
+                      {/* Patch 2026-07-18: ส่ง image ด้วย — VIP preset แบบรูปภาพโชว์ถูกต้องใน Grand Finale overlay */}
+                      <AvatarBubble emoji={myAvatarEmoji} image={myAvatarImage} size={32} />
                       <Text style={{ color: '#FFD76A', fontSize: 11, fontWeight: '700', letterSpacing: 1 }} numberOfLines={1}>{myDisplayName}</Text>
                     </View>
                     <GFStatusBadge playerId={PLAYER_ID} />
@@ -2747,6 +2915,12 @@ const GameTableLive: React.FC = () => {
           </View>}
 
         </View>
+        {/* Patch 2026-07-18: Boss Victory VFX — ทับทุก layer, จบแล้วถอดตัวเอง */}
+        {victoryVfx && (
+          <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 }} pointerEvents="none">
+            <BossVictoryVFX tier={victoryVfx} onFinish={() => setVictoryVfx(null)} />
+          </View>
+        )}
         {/* ── SHOWDOWN RESULT (กลางจอ) — Feedback C5: ครอบด้วยพื้นหลัง free/vip ชุดเดียวกับ Profile/Lobby ── */}
         {showResult && (phase === 'showdown' || phase === 'result') && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: -200, zIndex: 200 }}>
@@ -2799,10 +2973,12 @@ const s = StyleSheet.create({
   sideCol:       { width: SIDE_COL_W, alignItems: 'center', paddingTop: 4, gap: 2 },
   sideName:      { fontSize: 9, color: '#ffffff', letterSpacing: 1, fontWeight: '700' },
   userNameTag:   { fontSize: 10, color: '#ffffff', letterSpacing: 1, fontWeight: '800', maxWidth: 100, textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
+  // Patch 2026-07-18: ยอดโทเคนคงเหลือใต้ชื่อทุกที่นั่ง — ทองธีมหลัก, JetBrains Mono ตามมาตรฐานตัวเลข
+  seatToken:     { fontSize: 9, color: '#FFD76A', fontFamily: 'JetBrainsMono_600SemiBold', textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
   sideSeatWrap:  { flex: 1, width: SIDE_COL_W, overflow: 'visible', justifyContent: 'flex-start', alignItems: 'center' },
   sideSeatInner: { flexDirection: 'row', alignItems: 'center' },
 
-  commWrap:    { flex: 1, paddingLeft: 4, alignItems: 'flex-start', justifyContent: 'center', zIndex: 2 },
+  commWrap:    { flex: 1, paddingLeft: 4, paddingRight: 18 /* Patch 2026-07-18: คืน paddingRight ให้ตรง Initiate/Adept/Mastermind — เดิมตกหล่น */, alignItems: 'flex-start', justifyContent: 'center', marginTop: 40 /* Patch 2026-07-18: เลื่อนกองกลางทั้ง 3 กองลง 40px — ใช้พื้นที่ว่างกลางจอ */, zIndex: 2 },
   auctionLbl:  { fontSize: 7, color: 'rgba(160,80,220,.55)', letterSpacing: 1, textTransform: 'uppercase' },
   auctionCard: { width: 50, height: 72, borderRadius: 4, backgroundColor: '#091808', borderWidth: 2, borderColor: '#a855f7', overflow: 'hidden', shadowColor: '#a855f7', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.9, shadowRadius: 8, elevation: 8 },
   commCard:    { width: 50, height: 72, borderRadius: 4, backgroundColor: '#fdfaf3', borderWidth: 1, borderColor: 'rgba(74,154,90,.75)', overflow: 'hidden' },

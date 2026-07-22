@@ -13,7 +13,7 @@ import {
   Text, TouchableOpacity, View,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { router, useLocalSearchParams } from 'expo-router'
+import { router } from 'expo-router'
 import { io, Socket } from 'socket.io-client'
 import { autoSort } from '../../../src/utils/autoSort'
 import { useAuthStore } from '../../../src/store/authStore'
@@ -25,6 +25,7 @@ import { ActionButton } from '../../../src/components/ui/ActionButton'
 import { MenuButton } from '../../../src/components/ui/MenuButton'
 import { ResultPanel } from '../../../src/components/ui/ResultPanel'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
+import { GuideOverlay } from '../../../src/components/onboarding/GuideOverlay'
 
 // Feedback C5 — Showdown result ครอบด้วยพื้นหลังชุดเดียวกับ Profile/Lobby (bg free/vip ตาม isVip)
 const SHOWDOWN_BG_FREE = require('../../../assets/backgrounds/bg_main_free.png')
@@ -70,13 +71,13 @@ const CARD_IMG: Record<string, any> = {
 const CW = 62; const CH = 90; const OVERLAP = -38
 const SIDE_COL_W = 72
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
-// Escrow (ที่หักตอน matchmaking เต็มห้อง) ผูกกับ user_id จริงใน DB — ห้าม fallback เงียบเป็น literal เด็ดขาด
+const ROOM_ID    = 'Initiate1'
+// Escrow ผูกกับ user_id จริงใน DB — ห้าม fallback เงียบเป็น literal เด็ดขาด (บั๊กเดิม: 'Human1' ทำ escrow
+// query หา user_id ไม่เจอ ได้ balance เป็น 0 เสมอ ไม่ว่า DB จะมีเท่าไหร่จริง)
 // เปิดทางเทสเร็วไม่ login ได้เฉพาะ __DEV__ + ตั้ง env EXPO_PUBLIC_DEV_FAKE_USER_ID เอง — production build ตัดทิ้งอัตโนมัติ
 const DEV_FAKE_USER_ID = __DEV__ ? process.env.EXPO_PUBLIC_DEV_FAKE_USER_ID : undefined
 
 interface CardData { id: string; key: string }
-// Patch (2026-07-17): ใช้แทนที่นั่งคู่แข่งทั้งหมดแล้ว ไม่ใช่แค่ AI (id เป็น userId จริงถ้า Human,
-// emoji เป็น avatarUrl ของ Human ถ้ามี — ดู round_start handler ที่ map จาก data.seats)
 interface AIInfo   { id: string; name: string; emoji: string }
 
 // =================================================================
@@ -187,16 +188,10 @@ const GameTableLive: React.FC = () => {
   const insets = useSafeAreaInsets()
   const isWeb  = Platform.OS === 'web'
   const socketRef = useRef<Socket | null>(null)
-
-  // Patch Multiplayer: roomId/userId มาจาก Lobby (auto-match) ผ่าน route params
-  const params = useLocalSearchParams<{ roomId?: string; userId?: string }>()
   const authUserId = useUserStore(s => s.userId)
-  const ROOM_ID   = params.roomId ?? 'Adept1'
-  // params.userId มาจาก Lobby matchmaking (ผูก escrow ไว้แล้วตอนห้องเต็ม) — authUserId เป็น fallback กันกรณี
-  // route param หลุด แต่ทั้งคู่ต้องไม่ว่างพร้อมกัน ห้าม fallback เงียบเป็น literal เด็ดขาด (ดู DEV_FAKE_USER_ID ด้านบน)
-  const usingDevFakeId = !params.userId && !authUserId && !!DEV_FAKE_USER_ID
-  const PLAYER_ID = params.userId || authUserId || DEV_FAKE_USER_ID || ''
-  // Patch 2026-07-18: avatar_url เก็บเป็น preset key — resolve ผ่าน PRESET_AVATARS ก่อน render (pattern Initiate)
+  const usingDevFakeId = !authUserId && !!DEV_FAKE_USER_ID
+  const PLAYER_ID = authUserId || DEV_FAKE_USER_ID || ''
+  // Patch 2026-07-18: avatar_url เก็บเป็น preset key — resolve ผ่าน PRESET_AVATARS ก่อน render
   const myAvatarRaw = useAuthStore(s => s.profile?.avatar_url) || '👤'
   const myPreset = PRESET_AVATARS.find(p => p.key === myAvatarRaw)
   const myAvatarEmoji = myPreset?.emoji ?? (myPreset?.image ? '' : myAvatarRaw)
@@ -223,10 +218,6 @@ const GameTableLive: React.FC = () => {
   // แทนเพื่อบังคับ trigger startDealAnimation ทุกครั้งที่ round_start มาถึงจริง ไม่ว่าค่า phase จะซ้ำเดิมหรือไม่
   const [dealTrigger, setDealTrigger] = useState(0)
   const [connectionError, setConnectionError] = useState<string | null>(null)
-  // A5 — Bug A fix (2026-07-17): Reconnect UI state
-  const [isReconnecting, setIsReconnecting] = useState(false)
-  const [afkNotice, setAfkNotice] = useState<string | null>(null)
-  const afkNoticeTimeoutRef = useRef<any>(null)
   const [dealDone, setDealDone]         = useState(false)
   const [dealCount, setDealCount]       = useState(0)
   const [roundNumber, setRoundNumber] = useState(1)
@@ -257,6 +248,10 @@ const GameTableLive: React.FC = () => {
   const [sortDone, setSortDone] = useState(false)
   const [isReady, setIsReady]   = useState(false)
 
+  // ── Onboarding Guide Overlay (state ล้วนๆ ไม่กระทบ game logic เดิม) ──
+  // คุมลำดับโชว์ guide "Ready" ให้ต่อจาก guide "Arrangement" ในรอบเดียวกัน (ทั้งคู่ anchor ที่ phase==='arrangement')
+  const [showReadyGuide, setShowReadyGuide] = useState(false)
+
   // ── Community + Blind
   const [comm, setComm]   = useState({ p1: ['',''], p2: ['',''], p3: ['',''] })
   const [blind, setBlind] = useState<string[]>([])
@@ -281,10 +276,13 @@ const GameTableLive: React.FC = () => {
   // ── Triple Sweep Jackpot VFX — ใครก็ได้ (human/AI) ชนะครบ 3 กอง
   const [jackpotWinner, setJackpotWinner] = useState<string | null>(null)
   const jackpotTimeoutRef = useRef<any>(null)
+  useEffect(() => {
+    console.log('[JACKPOT] jackpotWinner state changed ->', jackpotWinner, 'at', Date.now())
+  }, [jackpotWinner])
 
   // ── Result
   const [tokenBalance, setTokenBalance] = useState<Record<string, number>>({})
-  // Patch 2026-07-18: format ยอดโทเคนเต็มมี comma (มติลุงเยาะ: แบบเต็ม ไม่ย่อ K/M) — pattern Initiate
+  // Patch 2026-07-18: format ยอดโทเคนเต็มมี comma (มติลุงเยาะ: แบบเต็ม ไม่ย่อ K/M)
   const fmtToken = (v: number | undefined) => (v ?? buyInAmount).toLocaleString('en-US')
   const [tokenDeltas, setTokenDeltas]   = useState<Record<string, number>>({})
   const [matchResult, setMatchResult]   = useState<any>(null)
@@ -336,6 +334,7 @@ const GameTableLive: React.FC = () => {
 
   // Triple Sweep Jackpot — burst ครั้งเดียว ไม่วนซ้ำ โชว์ไม่เกิน 5 วิ แล้วปิดเอง
   const triggerJackpot = (winnerId: string) => {
+    console.log('[JACKPOT] triggerJackpot called, winnerId=', winnerId, 'at', Date.now())
     if (jackpotTimeoutRef.current) clearTimeout(jackpotTimeoutRef.current)
     setJackpotWinner(winnerId)
 
@@ -355,7 +354,10 @@ const GameTableLive: React.FC = () => {
       ]).start()
     })
 
-    jackpotTimeoutRef.current = setTimeout(() => setJackpotWinner(null), 5000)
+    jackpotTimeoutRef.current = setTimeout(() => {
+      console.log('[JACKPOT] 5s timeout fired, clearing at', Date.now())
+      setJackpotWinner(null)
+    }, 5000)
   }
 
   useEffect(() => {
@@ -385,32 +387,23 @@ const GameTableLive: React.FC = () => {
       console.warn('[game] Using DEV_FAKE_USER_ID for PLAYER_ID:', PLAYER_ID)
     }
 
-    // A5 (Bug A fix, 2026-07-17): เปิด reconnection จริง (เดิม false — เน็ตสะดุดแป๊บเดียวก็ค้างจอถาวร
-    // ไม่มีทางกลับมาเองเลย) ค่า attempts/delay ตามที่ socketService.ts ใช้อยู่แล้วที่อื่นในโปรเจค
-    const socket = io(SERVER_URL, {
-      transports: ['websocket'], reconnection: true, reconnectionAttempts: 5, reconnectionDelay: 1000,
-    })
+    const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: false })
     socketRef.current = socket
 
-    // Patch Multiplayer: ห้องถูกสร้าง + startMultiplayerMatch ถูกเรียกจาก server แล้ว
-    // (ตอน room_auto_match / room_join_private ทำให้ห้องเต็ม) — client แค่ join room + รอ round_start
-    // 'connect' ยิงทั้งตอน connect ครั้งแรกและตอน reconnect สำเร็จ — game_join ทำหน้าที่คืนที่นั่งให้
-    // อัตโนมัติทั้งสองกรณี (ดู resendRoundStartToPlayer ฝั่ง server ที่ยกเลิก grace timer ให้เอง)
+    let matchStarted = false
     socket.on('connect', () => {
       setConnectionError(null)
-      setIsReconnecting(false)
-      socket.emit('game_join', { roomId: ROOM_ID, userId: PLAYER_ID })
+      if (matchStarted) return
+      matchStarted = true
+      // token ไม่ส่งจาก client (server-authoritative — escrowBuyIn คิดจาก users.token_balance สดเท่านั้น)
+      socket.emit('player_join_room', { roomId: ROOM_ID, playerId: PLAYER_ID, isVip: false })
+      // tier ต้องตรงกับ 'initiate' เป๊ะ — aiEngine.ts เช็ค tier === 'initiate' ตรงๆ (ไม่มี normalize)
+      // ของเดิมส่ง 'beginner' ทำให้ Beginner's Luck System (subOptimal/firstValid) ไม่เคย trigger เลย
+      socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'initiate' })
     })
 
     socket.on('connect_error', (err: any) => {
       setConnectionError(err?.message || 'Cannot reach the game server.')
-    })
-
-    // A5: เน็ตหลุดกลางเกม — โชว์ "Reconnecting..." ระหว่างรอ socket.io ต่อเองอัตโนมัติ (reconnection:true
-    // ด้านบน) ยกเว้นตอนที่เราเป็นคน disconnect เอง (unmount/ออกจากหน้านี้ — ดู cleanup ท้าย useEffect)
-    socket.on('disconnect', (reason: string) => {
-      if (reason === 'io client disconnect') return
-      setIsReconnecting(true)
     })
 
     // Buy-in Spec §4 safety net — server ปฏิเสธเข้าโต๊ะเพราะ token ไม่พอ (ปกติ Lobby เช็คไว้ก่อนแล้ว)
@@ -424,16 +417,9 @@ const GameTableLive: React.FC = () => {
       )
     })
 
-    // A5: อีกคนหลุด (AI เล่นแทนทันที ระหว่าง grace 60s รอ reconnect) — แจ้งผู้เล่นที่เหลือเฉยๆ ไม่บล็อกจอ
-    socket.on('player_disconnected_replaced', (data: { roomId: string; disconnectedUserId: string; displayName?: string; graceSeconds?: number }) => {
-      if (data.disconnectedUserId === PLAYER_ID) return // ตัวเองไม่ต้องเห็น notice ของตัวเอง
-      if (afkNoticeTimeoutRef.current) clearTimeout(afkNoticeTimeoutRef.current)
-      setAfkNotice(`${data.displayName ?? 'A player'} disconnected — AI takes over`)
-      afkNoticeTimeoutRef.current = setTimeout(() => setAfkNotice(null), 4000)
-    })
-
     socket.on('round_start', (data: any) => {
-      // Pre-Game Countdown §7.1 — โชว์ครั้งเดียวตอนเริ่มแมตช์
+      console.log('[DEAL] round_start received, roundNumber=', data.roundNumber, 'at', Date.now())
+      // Pre-Game Countdown §7.1 — โชว์ครั้งเดียวตอนเริ่มแมตช์ (ref ไม่ reset ตอน Rematch เพราะ component เดิมไม่ remount)
       if (data.roundNumber === 1 && !preGameCountdownShownRef.current) {
         preGameCountdownShownRef.current = true
         setShowPreGameCountdown(true)
@@ -455,19 +441,12 @@ const GameTableLive: React.FC = () => {
       fadeCards.stopAnimation(() => { fadeCards.setValue(0) })
       setBlind([]); setDealCount(0)
       setTokenBalance(data.tokenBalance ?? {})
-      // Bug B/C fix (2026-07-17): server เปลี่ยนจาก aiNames (AI-only) เป็น seats (4 ที่นั่งเรียงตาม
-      // ห้องจริง รวม Human) — เดิม Adept 2H+2AI มี AI แค่ 2 ตัว ทำให้ p4AI (index 2) ว่างเปล่าเวลาที่นั่ง
-      // นั้นเป็น Human จริง (หลังไพ่/avatar/ชื่อไม่โชว์เลย) map เป็นรูปแบบ AIInfo เดิมให้ bossAI/p2AI/p4AI
-      // derivation ทำงานถูกต้องเสมอไม่ว่าที่นั่งจะเป็น Human หรือ AI — ตัวแปรชื่อ aiList ยังคงไว้ (ไม่ rename
-      // ทั้งไฟล์) แต่ตอนนี้หมายถึง "คู่แข่งทั้งหมด" ไม่ใช่แค่ AI แล้ว
-      const opponents: AIInfo[] = (data.seats ?? [])
-        .filter((seat: any) => seat.userId !== PLAYER_ID)
-        .map((seat: any) => ({ id: seat.userId, name: seat.displayName, emoji: seat.avatarUrl || seat.emoji || '👤' }))
-      setAiList(opponents)
-      aiListRef.current = opponents
+      const aiNames = data.aiNames ?? []
+      setAiList(aiNames)
+      aiListRef.current = aiNames
 
       const init: Record<string, string> = {}
-      opponents.forEach((o) => { init[o.id] = 'Arranging...' })
+      data.aiNames?.forEach((a: any) => { init[a.id] = 'Arranging...' })
       setAiStatus(init)
 
       setComm({
@@ -484,6 +463,7 @@ const GameTableLive: React.FC = () => {
       }
 
       // เริ่ม deal animation
+      console.log('[DEAL] round_start setting phase=dealing + dealTrigger++ at', Date.now())
       setPhase('dealing')
       setDealTrigger(t => t + 1)
       setDealDone(false)
@@ -502,8 +482,8 @@ const GameTableLive: React.FC = () => {
         if (next <= 0) {
           clearInterval(timerRef.current)
           setPiles(cur => {
-            socket.emit('player_ready_multi', {
-              roomId: ROOM_ID, userId: PLAYER_ID,
+            socket.emit('player_ready', {
+              roomId: ROOM_ID, playerId: PLAYER_ID,
               arrangement: {
                 pile1: cur[0].map((c: CardData) => c.key),
                 pile2: cur[1].map((c: CardData) => c.key),
@@ -596,10 +576,9 @@ const GameTableLive: React.FC = () => {
       setPhase('end')
       setMatchResult(data)
       setTokenBalance(data.tokenBalance ?? {})
-      // Server ส่งยอด token_balance จริงหลัง settle มาด้วย (per-player) — ห้ามคำนวณเองจาก buyin/stack
-      const myNewBalance = data.newTokenBalances?.[PLAYER_ID] ?? data.newTokenBalance
-      if (typeof myNewBalance === 'number') {
-        useUserStore.getState().updateTokenBalance(myNewBalance)
+      // Server ส่งยอด token_balance จริงหลัง settle มาด้วย — ห้ามคำนวณเองจาก buyin/stack (bug: Profile ค้างยอดเก่า)
+      if (typeof data.newTokenBalance === 'number') {
+        useUserStore.getState().updateTokenBalance(data.newTokenBalance)
       }
       if (data.finalWinner === PLAYER_ID) {
         winPulseLoopRef.current = Animated.loop(Animated.sequence([
@@ -640,13 +619,13 @@ const GameTableLive: React.FC = () => {
       if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop()
       stopMatchEndAnimations()
       if (jackpotTimeoutRef.current) clearTimeout(jackpotTimeoutRef.current)
-      if (afkNoticeTimeoutRef.current) clearTimeout(afkNoticeTimeoutRef.current)
       socket.disconnect()
     }
   }, [])
 
   // ── Deal Animation
   const startDealAnimation = () => {
+    console.log('[DEAL] startDealAnimation() called at', Date.now(), 'had previous composite:', !!dealAnimCompositeRef.current)
     // กันรอบใหม่เริ่ม deal ทับรอบเก่าที่ยังเล่นไม่จบ (native driver ชนกันถ้าปล่อยให้วิ่งพร้อมกัน)
     if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop()
     // ตำแหน่งปลายทาง: Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย
@@ -688,6 +667,7 @@ const GameTableLive: React.FC = () => {
 
     dealAnimCompositeRef.current = Animated.parallel(anims)
     dealAnimCompositeRef.current.start(({ finished }) => {
+      console.log('[DEAL] composite.start callback fired, finished=', finished, 'at', Date.now())
       // ถ้าโดน .stop() ตัดกลางคัน (finished=false) เพราะรอบใหม่มาแทรก ห้ามทำ reveal logic นี้
       // ไม่งั้น phase/fadeCards จะเพี้ยนไปตามข้อมูล deal รอบเก่าที่ถูกยกเลิกไปแล้ว
       if (!finished) return
@@ -703,9 +683,10 @@ const GameTableLive: React.FC = () => {
   // เริ่ม deal เมื่อ phase เปลี่ยนเป็น dealing — ใช้ dealTrigger คู่กับ phase กัน round_start
   // แรกสุดที่ setPhase('dealing') เป็น no-op (phase เป็น 'dealing' อยู่แล้วตั้งแต่ initial state)
   useEffect(() => {
+    console.log('[DEAL] dealing-effect ran, phase=', phase, 'dealTrigger=', dealTrigger, 'at', Date.now())
     if (phase === 'dealing') {
       const t = setTimeout(() => startDealAnimation(), 300)
-      return () => clearTimeout(t)
+      return () => { console.log('[DEAL] dealing-effect cleanup, clearing pending timeout at', Date.now()); clearTimeout(t) }
     }
   }, [phase, dealTrigger])
 
@@ -742,8 +723,8 @@ const GameTableLive: React.FC = () => {
     setShowDiscard(false); setIsReady(true)
     if (timerRef.current) clearInterval(timerRef.current)
     const pile3kept = piles[2].filter((_, i) => !discardSelected.includes(i))
-    socketRef.current?.emit('player_ready_multi', {
-      roomId: ROOM_ID, userId: PLAYER_ID,
+    socketRef.current?.emit('player_ready', {
+      roomId: ROOM_ID, playerId: PLAYER_ID,
       arrangement: {
         pile1: piles[0].map(c => c.key),
         pile2: piles[1].map(c => c.key),
@@ -787,9 +768,10 @@ const GameTableLive: React.FC = () => {
     confettiCompositesRef.current = []
   }
 
-  const handleBackToLobby = () => {
+  const handleRematch = () => {
     stopMatchEndAnimations()
-    router.push('/lobby')
+    setMatchResult(null); setPhase('arrangement')
+    socketRef.current?.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'initiate' })
   }
 
   // ── Sub-components
@@ -799,7 +781,7 @@ const GameTableLive: React.FC = () => {
     </View>
   )
 
-  // Patch 2026-07-18: รองรับ preset แบบรูปภาพ (avatar_vip_01-09) — เดิมรับแต่ emoji (pattern Initiate)
+  // Patch 2026-07-18: รองรับ preset แบบรูปภาพ (avatar_vip_01-09) — เดิมรับแต่ emoji
   const AvatarBubble: React.FC<{ emoji: string; size?: number; image?: any }> = ({ emoji, size = 36, image }) => (
     <View style={[s.avatarBubble, { width: size, height: size, borderRadius: size / 2, overflow: 'hidden' }]}>
       {image
@@ -1206,12 +1188,11 @@ const GameTableLive: React.FC = () => {
 
           <View style={{ height: 8 }} />
         </ScrollView>
+
       </View>
     )
   })
 
-  // Bug B fix: index 0 = ที่นั่ง Boss (Sage เสมอตามโครงสร้างห้อง Adept — ดู buildAdeptInitialSeats
-  // ฝั่ง server) index 1/2 = P2/P4 ซึ่งอาจเป็น Human หรือ AI ก็ได้ ไม่ใช่ AI เสมอไปเหมือนเดิม
   const bossAI = aiList[0]; const p2AI = aiList[1]; const p4AI = aiList[2]
   const userRevealed = allCards[PLAYER_ID]
   const isRevealed   = userRevealed && Object.keys(userRevealed).length > 0
@@ -1255,18 +1236,6 @@ const GameTableLive: React.FC = () => {
                   <Text style={{ color: '#FF6B6B', fontSize: 11, textAlign: 'center' }}>Connection failed. Please check your network and try again.</Text>
                 </View>
               )}
-              {/* A5 — Bug A fix: เน็ตหลุด กำลังต่อใหม่อัตโนมัติ */}
-              {isReconnecting && (
-                <View style={{ position: 'absolute', top: 12, alignSelf: 'center', zIndex: 999, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: 'rgba(255,199,87,0.15)', borderWidth: 1, borderColor: 'rgba(255,199,87,0.5)', borderRadius: 10 }}>
-                  <Text style={{ color: '#FFC857', fontSize: 12, fontWeight: '700', textAlign: 'center' }}>Reconnecting...</Text>
-                </View>
-              )}
-              {/* A5 — Bug A fix: อีกคนหลุด/AI เล่นแทน แจ้งเตือนสั้นๆ */}
-              {afkNotice && (
-                <View style={{ position: 'absolute', top: 12, alignSelf: 'center', zIndex: 999, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: 'rgba(15,36,24,0.85)', borderWidth: 1, borderColor: 'rgba(255,215,106,0.5)', borderRadius: 10 }}>
-                  <Text style={{ color: '#F5F2E8', fontSize: 12, fontWeight: '600', textAlign: 'center' }}>{afkNotice}</Text>
-                </View>
-              )}
               {/* Boss AI — แสดงจำนวนไพ่ที่ได้รับ */}
               {[0,1,2,3].map(playerIdx => {
                 const count = Math.floor(dealCount / 4) + (dealCount % 4 > playerIdx ? 1 : 0)
@@ -1288,6 +1257,7 @@ const GameTableLive: React.FC = () => {
                 ))
               })}
           </View>
+
 
           {/* ── LOCKUP OVERLAY (Round 1 only, พร้อม deal animation) ── */}
           {showLockup && phase === 'dealing' && (
@@ -1348,7 +1318,29 @@ const GameTableLive: React.FC = () => {
             <Text style={s.countdownSub}>All piles reveal!</Text>
           </View>
 
-
+          {/* ── ONBOARDING GUIDE OVERLAYS (ครั้งแรกครั้งเดียวต่อ phase) ── */}
+          {/* Arrangement + Ready ต่างอยู่ phase 'arrangement' เหมือนกัน แต่ต้องโชว์ทีละอันเรียงกัน */}
+          <GuideOverlay
+            visible={phase === 'arrangement' && !showReadyGuide}
+            storageKey="guide_arrangement_seen"
+            message="Sort your 11 cards into 3 piles -- Left pile must be weakest, Right pile strongest!"
+            onDismiss={() => setShowReadyGuide(true)}
+          />
+          <GuideOverlay
+            visible={phase === 'arrangement' && showReadyGuide}
+            storageKey="guide_ready_seen"
+            message="Tap Ready when done -- all piles reveal at once!"
+          />
+          <GuideOverlay
+            visible={phase === 'showdown'}
+            storageKey="guide_showdown_seen"
+            message="All piles flip at the same time -- highest Hand wins each pot!"
+          />
+          <GuideOverlay
+            visible={phase === 'result'}
+            storageKey="guide_result_seen"
+            message="Win a pile -> earn its pot. Lose -> no reward. Foul -> lose everything!"
+          />
 
           {/* ── MATCH END OVERLAY ── */}
           {phase === 'end' && matchResult && (
@@ -1371,11 +1363,6 @@ const GameTableLive: React.FC = () => {
               )}
               <ResultPanel
                 variant={matchResult.finalWinner === PLAYER_ID ? 'victory' : 'defeat'}
-                footer={
-                  <View style={{ flexDirection: 'row', justifyContent: 'center' }}>
-                    <MenuButton icon="exit" label="Lobby" size="md" onPress={handleBackToLobby} />
-                  </View>
-                }
               >
                 {/* Buy-in Spec §6 — Buy-in/Returned/Net เหนือ Final Token Balance, JetBrains Mono */}
                 {(() => {
@@ -1396,9 +1383,9 @@ const GameTableLive: React.FC = () => {
                 })()}
                 {/* ยอด token_balance จริงหลัง settle จาก server (ไม่คำนวณเอง) — ต่างจาก "Final Token Balance"
                     ด้านล่างที่เป็น leaderboard stack ในแมตช์นี้ (รวม AI ซึ่งไม่มี token_balance จริงใน DB) */}
-                {typeof (matchResult.newTokenBalances?.[PLAYER_ID] ?? matchResult.newTokenBalance) === 'number' && (
+                {typeof matchResult.newTokenBalance === 'number' && (
                   <Text style={[s.buyInSummaryText, { textAlign: 'center', marginBottom: 8 }]}>
-                    Your Token Balance <Text style={{ color: '#c9a84c', fontWeight: '800' }}>{(matchResult.newTokenBalances?.[PLAYER_ID] ?? matchResult.newTokenBalance).toLocaleString('en-US')}</Text>
+                    Your Token Balance <Text style={{ color: '#c9a84c', fontWeight: '800' }}>{matchResult.newTokenBalance.toLocaleString('en-US')}</Text>
                   </Text>
                 )}
                 <Text style={s.matchEndSub}>Final Token Balance</Text>
@@ -1415,6 +1402,11 @@ const GameTableLive: React.FC = () => {
                   )
                 })}
               </ResultPanel>
+              {/* เลื่อนลงมาทับแนวปุ่ม Auto Sort (s.actionBar) ที่ก้นจอ แทนที่จะลอยอยู่ใน footer ของ ResultPanel */}
+              <View style={[s.actionBar, { position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 150 }]}>
+                <MenuButton icon="rematch" label="Rematch" size="md" onPress={handleRematch} />
+                <MenuButton icon="exit" label="Lobby" size="md" onPress={() => router.replace('/(home)/lobby')} />
+              </View>
             </>
           )}
 
@@ -1637,7 +1629,7 @@ const GameTableLive: React.FC = () => {
           {/* TOP BAR */}
           <View style={[s.topBar, { paddingTop: isWeb ? 22 : insets.top + 14, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }]}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: 50 }}>
-              <View style={s.tierBadge}><Text style={s.tierText}>ADEPT</Text></View>
+              <View style={s.tierBadge}><Text style={s.tierText}>INITIATE</Text></View>
               <Text style={s.roundText}>R{roundNumber}/5</Text>
             </View>
             <View style={[s.potBadge, { marginLeft: 6 }]}>
@@ -1684,7 +1676,7 @@ const GameTableLive: React.FC = () => {
 
             <View style={s.commWrap}>
               {/* Pile 1 & 2 แถวเดียวกัน */}
-              <View style={{ flexDirection: 'row', gap: 4, marginBottom: 4, marginLeft: 0 /* Patch 2026-07-18: เดิม -25 → ขยับขวา 25px (pattern Initiate) */ }}>
+              <View style={{ flexDirection: 'row', gap: 4, marginBottom: 4, marginLeft: 0 /* Patch 2026-07-18: เดิม -25 → ขยับขวา 25px */ }}>
                 <CommRow pileNum={1} k1={comm.p1[0]} k2={comm.p1[1]} />
                 <CommRow pileNum={2} k1={comm.p2[0]} k2={comm.p2[1]} />
               </View>
@@ -1715,7 +1707,7 @@ const GameTableLive: React.FC = () => {
 
 
             {isRevealed ? (
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 20 /* Patch 2026-07-18: เลื่อนไพ่ในมือลง 20px */ }}>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 20 /* Patch 2026-07-18 */ }}>
                 {[1, 2, 3].flatMap(pNum => userRevealed[pNum] ?? []).map((key, ci) => (
                   <View key={ci} style={[s.userCard, { zIndex: ci }]}>
                     {CARD_IMG[key] && <Image source={CARD_IMG[key]} style={{ width: CW, height: CH }} resizeMode="cover" />}
@@ -1772,7 +1764,6 @@ const GameTableLive: React.FC = () => {
             <AvatarBubble emoji={myAvatarEmoji} image={myAvatarImage} size={40} />
             <View>
               <Text style={s.userNameTag} numberOfLines={1}>{myDisplayName}</Text>
-              {/* Patch 2026-07-18: ยอดโทเคนคงเหลือใต้ชื่อ (pattern Initiate) */}
               <Text style={s.seatToken}>🪙 {fmtToken(tokenBalance[PLAYER_ID])}</Text>
             </View>
           </View>
@@ -1784,7 +1775,7 @@ const GameTableLive: React.FC = () => {
               label={sortDone ? 'Sorted ✓' : 'Auto Sort'}
               variant={sortDone ? 'disabled' : 'normal'}
               disabled={sortDone || phase !== 'arrangement'}
-              costBadge="30"
+              costBadge="FREE"
               onPress={handleAutoSort}
               style={s.actionBtnSize}
             />

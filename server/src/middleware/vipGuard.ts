@@ -4,7 +4,9 @@
 // มาตรฐานเดียวทั้งระบบ: อ่าน vip_status ('none'|'vip'|'vip_pro') จาก users — ห้ามใช้ is_vip (คอลัมน์เก่า เลิกใช้แล้ว)
 
 import { FastifyRequest, FastifyReply } from 'fastify'
-import { supabase } from '../config/supabase'
+// Patch 2026-07-18: ต้องใช้ supabaseAdmin — RLS ของ public.users (auth.uid() = user_id)
+// บล็อก anon client ทำให้ getUserVipTier ได้ 'none' เสมอ → VIP โดนปฏิเสธทุกจุดที่ใช้ guard นี้
+import { supabaseAdmin } from '../config/supabase'
 
 // หมวดสินค้าที่จำกัดเฉพาะ VIP (vip หรือ vip_pro ผ่านได้ทั้งคู่)
 export const VIP_ONLY_CATEGORIES = [
@@ -24,7 +26,7 @@ export function isVipOnlyCategory(category: string): category is VipOnlyCategory
 // ดึง vip_status จริงของ user จาก DB ('none' ถ้าไม่พบแถว/error — fail-safe ปิดสิทธิ์ไว้ก่อน)
 // แก้บั๊กเดิม: query ผิด PK (.eq('id', ...)) — ตาราง users ใช้ user_id เป็น PK (Known Bug #3 ใน CLAUDE.md)
 export async function getUserVipTier(userId: string): Promise<VipStatus> {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('users')
     .select('vip_status')
     .eq('user_id', userId)

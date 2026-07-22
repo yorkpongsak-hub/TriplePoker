@@ -133,9 +133,9 @@ const s = StyleSheet.create({
   scrollBody: { padding: 16, paddingBottom: 40 },
   subtitle:   { color: '#7A7A6A', fontSize: 12, marginBottom: 16, textAlign: 'center' },
 
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between' },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' }, // Patch: gap+space-between ซ้อนกันทำให้แถวล้น ตกเป็น 2 คอลัมน์ — คุมระยะแนวตั้งด้วย marginBottom ของ card แทน
   card: {
-    width: '31%', borderRadius: 12, borderWidth: 1.5, borderColor: '#2A4A34',
+    width: '31%', marginBottom: 12, borderRadius: 12, borderWidth: 1.5, borderColor: '#2A4A34',
     backgroundColor: '#163A25', overflow: 'hidden', paddingBottom: 8,
   },
   portraitWrap: { width: '100%', height: 120, position: 'relative' },
@@ -144,10 +144,10 @@ const s = StyleSheet.create({
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
     backgroundColor: 'rgba(0,0,0,0.65)', alignItems: 'center', justifyContent: 'center',
   },
-  conquestIcon: { fontSize: 26 },
+  conquestIcon: { fontSize: 22 },
 
-  bossName:    { color: '#F5F2E8', fontSize: 12, fontWeight: '700', marginTop: 6, paddingHorizontal: 6 },
-  bossConcept: { color: '#C8C4B0', fontSize: 9, marginTop: 2, paddingHorizontal: 6 },
+  bossName:    { color: '#F5F2E8', fontSize: 11, fontWeight: '700', marginTop: 6, paddingHorizontal: 6 },
+  bossConcept: { color: '#C8C4B0', fontSize: 8, marginTop: 2, paddingHorizontal: 6 },
 
   allConqueredBanner: {
     marginTop: 20, padding: 14, borderRadius: 10, backgroundColor: 'rgba(255,215,106,0.12)',
