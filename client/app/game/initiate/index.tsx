@@ -27,6 +27,8 @@ import { ResultPanel } from '../../../src/components/ui/ResultPanel'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
 import { GuideOverlay } from '../../../src/components/onboarding/GuideOverlay'
 import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
+import PlayerHandView from '../../../src/components/game/PlayerHandView'
+import BossHandRow from '../../../src/components/game/BossHandRow'
 
 // Feedback C5 — Showdown result ครอบด้วยพื้นหลังชุดเดียวกับ Profile/Lobby (bg free/vip ตาม isVip)
 const SHOWDOWN_BG_FREE = require('../../../assets/backgrounds/bg_main_free.png')
@@ -771,26 +773,7 @@ const GameTableLive: React.FC = () => {
     return <CardBack key={elKey} w={w} h={h} ml={ml} />
   }
 
-  const AIPiles: React.FC<{ aiId: string }> = ({ aiId }) => {
-    const p1 = allCards[aiId]?.[1] ?? []; const p2 = allCards[aiId]?.[2] ?? []; const p3 = allCards[aiId]?.[3] ?? []
-    const cards = [...p1, ...p2, ...p3]
-    return (
-      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        {([3, 3, 5] as number[]).map((cnt, pi) => (
-          <React.Fragment key={pi}>
-            {pi > 0 && <View style={{ width: 4 }} />}
-            <View style={{ flexDirection: 'row' }}>
-              {Array.from({ length: cnt }).map((_, ci) => {
-                const idx = pi === 0 ? ci : pi === 1 ? 3 + ci : 6 + ci
-                const cardKey = cards[idx]
-                return renderCard(cardKey, 25, 36, ci === 0 ? 0 : -18, `${aiId}-${pi}-${ci}-${cardKey ?? 'back'}`)
-              })}
-            </View>
-          </React.Fragment>
-        ))}
-      </View>
-    )
-  }
+  // (AIPiles เดิมถูกแทนที่ด้วย BossHandRow กลางแล้ว — ดู src/components/game/BossHandRow.tsx)
 
   const SideSeat: React.FC<{ rot: '270deg' | '90deg'; aiId: string }> = ({ rot, aiId }) => {
     const p1 = allCards[aiId]?.[1] ?? []; const p2 = allCards[aiId]?.[2] ?? []; const p3 = allCards[aiId]?.[3] ?? []
@@ -875,17 +858,7 @@ const GameTableLive: React.FC = () => {
     )
   }
 
-  const FaceCard: React.FC<{ card: CardData; pi: number; ci: number; first: boolean }> = ({ card, pi, ci, first }) => {
-    const isSel = selected?.pi === pi && selected?.ci === ci
-    return (
-      <TouchableOpacity onPress={() => handleCardPress(pi, ci)} activeOpacity={0.85}
-        style={[s.userCard, !first && { marginLeft: OVERLAP }, isSel && s.userCardSel, { zIndex: ci }]}>
-        {CARD_IMG[card.key]
-          ? <Image source={CARD_IMG[card.key]} style={{ width: CW, height: CH }} resizeMode="cover" />
-          : <Text style={{ fontSize: 8 }}>{card.key}</Text>}
-      </TouchableOpacity>
-    )
-  }
+  // (FaceCard เดิมถูกแทนที่ด้วย PlayerHandView กลางแล้ว — ดู src/components/game/PlayerHandView.tsx)
 
   // Pile Reveal Overlay — Tab mode ผู้เล่นเลือกดูได้ + Continue button
   const PileRevealOverlay: React.FC<{ pileNum: 1|2|3 }> = ({ pileNum }) => {
@@ -1630,7 +1603,13 @@ const GameTableLive: React.FC = () => {
                 <Text style={s.statusText}>{aiStatus[bossAI?.id ?? ''] ?? 'Arranging...'}</Text>
               </View>
             </View>
-            {bossAI && <View style={{ marginTop: -10 /* Patch 2026-07-18: ยกไพ่บอสขึ้น 10px */ }}><AIPiles aiId={bossAI.id} /></View>}
+            {bossAI && <View style={{ marginTop: -10 /* Patch 2026-07-18: ยกไพ่บอสขึ้น 10px */ }}>
+              <BossHandRow revealed={[
+                ...(allCards[bossAI.id]?.[1] ?? []),
+                ...(allCards[bossAI.id]?.[2] ?? []),
+                ...(allCards[bossAI.id]?.[3] ?? []),
+              ]} />
+            </View>}
           </View>
 
           {/* MAIN AREA */}
@@ -1685,44 +1664,14 @@ const GameTableLive: React.FC = () => {
                 ))}
               </View>
             ) : (
-              <View style={{ gap: 4, marginTop: 20 /* Patch 2026-07-18: เลื่อนไพ่ในมือลง 20px */ }}>
-                {/* แถวบน: Pile 1 + Pile 2 แยกซ้ายขวา */}
-                <View style={{ flexDirection: 'row', gap: 6 }}>
-                  <View style={{ flexDirection: 'column', alignItems: 'center' }}>
-                    <Text style={[s.pileLabel, { marginBottom: 2 }]}>PILE 1</Text>
-                    <View style={{ flexDirection: 'row', marginRight: CW / 2, transform: [{ translateX: 15 }] /* Patch 2026-07-18: จัดซ้าย Pile1 ให้ตรงหลังไพ่ P2 — จูนค่าจากเครื่องจริง */ }}>
-                      {piles[0].map((card, ci) => (
-                        <FaceCard key={card.id} card={card} pi={0} ci={ci} first={ci === 0} />
-                      ))}
-                    </View>
-                  </View>
-                  <View style={{ flexDirection: 'column', alignItems: 'center' }}>
-                    <Text style={[s.pileLabel, { marginBottom: 2 }]}>PILE 2</Text>
-                    <View style={{ flexDirection: 'row', marginLeft: CW / 2 }}>
-                      {piles[1].map((card, ci) => (
-                        <FaceCard key={card.id} card={card} pi={1} ci={ci} first={ci === 0} />
-                      ))}
-                    </View>
-                  </View>
-                </View>
-                {/* แถวล่าง: Pile 3 */}
-                <View style={{ flexDirection: 'column', alignItems: 'center' }}>
-                  <Text style={[s.pileLabel, { marginBottom: 2 }]}>PILE 3</Text>
-                  <View style={{ flexDirection: 'row', alignSelf: 'center' }}>
-                    {piles[2].map((card, ci) => (
-                      <TouchableOpacity key={card.id}
-                        onPress={() => handleCardPress(2, ci)}
-                        activeOpacity={0.85}
-                        style={[s.userCard, ci > 0 && { marginLeft: -24 },
-                          selected?.pi === 2 && selected?.ci === ci && s.userCardSel,
-                          { zIndex: ci }]}>
-                        {CARD_IMG[card.key]
-                          ? <Image source={CARD_IMG[card.key]} style={{ width: CW, height: CH }} resizeMode="cover" />
-                          : <Text style={{ fontSize: 8 }}>{card.key}</Text>}
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </View>
+              // โซนจัดไพ่ในมือ — PlayerHandView กลาง (Free: overlap แถวตรง / VIP: fan arc)
+              <View style={{ width: '100%', marginTop: 20, alignItems: 'center' }}>
+                <PlayerHandView
+                  piles={piles}
+                  selected={selected}
+                  onCardPress={handleCardPress}
+                  isVip={isVip}
+                />
               </View>
             )}
           </View>
@@ -1831,6 +1780,7 @@ const s = StyleSheet.create({
   userCard:     { width: CW, height: CH, borderRadius: 4, backgroundColor: '#fdfaf3', borderWidth: 1, borderColor: 'rgba(201,168,76,.65)', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   userCardSel:  { borderColor: '#6ec87a', borderWidth: 2, transform: [{ translateY: -16 }] },
   swapHint:     { fontSize: 8, color: 'rgba(201,168,76,.9)', textAlign: 'center', marginBottom: 2 },
+  foulText:     { fontSize: 12, color: '#FF6B6B', fontWeight: '800', letterSpacing: 1, textAlign: 'center', marginBottom: 4 },
   actionBar:      { flexDirection: 'row', justifyContent: 'center', gap: 16, paddingHorizontal: 10, paddingTop: 4, paddingBottom: 20, zIndex: 2 },
   actionBtnSize:  { width: 130 },
 
