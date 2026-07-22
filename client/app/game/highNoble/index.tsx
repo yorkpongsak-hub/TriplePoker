@@ -2428,7 +2428,7 @@ const GameTableLive: React.FC = () => {
           {/* MAIN AREA */}
           <View style={[s.mainArea, { opacity: (phase === 'countdown' || phase === 'showdown' || phase === 'result' || phase === 'grand_finale' || phase === 'grand_finale_done') ? 0 : 1 }]}>
             <View style={[s.sideCol, { paddingLeft: 10 }]}>
-              <Text style={s.sideName}>{p2AI?.emoji ?? 'P2'}</Text>
+              <Text style={s.sideName}>{p2AI?.name ?? 'P2'}</Text>
               {/* Patch 2026-07-18: ยอดโทเคนคงเหลือใต้ชื่อ (pattern Initiate) */}
               <Text style={s.seatToken}>🪙 {fmtToken(tokenBalance[p2AI?.id ?? ''])}</Text>
               <View style={{ marginTop: 4, marginBottom: 60 }}>
@@ -2513,7 +2513,7 @@ const GameTableLive: React.FC = () => {
             </View>
 
             <View style={[s.sideCol, { paddingRight: 10 }]}>
-              <Text style={s.sideName}>{p4AI?.emoji ?? 'P4'}</Text>
+              <Text style={s.sideName}>{p4AI?.name ?? 'P4'}</Text>
               {/* Patch 2026-07-18: ยอดโทเคนคงเหลือใต้ชื่อ (pattern Initiate) */}
               <Text style={s.seatToken}>🪙 {fmtToken(tokenBalance[p4AI?.id ?? ''])}</Text>
               <View style={{ marginTop: 4, marginBottom: 60 }}>
