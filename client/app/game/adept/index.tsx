@@ -28,6 +28,7 @@ import { glassPanelDense } from '../../../src/ui/glassStyles'
 import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
 import PlayerHandView from '../../../src/components/game/PlayerHandView'
 import BossHandRow from '../../../src/components/game/BossHandRow'
+import GameTopBar from '../../../src/components/game/GameTopBar'
 
 // Feedback C5 — Showdown result ครอบด้วยพื้นหลังชุดเดียวกับ Profile/Lobby (bg free/vip ตาม isVip)
 const SHOWDOWN_BG_FREE = require('../../../assets/backgrounds/bg_main_free.png')
@@ -1591,22 +1592,18 @@ const GameTableLive: React.FC = () => {
 )}
 
           {/* TOP BAR */}
-          <View style={[s.topBar, { paddingTop: isWeb ? 22 : insets.top + 14, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }]}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: 50 }}>
-              <View style={s.tierBadge}><Text style={s.tierText}>ADEPT</Text></View>
-              <Text style={s.roundText}>R{roundNumber}/5</Text>
-            </View>
-            <View style={[s.potBadge, { marginLeft: 6 }]}>
-              <Text style={s.stackLabel}>STACK</Text>
-              <Text style={s.potText}>🪙 {tokenBalance[PLAYER_ID] ?? buyInAmount}</Text>
-              {(tokenDeltas[PLAYER_ID] ?? 0) !== 0 && (
-                <Text style={[s.deltaText, { color: (tokenDeltas[PLAYER_ID] ?? 0) > 0 ? '#4ade80' : '#f87171' }]}>
-                  {(tokenDeltas[PLAYER_ID] ?? 0) > 0 ? '+' : ''}{tokenDeltas[PLAYER_ID]}
-                </Text>
-              )}
-            </View>
+          <GameTopBar
+            tierName="ADEPT"
+            tierStars={3}
+            round={roundNumber}
+            isWeb={isWeb}
+            insetsTop={insets.top}
+            opacity={(phase === 'showdown' || phase === 'result') ? 0 : 1}
+            stackAmount={tokenBalance[PLAYER_ID] ?? buyInAmount}
+            stackDelta={tokenDeltas[PLAYER_ID] ?? 0}
+          >
             <TimerDisplay valRef={timerValRef} />
-          </View>
+          </GameTopBar>
 
           {/* AI SEAT + MAIN + USER — fade เมื่อ continue, ซ่อนระหว่าง dealing
               ห้ามสลับ opacity ระหว่าง literal 0 กับ fadeCards node ตรงนี้ (native driver
@@ -1757,15 +1754,7 @@ const s = StyleSheet.create({
   feltOverlay:   { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.2)' },
   logoWatermark: { alignItems: 'center', justifyContent: 'center' },
 
-  topBar:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6, zIndex: 2 },
   studioLogo: { width: 28, height: 28, opacity: 0.9 },
-  tierBadge:  { borderWidth: 1.5, borderColor: '#38bdf8', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2, backgroundColor: 'rgba(56,189,248,0.12)' },
-  tierText:   { fontSize: 8, color: '#38bdf8', letterSpacing: 2, fontWeight: '800' },
-  roundText:  { fontSize: 9, color: '#38bdf8', fontWeight: '800' },
-  potBadge:   { borderWidth: 1, borderColor: 'rgba(201,168,76,.4)', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 2, backgroundColor: 'rgba(0,0,0,.4)', alignItems: 'center' },
-  stackLabel: { fontSize: 6, fontWeight: '800', letterSpacing: 1, color: 'rgba(201,168,76,.6)', fontFamily: 'JetBrainsMono_400Regular' },
-  potText:    { fontSize: 10, fontWeight: '700', color: '#c9a84c' },
-  deltaText:  { fontSize: 9, fontWeight: '800' },
   timerText:  { fontSize: 20, fontWeight: '700', minWidth: 48, textAlign: 'right' },
   tbarWrap:   { paddingHorizontal: 12, paddingBottom: 2, zIndex: 2 },
   tbarBg:     { height: 3, backgroundColor: 'rgba(255,255,255,.08)', borderRadius: 2, overflow: 'hidden' },

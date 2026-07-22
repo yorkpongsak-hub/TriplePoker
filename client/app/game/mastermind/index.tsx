@@ -27,6 +27,7 @@ import { glassPanelDense } from '../../../src/ui/glassStyles'
 import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
 import PlayerHandView from '../../../src/components/game/PlayerHandView'
 import BossHandRow from '../../../src/components/game/BossHandRow'
+import GameTopBar from '../../../src/components/game/GameTopBar'
 
 // Feedback C5 — Showdown result ครอบด้วยพื้นหลังชุดเดียวกับ Profile/Lobby (bg free/vip ตาม isVip)
 const SHOWDOWN_BG_FREE = require('../../../assets/backgrounds/bg_main_free.png')
@@ -2293,20 +2294,18 @@ const GameTableLive: React.FC = () => {
 )}
 
           {/* TOP BAR */}
-          <View style={[s.topBar, { paddingTop: isWeb ? 22 : insets.top + 14, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }]}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: 50 }}>
-              <View style={{ alignItems: 'center' }}>
-                {/* Patch 2026-07-19: ดาวย้ายมาต่อท้าย badge แถวเดียวกัน (เดิมอยู่ใต้) */}
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <View style={s.tierBadge}><Text style={s.tierText}>MASTERMIND</Text></View>
-                  <Text style={{ fontSize: 13, color: '#FFD76A', letterSpacing: 1 }}>★★★★</Text>
-                </View>
-              </View>
-              <Text style={[s.roundText, { color: '#FFFFFF' /* Patch 2026-07-19: ขาวชัดตามมติลุงเยาะ */ }]}>R{roundNumber}/5</Text>
-            </View>
-            {/* Patch 2026-07-19: ตัด Stack badge — ยอดโทเคนมีใต้ชื่อผู้เล่นแล้ว (มติลุงเยาะ) */}
+          {/* Patch 2026-07-19: ตัด Stack badge — ยอดโทเคนมีใต้ชื่อผู้เล่นแล้ว (มติลุงเยาะ) — GameTopBar
+              ไม่ส่ง stackAmount ให้ = ไม่แสดง Stack badge (คงพฤติกรรมเดิม) */}
+          <GameTopBar
+            tierName="MASTERMIND"
+            tierStars={4}
+            round={roundNumber}
+            isWeb={isWeb}
+            insetsTop={insets.top}
+            opacity={(phase === 'showdown' || phase === 'result') ? 0 : 1}
+          >
             <TimerDisplay valRef={timerValRef} />
-          </View>
+          </GameTopBar>
 
           {/* AI SEAT + MAIN + USER — fade เมื่อ continue, ซ่อนระหว่าง dealing
               Patch 2026-07-18: ห้ามสลับ opacity ระหว่าง literal 0 กับ fadeCards node ตรงนี้ (native driver
@@ -2810,11 +2809,9 @@ const s = StyleSheet.create({
   feltOverlay:   { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.2)' },
   logoWatermark: { alignItems: 'center', justifyContent: 'center' },
 
-  topBar:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6, zIndex: 2 },
   studioLogo: { width: 28, height: 28, opacity: 0.9 },
   tierBadge:  { borderWidth: 1.5, borderColor: '#38bdf8', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2, backgroundColor: 'rgba(56,189,248,0.12)' },
   tierText:   { fontSize: 8, color: '#38bdf8', letterSpacing: 2, fontWeight: '800' },
-  roundText:  { fontSize: 9, color: '#38bdf8', fontWeight: '800' },
   potBadge:   { borderWidth: 1, borderColor: 'rgba(201,168,76,.4)', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 2, backgroundColor: 'rgba(0,0,0,.4)', alignItems: 'center' },
   stackLabel: { fontSize: 6, fontWeight: '800', letterSpacing: 1, color: 'rgba(201,168,76,.6)', fontFamily: 'JetBrainsMono_400Regular' },
   potText:    { fontSize: 10, fontWeight: '700', color: '#c9a84c' },
