@@ -384,9 +384,6 @@ export const gameConfig = {
     // §4.4: รอบขยายเวลาหลัง Dialog เลือก "Wait 2 More Minutes" (HighNoble เดิม — เก็บไว้ใช้กับ dialog flow เก่าจนกว่า Step 3)
     waitExtensionMs: 2 * 60_000,
 
-    // Adept public (auto-match) grace period เดิม (v1.0) — เก็บไว้เผื่อ path เก่ายังอ้างอิง ไม่ได้ใช้ต่อใน flow ใหม่ v1.1 แล้ว
-    adeptGraceMs: 40_000,
-
     // ─── v1.1: 2-stage timer ใหม่ (Human เติมจากหัว / AI เติมจากท้าย) — Adept + HighNoble ใช้ prefix เดียวกัน
     // ค่าเริ่มต้นเท่ากันทั้ง 2 Tier ตาม Spec — แยก key ต่อ Tier ไว้เผื่อปรับจูนทีหลังไม่เท่ากัน
     adept: {

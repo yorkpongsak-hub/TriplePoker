@@ -2,10 +2,15 @@
  * roomRegistry.ts
  * Room Registry กลาง (Redis-backed) — ใช้กับ Adept / Mastermind / HighNoble เท่านั้น
  * (Initiate ยังคง 1 Human + 3 AI แบบเดิม ไม่ใช้ไฟล์นี้)
- * Adept: Dynamic 2-3 Human + 1-2 AI — โต๊ะ public (auto-match) รอ human คนที่ 2/3 ผ่าน grace
- * period สั้นๆ (ADEPT_GRACE_MS) ก่อนจะยอมเติม AI/ยกเลิกโต๊ะ (ดู resolveAdeptGraceExpiry ด้านล่าง)
- * โต๊ะ private (PIN) ยังคงพฤติกรรมเดิม (2H+2AI ตายตัว เติม bot ตัวที่ 2 ทันทีที่ human ครบ 2)
- * Mastermind / HighNoble: 3 Human + 1 AI
+ * LobbyMatchmaking_Spec_v1_1 — Adept public (auto-match): Human เติมจากหัว (seat 0→1→2), AI เติม
+ * จากท้าย (seat 3→2) — seat แรกว่างทั้งหมดตอนสร้างห้อง ไม่ fix ตำแหน่งใดๆ Human คนแรก join → เติม
+ * Companion Bot (Sage) ทันทีที่ seat ว่างสุดท้าย + เริ่ม timer 2 นาทีรอคนที่ 2 (ไม่ครบ → ปิดโต๊ะ, ดู
+ * resolveAdeptWaitExpiry ด้านล่าง) Human คนที่ 2 join → timer เหลือ 15 วิรอคนที่ 3 (ไม่ครบ → เติม AI
+ * ตัวที่ 2 แทน)
+ * Adept private (PIN): ยังคงพฤติกรรมเดิมทั้งหมด ไม่ถูกแตะโดย v1.1 (2H+2AI ตายตัว, Sage เข้ารอทันทีตอน
+ * สร้างห้อง — ดู buildAdeptPrivateInitialSeats)
+ * Mastermind / HighNoble: 3 Human + 1 AI (HighNoble ยังใช้ seat[0]=Boss ตายตัวแบบเดิมจนกว่าจะ
+ * implement v1.1 ให้ HighNoble ด้วย)
  * The Sage Unicorn Studio Co., Ltd.
  */
 
@@ -40,16 +45,21 @@ export interface GameRoom {
   isPrivate: boolean
   pin?: string
   hostUserId?: string
-  // LobbyMatchmaking_Spec_v1_0 §4.4/§6.1: waiting timeout — 'waiting' (รอบแรก 3 นาที) จบแล้วถามผู้เล่น
-  // ('awaiting_choice') → เลือก "รอต่อ" เข้า 'extended' (2 นาที) → หมดแล้ว: Adept ลบทันที, High Noble
-  // เช็ค Human count ก่อน — ถ้า >=2 เข้า 'awaiting_deadlock_choice' (Host เลือก Start Now/Delete) ถ้า =1 ลบทันที
+  // LobbyMatchmaking_Spec_v1_0 §4.4/§6.1: waiting timeout เดิม — HighNoble เท่านั้นตอนนี้ (Adept public
+  // ย้ายไปใช้ waitStage ด้านล่างแทนแล้วตาม v1.1) — 'waiting' (รอบแรก 3 นาที) จบแล้วถามผู้เล่น
+  // ('awaiting_choice') → เลือก "รอต่อ" เข้า 'extended' (2 นาที) → หมดแล้ว เช็ค Human count ก่อน —
+  // ถ้า >=2 เข้า 'awaiting_deadlock_choice' (Host เลือก Start Now/Delete) ถ้า =1 ปิดโต๊ะทันที
   timeoutStage?: 'waiting' | 'awaiting_choice' | 'extended' | 'awaiting_deadlock_choice'
+  // LobbyMatchmaking_Spec_v1_1 §Adept: stage ของ timer ใหม่ — ใช้ตัดสินใจใน resolveAdeptWaitExpiry()
+  // (humanCount ตอน timer หมดจะบอกเองว่าอยู่ stage ไหน แต่เก็บ field นี้ไว้ส่งให้ client โชว์ label ถูก)
+  waitStage?: 'waiting_2nd' | 'waiting_3rd'
 }
 
 // ─── Config ต่อ Tier ────────────────────────────────────────────
 // humanSeatsRequired: จำนวนที่นั่ง Human ที่ต้องการ — ที่เหลือ (4 - จำนวนนี้) = AI fix ตั้งแต่สร้างห้อง
 // adept.waitTimeoutMs/humanSeatsRequired ตอนนี้ใช้แค่ฝั่ง private room เท่านั้น (2H+2AI ตายตัว) —
-// โต๊ะ public (auto-match) ใช้ ADEPT_GRACE_MS ด้านล่างแทน (dynamic 2-3H, ดู joinRoom/resolveAdeptGraceExpiry)
+// โต๊ะ public (auto-match) ใช้ gameConfig.matchmakingTimeouts.adept.{secondHumanWaitMs,thirdHumanWaitMs}
+// แทน (v1.1 dynamic 2-3H 2-stage timer, ดู joinRoom/resolveAdeptWaitExpiry)
 // ค่าตัวเลขทั้งหมดย้ายไป gameConfig.matchmakingTimeouts แล้ว (config-driven ตามกติกา) — ไฟล์นี้แค่ import มาใช้
 export const TIER_ROOM_CONFIG: Record<Tier, { waitTimeoutMs: number; humanSeatsRequired: number }> = {
   adept:      { waitTimeoutMs: gameConfig.matchmakingTimeouts.adeptPrivateWaitTimeoutMs, humanSeatsRequired: 2 }, // private room เท่านั้น — Sage เข้ารอทันที, Ghost/Reckless สุ่มตอน Human คนที่ 2
@@ -57,11 +67,7 @@ export const TIER_ROOM_CONFIG: Record<Tier, { waitTimeoutMs: number; humanSeatsR
   highNoble:  { waitTimeoutMs: gameConfig.matchmakingTimeouts.highNobleWaitTimeoutMs,     humanSeatsRequired: 3 }, // 3H + 1AI (Boss = Four Gods ปกติ 97% / Monarch ลับ 3%+pity — ดู monarchSpawn.ts)
 }
 
-// Adept public (auto-match) grace period — โต๊ะรอ human คนถัดไปนานเท่านี้ก่อนตัดสินใจ
-// ยกเลิกโต๊ะ (ยังมีแค่ 1H) หรือเติม AI (มี 2H แล้ว) ใช้ค่าเดียวกันทั้ง 2 stage
-export const ADEPT_GRACE_MS = gameConfig.matchmakingTimeouts.adeptGraceMs // tune ได้ในช่วง 30_000-45_000
-
-// §4.4: รอบขยายเวลาหลัง Dialog เลือก "Wait 2 More Minutes"
+// §4.4: รอบขยายเวลาหลัง Dialog เลือก "Wait 2 More Minutes" (HighNoble เท่านั้น จนกว่าจะทำ Step 3)
 export const WAIT_EXTENSION_MS = gameConfig.matchmakingTimeouts.waitExtensionMs
 
 // ─── Redis Key Helpers ──────────────────────────────────────────
@@ -79,22 +85,39 @@ function aiSeat(idx: number): Seat {
   return { type: 'ai', name: `Minion-${idx + 1}`, joinedAt: Date.now() }
 }
 
-// LobbyMatchmaking_Spec_v1_0 §4.2: The Sage เข้ารอทันทีตอนสร้างโต๊ะ Adept
+// The Sage — companion bot ตัวแรกของ Adept (ทั้ง private ตอนสร้างห้อง และ public v1.1 ตอน Human คนแรก join)
 function sageSeat(): Seat {
   const sage = AI_CONFIGS.find(a => a.personality === 'sage')!
   return { type: 'ai', name: sage.name, joinedAt: Date.now(), aiConfigId: sage.id }
 }
 
-// §4.3: Human คนที่ 2 join → สุ่ม Bot อีก 1 ตัว (The Ghost หรือ The Reckless)
+// Companion bot ตัวที่ 2 ของ Adept (The Ghost หรือ The Reckless สุ่ม 1 ตัว) — private: ตอน human ครบ 2
+// | public v1.1: ตอน 15 วิ (thirdHumanWaitMs) หมดแล้วยังไม่มี human คนที่ 3 (ดู resolveAdeptWaitExpiry)
 function secondAdeptBotSeat(): Seat {
   const pool = AI_CONFIGS.filter(a => a.personality === 'ghost' || a.personality === 'reckless')
   const pick = pool[Math.floor(Math.random() * pool.length)]
   return { type: 'ai', name: pick.name, joinedAt: Date.now(), aiConfigId: pick.id }
 }
 
-// §4.2: seat 0 = The Sage ทันที, seat 1 ว่างไว้ก่อน (เติมสุ่มตอน Human คนที่ 2 join ใน joinRoom())
-function buildAdeptInitialSeats(): [Seat, Seat, Seat, Seat] {
+// LobbyMatchmaking_Spec_v1_0 §4.2 (private room เท่านั้น ไม่ถูกแตะโดย v1.1): seat 0 = The Sage ทันที
+// ตอนสร้างห้อง, seat 1 ว่างไว้ก่อน (host เข้า) — Companion bot ตัวที่ 2 เติมตอน human ครบ 2 ใน joinRoom()
+function buildAdeptPrivateInitialSeats(): [Seat, Seat, Seat, Seat] {
   return [sageSeat(), emptySeat(), emptySeat(), emptySeat()]
+}
+
+// LobbyMatchmaking_Spec_v1_1 §Adept public: ไม่ fix ตำแหน่งใดๆ ตั้งแต่สร้างห้อง — ทุกที่นั่งว่างหมด รอ
+// Human เข้าที่นั่งว่างแรกที่เจอ (findIndex) เอง ซึ่งจะกลายเป็น seat 0→1→2 โดยธรรมชาติ (ดู joinRoom())
+function buildAdeptPublicInitialSeats(): [Seat, Seat, Seat, Seat] {
+  return [emptySeat(), emptySeat(), emptySeat(), emptySeat()]
+}
+
+// หา index ของที่นั่งว่างตัว "ท้ายสุด" (index มากสุด) — ใช้เติม AI จากท้ายตาม v1.1 (Human เติมจากหัว
+// ด้วย findIndex ปกติอยู่แล้ว, AI ต้องเติมจากท้ายแทนไม่ให้ชนกับ human ที่กำลังจะ join ต่อ)
+function lastEmptySeatIndex(seats: readonly Seat[]): number {
+  for (let i = seats.length - 1; i >= 0; i--) {
+    if (seats[i].type === 'empty') return i
+  }
+  return -1
 }
 
 // Patch Multiplayer HighNoble: ที่นั่ง Boss (index 0) — สุ่ม placeholder ตอนสร้างห้อง (ยังไม่รู้ว่าใครจะมานั่ง Human บ้าง)
@@ -108,9 +131,9 @@ function makeRoomId(tier: Tier): string {
   return `${tier}_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e4)}`
 }
 
-function buildInitialSeats(tier: Tier): [Seat, Seat, Seat, Seat] {
-  // §4.2: Adept มี seat layout พิเศษ — bot ตัวที่ 2 ไม่ fix ตั้งแต่สร้างห้อง (ดู buildAdeptInitialSeats)
-  if (tier === 'adept') return buildAdeptInitialSeats()
+function buildInitialSeats(tier: Tier, isPrivate: boolean): [Seat, Seat, Seat, Seat] {
+  // Adept: private (PIN) ใช้ layout เดิม (Sage seat 0 ทันที) | public (auto-match) v1.1 ว่างหมดทุกที่นั่ง
+  if (tier === 'adept') return isPrivate ? buildAdeptPrivateInitialSeats() : buildAdeptPublicInitialSeats()
 
   const cfg = TIER_ROOM_CONFIG[tier]
   const aiCount = 4 - cfg.humanSeatsRequired
@@ -173,12 +196,13 @@ export async function findOpenRoom(tier: Tier): Promise<GameRoom | null> {
 // (เรียกจาก findOrCreateRoom() เท่านั้น — public room เสมอ, isPrivate default false)
 export async function createRoom(tier: Tier, isPrivate = false): Promise<GameRoom> {
   const cfg = TIER_ROOM_CONFIG[tier]
-  // Adept public: เริ่มนับ grace period รอ human คนที่ 2 ทันที (แทน waitTimeoutMs 3 นาทีเดิม)
-  const timeoutAt = tier === 'adept' ? Date.now() + ADEPT_GRACE_MS : Date.now() + cfg.waitTimeoutMs
+  // Adept public v1.1: ยังไม่เริ่มนับ timer ใดๆ ตอนสร้างห้อง — รอ Human คนแรก join ก่อน (ดู joinRoom())
+  // เพราะ findOrCreateRoomAndJoin() เรียก createRoom() แล้ว join ทันทีในธุรกรรมเดียวกันเสมออยู่แล้ว
+  const timeoutAt = tier === 'adept' && !isPrivate ? null : Date.now() + cfg.waitTimeoutMs
   const room: GameRoom = {
     roomId: makeRoomId(tier),
     tier,
-    seats: buildInitialSeats(tier),
+    seats: buildInitialSeats(tier, isPrivate),
     createdAt: Date.now(),
     timeoutAt,
     status: 'waiting',
@@ -249,7 +273,7 @@ export async function createPrivateRoom(
   }
 
   const cfg = TIER_ROOM_CONFIG[tier]
-  const seats = buildInitialSeats(tier)
+  const seats = buildInitialSeats(tier, true)
   const firstHumanIdx = seats.findIndex(s => s.type === 'empty')
   if (firstHumanIdx !== -1) {
     seats[firstHumanIdx] = { type: 'human', userId: hostUserId, name: hostName, joinedAt: Date.now() }
@@ -298,20 +322,33 @@ export async function joinRoom(
   room.seats[seatIdx] = { type: 'human', userId, name: userName, joinedAt: Date.now(), avatarUrl }
   if (!room.hostUserId) room.hostUserId = userId // คนแรกที่ join ห้อง public = host (ใช้กับ Deadlock dialog §4.4/§6.1)
 
-  // Adept: private room (PIN) ยังคงพฤติกรรมเดิม — human ครบ 2 → เติม Bot ตัวที่ 2 ทันที
-  // (ไม่มี resolveAdeptGraceExpiry() มาช่วยเพราะ private room ไม่อยู่ใน openSetKey เลย — ถ้าไม่เติม
+  // Adept: private room (PIN) ยังคงพฤติกรรมเดิมทั้งหมด — human ครบ 2 → เติม Bot ตัวที่ 2 ทันที
+  // (ไม่มี resolveAdeptWaitExpiry() มาช่วยเพราะ private room ไม่อยู่ใน openSetKey เลย — ถ้าไม่เติม
   // ทันทีตรงนี้ที่นั่งจะว่างค้างตลอดไป ไม่มีวันเริ่มเกมได้)
   if (room.tier === 'adept' && room.isPrivate) {
     if (humanCount(room) === TIER_ROOM_CONFIG.adept.humanSeatsRequired) {
       const remainingEmpty = room.seats.findIndex(s => s.type === 'empty')
       if (remainingEmpty !== -1) room.seats[remainingEmpty] = secondAdeptBotSeat()
     }
-  } else if (room.tier === 'adept' && humanCount(room) === 2) {
-    // Public Adept, human คนที่ 2 เพิ่ง join — ยังไม่เติม Bot ทันที เริ่ม grace period รอบ 2
-    // รอ human คนที่ 3 แทน (resolveAdeptGraceExpiry จะเติม Bot เองถ้าหมดเวลาแล้วยังมีแค่ 2H —
-    // ไม่ต้องเช็ค humanCount===3 ตรงนี้เพราะที่นั่งสุดท้ายถูกเติมแบบปกติด้านบนอยู่แล้ว isRoomFull()
-    // ด้านล่างจะกลายเป็น true เองตามปกติ เหมือน tier อื่น)
-    room.timeoutAt = Date.now() + ADEPT_GRACE_MS
+  } else if (room.tier === 'adept' && !room.isPrivate) {
+    // LobbyMatchmaking_Spec_v1_1 §Adept public — Human เติมจากหัว (seatIdx ด้านบนหาที่ว่างแรกเจอเองอยู่
+    // แล้ว), Companion Bot เติมจากท้ายด้วย lastEmptySeatIndex() แยกจาก path นี้
+    const hCount = humanCount(room)
+    if (hCount === 1) {
+      // Human คนแรก join — เติม Sage ที่ seat ว่างสุดท้ายทันที + เริ่ม timer รอบแรก (รอคนที่ 2)
+      const lastEmpty = lastEmptySeatIndex(room.seats)
+      if (lastEmpty !== -1) room.seats[lastEmpty] = sageSeat()
+      room.waitStage = 'waiting_2nd'
+      room.timeoutAt = Date.now() + gameConfig.matchmakingTimeouts.adept.secondHumanWaitMs
+    } else if (hCount === 2) {
+      // Human คนที่ 2 join — ยกเลิก timer เดิม เริ่ม timer รอบ 2 (สั้นลง รอคนที่ 3)
+      room.waitStage = 'waiting_3rd'
+      room.timeoutAt = Date.now() + gameConfig.matchmakingTimeouts.adept.thirdHumanWaitMs
+    } else if (hCount === 3) {
+      // Human คนที่ 3 join — ครบ 3H+1AI แล้ว ไม่ต้องมี timer อีก (isRoomFull() ด้านล่างจะ mark 'full' เอง)
+      room.waitStage = undefined
+      room.timeoutAt = null
+    }
   }
 
   if (isRoomFull(room)) room.status = 'full'
@@ -431,11 +468,13 @@ export async function deleteRoomCompletely(roomId: string): Promise<void> {
   await redis.del(fullKey(roomId))
 }
 
-// ─── Adept Dynamic Capacity — grace period scanner + resolver ──────────────
-// สแกนหาโต๊ะ Adept public (ไม่ใช่ private) ที่ยัง 'waiting' และ grace period หมดเวลาแล้ว
-// คืนแค่ roomId — ผู้เรียกต้องผ่าน resolveAdeptGraceExpiry() เสมอ เพราะระหว่าง scan เสร็จกับ
-// resolver ทำงานจริง อาจมี join ใหม่แทรกเข้ามาพอดี (ต้องอ่านสดอีกรอบใน resolver ก่อนตัดสินใจ)
-export async function getAdeptGraceExpiredRoomIds(): Promise<string[]> {
+// ─── Adept Dynamic Capacity (v1.1) — 2-stage wait timer scanner + resolver ──
+// สแกนหาโต๊ะ Adept public (ไม่ใช่ private) ที่ยัง 'waiting' และ timer stage ปัจจุบันหมดเวลาแล้ว —
+// timer เดียวกันนี้ถูกตั้งค่าใหม่ทุกครั้งที่มี human join (ดู joinRoom(): secondHumanWaitMs ตอน human
+// คนแรก join, thirdHumanWaitMs ตอนคนที่ 2 join) — humanCount() ตอนหมดเวลาจริงจะบอกเองว่าอยู่ stage ไหน
+// คืนแค่ roomId — ผู้เรียกต้องผ่าน resolveAdeptWaitExpiry() เสมอ เพราะระหว่าง scan เสร็จกับ resolver
+// ทำงานจริง อาจมี join ใหม่แทรกเข้ามาพอดี (ต้องอ่านสดอีกรอบใน resolver ก่อนตัดสินใจ)
+export async function getAdeptWaitExpiredRoomIds(): Promise<string[]> {
   const roomIds = await redis.smembers(openSetKey('adept'))
   const now = Date.now()
   const result: string[] = []
@@ -451,25 +490,29 @@ export async function getAdeptGraceExpiredRoomIds(): Promise<string[]> {
 // ตัดสินใจ + แก้ไขห้องจริงสำหรับ 1 roomId — ล็อกด้วย lock เดียวกับ findOrCreateRoomAndJoin (tier
 // 'adept') กัน race กับ join ที่กำลังเข้ามาพอดี แล้วอ่านห้องสดอีกรอบ + เช็ค timeoutAt ซ้ำก่อนลงมือ
 // จริง (เผื่อ join ใหม่แทรกเข้ามาระหว่าง scan กับตอนนี้พอดี ทำให้ timeoutAt ถูกรีเซ็ตไปแล้ว)
-export type AdeptGraceResult =
+export type AdeptWaitExpiryResult =
   | { action: 'noop' }
-  | { action: 'cancelled' }
+  | { action: 'closed' }
   | { action: 'ai_filled'; room: GameRoom }
 
-export async function resolveAdeptGraceExpiry(roomId: string): Promise<AdeptGraceResult> {
+export async function resolveAdeptWaitExpiry(roomId: string): Promise<AdeptWaitExpiryResult> {
   return withLock('matchmaking:adept', async () => {
     const room = await getRoom(roomId)
     if (!room || room.status !== 'waiting' || room.isPrivate || room.tier !== 'adept') return { action: 'noop' }
     if (room.timeoutAt === null || Date.now() <= room.timeoutAt) return { action: 'noop' } // มี join ใหม่รีเซ็ต timeoutAt ไปแล้ว
 
+    // Stage 1 (secondHumanWaitMs) หมดเวลา ยังมีแค่ 1 Human — Human>=2 บังคับตาม Spec v1.1 → ปิดโต๊ะ
+    // (ไม่ deleteRoomCompletely — mark status='closed' เฉยๆ ให้ client รู้สาเหตุชัดเจน ไม่ต้อง refund
+    // เพราะ escrow ยังไม่เคยหักในช่วง 'waiting' เลย — ดู finalizeAndStartRoom ที่หัก escrow ตอนห้องเต็มเท่านั้น)
     if (humanCount(room) <= 1) {
-      await deleteRoomCompletely(roomId)
-      return { action: 'cancelled' }
+      await closeRoom(roomId)
+      return { action: 'closed' }
     }
 
-    // มี 2 Human แล้วยังไม่มีคนที่ 3 ทันเวลา — เติม Bot ตัวที่ 2 ให้เริ่มเกมได้
+    // Stage 2 (thirdHumanWaitMs) หมดเวลา มี 2 Human แล้วยังไม่มีคนที่ 3 — เติม Bot ตัวที่ 2 ให้เริ่มเกมได้
     const remainingEmpty = room.seats.findIndex(s => s.type === 'empty')
     if (remainingEmpty !== -1) room.seats[remainingEmpty] = secondAdeptBotSeat()
+    room.waitStage = undefined
     if (isRoomFull(room)) room.status = 'full'
     await saveRoom(room)
     return { action: 'ai_filled', room }

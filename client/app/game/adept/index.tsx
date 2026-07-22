@@ -1167,8 +1167,11 @@ const GameTableLive: React.FC = () => {
     )
   })
 
-  // Bug B fix: index 0 = ที่นั่ง Boss (Sage เสมอตามโครงสร้างห้อง Adept — ดู buildAdeptInitialSeats
-  // ฝั่ง server) index 1/2 = P2/P4 ซึ่งอาจเป็น Human หรือ AI ก็ได้ ไม่ใช่ AI เสมอไปเหมือนเดิม
+  // Bug B fix: bossAI/p2AI/p4AI = 3 ตำแหน่งภาพบนโต๊ะ (บน/ซ้าย/ขวา) ไม่ใช่ "Boss" จริงแบบ Mastermind/
+  // HighNoble — Adept ไม่มี Boss concept ชื่อตัวแปรสืบมาจาก template เดิมเฉยๆ ค่าคือ 3 คู่แข่งที่เหลือ
+  // เรียงตาม seat index จริงในห้อง (aiList = data.seats กรองตัวเองออก) ใครจะอยู่ตำแหน่งไหนไม่คงที่ —
+  // LobbyMatchmaking_Spec_v1_1: ห้อง Adept public เติม Human จากหัว (seat 0→1→2) ไม่ fix Sage ไว้ seat 0
+  // อีกต่อไปแล้ว (private room ยังคง Sage seat 0 เสมอ — ดู buildAdeptPrivateInitialSeats ฝั่ง server)
   const bossAI = aiList[0]; const p2AI = aiList[1]; const p4AI = aiList[2]
   const userRevealed = allCards[PLAYER_ID]
   const isRevealed   = userRevealed && Object.keys(userRevealed).length > 0

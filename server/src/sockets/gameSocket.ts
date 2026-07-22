@@ -26,7 +26,7 @@ import {
   fillRemainingWithAI, getTimedOutRooms, markInProgress, finalizeBossSeat,
   getRoomsNeedingTimeoutChoice, markAwaitingTimeoutChoice, extendRoomWait,
   getExpiredExtendedRooms, deleteRoomCompletely, fillWithMinion, humanCount,
-  markAwaitingDeadlockChoice, getAdeptGraceExpiredRoomIds, resolveAdeptGraceExpiry,
+  markAwaitingDeadlockChoice, getAdeptWaitExpiredRoomIds, resolveAdeptWaitExpiry,
   type Tier as RoomTier, type GameRoom,
 } from "../game/roomRegistry";
 import { broadcastTableUpdate } from "./lobbySocket";
@@ -148,25 +148,26 @@ export function registerGameSocket(io: Server): void {
     }
   }, 10_000);
 
-  // Adept Dynamic Capacity grace period — เฉพาะโต๊ะ public (auto-match) เท่านั้น (private ไม่เคยอยู่
-  // ใน openSetKey เลย ไม่โดนกระทบ ยังคงพฤติกรรมเดิม 2H+2AI ตายตัวใน joinRoom()) โพลถี่กว่า loop อื่น
-  // (3 วิ แทน 10 วิ) เพราะ grace window สั้นแค่ ~40 วิ ไม่ใช่หลักนาทีเหมือน loop ด้านบน
+  // Adept Dynamic Capacity (LobbyMatchmaking_Spec_v1_1) — 2-stage wait timer, เฉพาะโต๊ะ public
+  // (auto-match) เท่านั้น (private ไม่เคยอยู่ใน openSetKey เลย ไม่โดนกระทบ ยังคงพฤติกรรมเดิม 2H+2AI
+  // ตายตัวใน joinRoom()) โพลถี่กว่า loop อื่น (3 วิ แทน 10 วิ) เพราะ stage สั้นสุดแค่ 15 วิ (thirdHumanWaitMs)
   setInterval(async () => {
-    const roomIds = await getAdeptGraceExpiredRoomIds();
+    const roomIds = await getAdeptWaitExpiredRoomIds();
     for (const roomId of roomIds) {
       try {
-        const result = await resolveAdeptGraceExpiry(roomId);
-        if (result.action === 'cancelled') {
-          io.to(roomId).emit('room_deleted', {
-            roomId,
-            message: 'No second player joined in time — table has been removed. Please try Auto Match again.',
+        const result = await resolveAdeptWaitExpiry(roomId);
+        if (result.action === 'closed') {
+          // Human>=2 บังคับ — ไม่ครบภายใน secondHumanWaitMs → ปิดโต๊ะ ไม่มี refund (escrow ยังไม่เคยหักตอน 'waiting')
+          io.to(roomId).emit('room_closed_insufficient_players', {
+            roomId, tier: 'adept',
+            message: 'Not enough players — this tier requires at least 2 human players.',
           });
         } else if (result.action === 'ai_filled' && result.room.status === 'full') {
           await finalizeAndStartRoom(io, result.room);
         }
-        // 'noop' — มี join แทรกเข้ามาระหว่าง scan กับตอนนี้พอดี (resolveAdeptGraceExpiry เช็คสดแล้วเจอว่าไม่หมดเวลาจริง) ไม่ต้องทำอะไร
+        // 'noop' — มี join แทรกเข้ามาระหว่าง scan กับตอนนี้พอดี (resolveAdeptWaitExpiry เช็คสดแล้วเจอว่าไม่หมดเวลาจริง) ไม่ต้องทำอะไร
       } catch (err) {
-        console.error('[ADEPT_GRACE] failed for room', roomId, err);
+        console.error('[ADEPT_WAIT] failed for room', roomId, err);
       }
     }
   }, 3_000);
