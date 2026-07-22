@@ -27,6 +27,7 @@ import {
   getRoomsNeedingTimeoutChoice, markAwaitingTimeoutChoice, extendRoomWait,
   getExpiredExtendedRooms, deleteRoomCompletely, fillWithMinion, humanCount,
   markAwaitingDeadlockChoice, getAdeptWaitExpiredRoomIds, resolveAdeptWaitExpiry,
+  getHighNobleWaitExpiredRoomIds, resolveHighNobleWaitExpiry,
   type Tier as RoomTier, type GameRoom,
 } from "../game/roomRegistry";
 import { broadcastTableUpdate } from "./lobbySocket";
@@ -46,15 +47,20 @@ function toCards(keys: string[]) {
 // ─── Multiplayer: track socket -> {userId, roomId} สำหรับ disconnect handling ───
 const socketUserMap = new Map<string, { userId: string; roomId: string; tier: string }>();
 
-// ห้องเต็มแล้ว → finalize (สุ่ม Boss จริงถ้า High Noble) + emit room_ready + เริ่มเกม
-// ใช้ร่วมกัน 3 จุด: room_auto_match, room_join_private, Adept grace-period AI-fill
+// ห้องเต็มแล้ว → finalize (สุ่ม Boss จริงถ้า High Noble private) + emit room_ready + เริ่มเกม
+// ใช้ร่วมกัน 3 จุด: room_auto_match, room_join_private, Adept/HighNoble wait-expiry AI-fill
 //
 // A2 (Bug A fix, 2026-07-17): Adept ต้องหัก escrow ให้ครบทุกคน "ก่อน" broadcast room_ready เสมอ —
 // เดิม room_ready ยิงก่อน escrow loop ใน startMultiplayerMatch ทำให้ทุกคน navigate เข้าเกมไปแล้ว
 // ก่อนรู้ว่า escrow ใครคนหนึ่งล้มเหลว (เช่น ACTIVE_MATCH_EXISTS จากห้องก่อนหน้าที่ยังไม่ settle) — พอ
 // ล้มเหลวจริงจะไม่มีใครเห็น error เลยเพราะ socket lobby เดิมถูก disconnect ไปแล้วตอน navigate
+//
+// LobbyMatchmaking_Spec_v1_1: HighNoble public room ล็อค Boss/Monarch ไปแล้วตอน Human คนแรก join (ดู
+// roomRegistry.joinRoom()) — ห้าม finalizeBossSeat() ซ้ำตรงนี้ เพราะจะ re-roll ทับผลที่ล็อกไว้แล้ว
+// (pity ก็จะผูกกับคนละคนด้วย เพราะ finalizeBossSeat ใช้ human ทั้ง 3 คน ไม่ใช่แค่คนแรก) — เรียกเฉพาะ
+// private room เท่านั้น (ยังใช้ placeholder ตอนสร้างห้อง แล้วมา roll จริงตรงนี้เหมือนเดิมทุกอย่าง)
 async function finalizeAndStartRoom(io: Server, room: GameRoom): Promise<void> {
-  const finalRoom = room.tier === 'highNoble' ? await finalizeBossSeat(room) : room;
+  const finalRoom = (room.tier === 'highNoble' && room.isPrivate) ? await finalizeBossSeat(room) : room;
   await markInProgress(finalRoom.roomId);
 
   if (finalRoom.tier === 'adept') {
@@ -112,15 +118,23 @@ export function registerGameSocket(io: Server): void {
     }
   }, 10_000);
 
-  // Waiting Timeout Dialog (LobbyMatchmaking_Spec_v1_0 §4.4/§6.1) — High Noble เท่านั้นทุก 10 วิ
-  // (Adept ไม่ใช้ dialog นี้อีกแล้ว — เปลี่ยนไปใช้ Adept Dynamic Capacity grace period แทน ดู
-  // setInterval ใหม่ด้านล่างที่เรียก getAdeptGraceExpiredRoomIds/resolveAdeptGraceExpiry):
+  // Waiting Timeout Dialog (LobbyMatchmaking_Spec_v1_0 §4.4/§6.1) — เดิม High Noble เท่านั้นทุก 10 วิ
+  // ตอนนี้ dialogTiers ว่างเปล่าถาวรแล้ว: ทั้ง Adept และ HighNoble ย้ายไปใช้ 2-stage wait timer ใหม่
+  // (LobbyMatchmaking_Spec_v1_1) แทนหมดแล้ว — เก็บ loop/ฟังก์ชันไว้เฉยๆ ไม่ลบ (dead code ที่ปลอดภัย
+  // ไม่มี tier ไหนเรียกใช้อีก, private room ก็ไม่เคยเข้า openSetKey อยู่แล้วเลยไม่เคยโดน loop นี้ตั้งแต่
+  // แรก) — งดปิดถาวร ณ ตอนนี้เพื่อไม่ให้ diff Step 3 บวมเกินจำเป็น รอตัดสินใจเก็บกวาดจริงทีหลัง (ดู
+  // client lobby.tsx room_wait_timeout_choice/room_wait_extended/room_timeout_choice handler ที่พังคู่กัน)
   //   รอบแรก (3 นาที) หมด → ถาม dialog "Wait 2 More Minutes" / "Delete Table" (เฉพาะ Host)
   //   รอบขยาย (2 นาที) หมด:
   //     Human >=2: Deadlock dialog "Start Now (Fill 1 Minion AI)"/"Delete Table" (Host เท่านั้น, §6.1)
   //     Human =1: ลบโต๊ะทันที
+  //
+  // ⚠️ สำคัญ (ไม่ใช่แค่ cleanup): ต้องเอา 'highNoble' ออกจาก array นี้จริงๆ (ไม่ใช่แค่ปรับ comment) —
+  // ถ้าปล่อยไว้ loop นี้จะยังสแกน openSetKey('highNoble') ห้องเดียวกับ setInterval ใหม่ด้านล่าง (ทุก
+  // 3 วิ) พร้อมกัน ชนกันได้ (เช่น mark timeoutStage='awaiting_choice' + emit dialog ทับ waitStage ใหม่
+  // ทั้งที่ผู้เล่นไม่เห็น dialog UI แบบเดิมแล้วเพราะ client ไม่ฟัง event นี้อีกต่อไปหลัง Step 4)
   setInterval(async () => {
-    const dialogTiers: RoomTier[] = ['highNoble'];
+    const dialogTiers: RoomTier[] = [];
     for (const tier of dialogTiers) {
       const needChoice = await getRoomsNeedingTimeoutChoice(tier);
       for (const room of needChoice) {
@@ -168,6 +182,29 @@ export function registerGameSocket(io: Server): void {
         // 'noop' — มี join แทรกเข้ามาระหว่าง scan กับตอนนี้พอดี (resolveAdeptWaitExpiry เช็คสดแล้วเจอว่าไม่หมดเวลาจริง) ไม่ต้องทำอะไร
       } catch (err) {
         console.error('[ADEPT_WAIT] failed for room', roomId, err);
+      }
+    }
+  }, 3_000);
+
+  // HighNoble Dynamic Capacity (LobbyMatchmaking_Spec_v1_1) — เหมือน Adept ทุกอย่าง (ดู loop ด้านบน)
+  // ต่างแค่ AI-fill ใช้ fillWithMinion() แทน secondAdeptBotSeat() (ดู resolveHighNobleWaitExpiry) —
+  // Boss/Monarch ถูกล็อคไปแล้วตอน Human คนแรก join (ดู roomRegistry.joinRoom()) ไม่ re-roll ที่นี่
+  setInterval(async () => {
+    const roomIds = await getHighNobleWaitExpiredRoomIds();
+    for (const roomId of roomIds) {
+      try {
+        const result = await resolveHighNobleWaitExpiry(roomId);
+        if (result.action === 'closed') {
+          io.to(roomId).emit('room_closed_insufficient_players', {
+            roomId, tier: 'highNoble',
+            message: 'Not enough players — this tier requires at least 2 human players.',
+          });
+        } else if (result.action === 'ai_filled' && result.room.status === 'full') {
+          await finalizeAndStartRoom(io, result.room);
+        }
+        // 'noop' — มี join แทรกเข้ามาระหว่าง scan กับตอนนี้พอดี ไม่ต้องทำอะไร
+      } catch (err) {
+        console.error('[HIGHNOBLE_WAIT] failed for room', roomId, err);
       }
     }
   }, 3_000);
@@ -564,7 +601,10 @@ export function registerGameSocket(io: Server): void {
       if (choice === "start_now" && room.tier === "highNoble") {
         let filled = await fillWithMinion(roomId);
         if (!filled) return;
-        filled = await finalizeBossSeat(filled);
+        // LobbyMatchmaking_Spec_v1_1: public room ล็อค Boss/Monarch ไปแล้วตอน Human คนแรก join (ดู
+        // roomRegistry.joinRoom()) — finalizeBossSeat() ที่นี่จะ re-roll ทับผลที่ล็อกไว้ ต้อง gate ด้วย
+        // isPrivate เหมือน finalizeAndStartRoom() ด้านบน (private room เท่านั้นที่ยังใช้ placeholder รอ roll จริงตรงนี้)
+        if (filled.isPrivate) filled = await finalizeBossSeat(filled);
         await markInProgress(roomId);
         io.to(roomId).emit("room_ready", { roomId, seats: filled.seats });
         await startHighNobleMultiMatch(io, roomId, filled.seats);

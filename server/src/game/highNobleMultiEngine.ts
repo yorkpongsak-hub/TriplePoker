@@ -327,8 +327,13 @@ function aiSeats(state: HNMatchState): HNSeat[] {
 function seatById(state: HNMatchState, id: string): HNSeat | undefined {
   return state.seats.find(s => s.id === id)
 }
+// v1.1 fix: หา boss seat จาก role field ตรงๆ ไม่ใช่ state.seats[0] — เดิมสมมติว่า boss อยู่ index 0
+// เสมอ ซึ่งไม่จริงอีกต่อไปสำหรับ public room หลัง LobbyMatchmaking_Spec_v1_1 (Human อาจอยู่ index 0
+// ได้แล้ว) — ฟังก์ชันนี้เคยถูกประกาศไว้เฉยๆ ไม่มีใครเรียก (dead code) ส่วน 2 จุดที่ต้องใช้จริง (startHNRound
+// ล็อค Monarch personality, finalizeHNGrandFinale ตัดสิน Pot×2) ก็อบปี้ logic state.seats[0] แบบเดียวกัน
+// ไปใช้ตรงๆ แทน — แก้ตรงนี้ที่เดียวแล้วเปลี่ยนทั้ง 2 จุดให้เรียกฟังก์ชันนี้แทน (ดูด้านล่าง)
 function bossSeat(state: HNMatchState): HNSeat {
-  return state.seats[0]
+  return state.seats.find(s => s.role === 'boss')!
 }
 
 // ============================================================
@@ -359,7 +364,7 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
 
   // Monarch Spec v1.3: ล็อคบุคลิกตาม hand strength ทันทีที่แจกไพ่เสร็จ — เฉพาะ Round 1 เท่านั้น
   // (ล็อคครั้งเดียวทั้งแมตช์ ไม่สลับอีก, client ไม่เห็นค่า personality — เห็นแค่ name="Monarch")
-  const boss = state.seats[0]
+  const boss = bossSeat(state) // v1.1 fix: หาจาก role ไม่ใช่ index 0 ตรงๆ (ดู bossSeat() ด้านบน)
   if (boss.isMonarch && state.roundNumber === 1) {
     boss.personality = lockMonarchPersonality(cardsMap[boss.id], community)
   }
@@ -1080,7 +1085,7 @@ function finalizeHNGrandFinale(
       // Monarch Spec v1.3 §3: ผู้ชนะ human ที่เจอ Monarch (กำไรสุทธิ > 0) ได้ Pot ×2.0 ระดับ "ทั้งแมตช์" —
       // ส่วนต่างที่เพิ่ม (อีก 1x) เป็น House mint ไม่หักจากผู้เล่นอื่น (ยืนยันขอบเขตกับลุงเยาะแล้ว — ระดับ match ไม่ใช่ต่อ pile/round)
       // computeHNHumanPayout เดิมไม่แตะ — effectiveFinalStack = buyInAmount + payout ทำให้ settleEscrow ให้ผลรวมเท่าเดิมทุกกรณี
-      const bossSeatFinal = state.seats[0]
+      const bossSeatFinal = bossSeat(state) // v1.1 fix: หาจาก role ไม่ใช่ index 0 ตรงๆ (ดู bossSeat() ด้านบน) — ผลตัดสิน Pot×2 ผูกกับ Monarch จริง ไม่ใช่ที่นั่ง index 0
       const winnerSeat = seatById(state, finalWinner)
       const isMonarchMatch = bossSeatFinal.isMonarch === true
       const isHumanWinner = !!winnerSeat?.isHuman

@@ -16,7 +16,7 @@
 
 import { redis } from '../config/redis'
 import { FOUR_GODS, AI_CONFIGS, AIConfig, pickRandomMinions } from './aiEngine'
-import { rollHighNobleBoss } from './monarchSpawn'
+import { rollHighNobleBoss, type MonarchRollResult } from './monarchSpawn'
 import { gameConfig } from '../config/gameConfig'
 
 // ─── Types ───────────────────────────────────────────────────────
@@ -120,11 +120,27 @@ function lastEmptySeatIndex(seats: readonly Seat[]): number {
   return -1
 }
 
-// Patch Multiplayer HighNoble: ที่นั่ง Boss (index 0) — สุ่ม placeholder ตอนสร้างห้อง (ยังไม่รู้ว่าใครจะมานั่ง Human บ้าง)
-// ตัวจริงจะถูกสุ่มใหม่ทับด้วย finalizeBossSeat() ตอนห้องเต็ม (รู้ user_id ครบ 3 คนแล้ว ใช้คำนวณ Monarch pity ได้)
+// Patch Multiplayer HighNoble (private room เท่านั้นหลัง v1.1): ที่นั่ง Boss (index 0) — สุ่ม placeholder
+// ตอนสร้างห้อง (ยังไม่รู้ว่าใครจะมานั่ง Human บ้าง) ตัวจริงจะถูกสุ่มใหม่ทับด้วย finalizeBossSeat() ตอน
+// ห้องเต็ม (รู้ user_id ครบ 3 คนแล้ว ใช้คำนวณ Monarch pity ได้) — public room ไม่ใช้ฟังก์ชันนี้อีกต่อไป
+// (ดู joinRoom(): roll จริงตอน Human คนแรก join เลย ไม่มี placeholder)
 function bossSeat(): Seat {
   const god: AIConfig = FOUR_GODS[Math.floor(Math.random() * FOUR_GODS.length)]
   return { type: 'ai', name: god.name, joinedAt: Date.now(), aiConfigId: god.id, isBoss: true }
+}
+
+// LobbyMatchmaking_Spec_v1_1 §HighNoble public: เหมือน Adept public — ไม่ fix ตำแหน่งใดๆ ตั้งแต่สร้าง
+// ห้อง ทุกที่นั่งว่างหมด รอ Human คนแรก join ก่อนค่อยสุ่ม Boss/Monarch จริง (ดู joinRoom())
+function buildHighNoblePublicInitialSeats(): [Seat, Seat, Seat, Seat] {
+  return [emptySeat(), emptySeat(), emptySeat(), emptySeat()]
+}
+
+// แปลงผลลัพธ์จาก rollHighNobleBoss() เป็น Seat จริง — ใช้ร่วมกัน 2 จุด: finalizeBossSeat() (private
+// room, roll ตอนห้องเต็ม) และ joinRoom() public v1.1 (roll ตอน Human คนแรก join) กันโค้ดซ้ำ
+function bossSeatFromRoll(result: MonarchRollResult): Seat {
+  return result.isMonarch
+    ? { type: 'ai', name: 'Monarch', joinedAt: Date.now(), isBoss: true, isMonarch: true }
+    : { type: 'ai', name: result.boss!.name, joinedAt: Date.now(), aiConfigId: result.boss!.id, isBoss: true }
 }
 
 function makeRoomId(tier: Tier): string {
@@ -134,13 +150,16 @@ function makeRoomId(tier: Tier): string {
 function buildInitialSeats(tier: Tier, isPrivate: boolean): [Seat, Seat, Seat, Seat] {
   // Adept: private (PIN) ใช้ layout เดิม (Sage seat 0 ทันที) | public (auto-match) v1.1 ว่างหมดทุกที่นั่ง
   if (tier === 'adept') return isPrivate ? buildAdeptPrivateInitialSeats() : buildAdeptPublicInitialSeats()
+  // HighNoble: private ใช้ layout เดิม (Boss placeholder seat 0 ทันที, real roll ตอนห้องเต็มผ่าน
+  // finalizeBossSeat) | public v1.1 ว่างหมดทุกที่นั่งเหมือน Adept (real roll ตอน Human คนแรก join)
+  if (tier === 'highNoble' && !isPrivate) return buildHighNoblePublicInitialSeats()
 
   const cfg = TIER_ROOM_CONFIG[tier]
   const aiCount = 4 - cfg.humanSeatsRequired
   const seats: Seat[] = []
   for (let i = 0; i < 4; i++) {
     if (i >= aiCount) { seats.push(emptySeat()); continue }
-    // Patch Multiplayer HighNoble: seat 0 = Boss (fixed, never human-joinable) — seat 1+ (ถ้ามี) = generic AI filler
+    // Patch Multiplayer HighNoble (private เท่านั้นตอนนี้): seat 0 = Boss placeholder — seat 1+ (ถ้ามี, Mastermind) = generic AI filler
     seats.push(i === 0 && tier === 'highNoble' ? bossSeat() : aiSeat(i))
   }
   return seats as [Seat, Seat, Seat, Seat]
@@ -196,9 +215,10 @@ export async function findOpenRoom(tier: Tier): Promise<GameRoom | null> {
 // (เรียกจาก findOrCreateRoom() เท่านั้น — public room เสมอ, isPrivate default false)
 export async function createRoom(tier: Tier, isPrivate = false): Promise<GameRoom> {
   const cfg = TIER_ROOM_CONFIG[tier]
-  // Adept public v1.1: ยังไม่เริ่มนับ timer ใดๆ ตอนสร้างห้อง — รอ Human คนแรก join ก่อน (ดู joinRoom())
-  // เพราะ findOrCreateRoomAndJoin() เรียก createRoom() แล้ว join ทันทีในธุรกรรมเดียวกันเสมออยู่แล้ว
-  const timeoutAt = tier === 'adept' && !isPrivate ? null : Date.now() + cfg.waitTimeoutMs
+  // Adept/HighNoble public v1.1: ยังไม่เริ่มนับ timer ใดๆ ตอนสร้างห้อง — รอ Human คนแรก join ก่อน (ดู
+  // joinRoom()) เพราะ findOrCreateRoomAndJoin() เรียก createRoom() แล้ว join ทันทีในธุรกรรมเดียวกันเสมออยู่แล้ว
+  const usesNewWaitFlow = (tier === 'adept' || tier === 'highNoble') && !isPrivate
+  const timeoutAt = usesNewWaitFlow ? null : Date.now() + cfg.waitTimeoutMs
   const room: GameRoom = {
     roomId: makeRoomId(tier),
     tier,
@@ -346,6 +366,29 @@ export async function joinRoom(
       room.timeoutAt = Date.now() + gameConfig.matchmakingTimeouts.adept.thirdHumanWaitMs
     } else if (hCount === 3) {
       // Human คนที่ 3 join — ครบ 3H+1AI แล้ว ไม่ต้องมี timer อีก (isRoomFull() ด้านล่างจะ mark 'full' เอง)
+      room.waitStage = undefined
+      room.timeoutAt = null
+    }
+  } else if (room.tier === 'highNoble' && !room.isPrivate) {
+    // LobbyMatchmaking_Spec_v1_1 §HighNoble public — เหมือน Adept public แต่มี Companion Bot ตัวเดียว
+    // (Boss/Monarch เอง ไม่มี "ตัวที่ 2" แยก) roll จริง (weighted random + pity) เกิดตอน Human คนแรก
+    // join เลย ไม่ใช่ตอนห้องเต็มแบบเดิม (Monarch_Spec_v1_1: "Seat 1 = คน trigger การสุ่ม") — ผูก pity
+    // counter กับคนแรกที่ trigger คนเดียวเท่านั้น (ไม่ใช่ max ของทั้งโต๊ะแบบ private room เดิม เพราะตอนนี้
+    // ยังไม่รู้ว่าอีก 2 คนที่เหลือจะเป็นใคร) ผลที่ล็อกไว้ตรงนี้จะไม่ถูก re-roll ตอนห้องเต็มอีก — ดู
+    // finalizeAndStartRoom ใน gameSocket.ts ที่ข้าม finalizeBossSeat() สำหรับ public room โดยเฉพาะ
+    const hCount = humanCount(room)
+    if (hCount === 1) {
+      const lastEmpty = lastEmptySeatIndex(room.seats)
+      if (lastEmpty !== -1) {
+        const rollResult = await rollHighNobleBoss([userId])
+        room.seats[lastEmpty] = bossSeatFromRoll(rollResult)
+      }
+      room.waitStage = 'waiting_2nd'
+      room.timeoutAt = Date.now() + gameConfig.matchmakingTimeouts.highNoble.secondHumanWaitMs
+    } else if (hCount === 2) {
+      room.waitStage = 'waiting_3rd'
+      room.timeoutAt = Date.now() + gameConfig.matchmakingTimeouts.highNoble.thirdHumanWaitMs
+    } else if (hCount === 3) {
       room.waitStage = undefined
       room.timeoutAt = null
     }
@@ -544,6 +587,50 @@ export async function fillWithMinion(roomId: string): Promise<GameRoom | null> {
   return room
 }
 
+// ─── HighNoble Dynamic Capacity (v1.1) — 2-stage wait timer scanner + resolver ──
+// โครงเหมือน Adept ทุกอย่าง (ดู resolveAdeptWaitExpiry ด้านบน) ยกเว้นตอนเติมที่นั่งที่เหลือเมื่อไม่มี
+// Human คนที่ 3 ทันเวลา — HighNoble มีที่นั่ง AI แค่ 1 ที่ (Boss/Monarch เท่านั้น สุ่มไปแล้วตอน Human
+// คนแรก join ใน joinRoom()) ที่นั่งว่างที่เหลือตอนนี้คือ "Human seat ที่ไม่มีคนมา" ไม่ใช่ companion bot
+// ตัวที่ 2 แบบ Adept — ใช้ fillWithMinion() (Minion pool เดิมจาก Deadlock "Start Now" §6.1) แทน ให้ตรง
+// ความหมายว่าเป็นตัวสำรองเติมที่นั่งเฉยๆ ไม่ใช่ Boss ซ้ำ
+export async function getHighNobleWaitExpiredRoomIds(): Promise<string[]> {
+  const roomIds = await redis.smembers(openSetKey('highNoble'))
+  const now = Date.now()
+  const result: string[] = []
+  for (const roomId of roomIds) {
+    const room = await getRoom(roomId)
+    if (room && room.status === 'waiting' && !room.isPrivate && room.timeoutAt !== null && now > room.timeoutAt) {
+      result.push(roomId)
+    }
+  }
+  return result
+}
+
+export type HighNobleWaitExpiryResult =
+  | { action: 'noop' }
+  | { action: 'closed' }
+  | { action: 'ai_filled'; room: GameRoom }
+
+export async function resolveHighNobleWaitExpiry(roomId: string): Promise<HighNobleWaitExpiryResult> {
+  return withLock('matchmaking:highNoble', async () => {
+    const room = await getRoom(roomId)
+    if (!room || room.status !== 'waiting' || room.isPrivate || room.tier !== 'highNoble') return { action: 'noop' }
+    if (room.timeoutAt === null || Date.now() <= room.timeoutAt) return { action: 'noop' } // มี join ใหม่รีเซ็ต timeoutAt ไปแล้ว
+
+    // Stage 1 (secondHumanWaitMs) หมดเวลา ยังมีแค่ 1 Human — Human>=2 บังคับตาม Spec v1.1 → ปิดโต๊ะ
+    // (ไม่ deleteRoomCompletely — ไม่ต้อง refund เพราะ escrow ยังไม่เคยหักในช่วง 'waiting' เลย)
+    if (humanCount(room) <= 1) {
+      await closeRoom(roomId)
+      return { action: 'closed' }
+    }
+
+    // Stage 2 (thirdHumanWaitMs) หมดเวลา มี 2 Human แล้วยังไม่มีคนที่ 3 — เติม Minion ที่นั่งที่เหลือ
+    const filled = await fillWithMinion(roomId)
+    if (!filled) return { action: 'noop' }
+    return { action: 'ai_filled', room: filled }
+  })
+}
+
 // ─── Monarch Boss Finalize (Spec v1.3) ──────────────────────────
 // เรียกตอนห้อง highNoble เต็ม (รู้ user_id ของ Human ครบ 3 คนแล้ว) — สุ่มทับที่นั่ง Boss (seat 0)
 // ด้วย weighted random + pity จริง (bossSeat() ตอนสร้างห้องเป็นแค่ placeholder ระหว่างรอ Human เข้า)
@@ -552,9 +639,7 @@ export async function finalizeBossSeat(room: GameRoom): Promise<GameRoom> {
   const humanUserIds = room.seats.filter(s => s.type === 'human' && s.userId).map(s => s.userId!)
   const result = await rollHighNobleBoss(humanUserIds)
 
-  room.seats[0] = result.isMonarch
-    ? { type: 'ai', name: 'Monarch', joinedAt: Date.now(), isBoss: true, isMonarch: true }
-    : { type: 'ai', name: result.boss!.name, joinedAt: Date.now(), aiConfigId: result.boss!.id, isBoss: true }
+  room.seats[0] = bossSeatFromRoll(result)
 
   await saveRoom(room)
   return room
