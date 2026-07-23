@@ -625,6 +625,9 @@ function startHNDiscardPhase(io: Server, roomId: string): void {
     state.arrangements![seat.id] = finalArr
   })
 
+  // Patch v1.2 (2026-07-24): ย้ายจาก literal 20000 hardcode มา gameConfig.discardTimer — ค่าเท่าเดิม (20s)
+  const discardTimeoutMs = (gameConfig.discardTimer.highNoble ?? 20) * 1000
+
   humanSeats(state).forEach(seat => {
     const arr = state.arrangements![seat.id]
     io.to(seat.id).emit('discard_phase_start_highnoble', {
@@ -635,11 +638,11 @@ function startHNDiscardPhase(io: Server, roomId: string): void {
         pile2: Math.max(0, arr.pile2.length - 3),
         pile3: Math.max(0, arr.pile3.length - 3),
       },
-      decisionTimeMs: 20000,
+      decisionTimeMs: discardTimeoutMs,
     })
   })
 
-  const timeoutId = setTimeout(() => resolveHNDiscardTimeout(io, roomId), 20000)
+  const timeoutId = setTimeout(() => resolveHNDiscardTimeout(io, roomId), discardTimeoutMs)
   ;(state as any)._discardTimeoutId = timeoutId
 }
 

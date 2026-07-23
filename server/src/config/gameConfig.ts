@@ -149,6 +149,15 @@ export const gameConfig = {
     lastBoss:   75, // แยกจาก highNoble — ให้เวลาคิดมากขึ้นเพราะ AI เก่งระดับ DDE/MCTS
   },
 
+  // ─── Discard Timer ────────────────────────────────────────────
+  // Patch v1.2 (2026-07-24): ย้ายมาจาก literal 20000 (ms) ที่ hardcode ซ้ำ 2 จุด (gameLoop.ts
+  // startDiscardPhase ทั้ง 2 branch + highNobleMultiEngine.ts) มารวมที่นี่จุดเดียว — ค่าเท่าเดิมทุกประการ
+  // (20s ทั้งคู่) ไม่มีการเปลี่ยนพฤติกรรม แค่ทำให้ config-driven ตาม pattern เดียวกับ arrangementTimer/betTimer
+  discardTimer: {
+    mastermind: 20,
+    highNoble:  20,
+  },
+
   // ─── Auto-Sort Fee ───────────────────────────────────────────
   // *** ADDED v1.1 — ค่าธรรมเนียม Auto-sort ต่อ Tier ***
   // Beginner ได้ Auto-sort ฟรี 10 Round แรก (นับรวมทุกเกม)

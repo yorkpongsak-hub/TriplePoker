@@ -987,6 +987,8 @@ function startDiscardPhase(io: Server, roomId: string, state: MatchState): void 
   const auctionWon: Record<string, Card> = (state as any)._auctionWonCards ?? {}
   const aiArrangements: Record<string, PlayerArrangement> = (state as any)._aiArrangements
   const finalPile3: Record<string, Card[]> = {}
+  // Patch v1.2 (2026-07-24): ย้ายจาก literal 20000 hardcode มา gameConfig.discardTimer — ค่าเท่าเดิม (20s)
+  const discardTimeoutMs = ((gameConfig.discardTimer as Record<string, number>)[state.tier] ?? 20) * 1000
 
   if (isHighNoble) {
     const fouled: Record<string, boolean> = (state as any)._foulMap ?? {}
@@ -1014,9 +1016,9 @@ function startDiscardPhase(io: Server, roomId: string, state: MatchState): void 
         pile2: Math.max(0, arr.pile2.length - 3),
         pile3: Math.max(0, arr.pile3.length - 3),
       },
-      decisionTimeMs: 20000,
+      decisionTimeMs: discardTimeoutMs,
     })
-    setTimeout(() => resolveDiscardTimeout(io, roomId), 20000)
+    setTimeout(() => resolveDiscardTimeout(io, roomId), discardTimeoutMs)
     return
   }
 
@@ -1036,10 +1038,10 @@ function startDiscardPhase(io: Server, roomId: string, state: MatchState): void 
     roomId,
     hand: humanHand.map(cardKey),
     suggestedKeep: suggestedKeep.map(cardKey),
-    decisionTimeMs: 20000,
+    decisionTimeMs: discardTimeoutMs,
   })
 
-  setTimeout(() => resolveDiscardTimeout(io, roomId), 20000)
+  setTimeout(() => resolveDiscardTimeout(io, roomId), discardTimeoutMs)
 }
 
 // Human submit — เรียกจาก socket handler ใน gameSocket.ts
