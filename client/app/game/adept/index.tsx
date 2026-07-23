@@ -99,6 +99,28 @@ const NAMES  = ['SomchaiX','NongBeer','JaoPoker','WinWin99','ThaiDragon','LuckyA
 const TABLES = ['Table #1','Table #3','Table #7','VIP Room']
 const rnd = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)]
 
+// Token counter นับวิ่งจาก 0 (หรือค่าเดิม) ไปค่าใหม่ ~650ms — ใช้ตอนโชว์ผล net token ต่อรอบ
+const AnimatedTokenNumber: React.FC<{ value: number; style?: any }> = ({ value, style }) => {
+  const [display, setDisplay] = useState(0)
+  const prevValueRef = useRef(0)
+  useEffect(() => {
+    const from = prevValueRef.current
+    const to = value
+    const duration = 650
+    const startTime = Date.now()
+    const id = setInterval(() => {
+      const t = Math.min(1, (Date.now() - startTime) / duration)
+      setDisplay(Math.round(from + (to - from) * t))
+      if (t >= 1) {
+        clearInterval(id)
+        prevValueRef.current = to
+      }
+    }, 33)
+    return () => clearInterval(id)
+  }, [value])
+  return <Text style={style}>{display > 0 ? '+' : ''}{display}</Text>
+}
+
 // Animated "Arranging..." dots ของ AI status badge — วนจำนวนจุดอิสระของตัวเอง ไม่ผูกกับ dotAnim ของ ServerLog ด้านล่าง
 const AiStatusDots = React.memo(({ label }: { label: string }) => {
   const [dots, setDots] = useState(1)
@@ -1074,9 +1096,7 @@ const GameTableLive: React.FC = () => {
                       <Text style={{ fontSize: 11, color: '#FFC857', fontWeight: '700', textAlign: 'center' }}>⚡ Triple!</Text>
                     )}
                     {raw > 0 && <Text style={{ fontSize: 11, color: '#FFB74D' }}>Rake -5%</Text>}
-                    <Text style={{ fontSize: 16, color: net > 0 ? '#8DFFB5' : '#FF6B6B', fontWeight: '900', marginTop: 2 }}>
-                      {net > 0 ? '+' : ''}{net}
-                    </Text>
+                    <AnimatedTokenNumber value={net} style={{ fontSize: 16, color: net > 0 ? '#8DFFB5' : '#FF6B6B', fontWeight: '900', marginTop: 2 }} />
                     <Text style={{ fontSize: 10, color: '#a89060' }}>tokens</Text>
                   </>
                 )
