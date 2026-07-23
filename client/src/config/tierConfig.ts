@@ -6,17 +6,19 @@
 // ห้ามประกาศ TIER_CONFIG/threshold ซ้ำที่ไฟล์อื่นอีก — ย้ายมาจาก lobby.tsx เดิม
 //
 // มี 2 concept แยกกัน:
-//   1. Tier    — key เดิมของระบบ Lobby/Matchmaking (6 ค่า รวม demo/last_boss)
+//   1. Tier    — key เดิมของระบบ Lobby/Matchmaking (5 ค่า รวม last_boss)
 //   2. TierKey — 4 tier หลักที่คำนวณจาก token_balance จริงได้ (canon MasterPlan v10.0)
-//                ไม่รวม demo/last_boss เพราะไม่ใช่ token-threshold tier
+//                ไม่รวม last_boss เพราะไม่ใช่ token-threshold tier
 //
 // Ascendant (S) / Last Boss (S+) เป็น status แยก ไม่ใช่ token-threshold —
 // ห้ามเพิ่มเข้า TierKey หรือ getTierFromToken() เด็ดขาด (ดู TriplePoker_Ascendant_Spec_v1_1 — ยัง stub)
+//
+// 'demo' ถูกลบออกจากที่นี่แล้ว (เคยเป็น tier placeholder implemented:false ไม่เคยเล่นได้จริง) —
+// ตำแหน่งเดิมในล็อบบี้ถูกแทนที่ด้วยปุ่ม "How to Play" (เปิด Onboarding ตรงๆ ไม่ผ่าน Tier system นี้แล้ว)
 
-export type Tier = 'demo' | 'initiate' | 'adept' | 'mastermind' | 'high_noble' | 'last_boss'
+export type Tier = 'initiate' | 'adept' | 'mastermind' | 'high_noble' | 'last_boss'
 
 export const TIER_CONFIG: Record<Tier, { label: string; letter: string; minToken: number; implemented: boolean; badgeColor: string }> = {
-  demo:        { label: 'Demo',          letter: 'D',  minToken: 0,       implemented: false, badgeColor: '#8DFFB5' },
   initiate:    { label: 'Initiate',      letter: 'C',  minToken: 100,     implemented: true,  badgeColor: '#8DFFB5' },
   adept:       { label: 'Adept',         letter: 'B',  minToken: 10_000,  implemented: true,  badgeColor: '#FFD76A' },
   mastermind:  { label: 'Mastermind',    letter: 'A',  minToken: 40_000,  implemented: true,  badgeColor: '#FFD76A' },

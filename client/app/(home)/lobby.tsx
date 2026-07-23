@@ -48,7 +48,6 @@ const TIER_ROWS: Tier[][] = [
   ['last_boss'],
   ['high_noble', 'mastermind'],
   ['adept', 'initiate'],
-  ['demo'],
 ];
 
 // LobbyMatchmaking_Spec_v1_1 — M:SS format สำหรับ countdown ของ waiting_2nd stage (2 นาที)
@@ -111,7 +110,7 @@ export default function LobbyScreen() {
     celebratedCheckedRef.current = true;
     const celebrated = new Set(profile.tier_unlock_celebrated ?? []);
     const newlyUnlocked = (Object.keys(TIER_CONFIG) as Tier[])
-      .filter(t => t !== 'demo' && isEligible(t, tokenBalance) && !celebrated.has(t));
+      .filter(t => isEligible(t, tokenBalance) && !celebrated.has(t));
     if (newlyUnlocked.length === 0) return;
     const token = session?.access_token;
     if (!token) return;
@@ -273,6 +272,10 @@ export default function LobbyScreen() {
 
   const handleAutoMatchAdept = () => handleAutoMatch('adept');
   const handleEnterHighNoble = () => handleAutoMatch('highNoble');
+
+  // แทนที่ตำแหน่งเดิมของ Tier D: Demo (placeholder implemented:false ไม่เคยเล่นได้จริง — ดู audit)
+  // เปิด Onboarding ตรงๆ ไม่ผ่าน Tier system แล้ว
+  const handleHowToPlay = () => router.push('/(auth)/onboarding');
 
   const handleCancelMatchmaking = () => {
     socketRef.current?.disconnect();
@@ -552,6 +555,16 @@ export default function LobbyScreen() {
               </View>
             );
           })}
+
+          {/* เดิมตำแหน่งนี้คือ Tier D: Demo (placeholder, ไม่เคยเล่นได้จริง) — แทนที่ด้วย How to Play
+              (เนื้อหา Onboarding เดิม) ไม่ผ่าน generic renderTierButton()/TIER_CONFIG แล้ว เพราะพฤติกรรม
+              ต่างกันโดยสิ้นเชิง (ไม่มี lock/Coming Soon/setSelected — เปิด Onboarding ตรงๆ) */}
+          <View style={s.tierRow}>
+            <TouchableOpacity style={[s.tierBtn, s.tierBtnFull]} onPress={handleHowToPlay}>
+              <View style={[s.badgeDot, { backgroundColor: COLOR.goldPrimary }]} />
+              <Text style={s.tierBtnTxt}>How to Play</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         <View style={s.footer}>
