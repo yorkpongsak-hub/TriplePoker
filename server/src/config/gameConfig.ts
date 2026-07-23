@@ -136,9 +136,12 @@ export const gameConfig = {
 
   // ─── Arrangement Timer ───────────────────────────────────────
   // *** ADDED v1.1 — เวลาจัดไพ่ต่อ Tier (วินาที) ***
+  // Patch v1.2 (2026-07-24): พับ client-side tierBonus (+15) เข้ามาไว้ที่นี่จุดเดียวสำหรับ
+  // initiate/adept — ผู้เล่นเห็นตัวเลขเท่าเดิมทุกประการ (ดู client index.tsx ที่ลบ tierBonus
+  // logic ออกคู่กัน) mastermind/highNoble ยังไม่แตะ (ดู Step 2 — "Tier สูง = เดิมพันสูง = เวลาคิดมากขึ้น")
   arrangementTimer: {
-    initiate:   90,
-    adept:      75,
+    initiate:   105,
+    adept:      90,
     mastermind: 60,
     highNoble:  35, // Patch: ลดเหลือ 35 (R1+R2 ใช้ค่านี้ทั้งคู่ — ครั้งหน้าแก้ที่นี่จุดเดียว)
     lastBoss:   75, // แยกจาก highNoble — ให้เวลาคิดมากขึ้นเพราะ AI เก่งระดับ DDE/MCTS

@@ -496,8 +496,9 @@ const GameTableLive: React.FC = () => {
       const cardObjs = myCards.map((k: string, i: number) => ({ id: `c${i}`, key: k }))
       setPiles([cardObjs.slice(0, 3), cardObjs.slice(3, 6), cardObjs.slice(6, 11)])
 
-      const tierBonus = 15 // บวก 15 วิ เพื่อชดเชยเวลาแจกไพ่
-      const t = (data.timer ?? 90) + tierBonus
+      // Patch v1.2: tierBonus (+15 เดิม) พับเข้า gameConfig.arrangementTimer.adept (75→90) แล้ว —
+      // ใช้ data.timer ตรงๆ เหมือน Mastermind/HighNoble (ผู้เล่นเห็นตัวเลขเท่าเดิมทุกประการ)
+      const t = data.timer ?? 90
       timerValRef.current = { val: t, max: t }
       if (timerRef.current) clearInterval(timerRef.current)
       timerRef.current = setInterval(() => {
