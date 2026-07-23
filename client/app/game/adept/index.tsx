@@ -227,8 +227,13 @@ const GameTableLive: React.FC = () => {
       scale:   new Animated.Value(0.5),
     }))
   ).current
-  const [continueCountdown, setContinueCountdown] = useState(33)
+  // Multiplayer (Adept/HighNoble) — ยืดจาก 33s เดิม (Solo: Initiate/Mastermind) เป็น 45s เพราะต้องดู
+  // ไพ่ของผู้เล่นคนอื่นเพิ่มด้วย ไม่ใช่แค่ AI + แบ่งเป็น auto-cycle Pile1→2→3 ทุก 15s (ดู startContinueCountdown)
+  const SHOWDOWN_TIMER_SEC = 45
+  const [continueCountdown, setContinueCountdown] = useState(SHOWDOWN_TIMER_SEC)
   const continueTimerRef = useRef<any>(null)
+  // true ทันทีที่ผู้เล่นแตะเลือก Pile tab เอง — auto-cycle หยุดถาวรจนจบ showdown รอบนี้ (เคารพการเลือกดูของผู้เล่น)
+  const autoCycleStoppedRef = useRef(false)
 
   // ── Cards
   const [piles, setPiles]       = useState<[CardData[], CardData[], CardData[]]>([[], [], []])
@@ -297,15 +302,23 @@ const GameTableLive: React.FC = () => {
     }))
   ).current
 
-  // showdown_result มาถึง → แสดง ShowdownResult popup ทันที countdown 15 วิ
+  // showdown_result มาถึง → แสดง ShowdownResult popup ทันที countdown 45 วิ (Multiplayer)
   const startContinueCountdown = () => {
     // ไม่เรียก setContinueCountdown ที่นี่แล้ว — ContinueTimer อ่านจาก continueValRef เองทุก 500ms
     // เพื่อเลี่ยง parent re-render ทุกวินาที (ต้นเหตุของไพ่กะพริบ)
-    continueValRef.current = 33
+    continueValRef.current = SHOWDOWN_TIMER_SEC
+    autoCycleStoppedRef.current = false
     if (continueTimerRef.current) clearInterval(continueTimerRef.current)
     continueTimerRef.current = setInterval(() => {
       const next = Math.max(0, continueValRef.current - 1)
       continueValRef.current = next
+      // Auto-cycle Pile tab ทุก 15s (45s/3 กอง) ถ้าผู้เล่นยังไม่เคยแตะเลือกเองรอบนี้ — setState ด้วยค่า
+      // เดิมซ้ำ React จะไม่ re-render เพิ่ม (bail out เอง) เลยเรียกได้ทุก tick โดยไม่ต้องเช็ค tab ปัจจุบัน
+      if (!autoCycleStoppedRef.current) {
+        const elapsed = SHOWDOWN_TIMER_SEC - next
+        const targetTab = elapsed < 15 ? 1 : elapsed < 30 ? 2 : 3
+        setActiveShowdownTab(targetTab)
+      }
       if (next <= 0) {
         clearInterval(continueTimerRef.current)
         handleContinue()
@@ -437,8 +450,9 @@ const GameTableLive: React.FC = () => {
       setHandRanks({})
       setRevealPile(0)
       setActiveShowdownTab(1)
-      setContinueCountdown(33)
-      continueValRef.current = 33
+      autoCycleStoppedRef.current = false
+      setContinueCountdown(SHOWDOWN_TIMER_SEC)
+      continueValRef.current = SHOWDOWN_TIMER_SEC
       if (continueTimerRef.current) clearInterval(continueTimerRef.current)
       setShowDiscard(false); setDiscardSelected([])
       // ต้อง stopAnimation ก่อน setValue เสมอ กัน native-driven timing ที่ยังค้างจาก handleContinue ชนกัน
@@ -898,99 +912,6 @@ const GameTableLive: React.FC = () => {
 
   // (FaceCard เดิมถูกแทนที่ด้วย PlayerHandView กลางแล้ว — ดู src/components/game/PlayerHandView.tsx)
 
-  // Pile Reveal Overlay — Tab mode ผู้เล่นเลือกดูได้ + Continue button
-  const PileRevealOverlay: React.FC<{ pileNum: 1|2|3 }> = ({ pileNum }) => {
-    const players = [
-      { id: PLAYER_ID, label: myDisplayName, emoji: myAvatarEmoji },
-      ...(aiList.map(a => ({ id: a.id, label: a.name, emoji: a.emoji }))),
-    ]
-    const commMap: Record<number, string[]> = { 1: comm.p1, 2: comm.p2, 3: comm.p3 }
-    const cCards = commMap[pileNum] ?? []
-    const winner = pileWinners[pileNum]
-    const rank   = handRanks[pileNum]
-    const CARD_W = 50; const CARD_H = 72
-
-    return (
-      <View style={[s.overlay, { justifyContent: 'flex-start', padding: 16, backgroundColor: 'rgba(15,36,24,0.97)' }]}>
-        {/* Tab selector */}
-        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12, marginTop: 8 }}>
-          {([1,2,3] as const).map(n => (
-            <TouchableOpacity key={n} onPress={() => setRevealPile(n)}
-              style={{ flex: 1, paddingVertical: 8, borderRadius: 8, borderWidth: 1.5, alignItems: 'center',
-                borderColor: pileNum === n ? '#FFD76A' : 'rgba(255,215,106,0.3)',
-                backgroundColor: pileNum === n ? 'rgba(255,215,106,0.15)' : 'transparent' }}>
-              <Text style={{ fontSize: 14, color: pileNum === n ? '#FFD76A' : '#a89060', fontWeight: '800' }}>PILE {n}</Text>
-              {pileWinners[n] === PLAYER_ID && <Text style={{ fontSize: 9, color: '#8DFFB5' }}>🏆 YOU</Text>}
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        {/* Hand rank */}
-        {rank && <Text style={{ fontSize: 16, color: '#8DFFB5', marginBottom: 10, letterSpacing: 1, fontWeight: '700', alignSelf: 'center' }}>{rank}</Text>}
-
-        {/* Community cards */}
-        <View style={{ marginBottom: 12, alignItems: 'center' }}>
-          <Text style={{ fontSize: 12, color: '#38bdf8', fontWeight: '800', marginBottom: 6, letterSpacing: 2 }}>COMMUNITY</Text>
-          <View style={{ flexDirection: 'row', gap: 6 }}>
-            {cCards.map((k, i) => (
-              <View key={i} style={{ width: CARD_W, height: CARD_H, borderRadius: 4, overflow: 'hidden', borderWidth: 2, borderColor: '#38bdf8' }}>
-                {CARD_IMG[k]
-                  ? <Image source={CARD_IMG[k]} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" />
-                  : <Image source={cardBackImg} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" />}
-              </View>
-            ))}
-          </View>
-        </View>
-
-        {/* ไพ่แต่ละคน */}
-        <View style={{ width: '100%', gap: 8, flex: 1 }}>
-          {players.map(p => {
-            const revealed = allCards[p.id]?.[pileNum]
-            const cardKeys = revealed ? (pileNum === 3 ? revealed.slice(0, 3) : revealed) : []
-            const isWinner = pileWinners[pileNum] === p.id
-            const isUser   = p.id === PLAYER_ID
-            return (
-              <View key={p.id} style={{
-                flexDirection: 'row', alignItems: 'center',
-                borderWidth: isWinner ? 1.5 : 1,
-                borderColor: isWinner ? '#4ade80' : '#2A4A34',
-                borderRadius: 8, padding: 8,
-                backgroundColor: isWinner ? 'rgba(74,222,128,0.08)' : 'rgba(0,0,0,0.3)',
-              }}>
-                <View style={{ width: 56, alignItems: 'center', marginRight: 8 }}>
-                  <Text style={{ fontSize: 20 }}>{p.emoji}</Text>
-                  <Text style={{ fontSize: 10, color: isUser ? '#FFD76A' : '#F5F2E8', fontWeight: '800', marginTop: 2 }} numberOfLines={1}>
-                    {isUser ? myDisplayName : p.label.split(' ')[0]}
-                  </Text>
-                  {isWinner && <Text style={{ fontSize: 9, color: '#8DFFB5', fontWeight: '900' }}>🏆 WIN</Text>}
-                </View>
-                <View style={{ flexDirection: 'row', gap: 4 }}>
-                  {cardKeys.length > 0 ? cardKeys.map((k, i) => (
-                    <View key={i} style={{ width: CARD_W, height: CARD_H, borderRadius: 4, overflow: 'hidden', borderWidth: 1.5, borderColor: isWinner ? '#4ade80' : '#2A4A34' }}>
-                      {CARD_IMG[k]
-                        ? <Image source={CARD_IMG[k]} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" />
-                        : <Image source={cardBackImg} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" />}
-                    </View>
-                  )) : Array.from({ length: 3 }).map((_, i) => (
-                    <View key={i} style={{ width: CARD_W, height: CARD_H, borderRadius: 4, overflow: 'hidden', borderWidth: 1, borderColor: '#2A4A34' }}>
-                      <Image source={cardBackImg} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" />
-                    </View>
-                  ))}
-                </View>
-              </View>
-            )
-          })}
-        </View>
-
-
-        {/* Continue button */}
-        <View style={{ marginTop: 12, width: '100%' }}>
-          <ContinueTimer valRef={continueValRef} onContinue={handleContinue} />
-        </View>
-      </View>
-    )
-  }
-
   // ContinueTimer — แยก component ไม่ให้ ScrollView re-render
   const ContinueTimer: React.FC<{
     valRef: React.MutableRefObject<number>
@@ -1054,7 +975,7 @@ const GameTableLive: React.FC = () => {
           {([1,2,3] as const).map(n => {
             const isMyWin = pileWinners[n] === PLAYER_ID
             return (
-              <TouchableOpacity key={n} onPress={() => setActiveTab(n)}
+              <TouchableOpacity key={n} onPress={() => { autoCycleStoppedRef.current = true; setActiveTab(n) }}
                 style={{ flex: 1, paddingVertical: 8, borderRadius: 8, borderWidth: 1.5, alignItems: 'center',
                   borderColor: activeTab === n ? '#FFD76A' : '#2A4A34',
                   backgroundColor: activeTab === n ? 'rgba(255,215,106,0.15)' : 'rgba(0,0,0,0.3)' }}>

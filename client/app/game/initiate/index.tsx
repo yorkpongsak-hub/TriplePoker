@@ -219,7 +219,9 @@ const GameTableLive: React.FC = () => {
       scale:   new Animated.Value(0.5),
     }))
   ).current
-  const [continueCountdown, setContinueCountdown] = useState(33)
+  // Solo tier (Initiate/Mastermind) — countdown คงที่ 33s เดิม ห้ามแก้ (ต่างจาก Adept/HighNoble ที่ยืดเป็น 45s)
+  const SHOWDOWN_TIMER_SEC = 33
+  const [continueCountdown, setContinueCountdown] = useState(SHOWDOWN_TIMER_SEC)
   const continueTimerRef = useRef<any>(null)
 
   // ── Cards
@@ -296,11 +298,11 @@ const GameTableLive: React.FC = () => {
     }))
   ).current
 
-  // showdown_result มาถึง → แสดง ShowdownResult popup ทันที countdown 15 วิ
+  // showdown_result มาถึง → แสดง ShowdownResult popup ทันที countdown 33 วิ
   const startContinueCountdown = () => {
     // ไม่เรียก setContinueCountdown ที่นี่แล้ว — ContinueTimer อ่านจาก continueValRef เองทุก 500ms
     // เพื่อเลี่ยง parent re-render ทุกวินาที (ต้นเหตุของไพ่กะพริบ)
-    continueValRef.current = 33
+    continueValRef.current = SHOWDOWN_TIMER_SEC
     if (continueTimerRef.current) clearInterval(continueTimerRef.current)
     continueTimerRef.current = setInterval(() => {
       const next = Math.max(0, continueValRef.current - 1)
@@ -415,8 +417,8 @@ const GameTableLive: React.FC = () => {
       setHandRanks({})
       setRevealPile(0)
       setActiveShowdownTab(1)
-      setContinueCountdown(33)
-      continueValRef.current = 33
+      setContinueCountdown(SHOWDOWN_TIMER_SEC)
+      continueValRef.current = SHOWDOWN_TIMER_SEC
       if (continueTimerRef.current) clearInterval(continueTimerRef.current)
       setShowDiscard(false); setDiscardSelected([])
       // ต้อง stopAnimation ก่อน setValue เสมอ กัน native-driven timing ที่ยังค้างจาก handleContinue ชนกัน
@@ -871,99 +873,6 @@ const GameTableLive: React.FC = () => {
   }
 
   // (FaceCard เดิมถูกแทนที่ด้วย PlayerHandView กลางแล้ว — ดู src/components/game/PlayerHandView.tsx)
-
-  // Pile Reveal Overlay — Tab mode ผู้เล่นเลือกดูได้ + Continue button
-  const PileRevealOverlay: React.FC<{ pileNum: 1|2|3 }> = ({ pileNum }) => {
-    const players = [
-      { id: PLAYER_ID, label: myDisplayName, emoji: myAvatarEmoji },
-      ...(aiList.map(a => ({ id: a.id, label: a.name, emoji: a.emoji }))),
-    ]
-    const commMap: Record<number, string[]> = { 1: comm.p1, 2: comm.p2, 3: comm.p3 }
-    const cCards = commMap[pileNum] ?? []
-    const winner = pileWinners[pileNum]
-    const rank   = handRanks[pileNum]
-    const CARD_W = 50; const CARD_H = 72
-
-    return (
-      <View style={[s.overlay, { justifyContent: 'flex-start', padding: 16, backgroundColor: 'rgba(15,36,24,0.97)' }]}>
-        {/* Tab selector */}
-        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12, marginTop: 8 }}>
-          {([1,2,3] as const).map(n => (
-            <TouchableOpacity key={n} onPress={() => setRevealPile(n)}
-              style={{ flex: 1, paddingVertical: 8, borderRadius: 8, borderWidth: 1.5, alignItems: 'center',
-                borderColor: pileNum === n ? '#FFD76A' : 'rgba(255,215,106,0.3)',
-                backgroundColor: pileNum === n ? 'rgba(255,215,106,0.15)' : 'transparent' }}>
-              <Text style={{ fontSize: 14, color: pileNum === n ? '#FFD76A' : '#a89060', fontWeight: '800' }}>PILE {n}</Text>
-              {pileWinners[n] === PLAYER_ID && <Text style={{ fontSize: 9, color: '#8DFFB5' }}>🏆 YOU</Text>}
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        {/* Hand rank */}
-        {rank && <Text style={{ fontSize: 16, color: '#8DFFB5', marginBottom: 10, letterSpacing: 1, fontWeight: '700', alignSelf: 'center' }}>{rank}</Text>}
-
-        {/* Community cards */}
-        <View style={{ marginBottom: 12, alignItems: 'center' }}>
-          <Text style={{ fontSize: 12, color: '#38bdf8', fontWeight: '800', marginBottom: 6, letterSpacing: 2 }}>COMMUNITY</Text>
-          <View style={{ flexDirection: 'row', gap: 6 }}>
-            {cCards.map((k, i) => (
-              <View key={i} style={{ width: CARD_W, height: CARD_H, borderRadius: 4, overflow: 'hidden', borderWidth: 2, borderColor: '#38bdf8' }}>
-                {CARD_IMG[k]
-                  ? <Image source={CARD_IMG[k]} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" />
-                  : <Image source={cardBackImg} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" />}
-              </View>
-            ))}
-          </View>
-        </View>
-
-        {/* ไพ่แต่ละคน */}
-        <View style={{ width: '100%', gap: 8, flex: 1 }}>
-          {players.map(p => {
-            const revealed = allCards[p.id]?.[pileNum]
-            const cardKeys = revealed ? (pileNum === 3 ? revealed.slice(0, 3) : revealed) : []
-            const isWinner = pileWinners[pileNum] === p.id
-            const isUser   = p.id === PLAYER_ID
-            return (
-              <View key={p.id} style={{
-                flexDirection: 'row', alignItems: 'center',
-                borderWidth: isWinner ? 1.5 : 1,
-                borderColor: isWinner ? '#4ade80' : '#2A4A34',
-                borderRadius: 8, padding: 8,
-                backgroundColor: isWinner ? 'rgba(74,222,128,0.08)' : 'rgba(0,0,0,0.3)',
-              }}>
-                <View style={{ width: 56, alignItems: 'center', marginRight: 8 }}>
-                  <Text style={{ fontSize: 20 }}>{p.emoji}</Text>
-                  <Text style={{ fontSize: 10, color: isUser ? '#FFD76A' : '#F5F2E8', fontWeight: '800', marginTop: 2 }} numberOfLines={1}>
-                    {isUser ? myDisplayName : p.label.split(' ')[0]}
-                  </Text>
-                  {isWinner && <Text style={{ fontSize: 9, color: '#8DFFB5', fontWeight: '900' }}>🏆 WIN</Text>}
-                </View>
-                <View style={{ flexDirection: 'row', gap: 4 }}>
-                  {cardKeys.length > 0 ? cardKeys.map((k, i) => (
-                    <View key={i} style={{ width: CARD_W, height: CARD_H, borderRadius: 4, overflow: 'hidden', borderWidth: 1.5, borderColor: isWinner ? '#4ade80' : '#2A4A34' }}>
-                      {CARD_IMG[k]
-                        ? <Image source={CARD_IMG[k]} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" />
-                        : <Image source={cardBackImg} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" />}
-                    </View>
-                  )) : Array.from({ length: 3 }).map((_, i) => (
-                    <View key={i} style={{ width: CARD_W, height: CARD_H, borderRadius: 4, overflow: 'hidden', borderWidth: 1, borderColor: '#2A4A34' }}>
-                      <Image source={cardBackImg} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" />
-                    </View>
-                  ))}
-                </View>
-              </View>
-            )
-          })}
-        </View>
-
-
-        {/* Continue button */}
-        <View style={{ marginTop: 12, width: '100%' }}>
-          <ContinueTimer valRef={continueValRef} onContinue={handleContinue} />
-        </View>
-      </View>
-    )
-  }
 
   // ContinueTimer — แยก component ไม่ให้ ScrollView re-render
   const ContinueTimer: React.FC<{
