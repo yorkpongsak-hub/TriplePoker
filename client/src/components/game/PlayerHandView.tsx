@@ -52,12 +52,13 @@ const VIP_CW = 54; const VIP_CH = 78
 const VIP_HARD_MIN_CW = 46
 const VIP_MIN_EXPOSED = 28
 const VIP_OVERLAP_RATIO = 0.65 // โหมด VIP พัดซ้อนกันลึก 65% ของหน้าไพ่ (โผล่ 35%)
+// Free mode เท่านั้น: ขยับกอง 1/3 แนวตั้งให้เหลื่อมขั้นบันได (กอง 2 อยู่ตำแหน่งเดิม)
+const FREE_PILE_OFFSET_Y = [-20, 0, 20]
 const SELECT_LIFT = 12     // ระยะเด้งขึ้นตอนเลือกไพ่
 const PILE_GAP = 8         // ช่องไฟระหว่างกอง
 const FRAME_H_PAD = 6      // paddingHorizontal ของกรอบทอง
 const FRAME_W_RATIO = 0.98 // กรอบทองกว้าง 98% ของจอ
 
-const PILE_LABELS = ['PILE 1', 'PILE 2', 'PILE 3']
 const AspectView = Animated.createAnimatedComponent(View)
 
 interface LayoutTarget { cw: number; ch: number; hardMinCw: number; minExposed: number; maxExposed: number }
@@ -174,12 +175,12 @@ const FanCard: React.FC<{
 
 // ── 1 กอง (Free หรือ VIP) ──
 const PileColumn: React.FC<{
-  cards: HandCardData[]; pi: number; label: string; isVip: boolean
+  cards: HandCardData[]; pi: number; isVip: boolean
   selected: { pi: number; ci: number } | null
   onCardPress: (pi: number, ci: number) => void
   cw: number; ch: number; exposed: number
   images: Record<string, any>
-}> = ({ cards, pi, label, isVip, selected, onCardPress, cw, ch, exposed, images }) => {
+}> = ({ cards, pi, isVip, selected, onCardPress, cw, ch, exposed, images }) => {
   // Free: โผล่เท่า exposed ที่คำนวณพอดีกรอบ | VIP: พัดซ้อนลึกกว่า (โผล่แค่ 35% ของหน้าไพ่)
   const vipExposed = cw * (1 - VIP_OVERLAP_RATIO)
   const overlapML  = isVip ? -(cw - vipExposed) : -(cw - exposed) // marginLeft ติดลบ = ระยะซ้อน
@@ -190,8 +191,7 @@ const PileColumn: React.FC<{
   const arcRise  = n >= 5 ? 18 : n >= 4 ? 13 : 9
 
   return (
-    <View style={styles.pileGroup}>
-      <Text style={styles.pileLabel}>{label}</Text>
+    <View style={[styles.pileGroup, !isVip && { transform: [{ translateY: FREE_PILE_OFFSET_Y[pi] }] }]}>
       <View style={styles.cardRow}>
         {cards.map((card, ci) => {
           const isSel = selected?.pi === pi && selected?.ci === ci
@@ -265,7 +265,6 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
             key={pi}
             cards={cards}
             pi={pi}
-            label={PILE_LABELS[pi]}
             isVip={isVip}
             selected={selected}
             onCardPress={onCardPress}
@@ -291,17 +290,9 @@ const styles = StyleSheet.create({
     width: '98%',
     paddingVertical: 14,
     paddingHorizontal: FRAME_H_PAD,
-    backgroundColor: 'rgba(0, 30, 15, 0.65)',
-    borderWidth: 1.5,
-    borderColor: '#c9a84c',
-    borderRadius: 14,
     marginTop: 4,
   },
   pileGroup: { flexDirection: 'column', alignItems: 'center' },
-  pileLabel: {
-    fontSize: 9, color: '#FFD76A', fontWeight: '800',
-    letterSpacing: 1, marginBottom: 4,
-  },
   cardRow: { flexDirection: 'row', alignItems: 'center' },
   card: {
     borderRadius: 4, backgroundColor: '#fdfaf3',
