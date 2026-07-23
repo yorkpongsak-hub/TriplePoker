@@ -15,6 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
 import { io, Socket } from 'socket.io-client'
+import * as Haptics from 'expo-haptics'
 import { autoSort } from '../../../src/utils/autoSort'
 import { getReduceMotion } from '../../../src/utils/reduceMotion'
 import { useAuthStore } from '../../../src/store/authStore'
@@ -60,6 +61,7 @@ const TimerDisplay: React.FC<{
 }> = ({ valRef }) => {
   const [val, setVal] = useState(valRef.current.val)
   const [max, setMax] = useState(valRef.current.max)
+  const hapticFiredRef = useRef(false)
   useEffect(() => {
     const id = setInterval(() => {
       setVal(valRef.current.val)
@@ -68,7 +70,16 @@ const TimerDisplay: React.FC<{
     return () => clearInterval(id)
   }, [])
   const ratio = val / (max || 1)
-  const color = ratio <= 0.10 ? '#cc2222' : ratio <= 0.30 ? '#c9a84c' : '#3daa4a'
+  const isRed = ratio <= 0.10
+  useEffect(() => {
+    if (isRed && !hapticFiredRef.current) {
+      hapticFiredRef.current = true
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {})
+    } else if (!isRed) {
+      hapticFiredRef.current = false
+    }
+  }, [isRed])
+  const color = isRed ? '#cc2222' : ratio <= 0.30 ? '#c9a84c' : '#3daa4a'
   return (
     <>
       <Text style={[s.timerText, { color }]}>{val}</Text>
@@ -256,6 +267,10 @@ const GameTableLive: React.FC = () => {
   const [allCards, setAllCards]       = useState<Record<string, Record<number, string[]>>>({})
   const [pileWinners, setPileWinners] = useState<Record<number, string>>({})
   const [hasFoul, setHasFoul]         = useState<Record<string, boolean>>({})
+  // Haptic เตือน Foul ของฉันเอง — ยิงครั้งเดียวตอน hasFoul[PLAYER_ID] เปลี่ยนจาก false → true
+  useEffect(() => {
+    if (hasFoul[PLAYER_ID]) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {})
+  }, [hasFoul[PLAYER_ID]])
   const [foulReasons, setFoulReasons]   = useState<Record<string, string>>({})
   const [showResult, setShowResult]   = useState(false)
   const [handRanks, setHandRanks]       = useState<Record<number, string>>({})

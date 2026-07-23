@@ -12,6 +12,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { io, Socket } from 'socket.io-client'
 import { router, useLocalSearchParams } from 'expo-router'
+import * as Haptics from 'expo-haptics'
 import { useAuthStore } from '../../../src/store/authStore'
 // Patch 2026-07-18: resolve avatar preset key → emoji/รูปภาพ (แก้ VIP preset ไม่โชว์ที่โต๊ะ)
 import { PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
@@ -71,6 +72,7 @@ const TimerDisplay: React.FC<{
 }> = ({ valRef }) => {
   const [val, setVal] = useState(valRef.current.val)
   const [max, setMax] = useState(valRef.current.max)
+  const hapticFiredRef = useRef(false)
   useEffect(() => {
     const id = setInterval(() => {
       setVal(valRef.current.val)
@@ -79,7 +81,16 @@ const TimerDisplay: React.FC<{
     return () => clearInterval(id)
   }, [])
   const ratio = val / (max || 1)
-  const color = ratio <= 0.10 ? '#cc2222' : ratio <= 0.30 ? '#c9a84c' : '#3daa4a'
+  const isRed = ratio <= 0.10
+  useEffect(() => {
+    if (isRed && !hapticFiredRef.current) {
+      hapticFiredRef.current = true
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {})
+    } else if (!isRed) {
+      hapticFiredRef.current = false
+    }
+  }, [isRed])
+  const color = isRed ? '#cc2222' : ratio <= 0.30 ? '#c9a84c' : '#3daa4a'
   return (
     <>
       <Text style={[s.timerText, { color }]}>{val}</Text>
@@ -249,6 +260,10 @@ const GameTableLive: React.FC = () => {
   const [allCards, setAllCards]       = useState<Record<string, Record<number, string[]>>>({})
   const [pileWinners, setPileWinners] = useState<Record<number, string>>({})
   const [hasFoul, setHasFoul]         = useState<Record<string, boolean>>({})
+  // Haptic เตือน Foul ของฉันเอง — ยิงครั้งเดียวตอน hasFoul[PLAYER_ID] เปลี่ยนจาก false → true
+  useEffect(() => {
+    if (hasFoul[PLAYER_ID]) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {})
+  }, [hasFoul[PLAYER_ID]])
   const [foulReasons, setFoulReasons]   = useState<Record<string, string>>({})
   const [showResult, setShowResult]   = useState(false)
   const [handRanks, setHandRanks]       = useState<Record<number, string>>({})
@@ -277,6 +292,10 @@ const GameTableLive: React.FC = () => {
   // Patch Blind Auction: state ทั้งหมดสำหรับประมูล
   const [auctionBidLevels, setAuctionBidLevels] = useState<number[]>([])
   const [auctionTimeLeft, setAuctionTimeLeft]   = useState(5)
+  // Haptic เตือน Auction timer ใกล้หมดเวลา — ยิงตอนแตะ 2s พอดี (จุดเดียวกับที่ text เปลี่ยนสีแดง)
+  useEffect(() => {
+    if (auctionTimeLeft === 2) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {})
+  }, [auctionTimeLeft])
   const [auctionMyBid, setAuctionMyBid]         = useState<{ cardIndex: 0 | 1; level: number } | null>(null)
   const [auctionResult, setAuctionResult]       = useState<any[] | null>(null)
   const auctionTimerRef = useRef<any>(null)
@@ -316,6 +335,10 @@ const GameTableLive: React.FC = () => {
   const [discardHandKeys, setDiscardHandKeys]   = useState<string[]>([])
   const [discardSuggested, setDiscardSuggested] = useState<string[]>([])
   const [discardTimeLeft, setDiscardTimeLeft]   = useState(20)
+  // Haptic เตือน Discard timer ใกล้หมดเวลา — ยิงตอนแตะ 3s พอดี (จุดเดียวกับที่ discardSub text เปลี่ยนสีแดง)
+  useEffect(() => {
+    if (discardTimeLeft === 3) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {})
+  }, [discardTimeLeft])
   const discardTimerRef = useRef<any>(null)
   const [discardSelected, setDiscardSelected] = useState<number[]>([])
   // Patch (บั๊กแก้) High Noble: Discard แบบ 3 กอง — เลือกทิ้งจากกองไหนก็ได้ใน 11-12 ใบ ให้เหลือกองละ 3 ใบเป๊ะ
