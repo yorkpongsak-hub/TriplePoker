@@ -819,7 +819,7 @@ function startHNNextTurn(io: Server, roomId: string): void {
   const currentPid = gf.turnOrder[gf.currentTurnIdx]
   const seat = seatById(state, currentPid)!
   const callAmount = gameConfig.grandFinale.callAmount.highNoble ?? 0
-  const timeLimitMs = (gameConfig.grandFinale.betTimer.highNoble ?? 8) * 1000
+  const timeLimitMs = (gameConfig.grandFinale.betTimer.highNoble ?? 30) * 1000
 
   io.to(roomId).emit('grand_finale_turn', { roomId, playerId: currentPid, roundNumber: gf.roundNumber, callAmount, timeLimitMs })
 

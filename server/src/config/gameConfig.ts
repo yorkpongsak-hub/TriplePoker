@@ -209,10 +209,13 @@ export const gameConfig = {
       lastBoss:   4_000,
     },
     betTimer: {
+      // Patch v1.2 (2026-07-24): highNoble เดิม 8s สั้นกว่า mastermind (20s) ทั้งที่ callAmount.highNoble
+      // (2,000) สูงกว่า callAmount.mastermind (600) เกือบ 3 เท่า — ขัดกับ "Tier สูง = เดิมพันสูง =
+      // เวลาคิดมากขึ้น" ยืดเป็น 30s ให้สอดคล้อง (mastermind ไม่มีปัญหานี้ คงไว้ 20s เดิม)
       initiate:   null,
       adept:      null,
       mastermind: 20,
-      highNoble:  8,
+      highNoble:  30,
       lastBoss:   8,
     },
     // ลำดับ Betting
