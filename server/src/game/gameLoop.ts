@@ -185,7 +185,7 @@ export async function recoverStaleEscrow(userId: string): Promise<{ recovered: b
       .select('escrow_id, buyin_amount')
 
     if (error) {
-      console.error('[ESCROW] recoverStaleEscrow update error for', userId, error)
+      console.error('[ESCROW]', Date.now(), 'recoverStaleEscrow update error for', userId, error)
       return { recovered: false, totalRefunded: 0 }
     }
     if (!staleRows || staleRows.length === 0) return { recovered: false, totalRefunded: 0 }
@@ -195,10 +195,10 @@ export async function recoverStaleEscrow(userId: string): Promise<{ recovered: b
     const newBalance = (userData?.token_balance ?? 0) + totalRefunded
     await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
 
-    console.log('[ESCROW] Recovered stale escrow(s) for', userId, '| escrow_ids:', staleRows.map((r: any) => r.escrow_id), '| refunded:', totalRefunded, '| New balance:', newBalance)
+    console.log('[ESCROW]', Date.now(), 'Recovered stale escrow(s) for', userId, '| escrow_ids:', staleRows.map((r: any) => r.escrow_id), '| refunded:', totalRefunded, '| New balance:', newBalance)
     return { recovered: true, totalRefunded }
   } catch (err) {
-    console.error('[ESCROW] Error in recoverStaleEscrow for', userId, err)
+    console.error('[ESCROW]', Date.now(), 'Error in recoverStaleEscrow for', userId, err)
     return { recovered: false, totalRefunded: 0 }
   }
 }
@@ -233,22 +233,22 @@ export async function escrowBuyIn(
       .limit(1)
       .maybeSingle()
     if (activeCheckError) {
-      console.error('[ESCROW] Failed to check active escrow for', userId, activeCheckError)
+      console.error('[ESCROW]', Date.now(), 'Failed to check active escrow for', userId, activeCheckError)
       return { ok: false, reason: 'SERVER_ERROR' }
     }
     if (activeEscrow) {
-      console.warn('[ESCROW] Active match already exists for', userId, '| escrow', activeEscrow.escrow_id)
+      console.warn('[ESCROW]', Date.now(), 'Active match already exists for', userId, '| escrow', activeEscrow.escrow_id)
       return { ok: false, reason: 'ACTIVE_MATCH_EXISTS' }
     }
 
     const { data: userData, error: userFetchError } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
     if (userFetchError) {
-      console.error('[ESCROW] Failed to read token_balance for', userId, userFetchError)
+      console.error('[ESCROW]', Date.now(), 'Failed to read token_balance for', userId, userFetchError)
       return { ok: false, reason: 'SERVER_ERROR' }
     }
     const currentBalance = userData?.token_balance ?? 0
     if (currentBalance < buyInAmount) {
-      console.warn('[ESCROW] Insufficient tokens for', userId, '| have', currentBalance, '| need', buyInAmount)
+      console.warn('[ESCROW]', Date.now(), 'Insufficient tokens for', userId, '| have', currentBalance, '| need', buyInAmount)
       return { ok: false, reason: 'INSUFFICIENT_TOKENS' }
     }
 
@@ -260,7 +260,7 @@ export async function escrowBuyIn(
       .single()
 
     if (insertError || !escrowRow) {
-      console.error('[ESCROW] Failed to insert match_escrow for', userId, '| room', roomId, '| tier', validTier, insertError)
+      console.error('[ESCROW]', Date.now(), 'Failed to insert match_escrow for', userId, '| room', roomId, '| tier', validTier, insertError)
       return { ok: false, reason: 'SERVER_ERROR' }
     }
 
@@ -272,14 +272,14 @@ export async function escrowBuyIn(
       // 'refunded' (เทียบเท่า "voided" — status enum มีแค่ 3 ค่า ไม่มี column ให้เพิ่ม 'failed' แยก)
       // กัน escrow ค้างสถานะ in_match ทั้งที่ไม่เคยมีเงินถูกหักไปเลย
       await supabaseAdmin.from('match_escrow').update({ status: 'refunded', settled_at: new Date().toISOString() }).eq('escrow_id', escrowRow.escrow_id)
-      console.error('[ESCROW] Failed to deduct token_balance for', userId, '| escrow', escrowRow.escrow_id, 'voided (no deduction occurred)', deductError)
+      console.error('[ESCROW]', Date.now(), 'Failed to deduct token_balance for', userId, '| escrow', escrowRow.escrow_id, 'voided (no deduction occurred)', deductError)
       return { ok: false, reason: 'SERVER_ERROR' }
     }
 
-    console.log('[ESCROW] Buy-in', buyInAmount, 'deducted from', userId, '| escrow', escrowRow.escrow_id, '| New balance:', newBalance)
+    console.log('[ESCROW]', Date.now(), 'Buy-in', buyInAmount, 'deducted from', userId, '| escrow', escrowRow.escrow_id, '| New balance:', newBalance)
     return { ok: true, escrowId: escrowRow.escrow_id, buyInAmount }
   } catch (err) {
-    console.error('[ESCROW] Error in escrowBuyIn for', userId, err)
+    console.error('[ESCROW]', Date.now(), 'Error in escrowBuyIn for', userId, err)
     return { ok: false, reason: 'SERVER_ERROR' }
   }
 }
@@ -296,10 +296,10 @@ export async function settleEscrow(userId: string, escrowId: string, finalStack:
     await supabaseAdmin.from('match_escrow')
       .update({ status: 'settled', final_stack: finalStack, settled_at: new Date().toISOString() })
       .eq('escrow_id', escrowId)
-    console.log('[ESCROW] Settled', userId, '| finalStack', finalStack, '| New balance:', newBalance)
+    console.log('[ESCROW]', Date.now(), 'Settled', userId, '| finalStack', finalStack, '| New balance:', newBalance)
     return newBalance
   } catch (err) {
-    console.error('[ESCROW] Error settling escrow for', userId, err)
+    console.error('[ESCROW]', Date.now(), 'Error settling escrow for', userId, err)
     return null
   }
 }
@@ -313,9 +313,9 @@ export async function refundEscrow(userId: string, escrowId: string, buyInAmount
     await supabaseAdmin.from('match_escrow')
       .update({ status: 'refunded', settled_at: new Date().toISOString() })
       .eq('escrow_id', escrowId)
-    console.log('[ESCROW] Refunded', buyInAmount, 'to', userId, '(join rollback)')
+    console.log('[ESCROW]', Date.now(), 'Refunded', buyInAmount, 'to', userId, '(join rollback)')
   } catch (err) {
-    console.error('[ESCROW] Error refunding escrow for', userId, err)
+    console.error('[ESCROW]', Date.now(), 'Error refunding escrow for', userId, err)
   }
 }
 

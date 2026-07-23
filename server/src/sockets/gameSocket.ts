@@ -47,6 +47,32 @@ function toCards(keys: string[]) {
 // ─── Multiplayer: track socket -> {userId, roomId} สำหรับ disconnect handling ───
 const socketUserMap = new Map<string, { userId: string; roomId: string; tier: string }>();
 
+// TEMP DEBUG (2026-07-24, Symptom A investigation — ลบออกทีหลังหาสาเหตุ race เจอแล้ว): log ทุกจุดที่
+// socketUserMap ถูก set/clear พร้อม Date.now() ให้ correlate กับ [DISCONNECT]/[ESCROW] logs ได้ว่า
+// socketUserMap.set() ของ human แต่ละคน "เสร็จก่อนหรือหลัง" clearMatchmakingSocketTracking ที่ trigger
+// จาก human อีกคน (ทฤษฎี race ที่สงสัยหลัง Step 2 ตัด 15s buffer ออก)
+function trackMatchmakingSocket(socketId: string, info: { userId: string; roomId: string; tier: string }): void {
+  console.log('[DEBUG_SOCKETMAP] SET', Date.now(), 'socket=', socketId, 'userId=', info.userId, 'roomId=', info.roomId, 'tier=', info.tier);
+  socketUserMap.set(socketId, info);
+}
+
+// Bug (2026-07-23): room_auto_match/room_join_private ผูก socketUserMap ให้ "matchmaking socket" ตั้งแต่
+// ตอน join ห้อง (ยังไม่ใช่ socket ของ game screen จริง) — พอ finalizeAndStartRoom เริ่มแมตช์แล้ว emit
+// room_ready, client (lobby.tsx) จะ disconnect socket ตัวนี้ทันทีก่อน navigate ไปหน้าเกม ทำให้ disconnect
+// handler ด้านล่างเข้าใจผิดว่า human หลุดกลางเกม → markPlayerAFK ทันที (ไม่รอ 60s) → auto-submit ทั้ง 2
+// คนพร้อมกันพอดี → resolveMultiShowdown ยิงก่อน game screen (socket ใหม่ที่ยิง game_join) ทันได้เชื่อมด้วย
+// ซ้ำ — ต้องล้าง entry ของ matchmaking socket ทิ้งก่อน emit room_ready เสมอ ปล่อยให้ game_join (จาก socket
+// ใหม่จริง) เป็นคนผูก socketUserMap ใหม่แทนตอนต่อเข้าห้องเกมจริง
+function clearMatchmakingSocketTracking(roomId: string): void {
+  console.log('[DEBUG_SOCKETMAP] CLEAR start', Date.now(), 'roomId=', roomId);
+  for (const [socketId, info] of socketUserMap) {
+    if (info.roomId === roomId) {
+      console.log('[DEBUG_SOCKETMAP] CLEAR delete', Date.now(), 'socket=', socketId, 'userId=', info.userId, 'roomId=', roomId);
+      socketUserMap.delete(socketId);
+    }
+  }
+}
+
 // ห้องเต็มแล้ว → finalize (สุ่ม Boss จริงถ้า High Noble private) + emit room_ready + เริ่มเกม
 // ใช้ร่วมกัน 3 จุด: room_auto_match, room_join_private, Adept/HighNoble wait-expiry AI-fill
 //
@@ -72,8 +98,10 @@ async function finalizeAndStartRoom(io: Server, room: GameRoom): Promise<void> {
       await deleteRoomCompletely(finalRoom.roomId); // กันห้องค้างสถานะ in_progress ทั้งที่ไม่มี match จริง
       return;
     }
+    clearMatchmakingSocketTracking(finalRoom.roomId);
     io.to(finalRoom.roomId).emit("room_ready", { roomId: finalRoom.roomId, seats: finalRoom.seats });
   } else if (finalRoom.tier === 'highNoble') {
+    clearMatchmakingSocketTracking(finalRoom.roomId);
     io.to(finalRoom.roomId).emit("room_ready", { roomId: finalRoom.roomId, seats: finalRoom.seats });
     await startHighNobleMultiMatch(io, finalRoom.roomId, finalRoom.seats);
   }
@@ -397,7 +425,7 @@ export function registerGameSocket(io: Server): void {
       socket.join(roomId);
       // Buy-in Spec §4: ต้อง track ใน socketUserMap ให้ disconnect กลางเกม settle escrow ได้
       // (เดิม solo tier ไม่เคยถูก track เลย เพราะ join ผ่าน player_join_room คนละ event กับ Adept/HighNoble)
-      socketUserMap.set(socket.id, { userId: playerId, roomId, tier });
+      trackMatchmakingSocket(socket.id, { userId: playerId, roomId, tier });
       await startMatch(io, roomId, playerId, tier, devBossId, bossId);
     });
 
@@ -527,7 +555,7 @@ export function registerGameSocket(io: Server): void {
         }
         socket.join(result.room.roomId);
         socket.join(userId); // Patch Multiplayer: private card delivery ต่อ user
-        socketUserMap.set(socket.id, { userId, roomId: result.room.roomId, tier });
+        trackMatchmakingSocket(socket.id, { userId, roomId: result.room.roomId, tier });
         socket.emit("room_matched", { room: result.room, seatIndex: result.seatIndex });
         io.to(result.room.roomId).emit("room_status", { room: result.room });
 
@@ -564,7 +592,7 @@ export function registerGameSocket(io: Server): void {
       if (result.ok && result.room) {
         socket.join(roomId);
         socket.join(userId); // Patch Multiplayer: private card delivery ต่อ user
-        socketUserMap.set(socket.id, { userId, roomId, tier: tier ?? result.room.tier });
+        trackMatchmakingSocket(socket.id, { userId, roomId, tier: tier ?? result.room.tier });
         io.to(roomId).emit("room_status", { room: result.room });
 
         if (result.room.status === 'full') {
@@ -624,7 +652,7 @@ export function registerGameSocket(io: Server): void {
       const { roomId, userId, tier } = data;
       socket.join(roomId);
       socket.join(userId);
-      socketUserMap.set(socket.id, { userId, roomId, tier: tier ?? 'adept' });
+      trackMatchmakingSocket(socket.id, { userId, roomId, tier: tier ?? 'adept' });
       if (tier === 'highNoble') {
         resendHNRoundStartToPlayer(io, roomId, userId);
       } else {
@@ -706,13 +734,16 @@ export function registerGameSocket(io: Server): void {
     socket.on("disconnect", async () => {
       const info = socketUserMap.get(socket.id);
       if (info) {
-        console.log('[DISCONNECT]', info.userId, 'from room', info.roomId);
+        console.log('[DISCONNECT]', Date.now(), info.userId, 'from room', info.roomId);
         // Bug A fix (2026-07-17): ครอบ try/catch — เดิมไม่มีเลย ถ้า replace/AFK logic throw กลางทาง
         // socketUserMap.delete() ด้านล่างจะไม่ทำงาน ทิ้ง entry ค้างตลอดไป
         try {
           if (info.tier === 'adept') {
             // A5: mark AFK + ให้ AI ตอบแทนทันที (ไม่ settle escrow ตรงนี้แล้ว — รอ grace 60s ก่อน
             // reconnect ได้ ดู markPlayerAFK/finalizeAFKReplacement ใน gameLoop.ts)
+            // TEMP DEBUG (2026-07-24, Symptom A): จุดที่ trigger AFK จริง — เทียบ timestamp นี้กับ
+            // [DEBUG_SOCKETMAP] SET/CLEAR ของ userId เดียวกันเพื่อดูว่า set() มาทันหรือหลัง clear ไปแล้ว
+            console.log('[DEBUG_AFK_TRIGGER]', Date.now(), 'marking AFK for', info.userId, 'in room', info.roomId, 'from socket', socket.id);
             await markPlayerAFK(io, info.roomId, info.userId);
           } else if (info.tier === 'highNoble') {
             await replaceHNPlayerWithAI(io, info.roomId, info.userId);
@@ -721,11 +752,11 @@ export function registerGameSocket(io: Server): void {
             await settleAndEndSoloMatch(info.roomId);
           }
         } catch (err) {
-          console.error('[DISCONNECT] handler failed for', info.userId, 'in', info.roomId, err);
+          console.error('[DISCONNECT]', Date.now(), 'handler failed for', info.userId, 'in', info.roomId, err);
         }
         socketUserMap.delete(socket.id);
       } else {
-        console.log('[DISCONNECT] Socket disconnected (untracked):', socket.id);
+        console.log('[DISCONNECT]', Date.now(), 'Socket disconnected (untracked):', socket.id);
       }
     });
   });
