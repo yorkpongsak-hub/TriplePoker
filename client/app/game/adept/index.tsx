@@ -88,6 +88,16 @@ const NAMES  = ['SomchaiX','NongBeer','JaoPoker','WinWin99','ThaiDragon','LuckyA
 const TABLES = ['Table #1','Table #3','Table #7','VIP Room']
 const rnd = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)]
 
+// Animated "Arranging..." dots ของ AI status badge — วนจำนวนจุดอิสระของตัวเอง ไม่ผูกกับ dotAnim ของ ServerLog ด้านล่าง
+const AiStatusDots = React.memo(({ label }: { label: string }) => {
+  const [dots, setDots] = useState(1)
+  useEffect(() => {
+    const id = setInterval(() => setDots(prev => (prev % 3) + 1), 450)
+    return () => clearInterval(id)
+  }, [])
+  return <Text style={s.statusText}>{label}{'.'.repeat(dots)}</Text>
+})
+
 const ServerLog = React.memo(() => {
   interface LogEntry { id: number; icon: string; text: string; time: string }
   const [logs, setLogs]     = useState<LogEntry[]>([])
@@ -471,7 +481,7 @@ const GameTableLive: React.FC = () => {
       aiListRef.current = opponents
 
       const init: Record<string, string> = {}
-      opponents.forEach((o) => { init[o.id] = 'Arranging...' })
+      opponents.forEach((o) => { init[o.id] = 'Arranging' })
       setAiStatus(init)
 
       setComm({
@@ -1546,7 +1556,7 @@ const GameTableLive: React.FC = () => {
                 <Text style={s.seatToken}>🪙 {fmtToken(tokenBalance[bossAI?.id ?? ''])}</Text>
               </View>
               <View style={s.statusBadge}>
-                <Text style={s.statusText}>{aiStatus[bossAI?.id ?? ''] ?? 'Arranging...'}</Text>
+                <AiStatusDots label={aiStatus[bossAI?.id ?? ''] ?? 'Arranging'} />
               </View>
             </View>
             {bossAI && <View style={{ marginTop: -10 /* Patch 2026-07-18: ยกไพ่บอสขึ้น 10px */ }}>
