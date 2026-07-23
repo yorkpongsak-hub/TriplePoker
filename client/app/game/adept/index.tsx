@@ -506,6 +506,14 @@ const GameTableLive: React.FC = () => {
         timerValRef.current = { ...timerValRef.current, val: next }
         if (next <= 0) {
           clearInterval(timerRef.current)
+          // TODO (backlog, 2026-07-24): Adept multiplayer arrangement round 1 has no server-side
+          // timeout enforcement (unlike HighNoble's resolveHNArrangementTimeout in
+          // highNobleMultiEngine.ts) — this client-side auto-submit-on-timeout is the ONLY thing
+          // that ever resolves this phase. A frozen/malicious client that never emits
+          // 'player_ready_multi' could hang the entire table indefinitely (server just waits
+          // forever for submitMultiArrangement). Needs a resolveAdeptArrangementTimeout mirroring
+          // the HighNoble pattern (setTimeout in gameLoop.ts's startMultiRound, tied to
+          // gameConfig.arrangementTimer.adept). Flagged as separate backlog item, not fixed here.
           setPiles(cur => {
             socket.emit('player_ready_multi', {
               roomId: ROOM_ID, userId: PLAYER_ID,
