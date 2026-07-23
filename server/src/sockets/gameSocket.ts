@@ -162,9 +162,12 @@ export function registerGameSocket(io: Server): void {
     }
   }, 10_000);
 
-  // Adept Dynamic Capacity (LobbyMatchmaking_Spec_v1_1) — 2-stage wait timer, เฉพาะโต๊ะ public
-  // (auto-match) เท่านั้น (private ไม่เคยอยู่ใน openSetKey เลย ไม่โดนกระทบ ยังคงพฤติกรรมเดิม 2H+2AI
-  // ตายตัวใน joinRoom()) โพลถี่กว่า loop อื่น (3 วิ แทน 10 วิ) เพราะ stage สั้นสุดแค่ 15 วิ (thirdHumanWaitMs)
+  // Adept Dynamic Capacity (LobbyMatchmaking_Spec_v1_2) — เฉพาะโต๊ะ public (auto-match) เท่านั้น
+  // (private ไม่เคยอยู่ใน openSetKey เลย ไม่โดนกระทบ ยังคงพฤติกรรมเดิม 2H+2AI ตายตัวใน joinRoom())
+  // v1.2: ล็อคตายตัว 2H+2AI เท่านั้น — humanCount===2 เติม Companion Bot ตัวที่ 2 + mark 'full' ทันทีใน
+  // joinRoom() เอง (ดู finalizeAndStartRoom ที่ถูกเรียกจาก room_auto_match handler ตรงๆ ทันทีที่คนที่ 2
+  // join ไม่ต้องรอ loop นี้อีกแล้ว) เหลือหน้าที่เดียวของ loop นี้คือปิดโต๊ะที่ค้างแค่ 1 Human เกิน
+  // secondHumanWaitMs (2 นาที) — ไม่มี stage สั้น 15 วิให้ต้องรอทันอีกต่อไป โพล 10 วิเหมือน loop อื่นพอ
   setInterval(async () => {
     const roomIds = await getAdeptWaitExpiredRoomIds();
     for (const roomId of roomIds) {
@@ -176,15 +179,13 @@ export function registerGameSocket(io: Server): void {
             roomId, tier: 'adept',
             message: 'Not enough players — this tier requires at least 2 human players.',
           });
-        } else if (result.action === 'ai_filled' && result.room.status === 'full') {
-          await finalizeAndStartRoom(io, result.room);
         }
         // 'noop' — มี join แทรกเข้ามาระหว่าง scan กับตอนนี้พอดี (resolveAdeptWaitExpiry เช็คสดแล้วเจอว่าไม่หมดเวลาจริง) ไม่ต้องทำอะไร
       } catch (err) {
         console.error('[ADEPT_WAIT] failed for room', roomId, err);
       }
     }
-  }, 3_000);
+  }, 10_000);
 
   // HighNoble Dynamic Capacity (LobbyMatchmaking_Spec_v1_1) — เหมือน Adept ทุกอย่าง (ดู loop ด้านบน)
   // ต่างแค่ AI-fill ใช้ fillWithMinion() แทน secondAdeptBotSeat() (ดู resolveHighNobleWaitExpiry) —

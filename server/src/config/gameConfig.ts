@@ -401,15 +401,15 @@ export const gameConfig = {
     // §4.4: รอบขยายเวลาหลัง Dialog เลือก "Wait 2 More Minutes" (HighNoble เดิม — เก็บไว้ใช้กับ dialog flow เก่าจนกว่า Step 3)
     waitExtensionMs: 2 * 60_000,
 
-    // ─── v1.1: 2-stage timer ใหม่ (Human เติมจากหัว / AI เติมจากท้าย) — Adept + HighNoble ใช้ prefix เดียวกัน
-    // ค่าเริ่มต้นเท่ากันทั้ง 2 Tier ตาม Spec — แยก key ต่อ Tier ไว้เผื่อปรับจูนทีหลังไม่เท่ากัน
+    // Adept v1.2: ล็อคตายตัว 2H+2AI เท่านั้น ไม่มี 3rd-human wait stage อีกแล้ว (thirdHumanWaitMs ถูกลบ —
+    // เคยมีใน v1.1 ตอนยังรอคนที่ 3 ได้ 15 วิ) — HighNoble ยังใช้ 2-stage timer เดิม (v1.1) แยกต่างหาก
+    // ไม่ถูกกระทบ ค่าเริ่มต้นเท่ากันทั้ง 2 Tier ตาม Spec เดิม แยก key ต่อ Tier ไว้เผื่อปรับจูนทีหลังไม่เท่ากัน
     adept: {
       secondHumanWaitMs: 120_000, // Human คนที่ 1 เข้า → รอ 2 นาที ให้คนที่ 2 เข้า ไม่งั้นปิดโต๊ะ (Human>=2 บังคับ)
-      thirdHumanWaitMs:  15_000,  // Human คนที่ 2 เข้า → รอ 15 วิ ให้คนที่ 3 เข้า ไม่งั้นเติม AI ตัวที่ 2
     },
     highNoble: {
       secondHumanWaitMs: 120_000,
-      thirdHumanWaitMs:  15_000,
+      thirdHumanWaitMs:  15_000,  // Human คนที่ 2 เข้า → รอ 15 วิ ให้คนที่ 3 เข้า ไม่งั้นเติม AI ตัวที่ 2
     },
   },
 
