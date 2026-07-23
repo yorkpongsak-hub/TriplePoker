@@ -18,6 +18,7 @@ import { glassPanel, glassPanelDense } from '../../src/ui/glassStyles'
 import { getTierFromToken, TierKey } from '../../src/config/tierConfig'
 import { supabase } from '../../src/services/supabaseService'
 import ProfilePicturePicker from '../../src/components/profile/ProfilePicturePicker'
+import SettingsModal from '../../src/components/profile/SettingsModal'
 import { AvatarDisplay, PRESET_AVATARS, AvatarConfig } from '../../src/components/profile/AvatarPicker'
 
 // ─── ธีมสีหลัก (Website Theme Spec v1.0) ─────────────────────
@@ -151,6 +152,8 @@ export default function ProfileScreen() {
 
   // --- Profile Picture (VIP real image) --- เก็บ path ใน DB, ขอ signed URL สดตอน render
   const [picModalVisible, setPicModalVisible] = useState(false)
+  // Settings modal จริง — คืนปุ่ม Settings ให้เปิดหน้านี้แทน Onboarding (ย้าย "How to Play" ไปปุ่ม Demo ใน lobby แล้ว)
+  const [settingsModalVisible, setSettingsModalVisible] = useState(false)
   const [profileImageSignedUrl, setProfileImageSignedUrl] = useState<string | null>(null)
   const profileImagePath = profile?.profile_image_url ?? null
   useEffect(() => {
@@ -186,9 +189,7 @@ export default function ProfileScreen() {
   }
 
   const handleSettings = () => {
-    // ยังไม่มีหน้า Settings จริง -- ใช้ปุ่มนี้เปิด Onboarding ซ้ำไปก่อน (label เปลี่ยนเป็น "How to Play" แล้ว)
-    // วันหลังมีหน้า Settings จริงค่อยคืน label + onPress กลับเป็นของเดิม
-    router.push('/(auth)/onboarding')
+    setSettingsModalVisible(true)
   }
 
   const handleEditProfile = () => {
@@ -224,7 +225,7 @@ export default function ProfileScreen() {
 
         {/* ═══════════════ TOP HEADER ═══════════════ */}
         <View style={s.topHeader}>
-          <MenuButton icon="settings" label="How to Play" size="xs" onPress={handleSettings} vipShimmer={isVip} />
+          <MenuButton icon="settings" label="Settings" size="xs" onPress={handleSettings} vipShimmer={isVip} />
           <View style={s.playerProfileLabel}>
             <LinearGradient
               colors={[C.goldDark, C.gold]}
@@ -263,6 +264,11 @@ export default function ProfileScreen() {
             userId={authUser?.id ?? ''}
             onUploaded={refreshProfile}
             onChooseAvatar={() => router.push('/(auth)/setup-profile')}
+          />
+
+          <SettingsModal
+            visible={settingsModalVisible}
+            onClose={() => setSettingsModalVisible(false)}
           />
 
           <View style={s.heroInfo}>

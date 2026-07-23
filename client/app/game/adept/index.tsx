@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router, useLocalSearchParams } from 'expo-router'
 import { io, Socket } from 'socket.io-client'
 import { autoSort } from '../../../src/utils/autoSort'
+import { getReduceMotion } from '../../../src/utils/reduceMotion'
 import { useAuthStore } from '../../../src/store/authStore'
 // Patch 2026-07-18: resolve avatar preset key → emoji/รูปภาพ (แก้ VIP preset ไม่โชว์ที่โต๊ะ)
 import { PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
@@ -185,6 +186,10 @@ const GameTableLive: React.FC = () => {
   const timerRef    = useRef<any>(null)
   const countdownAnimTimeoutRef = useRef<any>(null)
   const dealAnimCompositeRef = useRef<Animated.CompositeAnimation | null>(null)
+  // Reduce Motion preference (Settings modal, AsyncStorage local) — โหลดครั้งเดียวตอน mount แล้ว
+  // เก็บใน ref (ไม่ trigger re-render) ให้ startDealAnimation() อ่านสดตอนถูกเรียกจริง
+  const reduceMotionRef = useRef(false)
+  useEffect(() => { getReduceMotion().then(v => { reduceMotionRef.current = v }) }, [])
   const winPulseLoopRef = useRef<Animated.CompositeAnimation | null>(null)
   const winOpacityLoopRef = useRef<Animated.CompositeAnimation | null>(null)
   const confettiActiveRef = useRef(false)
@@ -647,7 +652,9 @@ const GameTableLive: React.FC = () => {
       a.opacity.setValue(0); a.scale.setValue(0.5)
     })
 
-    const delayPerCard = (10000 - 1000) / DEAL_COUNT // ~205ms ต่อใบ
+    // Reduce Motion: ย่นเวลารวมจาก 10s เหลือ ~1.2s ตามสัดส่วนเดิม (DEAL_COUNT ไม่เปลี่ยน)
+    const dealDurationMs = reduceMotionRef.current ? 1200 : 10000
+    const delayPerCard = (dealDurationMs - 1000) / DEAL_COUNT // ~205ms ต่อใบ (ปกติ) / ~4.5ms (Reduce Motion)
     const anims: Animated.CompositeAnimation[] = []
 
     dealAnims.forEach((a, i) => {

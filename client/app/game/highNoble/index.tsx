@@ -19,6 +19,7 @@ import { PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
 import BossVictoryVFX, { VictoryTier } from '../../../src/components/vfx/BossVictoryVFX'
 import { useUserStore } from '../../../src/store/userStore'
 import { autoSort } from '../../../src/utils/autoSort'
+import { getReduceMotion } from '../../../src/utils/reduceMotion'
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
 import { MINION_AVATAR } from '../../../src/constants/minionAvatars'
 import { ActionButton } from '../../../src/components/ui/ActionButton'
@@ -1021,6 +1022,10 @@ const GameTableLive: React.FC = () => {
   // ── Deal Animation
   // Patch 2026-07-17: composite ref เก็บ Animated.parallel ไว้เรียก .stop() (พอร์ต pattern จาก Adept)
   const dealAnimCompositeRef = useRef<Animated.CompositeAnimation | null>(null)
+  // Reduce Motion preference (Settings modal, AsyncStorage local) — โหลดครั้งเดียวตอน mount แล้ว
+  // เก็บใน ref (ไม่ trigger re-render) ให้ startDealAnimation() อ่านสดตอนถูกเรียกจริง
+  const reduceMotionRef = useRef(false)
+  useEffect(() => { getReduceMotion().then(v => { reduceMotionRef.current = v }) }, [])
 
   const startDealAnimation = () => {
     // Patch: หยุด animation รอบเก่าก่อนเสมอ — กัน "Animated node is already attached to a view"
@@ -1038,7 +1043,9 @@ const GameTableLive: React.FC = () => {
       a.opacity.setValue(0); a.scale.setValue(0.5)
     })
 
-    const delayPerCard = (10000 - 1000) / DEAL_COUNT // ~205ms ต่อใบ
+    // Reduce Motion: ย่นเวลารวมจาก 10s เหลือ ~1.2s ตามสัดส่วนเดิม (DEAL_COUNT ไม่เปลี่ยน)
+    const dealDurationMs = reduceMotionRef.current ? 1200 : 10000
+    const delayPerCard = (dealDurationMs - 1000) / DEAL_COUNT // ~205ms ต่อใบ (ปกติ) / ~4.5ms (Reduce Motion)
     const anims: Animated.CompositeAnimation[] = []
 
     dealAnims.forEach((a, i) => {
