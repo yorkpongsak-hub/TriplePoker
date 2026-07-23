@@ -465,7 +465,7 @@ export default function LobbyScreen() {
 
           {selected === 'adept' && mmStatus === 'idle' && (
             <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('adept', handleAutoMatchAdept)}>
-              <Text style={s.enterBtnTxt}>▶ Play (Auto-Match 3 Human + AI)</Text>
+              <Text style={s.enterBtnTxt}>▶ Play (Auto-Match 2 Human + AI)</Text>
             </TouchableOpacity>
           )}
 
