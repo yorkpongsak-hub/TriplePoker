@@ -49,7 +49,7 @@ const DEV_FAKE_USER_ID = __DEV__ ? process.env.EXPO_PUBLIC_DEV_FAKE_USER_ID : un
 interface CardData { id: string; key: string }
 // Patch (2026-07-17): ใช้แทนที่นั่งคู่แข่งทั้งหมดแล้ว ไม่ใช่แค่ AI (id เป็น userId จริงถ้า Human,
 // emoji เป็น avatarUrl ของ Human ถ้ามี — ดู round_start handler ที่ map จาก data.seats)
-interface AIInfo   { id: string; name: string; emoji: string }
+interface AIInfo   { id: string; name: string; emoji: string; avatarUrl?: string }
 
 // =================================================================
 // TIMER DISPLAY — แยก component ไม่ให้ main re-render
@@ -447,7 +447,7 @@ const GameTableLive: React.FC = () => {
       // ทั้งไฟล์) แต่ตอนนี้หมายถึง "คู่แข่งทั้งหมด" ไม่ใช่แค่ AI แล้ว
       const opponents: AIInfo[] = (data.seats ?? [])
         .filter((seat: any) => seat.userId !== PLAYER_ID)
-        .map((seat: any) => ({ id: seat.userId, name: seat.displayName, emoji: seat.avatarUrl || seat.emoji || '👤' }))
+        .map((seat: any) => ({ id: seat.userId, name: seat.displayName, emoji: seat.avatarUrl || seat.emoji || '👤', avatarUrl: seat.avatarUrl }))
       setAiList(opponents)
       aiListRef.current = opponents
 
@@ -1173,6 +1173,17 @@ const GameTableLive: React.FC = () => {
   // LobbyMatchmaking_Spec_v1_1: ห้อง Adept public เติม Human จากหัว (seat 0→1→2) ไม่ fix Sage ไว้ seat 0
   // อีกต่อไปแล้ว (private room ยังคง Sage seat 0 เสมอ — ดู buildAdeptPrivateInitialSeats ฝั่ง server)
   const bossAI = aiList[0]; const p2AI = aiList[1]; const p4AI = aiList[2]
+  // Symptom B fix: ตำแหน่งไหนก็ตามอาจเป็น Human จริง (ไม่ใช่แค่ P3) — resolve avatarUrl ผ่าน
+  // PRESET_AVATARS แบบเดียวกับ avatar ตัวเอง (myAvatarEmoji/myAvatarImage ด้านบน) ก่อน ถ้า resolve ไม่ได้
+  // (เป็น AI ที่มี seat.emoji อยู่แล้ว หรือ preset key ที่ไม่รู้จัก) fallback ไปที่ emoji/text เดิมเป๊ะ
+  const resolveOpponentAvatar = (info: AIInfo | undefined, fallbackEmoji: string): { emoji: string; image?: any } => {
+    const preset = info?.avatarUrl ? PRESET_AVATARS.find(p => p.key === info.avatarUrl) : undefined
+    if (preset) return { emoji: preset.emoji ?? (preset.image ? '' : info!.avatarUrl!), image: preset.image }
+    return { emoji: info?.emoji ?? fallbackEmoji }
+  }
+  const bossAvatar = resolveOpponentAvatar(bossAI, '🤖')
+  const p2Avatar = resolveOpponentAvatar(p2AI, '👤')
+  const p4Avatar = resolveOpponentAvatar(p4AI, '👤')
   const userRevealed = allCards[PLAYER_ID]
   const isRevealed   = userRevealed && Object.keys(userRevealed).length > 0
 
@@ -1592,7 +1603,7 @@ const GameTableLive: React.FC = () => {
           <Animated.View style={{ flex: 1, opacity: fadeCards }}>
           <View style={[s.aiSeat, { opacity: (phase === 'countdown' || phase === 'showdown' || phase === 'result') ? 0 : 1 }]}>
             <View style={s.aiRow}>
-              <View style={{ transform: [{ translateX: -50 }] /* Patch 2026-07-18: ขยับ avatar บอสไปซ้าย 50px */ }}><AvatarBubble emoji={bossAI?.emoji ?? '🤖'} size={36} /></View>
+              <View style={{ transform: [{ translateX: -50 }] /* Patch 2026-07-18: ขยับ avatar บอสไปซ้าย 50px */ }}><AvatarBubble emoji={bossAvatar.emoji} image={bossAvatar.image} size={36} /></View>
               <View style={{ transform: [{ translateX: -50 }] /* Patch 2026-07-18: ชื่อ+ยอดโทเคนบอสตาม avatar ไปซ้าย 50px */ }}>
                 <Text style={s.aiName}>{bossAI?.name ?? 'BOSS AI'}</Text>
                 <Text style={s.seatToken}>🪙 {fmtToken(tokenBalance[bossAI?.id ?? ''])}</Text>
@@ -1616,7 +1627,7 @@ const GameTableLive: React.FC = () => {
               <Text style={s.sideName}>{p2AI?.name ?? 'P2'}</Text>
               <Text style={s.seatToken}>🪙 {fmtToken(tokenBalance[p2AI?.id ?? ''])}</Text>
               <View style={{ marginTop: -6, marginBottom: 60 }}>
-                <AvatarBubble emoji={p2AI?.emoji ?? '👤'} size={36} />
+                <AvatarBubble emoji={p2Avatar.emoji} image={p2Avatar.image} size={36} />
               </View>
               {p2AI && <SideSeat rot="270deg" aiId={p2AI.id} />}
             </View>
@@ -1637,7 +1648,7 @@ const GameTableLive: React.FC = () => {
               <Text style={s.sideName}>{p4AI?.name ?? 'P4'}</Text>
               <Text style={s.seatToken}>🪙 {fmtToken(tokenBalance[p4AI?.id ?? ''])}</Text>
               <View style={{ marginTop: -6, marginBottom: 60 }}>
-                <AvatarBubble emoji={p4AI?.emoji ?? '👤'} size={36} />
+                <AvatarBubble emoji={p4Avatar.emoji} image={p4Avatar.image} size={36} />
               </View>
               {p4AI && (
                 <View style={{ marginLeft: 15 }}>
