@@ -2587,22 +2587,26 @@ const GameTableLive: React.FC = () => {
                 </View>
               )
             }
-            const SeatHeader: React.FC<{ pid: string; emoji: string; name: string; image?: any; glow?: boolean }> = ({ pid, emoji, name, image, glow }) => (
-              <View style={{ alignItems: 'center', gap: 2 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <AvatarBubble emoji={emoji} size={32} image={image} glow={glow} />
-                  <Text style={{ color: '#FFD76A', fontSize: 11, fontWeight: '700', letterSpacing: 1 }}>{name}</Text>
+            // Seat glow/dim ผูกกับตาจริงของ Grand Finale (gfTurnPlayerId) แทน static hardcode glow=true ที่ boss เดิม
+            const SeatHeader: React.FC<{ pid: string; emoji: string; name: string; image?: any }> = ({ pid, emoji, name, image }) => {
+              const isTurnSeat = gfTurnPlayerId === pid
+              return (
+                <View style={{ alignItems: 'center', gap: 2, opacity: gfTurnPlayerId && !isTurnSeat ? 0.75 : 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <AvatarBubble emoji={emoji} size={32} image={image} glow={isTurnSeat} />
+                    <Text style={{ color: '#FFD76A', fontSize: 11, fontWeight: '700', letterSpacing: 1 }}>{name}</Text>
+                  </View>
+                  <GFStatusBadge playerId={pid} />
+                  <GFHealthBar playerId={pid} />
                 </View>
-                <GFStatusBadge playerId={pid} />
-                <GFHealthBar playerId={pid} />
-              </View>
-            )
+              )
+            }
             return (
               <View style={{ position: 'absolute', top: 60, left: 0, right: 0, bottom: 0, zIndex: 40, paddingHorizontal: 10 }} pointerEvents="box-none">
                 {/* ═══ P3 (Boss) บนสุด ═══ */}
                 {bossAI && (
                   <View style={{ alignItems: 'center', marginTop: 4, gap: 4 }}>
-                    <SeatHeader pid={bossAI.id} emoji={bossAI.emoji} name={bossAI.name} image={bossAI?.name ? BOSS_AVATAR[bossAI.name] : undefined} glow />
+                    <SeatHeader pid={bossAI.id} emoji={bossAI.emoji} name={bossAI.name} image={bossAI?.name ? BOSS_AVATAR[bossAI.name] : undefined} />
                     <GFPile3Row playerId={bossAI.id} />
                   </View>
                 )}
