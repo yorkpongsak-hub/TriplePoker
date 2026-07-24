@@ -97,38 +97,9 @@ export default function LobbyScreen() {
 
   const lastBossVisible = useMemo(() => meetsLastBossCondition(tokenBalance), [tokenBalance]);
 
-  // ── Tier Unlock Tracking (LobbyMatchmaking_Spec_v1_0 §1.3) ──
-  // ไม่มี popup ใน Lobby แล้ว (การแสดงผล Tier ที่ปลดล็อกย้ายไปหน้า Profile) — เหลือแค่ mark
-  // tier_unlock_celebrated เงียบๆ กัน newlyUnlocked ถูกคำนวณ/ยิงซ้ำทุกครั้งที่ profile/tokenBalance เปลี่ยน
-  const session = useAuthStore(s => s.session);
+  // Tier Unlock Celebration ย้ายไปหน้า Profile ทั้งหมดแล้ว (VFX เด้งตอนเปิดแอปที่ profile.tsx แทน)
+  // profile ยังใช้ต่อที่นี่ (ส่ง avatarUrl เข้า room_auto_match ด้านล่าง)
   const profile = useAuthStore(s => s.profile);
-  const refreshProfile = useAuthStore(s => s.refreshProfile);
-  const celebratedCheckedRef = useRef(false);
-
-  useEffect(() => {
-    if (!profile || celebratedCheckedRef.current) return;
-    celebratedCheckedRef.current = true;
-    const celebrated = new Set(profile.tier_unlock_celebrated ?? []);
-    const newlyUnlocked = (Object.keys(TIER_CONFIG) as Tier[])
-      .filter(t => isEligible(t, tokenBalance) && !celebrated.has(t));
-    if (newlyUnlocked.length === 0) return;
-    const token = session?.access_token;
-    if (!token) return;
-    (async () => {
-      for (const tier of newlyUnlocked) {
-        try {
-          await fetch(`${SERVER_URL}/profile/celebrate-tier`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-            body: JSON.stringify({ tier }),
-          });
-        } catch (e) {
-          console.error('[Lobby] celebrate-tier failed:', e);
-        }
-      }
-      await refreshProfile();
-    })();
-  }, [profile, tokenBalance]);
 
   const handleEnterInitiate = () => { fadeOutBgm(); router.push('/game/initiate'); };
   const handleEnterMastermind = () => { fadeOutBgm(); router.push('/game/mastermind/select'); };
@@ -589,7 +560,7 @@ const s = StyleSheet.create({
     ...(Platform.OS === 'web' ? { height: '100vh' as any } : {}),
   },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, marginBottom: 12 }, // เดิม marginTop:50 hardcode ชดเชย status bar เอง — VipBackground มี SafeAreaView(top) ให้แล้ว เหลือแค่ breathing room ปกติ
-  header: { color: COLOR.goldPrimary, fontSize: 20, fontWeight: '800', letterSpacing: 1, fontFamily: 'Cinzel', ...textOnGlass },
+  header: { color: COLOR.goldPrimary, fontSize: 20, fontWeight: '800', letterSpacing: 1, fontFamily: 'Cinzel_700Bold', ...textOnGlass },
   profileBtn: { borderWidth: 1, borderColor: COLOR.goldPrimary, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
   profileBtnTxt: { color: COLOR.goldPrimary, fontSize: 12, fontWeight: '700', ...textOnGlass },
 
@@ -621,7 +592,7 @@ const s = StyleSheet.create({
 
   footer: { alignItems: 'center', paddingVertical: 10, borderTopWidth: 1, borderTopColor: COLOR.borderPrimary, marginTop: 10 },
   footerLogo: { width: 28, height: 28, opacity: 0.9, marginBottom: 4 },
-  footerText: { color: COLOR.goldPrimary, fontSize: 12, fontWeight: '800', letterSpacing: 1, fontFamily: 'Cinzel', ...textOnGlass }, // ลอยตรงบนพื้นหลัง ไม่มี panel รอง
+  footerText: { color: COLOR.goldPrimary, fontSize: 12, fontWeight: '800', letterSpacing: 1, fontFamily: 'Cinzel_700Bold', ...textOnGlass }, // ลอยตรงบนพื้นหลัง ไม่มี panel รอง
   footerSub: { color: COLOR.textTertiary, fontSize: 8, marginTop: 2, ...textOnGlass },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.7)', justifyContent: 'flex-end' },

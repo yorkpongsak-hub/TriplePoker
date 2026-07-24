@@ -24,6 +24,11 @@ interface UserProfile {
   monarch_victories: number | null    // Monarch_Spec_v1_3 §3/§5 — Badge "Monarch Slayer" (>=1) + เงื่อนไข Ascendant Gate
   tier_unlock_celebrated: string[] | null  // LobbyMatchmaking_Spec_v1_0 §1.3 — Tier ที่เคยแสดง Unlock Celebration แล้ว
   streak_count: number | null         // matchStatsService.ts อัปเดตทุกจบแมตช์ (Asia/Bangkok) — ยืนยันแล้วว่าคอลัมน์มีจริงบน live DB
+  games_played: number | null         // matchStatsService.ts — นับทุกแมตช์ที่จบครบ totalRounds
+  games_won: number | null            // เกณฑ์: finalWinner === humanPlayerId (อันดับ 1 ของโต๊ะ)
+  best_hands: Record<string, any> | null   // jsonb — hand ที่ดีที่สุดแยกตาม rank
+  tier_unlocked_max: string | null    // Ceiling model — Tier สูงสุดที่เคยปลด (token ลดไม่ล็อคกลับ)
+  iap_token_total: number | null      // Token สะสมจาก IAP — ไม่นับเป็นเกณฑ์ปลดล็อค Tier (กัน pay-to-unlock)
 }
 
 interface AuthState {
@@ -97,7 +102,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const { data, error } = await supabase
         .from('users')
-        .select('user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp, performance_score, ps_season, monarch_victories, tier_unlock_celebrated, streak_count')
+        .select('user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp, performance_score, ps_season, monarch_victories, tier_unlock_celebrated, streak_count, games_played, games_won, best_hands, tier_unlocked_max, iap_token_total')
         .eq('user_id', user.id)
         .maybeSingle()
       console.log('[authStore] refreshProfile query result:', { data, error, queriedUserId: user.id })

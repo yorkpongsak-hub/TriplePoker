@@ -14,6 +14,7 @@ import { Card } from './deck'
 import { gameConfig } from '../config/gameConfig'
 import { supabaseAdmin } from '../config/supabase'
 import { recordMatchStats, BestHandCandidate, StatsTier } from './matchStatsService'
+import { checkTierUnlock } from './tierUnlockService'
 
 // ── Types ────────────────────────────────────────────────────
 export interface RoundResult {
@@ -290,13 +291,36 @@ export async function escrowBuyIn(
 // ให้ client แทน ห้าม client คำนวณเองจาก buyin/stack (bug: Profile ค้างยอดเก่าเพราะ client ไม่เคยรู้ยอดจริงหลัง settle)
 export async function settleEscrow(userId: string, escrowId: string, finalStack: number): Promise<number | null> {
   try {
-    const { data: userData } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
-    const newBalance = (userData?.token_balance ?? 0) + finalStack
-    await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
-    await supabaseAdmin.from('match_escrow')
+    // Claim-first: เคลม escrow ก่อนจ่าย token — WHERE status='in_match' เป็น atomic ใน Postgres
+    // ถ้าได้ 0 rows แปลว่ามีคน settle ไปแล้ว ต้องออกทันที ห้ามบวก token ซ้ำ (บั๊ก Double Settle)
+    const { data: claimed, error: claimErr } = await supabaseAdmin.from('match_escrow')
       .update({ status: 'settled', final_stack: finalStack, settled_at: new Date().toISOString() })
       .eq('escrow_id', escrowId)
+      .eq('status', 'in_match')
+      .select('escrow_id')
+    if (claimErr) {
+      console.error('[ESCROW]', Date.now(), 'Claim failed for', escrowId, claimErr)
+      return null
+    }
+    if (!claimed || claimed.length === 0) {
+      console.warn('[ESCROW]', Date.now(), 'Already settled, skip:', escrowId, '| userId:', userId)
+      return null
+    }
+    const { data: userData } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
+    const newBalance = (userData?.token_balance ?? 0) + finalStack
+    const { error: balanceUpdateError } = await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
+    if (balanceUpdateError) {
+      console.error('[ESCROW]', Date.now(), 'Error updating token_balance for', userId, balanceUpdateError)
+    }
     console.log('[ESCROW]', Date.now(), 'Settled', userId, '| finalStack', finalStack, '| New balance:', newBalance)
+
+    // Tier Unlock Check (Ceiling Model) — ห่อ try/catch แยกต่างหาก ห้ามทำให้ settleEscrow throw
+    try {
+      await checkTierUnlock(userId, newBalance)
+    } catch (err) {
+      console.error('[TIER_UNLOCK] Unexpected error calling checkTierUnlock:', err, '| userId:', userId)
+    }
+
     return newBalance
   } catch (err) {
     console.error('[ESCROW]', Date.now(), 'Error settling escrow for', userId, err)
@@ -307,12 +331,23 @@ export async function settleEscrow(userId: string, escrowId: string, finalStack:
 // Refund เต็มจำนวน — ใช้เฉพาะตอน escrow บาง seat ในกลุ่ม join พร้อมกันล้มเหลว (rollback seat ที่หักไปแล้วก่อนหน้า)
 export async function refundEscrow(userId: string, escrowId: string, buyInAmount: number): Promise<void> {
   try {
+    // Claim-first เช่นเดียวกับ settleEscrow — กัน refund ซ้ำ
+    const { data: claimed, error: claimErr } = await supabaseAdmin.from('match_escrow')
+      .update({ status: 'refunded', settled_at: new Date().toISOString() })
+      .eq('escrow_id', escrowId)
+      .eq('status', 'in_match')
+      .select('escrow_id')
+    if (claimErr) {
+      console.error('[ESCROW]', Date.now(), 'Refund claim failed for', escrowId, claimErr)
+      return
+    }
+    if (!claimed || claimed.length === 0) {
+      console.warn('[ESCROW]', Date.now(), 'Already settled/refunded, skip refund:', escrowId)
+      return
+    }
     const { data: userData } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
     const newBalance = (userData?.token_balance ?? 0) + buyInAmount
     await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
-    await supabaseAdmin.from('match_escrow')
-      .update({ status: 'refunded', settled_at: new Date().toISOString() })
-      .eq('escrow_id', escrowId)
     console.log('[ESCROW]', Date.now(), 'Refunded', buyInAmount, 'to', userId, '(join rollback)')
   } catch (err) {
     console.error('[ESCROW]', Date.now(), 'Error refunding escrow for', userId, err)
@@ -1802,11 +1837,16 @@ function finalizeGrandFinale(
         const conqueredBossId = (state as any)._bossId as string | undefined
         if (conqueredBossId) {
           try {
-            const { data: userData } = await supabaseAdmin
+            const { data: userData, error: readErr } = await supabaseAdmin
               .from('users')
               .select('conquered_sentinels')
               .eq('user_id', state.humanPlayerId)
               .single()
+            // อ่านไม่ได้ = ห้ามเขียนต่อ ไม่งั้น fallback [] จะลบ conquest ที่สะสมไว้ทั้งหมด
+            if (readErr) {
+              console.error('[CONQUEST] Read failed, skip:', readErr, '| userId:', state.humanPlayerId)
+              throw new Error('conquest_read_failed')
+            }
             const current: string[] = userData?.conquered_sentinels ?? []
             const updated = current.includes(conqueredBossId) ? current : [...current, conqueredBossId]
             if (!current.includes(conqueredBossId)) {

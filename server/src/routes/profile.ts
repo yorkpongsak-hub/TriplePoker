@@ -4,7 +4,10 @@ import { recoverStaleEscrow } from '../game/gameLoop'
 import { assertVip, assertVipPro, VipStatus } from '../middleware/vipGuard'
 import { getAvatarPreset, isAvatarKeyAllowed, DEFAULT_AVATAR_KEY } from '../constants/avatarPresets'
 
-const VALID_TIERS = ['initiate', 'adept', 'mastermind', 'high_noble', 'last_boss'] as const
+// camelCase ตาม tier_unlocked_max ceiling model (TIER_ORDER ฝั่ง tierUnlockService.ts) -
+// ไม่รวม 'D' (ค่าเริ่มต้นก่อนปลดล็อค ไม่มีอะไรให้ฉลอง) และไม่รวม last_boss (Last Boss อยู่ใน The Arena
+// แอปแยก ตาม Architecture Rule ห้ามเอา logic มาปนใน Main App)
+const VALID_TIERS = ['initiate', 'adept', 'mastermind', 'highNoble'] as const
 
 export async function profileRoutes(app: FastifyInstance) {
 

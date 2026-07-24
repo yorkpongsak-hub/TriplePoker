@@ -109,10 +109,14 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
   const userIds = valid.map(p => p.userId)
   const current: Record<string, CurrentUserRow> = {}
   try {
-    const { data } = await supabaseAdmin
+    const { data, error: readErr } = await supabaseAdmin
       .from('users')
       .select('user_id, token_balance, vip_status, games_played, games_won, xp, best_hands, debt_amount, streak_count, last_played_date, streak_shields')
       .in('user_id', userIds)
+    if (readErr) {
+      console.error('[MATCH_STATS] Read failed:', readErr, '| userIds:', userIds)
+      return
+    }
     for (const row of data ?? []) {
       current[row.user_id] = {
         token_balance:    row.token_balance ?? 0,
@@ -206,9 +210,17 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
   })
 
   try {
-    const { error } = await supabaseAdmin.from('users').upsert(rows, { onConflict: 'user_id' })
-    if (error) {
-      console.error('[MATCH_STATS] Upsert failed:', error, '| payload:', JSON.stringify(rows))
+    for (const row of rows) {
+      const { user_id, ...fields } = row
+      const { error } = await supabaseAdmin
+        .from('users')
+        .update(fields)
+        .eq('user_id', user_id)
+      if (error) {
+        console.error('[MATCH_STATS] Update failed:', error, '| user_id:', user_id, '| fields:', JSON.stringify(fields))
+      } else {
+        console.log('[MATCH_STATS] OK', user_id, 'games_played=', fields.games_played, 'xp=', fields.xp)
+      }
     }
   } catch (err) {
     console.error('[MATCH_STATS] Unexpected error during upsert:', err, '| payload:', JSON.stringify(rows))

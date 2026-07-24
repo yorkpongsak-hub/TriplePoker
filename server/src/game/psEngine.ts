@@ -31,17 +31,23 @@ export async function awardPerformanceScore(input: AwardPerformanceScoreInput): 
   const currentCareer: Record<string, number> = {}
   const currentSeason: Record<string, number> = {}
   try {
-    const { data } = await supabaseAdmin
+    const { data, error: readErr } = await supabaseAdmin
       .from('users')
       .select('user_id, performance_score, ps_season')
       .in('user_id', userIds)
+    // อ่านค่าเดิมไม่ได้ = ห้ามเขียนต่อเด็ดขาด ไม่งั้น (currentCareer ?? 0) + gained
+    // จะเขียนทับ PS ที่สะสมไว้ให้หายถาวร (คอลัมน์มีจริงแล้ว fallback 0 จึงอันตรายกว่าข้ามรอบ)
+    if (readErr) {
+      console.error('[PS] Read failed, skip award:', readErr, '| userIds:', userIds)
+      return
+    }
     for (const row of data ?? []) {
       currentCareer[row.user_id] = row.performance_score ?? 0
       currentSeason[row.user_id] = row.ps_season ?? 0
     }
   } catch (err) {
-    // Patch: ถ้า migration 006_monarch_spawn_reward.sql ยังไม่ได้รันบน Supabase คอลัมน์เหล่านี้จะยังไม่มี — fallback 0 ทุกคน (ไม่ throw)
-    console.error('[PS] Error reading performance_score/ps_season:', err)
+    console.error('[PS] Unexpected read error, skip award:', err, '| userIds:', userIds)
+    return
   }
 
   const rows = userIds.map(userId => {
@@ -57,7 +63,18 @@ export async function awardPerformanceScore(input: AwardPerformanceScoreInput): 
   })
 
   try {
-    await supabaseAdmin.from('users').upsert(rows, { onConflict: 'user_id' })
+    for (const row of rows) {
+      const { user_id, ...fields } = row
+      const { error } = await supabaseAdmin
+        .from('users')
+        .update(fields)
+        .eq('user_id', user_id)
+      if (error) {
+        console.error('[PS] Update failed:', error, '| user_id:', user_id, '| fields:', JSON.stringify(fields))
+      } else {
+        console.log('[PS] OK', user_id, 'career=', fields.performance_score, 'season=', fields.ps_season)
+      }
+    }
   } catch (err) {
     console.error('[PS] Error updating performance_score/ps_season batch:', err)
   }

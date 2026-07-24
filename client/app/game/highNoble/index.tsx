@@ -1113,7 +1113,7 @@ const GameTableLive: React.FC = () => {
     })
 
     // Reduce Motion: ย่นเวลารวมจาก 10s เหลือ ~1.2s ตามสัดส่วนเดิม (DEAL_COUNT ไม่เปลี่ยน)
-    const dealDurationMs = reduceMotionRef.current ? 1200 : 10000
+    const dealDurationMs = reduceMotionRef.current ? 1200 : 4000
     const delayPerCard = (dealDurationMs - 1000) / DEAL_COUNT // ~205ms ต่อใบ (ปกติ) / ~4.5ms (Reduce Motion)
     const anims: Animated.CompositeAnimation[] = []
 

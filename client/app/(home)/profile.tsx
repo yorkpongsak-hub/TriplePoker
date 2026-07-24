@@ -20,6 +20,12 @@ import { supabase } from '../../src/services/supabaseService'
 import ProfilePicturePicker from '../../src/components/profile/ProfilePicturePicker'
 import SettingsModal from '../../src/components/profile/SettingsModal'
 import { AvatarDisplay, PRESET_AVATARS, AvatarConfig } from '../../src/components/profile/AvatarPicker'
+import { TierUnlockOverlay } from '../../src/components/vfx/TierUnlockOverlay'
+
+const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
+
+// Tier Unlock Ceiling Model - ต้องตรงกับ TIER_ORDER ใน server/src/game/tierUnlockService.ts เป๊ะ (camelCase)
+const TIER_ORDER = ['D', 'initiate', 'adept', 'mastermind', 'highNoble'] as const
 
 // ─── ธีมสีหลัก (Website Theme Spec v1.0) ─────────────────────
 const C = {
@@ -44,12 +50,8 @@ const C = {
 
 // ─── Fallback ก่อน profile จาก Supabase โหลดเสร็จ ─────────────
 const MOCK = {
-  name:       'York',
-  avatar:     '🐉',
-  token:      425_000,
-  crown:      12,
-  streakDays: 7,
-  xpNow:      15_400,
+  name:   'Player',
+  avatar: '🐉',
 }
 
 // ─── Tier / VIP config ────────────────────────────────────────
@@ -78,15 +80,6 @@ const VIP_INFO: Record<string, { label: string; color: string } | null> = {
   vip_pro: { label: 'VIP PRO', color: C.goldDark },
 }
 
-// LobbyMatchmaking_Spec_v1_0 §1.3 — key ตรงกับ tier_unlock_celebrated ที่ lobby.tsx เขียนลง DB (server-authoritative)
-const TIER_UNLOCK_CONFIG: Record<string, { label: string; letter: string; color: string }> = {
-  initiate:   { label: 'Initiate',      letter: 'C',  color: C.green },
-  adept:      { label: 'Adept',         letter: 'B',  color: C.blue },
-  mastermind: { label: 'Mastermind',    letter: 'A',  color: C.purple },
-  high_noble: { label: 'High Noble',    letter: 'A+', color: C.gold }, // letter เดิม 'S' — แก้ให้ตรงกับ Top Bar badge (canon High Noble = A+, S สงวนไว้ให้ Ascendant)
-  last_boss:  { label: 'The Last Boss', letter: 'S+', color: C.goldDark },
-}
-
 const fmt = (n: number) => n.toLocaleString('en-US')
 
 // Monarch_Spec_v1_3 §4/§5 — Performance Score + Ascendant Gate ปลดล็อคตั้งแต่ Tier A+ (highNoble) ขึ้นไปเท่านั้น
@@ -101,6 +94,7 @@ export default function ProfileScreen() {
   const profile = useAuthStore(s => s.profile)
   const refreshProfile = useAuthStore(s => s.refreshProfile)
   const authUser = useAuthStore(s => s.user)
+  const session = useAuthStore(s => s.session) // ใช้แนบ Bearer token ตอน POST /profile/celebrate-tier
   const [activeTab, setActiveTab] = useState<TabKey>('stats')
 
   // Safety net: token อาจเปลี่ยนนอก flow แมตช์ (admin แก้ DB ตรง, ซื้อ token ใน Shop, ad reward ฯลฯ)
@@ -119,16 +113,16 @@ export default function ProfileScreen() {
   const displayName = profile?.display_name  || MOCK.name
   const avatar      = profile?.avatar_url    || MOCK.avatar
   const vipStatus   = profile?.vip_status    || 'none'
-  const token       = profile?.token_balance ?? MOCK.token
-  const crown       = profile?.crown_balance ?? MOCK.crown
-  const xpNow       = profile?.xp            ?? MOCK.xpNow
+  const token       = profile?.token_balance ?? 0
+  const crown       = profile?.crown_balance ?? 0
+  const xpNow       = profile?.xp            ?? 0
   // Patch (2026-07-17): ยืนยันแล้วว่า streak_count มีอยู่จริงบน live DB (ลุงเช็ค Table Editor
   // ให้แล้ว) — comment เดิมที่บอกว่าคอลัมน์ไม่มีล้าสมัยไปแล้ว ต่อสายเป็นค่าจริงจาก authStore
-  const streakDays  = profile?.streak_count ?? MOCK.streakDays
+  const streakDays  = profile?.streak_count ?? 0
 
   // Tier คำนวณสดจาก token เสมอ — เลิกอ่าน profile.tier ตรงๆ เพราะคอลัมน์นั้นไม่มี pipeline ไหนอัปเดตจริง
   // (ดูปัญหาเดิม: Top Bar ไม่ตรงกับ Tiers Unlocked) getTierFromToken คืนแค่ 4 tier หลัก ไม่มี crash เพราะ token
-  // เป็นตัวเลขเสมอ (fallback MOCK.token ถ้า profile ยังโหลดไม่เสร็จ)
+  // เป็นตัวเลขเสมอ (fallback 0 ถ้า profile ยังโหลดไม่เสร็จ — ห้ามใช้ค่าปลอมที่ดูสมจริง)
   const liveTier  = getTierFromToken(token)
   const tierLetter = TIER_KEY_LETTER[liveTier]
 
@@ -142,8 +136,60 @@ export default function ProfileScreen() {
 
   const tierInfo = TIER_INFO[tierLetter] ?? TIER_INFO['C']
   const vipInfo  = VIP_INFO[vipStatus]
-  const unlockedTiers = profile?.tier_unlock_celebrated ?? []
   const isVip    = vipStatus !== 'none' // VIP Shimmer Effect — ใช้ vip_status ที่มีอยู่แล้ว ไม่สร้าง state/query ใหม่
+
+  // ─── Tier Unlock Celebration (Ceiling Model) — เด้ง VFX ที่ Profile ตอนเปิดแอป ───
+  // tier_unlocked_max = single source of truth (server เขียนผ่าน checkTierUnlock() ใน settleEscrow)
+  // เทียบกับ tier_unlock_celebrated (array ที่เคยฉลองแล้ว) หา tier ที่ยังค้าง — โชว์แค่ tier สูงสุดตัวเดียว
+  // แต่ POST mark ครบทุกตัวที่ค้างตอนปิด overlay (เผื่อข้ามหลายชั้นพร้อมกัน)
+  const [overlayTier, setOverlayTier] = useState<string | null>(null)
+  // celebratingRef: true ระหว่างโชว์ overlay/รอ POST เสร็จ — กัน useFocusEffect ยิง refreshProfile ซ้ำ
+  // แล้ว trigger useEffect ด้านล่างซ้ำก่อน mark celebrated เสร็จ (bug class เดียวกับ lobby.tsx เดิม)
+  const celebratingRef = useRef(false)
+  const pendingCelebrateRef = useRef<string[]>([])
+
+  useEffect(() => {
+    if (!profile || celebratingRef.current) return
+    const maxIdx = (TIER_ORDER as readonly string[]).indexOf(profile.tier_unlocked_max ?? 'D')
+    if (maxIdx <= 0) return // 'D' หรือค่าที่ไม่รู้จัก (indexOf = -1) — ไม่มีอะไรให้ฉลอง
+    const celebrated = new Set(profile.tier_unlock_celebrated ?? [])
+    const pending = TIER_ORDER.slice(1, maxIdx + 1).filter(t => !celebrated.has(t))
+    if (pending.length === 0) return
+    celebratingRef.current = true
+    pendingCelebrateRef.current = pending
+    setOverlayTier(pending[pending.length - 1]) // TIER_ORDER เรียงต่ำ→สูงอยู่แล้ว ตัวท้ายคือสูงสุด
+  }, [profile])
+
+  const handleCloseTierUnlock = async () => {
+    setOverlayTier(null)
+    const toMark = pendingCelebrateRef.current
+    pendingCelebrateRef.current = []
+    const accessToken = session?.access_token
+    // ไม่มี token = mark ไม่ได้เลย ต้อง log ไม่งั้นพังเงียบ (VFX จะเด้งซ้ำรอบหน้า)
+    if (!accessToken) console.error('[Profile] celebrate-tier skipped: no token | pending:', toMark)
+    if (accessToken) {
+      for (const tier of toMark) {
+        try {
+          const res = await fetch(`${SERVER_URL}/profile/celebrate-tier`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+            body: JSON.stringify({ tier }),
+          })
+          // fetch ไม่ throw เมื่อ HTTP error (400/401/500) — ต้องเช็ค res.ok เอง ไม่งั้นพังเงียบ
+          if (!res.ok) {
+            const body = await res.text()
+            console.error('[Profile] celebrate-tier HTTP', res.status, '| tier:', tier, '| body:', body)
+          } else {
+            console.log('[Profile] celebrate-tier OK:', tier)
+          }
+        } catch (e) {
+          console.error('[Profile] celebrate-tier network error:', e, '| tier:', tier)
+        }
+      }
+      await refreshProfile()
+    }
+    celebratingRef.current = false
+  }
 
   // avatar_url อาจเป็น preset key ใหม่ ('wolf', 'avatar_vip_01' ฯลฯ) หรือ emoji ดิบของเก่า (ก่อนระบบ
   // preset) — เช็ค key ที่รู้จักก่อนค่อยเลือก component render ให้ถูก (กัน render "wolf" เป็น text ตรงๆ)
@@ -213,6 +259,9 @@ export default function ProfileScreen() {
     <ThemedBackground isVip={isVip}>
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
+
+      {/* ─── Tier Unlock Celebration — เด้งตอนเปิดแอปถ้ามี Tier ที่ยังไม่เคยฉลอง ─── */}
+      {overlayTier && <TierUnlockOverlay tier={overlayTier} onClose={handleCloseTierUnlock} />}
 
       {/* ─── Toast: Coming Soon (Friends/Ranking/Legends) — pattern เดียวกับ lobby.tsx ─── */}
       {comingSoonMsg && (
@@ -303,24 +352,6 @@ export default function ProfileScreen() {
           <ResourceBox icon="💎" label="VIP STATUS" value={vipInfo?.label ?? 'FREE'} valueColor={vipInfo?.color ?? C.textPrimary} />
         </GoldCard>
 
-        {/* ═══════════════ TIERS UNLOCKED (LobbyMatchmaking_Spec_v1_0 §1.3 — ย้ายมาจาก popup ใน Lobby) ═══════════════ */}
-        {unlockedTiers.length > 0 && (
-          <GoldCard style={s.tiersUnlockedCard}>
-            <Text style={s.tiersUnlockedLabel}>TIERS UNLOCKED</Text>
-            <View style={s.tiersUnlockedRow}>
-              {unlockedTiers.map(t => {
-                const cfg = TIER_UNLOCK_CONFIG[t]
-                if (!cfg) return null
-                return (
-                  <View key={t} style={[s.tierUnlockChip, { borderColor: cfg.color, backgroundColor: `${cfg.color}14` }]}>
-                    <Text style={[s.tierUnlockChipText, { color: cfg.color }]}>[{cfg.letter}] {cfg.label}</Text>
-                  </View>
-                )
-              })}
-            </View>
-          </GoldCard>
-        )}
-
         {/* ═══════════════ PERFORMANCE SCORE — Dual-Track (Tier A+ ขึ้นไปเท่านั้น — Monarch_Spec_v1_3 §4) ═══════════════ */}
         {/* Season PS เด่น (เกณฑ์แข่งขัน/Ascendant Star) + Career PS รอง (lifetime, ห้ามรีเซ็ต) — TODO: font JetBrains Mono ตาม spec ยังไม่ได้ load เข้า expo-font ในโปรเจกต์ */}
         {isPSUnlocked && (
@@ -353,7 +384,7 @@ export default function ProfileScreen() {
           <TabButton label="SOCIAL" active={activeTab === 'social'} onPress={() => setActiveTab('social')} />
         </View>
 
-        {activeTab === 'stats' && <StatsPanel streakDays={streakDays} />}
+        {activeTab === 'stats' && <StatsPanel streakDays={streakDays} gamesPlayed={profile?.games_played ?? 0} gamesWon={profile?.games_won ?? 0} bestHands={profile?.best_hands ?? null} />}
         {activeTab === 'bosses' && (
           <ComingSoonPanel icon="🗿" title="HALL OF BOSSES" sub="The Nine Sentinels are coming in a future update" />
         )}
@@ -411,14 +442,33 @@ function ComingSoonPanel({ icon, title, sub }: { icon: string; title: string; su
   )
 }
 
-function StatsPanel({ streakDays }: { streakDays: number }) {
+function StatsPanel({ streakDays, gamesPlayed, gamesWon, bestHands }: {
+  streakDays: number
+  gamesPlayed: number
+  gamesWon: number
+  bestHands: Record<string, any> | null
+}) {
+  // Win rate — กัน division by zero ตอนผู้เล่นใหม่ยังไม่เคยเล่น
+  const winRate = gamesPlayed > 0 ? Math.round((gamesWon / gamesPlayed) * 100) : null
+  // best_hands เก็บแยกตาม tier — หา score สูงสุดข้ามทุก tier
+  let bestLabel: string | null = null
+  if (bestHands) {
+    let topScore = -1
+    for (const entry of Object.values(bestHands)) {
+      const e = entry as any
+      if (e && typeof e.score === 'number' && e.score > topScore) {
+        topScore = e.score
+        bestLabel = e.rank ?? e.label ?? null
+      }
+    }
+  }
   return (
     <GoldCard style={s.statsPanel}>
-      <StatItem icon="🎯" label="WIN RATE" value="—" sub="COMING SOON" small />
+      <StatItem icon="🎯" label="WIN RATE" value={winRate !== null ? `${winRate}%` : '—'} sub={winRate !== null ? `${gamesWon} WINS` : 'NO DATA'} small />
       <View style={s.vLine} />
-      <StatItem icon="⚔️" label="MATCHES" value="—" sub="COMING SOON" small />
+      <StatItem icon="⚔️" label="MATCHES" value={`${gamesPlayed}`} sub="PLAYED" small />
       <View style={s.vLine} />
-      <StatItem icon="♠" label="BEST HAND" value="—" sub="COMING SOON" small />
+      <StatItem icon="♠" label="BEST HAND" value={bestLabel ?? '—'} sub={bestLabel ? 'ALL TIME' : 'NO DATA'} small />
       <View style={s.vLine} />
       <StatItem icon="🔥" label="STREAK" value={`${streakDays} Days`} sub="CURRENT" small />
     </GoldCard>
@@ -466,7 +516,7 @@ const s = StyleSheet.create({
     overflow: 'hidden',
   },
   playerProfileLabelText: {
-    fontFamily: 'Cinzel',
+    fontFamily: 'Cinzel_700Bold',
     color: C.bg,
     fontSize: 14,
     fontWeight: '900',
@@ -531,15 +581,6 @@ const s = StyleSheet.create({
   resourceLabel: { color: C.textSec, fontSize: 9, fontWeight: '800', letterSpacing: 1 },
   resourceValue: { color: C.textPrimary, fontSize: 15, fontWeight: '900', marginTop: 2 },
   vLine: { width: 1, minHeight: 36, backgroundColor: C.border },
-
-  tiersUnlockedCard: {
-    marginTop: 10,
-    padding: 12,
-  },
-  tiersUnlockedLabel: { color: C.textSec, fontSize: 9, fontWeight: '800', letterSpacing: 1, marginBottom: 8 },
-  tiersUnlockedRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  tierUnlockChip: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1.5 },
-  tierUnlockChipText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
 
   psCard: {
     marginTop: 10,
