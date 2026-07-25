@@ -30,6 +30,9 @@ import PlayerHandView from '../../../src/components/game/PlayerHandView'
 import BossHandRow from '../../../src/components/game/BossHandRow'
 import GameTopBar from '../../../src/components/game/GameTopBar'
 import MatchEndOverlay from '../../../src/components/game/MatchEndOverlay'
+import TokenFlowPanel, { PANEL_WIDTH, PANEL_RIGHT } from '../../../src/components/game/TokenFlowPanel'
+// Gold Radiance: กรอบทองเฉพาะโต๊ะที่มี buy-in (Adept ขึ้นไป) และเฉพาะที่นั่งของผู้เล่นเอง
+import AvatarFrame from '../../../src/components/game/AvatarFrame'
 
 // Feedback C5 — Showdown result ครอบด้วยพื้นหลังชุดเดียวกับ Profile/Lobby (bg free/vip ตาม isVip)
 const SHOWDOWN_BG_FREE = require('../../../assets/backgrounds/bg_main_free.png')
@@ -320,6 +323,19 @@ const GameTableLive: React.FC = () => {
   const [tokenDeltas, setTokenDeltas]   = useState<Record<string, number>>({})
   const [matchResult, setMatchResult]   = useState<any>(null)
 
+  // Token Flow Panel (Spec v1.1) - ค่าทั้งหมดมาจาก server ล้วน client ไม่คำนวณเอง
+  // flowBuyIn แยกจาก buyInAmount เพราะตัวหลัง set เฉพาะรอบ 1 (คู่กับ popup Lock-up)
+  const [flowPot, setFlowPot]         = useState<[number, number, number]>([0, 0, 0])
+  const [flowFeeRake, setFlowFeeRake] = useState(0)
+  const [flowBuyIn, setFlowBuyIn]     = useState(0)
+  const [burnToast, setBurnToast]     = useState<string | null>(null)
+  // ค่า Auto Sort ต่อครั้งของ Tier นี้ (server ส่งมาทุกรอบ) - ไม่มีรอบฟรีแล้วตามมติลุงเยาะ 2026-07-25
+  const [autoSortFee, setAutoSortFee] = useState(0)
+  // "จ่ายค่า Auto Sort ของรอบนี้ไปแล้ว" - แยกจาก sortDone เพราะ sortDone ถูก reset ทุกครั้งที่ผู้เล่น
+  // สลับไพ่เอง ถ้าใช้ตัวเดียวกันผู้เล่นจะโดนเรียกเก็บซ้ำได้ในรอบเดียว  ตัวนี้ reset เฉพาะตอนขึ้นรอบใหม่
+  // ให้ตรงกับ state.autoSortUsed ฝั่ง server ที่เคลียร์ใน startMultiRound
+  const [autoSortPaid, setAutoSortPaid] = useState(false)
+
   // ── Discard
   const [showDiscard, setShowDiscard]         = useState(false)
   const [buyInAmount, setBuyInAmount]       = useState(0)
@@ -490,7 +506,7 @@ const GameTableLive: React.FC = () => {
       }
       setPhase('arrangement')
       setRoundNumber(data.roundNumber)
-      setIsReady(false); setSortDone(false); setSelected(null)
+      setIsReady(false); setSortDone(false); setSelected(null); setAutoSortPaid(false)
       setAllCards({}); setPileWinners({})
       setHasFoul({}); setFoulReasons({}); setTokenDeltas({})
       setShowResult(false)
@@ -506,6 +522,11 @@ const GameTableLive: React.FC = () => {
       fadeCards.stopAnimation(() => { fadeCards.setValue(0) })
       setBlind([]); setDealCount(0)
       setTokenBalance(data.tokenBalance ?? {})
+      // Token Flow: ต้นรอบ server หัก Ante เข้า Pot มาให้แล้ว (tokenBalance ข้างบนคือยอดหลังหัก)
+      setFlowPot(data.pot ?? [0, 0, 0])
+      setFlowFeeRake(data.feeRake ?? 0)
+      if (typeof data.buyIn === 'number') setFlowBuyIn(data.buyIn)
+      if (typeof data.autoSortFee === 'number') setAutoSortFee(data.autoSortFee)
       // Bug B/C fix (2026-07-17): server เปลี่ยนจาก aiNames (AI-only) เป็น seats (4 ที่นั่งเรียงตาม
       // ห้องจริง รวม Human) — เดิม Adept 2H+2AI มี AI แค่ 2 ตัว ทำให้ p4AI (index 2) ว่างเปล่าเวลาที่นั่ง
       // นั้นเป็น Human จริง (หลังไพ่/avatar/ชื่อไม่โชว์เลย) map เป็นรูปแบบ AIInfo เดิมให้ bossAI/p2AI/p4AI
@@ -619,6 +640,11 @@ const GameTableLive: React.FC = () => {
       setHasFoul(newFouled)
       setFoulReasons(data.foulReasons ?? {})
       setTokenDeltas(data.tokenDeltas ?? {})
+      // Token Flow: Pot ไหลออกไปหาผู้ชนะ/Fee & Rake แล้ว - stack ทุกที่นั่งเปลี่ยนตรงนี้
+      if (data.tokenBalance) setTokenBalance(data.tokenBalance)
+      if (data.pot) setFlowPot(data.pot)
+      if (typeof data.feeRake === 'number') setFlowFeeRake(data.feeRake)
+      if (typeof data.buyIn === 'number') setFlowBuyIn(data.buyIn)
       setPhase('showdown')
 
       // Triple Sweep Jackpot — คนเดียวกันชนะครบทั้ง 3 กอง
@@ -650,12 +676,30 @@ const GameTableLive: React.FC = () => {
       setPhase('result')
       setTokenBalance(data.tokenBalance ?? {})
       setTokenDeltas(data.tokenDeltas ?? {})
+      if (data.pot) setFlowPot(data.pot)
+      if (typeof data.feeRake === 'number') setFlowFeeRake(data.feeRake)
+      if (typeof data.buyIn === 'number') setFlowBuyIn(data.buyIn)
+    })
+
+    // Token Flow: มีคนกด Auto Sort - fee ไหลจาก stack คนนั้นเข้า Fee & Rake (broadcast ทั้งโต๊ะ)
+    socket.on('token_flow_update', (data: any) => {
+      if (data.tokenBalance) setTokenBalance(data.tokenBalance)
+      if (data.pot) setFlowPot(data.pot)
+      if (typeof data.feeRake === 'number') setFlowFeeRake(data.feeRake)
+      if (typeof data.buyIn === 'number') setFlowBuyIn(data.buyIn)
     })
 
     socket.on('match_end', (data: any) => {
       setPhase('end')
       setMatchResult(data)
       setTokenBalance(data.tokenBalance ?? {})
+      // Token Flow Spec ข้อ 5: จบเกม -> Fee & Rake burn จริง (ออกจากจอ)
+      if (typeof data.feeRakeBurned === 'number') {
+        setFlowFeeRake(0)
+        setFlowPot([0, 0, 0])
+        setBurnToast(`House collected: ${data.feeRakeBurned.toLocaleString('en-US')} tokens`)
+        setTimeout(() => setBurnToast(null), 4000)
+      }
       // Server ส่งยอด token_balance จริงหลัง settle มาด้วย (per-player) — ห้ามคำนวณเองจาก buyin/stack
       const myNewBalance = data.newTokenBalances?.[PLAYER_ID] ?? data.newTokenBalance
       if (typeof myNewBalance === 'number') {
@@ -783,14 +827,43 @@ const GameTableLive: React.FC = () => {
     setPiles(np); setSelected(null); setSortDone(false)
   }, [isReady, phase, selected, piles])
 
+  // Auto Sort (Adept เสีย fee ทุกครั้ง ไม่มีรอบฟรี - มติลุงเยาะ 2026-07-25)
+  // Server-authoritative: ต้องขออนุญาต + ให้ server หัก fee เข้า Fee & Rake ก่อน ถึงจะจัดไพ่ให้จริง
+  // (ห้ามจัดไพ่ก่อนแล้วค่อยแจ้ง server ไม่งั้นผู้เล่นได้ของฟรีเมื่อ request ล้มเหลว)
   const handleAutoSort = () => {
-    if (!comm.p1[0]) return
-    const sorted = autoSort([...piles[0], ...piles[1], ...piles[2]], {
-      pile1: [comm.p1[0], comm.p1[1]] as [string, string],
-      pile2: [comm.p2[0], comm.p2[1]] as [string, string],
-      pile3: [comm.p3[0], comm.p3[1]] as [string, string],
+    if (!comm.p1[0] || sortDone || phase !== 'arrangement') return
+
+    // ใช้ updater form เพื่ออ่านไพ่ล่าสุด เผื่อผู้เล่นสลับไพ่ระหว่างรอ ack จาก server
+    const applySort = () => {
+      setPiles(cur => autoSort([...cur[0], ...cur[1], ...cur[2]], {
+        pile1: [comm.p1[0], comm.p1[1]] as [string, string],
+        pile2: [comm.p2[0], comm.p2[1]] as [string, string],
+        pile3: [comm.p3[0], comm.p3[1]] as [string, string],
+      }))
+      setSelected(null); setSortDone(true)
+    }
+
+    // จ่ายค่าธรรมเนียมของรอบนี้ไปแล้ว (กดแล้วสลับไพ่เอง แล้วกดใหม่) -> จัดให้เลย ไม่เรียกเก็บซ้ำ
+    // ตรงกับฝั่ง server ที่ตอบ ALREADY_USED และไม่หักเงินอีก
+    if (autoSortPaid) { applySort(); return }
+
+    const sock = socketRef.current
+    if (!sock) return
+
+    sock.once('auto_sort_ack', (res: { ok: boolean; reason?: string }) => {
+      if (!res?.ok) {
+        Alert.alert(
+          'Auto Sort unavailable',
+          res?.reason === 'INSUFFICIENT_TOKENS'
+            ? `You need ${autoSortFee} tokens to use Auto Sort.`
+            : 'Auto Sort is not available right now.',
+        )
+        return
+      }
+      setAutoSortPaid(true)
+      applySort()
     })
-    setPiles(sorted); setSelected(null); setSortDone(true)
+    sock.emit('auto_sort_request', { roomId: ROOM_ID, userId: PLAYER_ID })
   }
 
   const handleReady = () => {
@@ -1385,12 +1458,6 @@ const GameTableLive: React.FC = () => {
           <View style={{ position: 'absolute', top: 8, left: 10, zIndex: 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }} pointerEvents="none">
             <Image source={studioLogo} style={{ width: 28, height: 28, opacity: 0.9 }} resizeMode="contain" />
           </View>
-          <View style={{ position: 'absolute', top: 70, left: 0, zIndex: (phase === 'showdown' || phase === 'result') ? 0 : 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }}>
-            <TouchableOpacity onPress={() => { setShowTierInfo(true); setActiveTierTab('INITIATE') }}
-              style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(180,0,0,0.3)', borderWidth: 1.5, borderColor: '#ff3333', alignItems: 'center', justifyContent: 'center' }}>
-              <Text style={{ fontSize: 11, color: '#ff3333', fontWeight: '900' }}>i</Text>
-            </TouchableOpacity>
-          </View>
           <View style={{ position: 'absolute', top: 8, left: 0, right: 0, alignItems: 'center', zIndex: 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }} pointerEvents="box-none">
             <TouchableOpacity onPress={() => setShowRankTable(true)}
               style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(201,168,76,0.2)', borderWidth: 1, borderColor: 'rgba(201,168,76,0.5)', alignItems: 'center', justifyContent: 'center' }}>
@@ -1572,11 +1639,39 @@ const GameTableLive: React.FC = () => {
             isWeb={isWeb}
             insetsTop={insets.top}
             opacity={(phase === 'showdown' || phase === 'result') ? 0 : 1}
-            stackAmount={tokenBalance[PLAYER_ID] ?? buyInAmount}
-            stackDelta={tokenDeltas[PLAYER_ID] ?? 0}
-          >
-            <TimerDisplay valRef={timerValRef} />
-          </GameTopBar>
+            /* STACK badge ถูกตัดออกตามมติลุงเยาะ 2026-07-25 (ยึด layout ของ Initiate เป็นต้นแบบ) -
+               ยอดของตัวเองมีใต้ชื่อที่นั่งอยู่แล้ว และ Token Flow Panel มีแถว 4P รวมให้อีกชั้น
+               Timer + ปุ่ม i ย้ายมา leftSlot เพื่อเปิดพื้นที่มุมขวาบนทั้งแถบให้ Panel */
+            leftSlot={
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <TouchableOpacity
+                  onPress={() => { setShowTierInfo(true); setActiveTierTab('ADEPT') }}
+                  style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(180,0,0,0.3)', borderWidth: 1.5, borderColor: '#ff3333', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Text style={{ fontSize: 11, color: '#ff3333', fontWeight: '900' }}>i</Text>
+                </TouchableOpacity>
+                <TimerDisplay valRef={timerValRef} />
+              </View>
+            }
+          />
+
+          {/* TOKEN FLOW PANEL - ค้างตลอดเกม (Spec ข้อ 2) ซ่อนเฉพาะตอนจบเกมที่มีจอสรุปทับ */}
+          {phase !== 'end' && flowBuyIn > 0 && (
+            <TokenFlowPanel
+              pot={flowPot}
+              feeRake={flowFeeRake}
+              stacks={tokenBalance}
+              seatIds={[PLAYER_ID, ...aiList.map(a => a.id)]}
+              buyIn={flowBuyIn}
+              topOffset={isWeb ? 6 : insets.top + 2}
+            />
+          )}
+
+          {burnToast && (
+            <View style={s.burnToast} pointerEvents="none">
+              <Text style={s.burnToastText}>{burnToast}</Text>
+            </View>
+          )}
 
           {/* AI SEAT + MAIN + USER — fade เมื่อ continue, ซ่อนระหว่าง dealing
               ห้ามสลับ opacity ระหว่าง literal 0 กับ fadeCards node ตรงนี้ (native driver
@@ -1585,8 +1680,9 @@ const GameTableLive: React.FC = () => {
           <Animated.View style={{ flex: 1, opacity: fadeCards }}>
           <View style={[s.aiSeat, { opacity: (phase === 'countdown' || phase === 'showdown' || phase === 'result') ? 0 : 1 }]}>
             <View style={s.aiRow}>
-              <View style={{ transform: [{ translateX: -50 }] /* Patch 2026-07-18: ขยับ avatar บอสไปซ้าย 50px */ }}><AvatarBubble emoji={bossAvatar.emoji} image={bossAvatar.image} size={36} /></View>
-              <View style={{ transform: [{ translateX: -50 }] /* Patch 2026-07-18: ชื่อ+ยอดโทเคนบอสตาม avatar ไปซ้าย 50px */ }}>
+              {/* translateX -50 เดิมถูกลบแล้ว - aiSeat เป็น flex-end ทั้งบล็อกจัดตำแหน่งพร้อมกันอยู่แล้ว */}
+              <View><AvatarBubble emoji={bossAvatar.emoji} image={bossAvatar.image} size={36} /></View>
+              <View>
                 <Text style={s.aiName}>{bossAI?.name ?? 'BOSS AI'}</Text>
                 <Text style={s.seatToken}>🪙 {fmtToken(tokenBalance[bossAI?.id ?? ''])}</Text>
               </View>
@@ -1671,7 +1767,11 @@ const GameTableLive: React.FC = () => {
           {/* USER AVATAR — มุมล่างซ้าย — Feedback C2: ใช้ myAvatarEmoji/myDisplayName จริงแทน hardcode */}
           {/* P1 HUD ย้ายลงชิดขอบล่าง — pointerEvents none เพื่อไม่บังปุ่ม actionBar */}
           <View style={{ position: 'absolute', bottom: Math.max(insets.bottom, 4), left: 10, zIndex: 3, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1, flexDirection: 'row', alignItems: 'center', gap: 6 }} pointerEvents="none">
-            <AvatarBubble emoji={myAvatarEmoji} image={myAvatarImage} size={40} />
+            {/* Gold Radiance - Adept ไม่มี turn state จริง (arrangement/showdown เป็น simultaneous)
+                จึงเป็นกรอบนิ่งอย่างเดียว ไม่มี Active Turn Pulse ตามมติลุงเยาะ 2026-07-25 */}
+            <AvatarFrame size={40}>
+              <AvatarBubble emoji={myAvatarEmoji} image={myAvatarImage} size={40} />
+            </AvatarFrame>
             <View>
               <Text style={s.userNameTag} numberOfLines={1}>{myDisplayName}</Text>
               {/* Patch 2026-07-18: ยอดโทเคนคงเหลือใต้ชื่อ (pattern Initiate) */}
@@ -1684,9 +1784,11 @@ const GameTableLive: React.FC = () => {
             <ActionButton
               icon="auto_sort"
               label={sortDone ? 'Sorted ✓' : 'Auto Sort'}
-              variant={sortDone ? 'disabled' : 'normal'}
-              disabled={sortDone || phase !== 'arrangement'}
-              costBadge="30"
+              /* Spec ข้อ 8: token ไม่พอจ่าย fee -> ปุ่ม disabled ไปเลย ผู้เล่นต้องจัดเอง
+                 (server ก็ปฏิเสธซ้ำอีกชั้นใน requestAutoSort - ไม่เชื่อ client ฝ่ายเดียว) */
+              variant={(sortDone || (!autoSortPaid && (tokenBalance[PLAYER_ID] ?? 0) < autoSortFee)) ? 'disabled' : 'normal'}
+              disabled={sortDone || phase !== 'arrangement' || (!autoSortPaid && (tokenBalance[PLAYER_ID] ?? 0) < autoSortFee)}
+              costBadge={autoSortPaid ? 'PAID' : String(autoSortFee)}
               onPress={handleAutoSort}
               style={s.actionBtnSize}
             />
@@ -1733,7 +1835,13 @@ const s = StyleSheet.create({
   tbarBg:     { height: 3, backgroundColor: 'rgba(255,255,255,.08)', borderRadius: 2, overflow: 'hidden' },
   tbarFill:   { height: '100%' as any, borderRadius: 2 },
 
-  aiSeat:       { paddingHorizontal: 12, paddingVertical: 4, alignItems: 'center', gap: 4, zIndex: 2 },
+  // จัดบล็อกที่นั่งบนสุดชิดขวา เว้น paddingRight เท่าพื้นที่ที่ Token Flow Panel กินไปพอดี
+  // ผลคือขอบขวาของกรอบไพ่ไปชนขอบซ้ายของ Panel เป๊ะทุกขนาดจอ (ต้นแบบจาก Initiate)
+  aiSeat:       { paddingLeft: 12, paddingRight: PANEL_WIDTH + PANEL_RIGHT, paddingVertical: 4, alignItems: 'flex-end', gap: 4, zIndex: 2 },
+
+  // Token Flow Panel - toast แจ้ง burn ตอนจบเกม (Spec ข้อ 9)
+  burnToast:     { position: 'absolute', top: '42%', alignSelf: 'center', zIndex: 400, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: '#3A5A44', backgroundColor: 'rgba(15,36,24,0.94)' },
+  burnToastText: { fontSize: 11, color: '#FFD76A', fontFamily: 'JetBrainsMono_600SemiBold', letterSpacing: 0.5 },
   aiRow:        { flexDirection: 'row', alignItems: 'center', gap: 6 },
   avatarBubble: { backgroundColor: '#132019', borderWidth: 2, borderColor: '#c9a84c', alignItems: 'center', justifyContent: 'center', shadowColor: '#c9a84c', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6, elevation: 4 },
   aiName:       { fontSize: 9, color: '#ff3333', letterSpacing: 1.5, textTransform: 'uppercase', fontWeight: '800' },

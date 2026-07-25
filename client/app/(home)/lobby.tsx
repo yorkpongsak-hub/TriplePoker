@@ -533,7 +533,7 @@ export default function LobbyScreen() {
           <View style={s.tierRow}>
             <TouchableOpacity style={[s.tierBtn, s.tierBtnFull]} onPress={handleHowToPlay}>
               <View style={[s.badgeDot, { backgroundColor: COLOR.goldPrimary }]} />
-              <Text style={s.tierBtnTxt}>How to Play</Text>
+              <Text style={s.tierBtnTxt}>[D] Demo(How to Play)</Text>
             </TouchableOpacity>
           </View>
         </View>

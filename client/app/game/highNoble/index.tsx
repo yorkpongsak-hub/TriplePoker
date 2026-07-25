@@ -7,7 +7,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Alert, Animated, Image, ImageBackground, PanResponder, Platform, ScrollView, StatusBar, StyleSheet,
+  Alert, Animated, Image, ImageBackground, Platform, ScrollView, StatusBar, StyleSheet,
   Text, TouchableOpacity, View,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -27,9 +27,12 @@ import { ActionButton } from '../../../src/components/ui/ActionButton'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
 import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
 import PlayerHandView from '../../../src/components/game/PlayerHandView'
+import GFHandView from '../../../src/components/game/GFHandView'
 import BossHandRow from '../../../src/components/game/BossHandRow'
 import GameTopBar from '../../../src/components/game/GameTopBar'
 import MatchEndOverlay from '../../../src/components/game/MatchEndOverlay'
+// Gold Radiance: กรอบทองเฉพาะโต๊ะที่มี buy-in (Adept ขึ้นไป) และเฉพาะที่นั่งของผู้เล่นเอง
+import AvatarFrame from '../../../src/components/game/AvatarFrame'
 
 // Feedback C5 — Showdown result ครอบด้วยพื้นหลังชุดเดียวกับ Profile/Lobby (bg free/vip ตาม isVip)
 const SHOWDOWN_BG_FREE = require('../../../assets/backgrounds/bg_main_free.png')
@@ -2574,7 +2577,10 @@ const GameTableLive: React.FC = () => {
           {/* USER AVATAR — มุมล่างซ้าย (ซ่อนตอน Grand Finale เพราะ Overlay มี Avatar P1 แล้ว) — Feedback C2: ใช้ myAvatarEmoji/myDisplayName จริง */}
           {/* P1 HUD ย้ายลงชิดขอบล่าง — pointerEvents none เพื่อไม่บังปุ่ม actionBar */}
           <View style={{ position: 'absolute', bottom: Math.max(insets.bottom, 4), left: 10, zIndex: 3, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 /* Patch 2026-07-19: คงตำแหน่ง P1 HUD เดิมตลอดรวม Grand Finale — ตาม Mastermind */, flexDirection: 'row', alignItems: 'center', gap: 6 }} pointerEvents="none">
-            <AvatarBubble emoji={myAvatarEmoji} image={myAvatarImage} size={40} />
+            {/* Gold Radiance + Active Turn Pulse - reuse gfTurnPlayerId ตัวเดียวกับ SeatHeader ไม่สร้าง state ใหม่ */}
+            <AvatarFrame size={40} active={phase === 'grand_finale' && gfTurnPlayerId === PLAYER_ID}>
+              <AvatarBubble emoji={myAvatarEmoji} image={myAvatarImage} size={40} />
+            </AvatarFrame>
             <View>
               <Text style={s.userNameTag} numberOfLines={1}>{myDisplayName}</Text>
               {/* Patch 2026-07-18: ยอดโทเคนคงเหลือใต้ชื่อ (pattern Initiate) */}
@@ -2643,33 +2649,27 @@ const GameTableLive: React.FC = () => {
                   : null
                 const effectiveSelected = gfSelectedCardKey ?? defaultSelected
 
-                // PanResponder ตรวจ swipe down (จับเฉพาะเมื่อเป็นตา Human)
-                const panResponder = isMyTurn
-                  ? PanResponder.create({
-                      onStartShouldSetPanResponder: () => false,
-                      onMoveShouldSetPanResponder: (_, g) => g.dy > 20 && Math.abs(g.dy) > Math.abs(g.dx),
-                      onPanResponderRelease: (_, g) => {
-                        if (g.dy > 50) {
-                          socketRef.current?.emit('hn_grand_finale_action', { roomId: ROOM_ID, userId: PLAYER_ID, action: 'fold' })
-                        }
-                      },
-                    })
-                  : null
+                // VIP: ไพ่พัดชุดเดียวกับ arrangement -- Free ใช้ path แถวตรงเดิมด้านล่างต่อไป
+                if (isVip) {
+                  return (
+                    <GFHandView
+                      cards={cards}
+                      calledKeys={calledKeys}
+                      selectedKey={effectiveSelected}
+                      isMyTurn={isMyTurn}
+                      onSelect={setGfSelectedCardKey}
+                    />
+                  )
+                }
 
+                // มติลุงเยาะ 2026-07-25: ตัด swipe down = Fold ออก ใช้ปุ่ม FOLD จริงด้านล่างแทน
                 return (
-                  <View style={{ flexDirection: 'row', alignSelf: 'center' }} {...(panResponder?.panHandlers ?? {})}>
+                  <View style={{ flexDirection: 'row', alignSelf: 'center' }}>
                     {cards.map((c, i) => {
                       const isCalled = calledKeys.includes(c.key)
                       const isSelected = isMyTurn && !isCalled && c.key === effectiveSelected
-                      const handlePress = !isMyTurn || isCalled ? undefined : () => {
-                        if (effectiveSelected === c.key) {
-                          socketRef.current?.emit('hn_grand_finale_action', {
-                            roomId: ROOM_ID, userId: PLAYER_ID, action: 'call', revealedCardKey: c.key,
-                          })
-                        } else {
-                          setGfSelectedCardKey(c.key)
-                        }
-                      }
+                      // แตะ = เลือกใบที่จะหงายเท่านั้น ไม่ยิง Call เอง (กันกดพลาดเสียเงิน) ยืนยันที่ปุ่ม CALL
+                      const handlePress = !isMyTurn || isCalled ? undefined : () => setGfSelectedCardKey(c.key)
                       const cardBox = (
                         <View style={{
                           width: CW_USER_OR_AI, height: CH_USER_OR_AI, borderRadius: 4, overflow: 'hidden',
@@ -2800,20 +2800,24 @@ const GameTableLive: React.FC = () => {
                 คลิก = ย้าย ✓ / คลิกซ้ำใบที่มี ✓ = Call / swipe down = Fold / หมดเวลา = Call ใบ default
                 แต่ยังเก็บปุ่มไว้สำหรับ Mastermind/Initiate */}
           {phase === 'grand_finale' && gfTurnPlayerId === PLAYER_ID && (
-            <View style={{ position: 'absolute', bottom: 10, left: 0, right: 0, alignItems: 'center', zIndex: 80, flexDirection: 'row', justifyContent: 'center', gap: 10 }}>
-              <View pointerEvents="none" style={{ backgroundColor: 'rgba(15,36,24,0.85)', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: '#FFD76A' }}>
-                <Text style={{ color: '#FFD76A', fontSize: 11, fontWeight: '700', letterSpacing: 1, textAlign: 'center' }}>
-                  TAP CARD TO MARK ✓ · TAP AGAIN TO CALL (-{gfCallAmount.current})
-                </Text>
-                <Text style={{ color: '#C8C4B0', fontSize: 10, marginTop: 2, textAlign: 'center' }}>
-                  ▼ SWIPE DOWN OR TAP FOLD ▼
-                </Text>
+            <View style={s.gfActionBar}>
+              <Text style={s.gfActionHint}>TAP A CARD TO CHOOSE WHICH TO REVEAL</Text>
+              <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 12 }}>
+                <TouchableOpacity
+                  onPress={() => socketRef.current?.emit('hn_grand_finale_action', {
+                    roomId: ROOM_ID, userId: PLAYER_ID, action: 'call',
+                    // ไม่ได้เลือกใบไหนไว้ -> ไม่ส่ง key ให้ server เลือกใบอ่อนสุดให้เอง (pickRevealCard)
+                    ...(gfSelectedCardKey ? { revealedCardKey: gfSelectedCardKey } : {}),
+                  })}
+                  style={[s.gfActionBtn, { backgroundColor: '#1C4830', borderColor: '#8DFFB5' }]}>
+                  <Text style={[s.gfActionBtnTxt, { color: '#8DFFB5' }]}>CALL -{gfCallAmount.current}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => socketRef.current?.emit('hn_grand_finale_action', { roomId: ROOM_ID, userId: PLAYER_ID, action: 'fold' })}
+                  style={[s.gfActionBtn, { backgroundColor: '#5e1a1a', borderColor: '#f87171' }]}>
+                  <Text style={[s.gfActionBtnTxt, { color: '#fff' }]}>FOLD</Text>
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity
-                onPress={() => socketRef.current?.emit('hn_grand_finale_action', { roomId: ROOM_ID, userId: PLAYER_ID, action: 'fold' })}
-                style={{ backgroundColor: '#5e1a1a', borderWidth: 1.5, borderColor: '#f87171', borderRadius: 10, paddingVertical: 12, paddingHorizontal: 18, justifyContent: 'center' }}>
-                <Text style={{ color: '#fff', fontWeight: '900', fontSize: 13, letterSpacing: 1 }}>FOLD ✗</Text>
-              </TouchableOpacity>
             </View>
           )}
           {phase !== 'dealing' && phase !== 'showdown' && phase !== 'result' && phase !== 'fog_of_war' && phase !== 'grand_finale' && <View style={s.actionBar}>
@@ -2822,7 +2826,11 @@ const GameTableLive: React.FC = () => {
               label={sortDone ? 'Sorted ✓' : 'Auto Sort'}
               variant={sortDone ? 'disabled' : 'normal'}
               disabled={sortDone || (phase !== 'arrangement' && phase !== 'arrangement_2')}
-              costBadge="250"
+              /* 750 = 50% ของ Ante กอง 3 (1,500) ตามสูตรใหม่ 2026-07-25 — เดิมค้างเลขเก่า 250 ไว้
+                 ⚠️ ตัวเลขนี้ยัง "แสดงผลอย่างเดียว" Tier นี้ยังไม่ได้ wire Token Flow จึงยังไม่หักเงินจริง
+                 ตอนทำ Token Flow ของ High Noble ให้เปลี่ยนเป็นรับ autoSortFee จาก payload round_start
+                 เหมือน Adept/Mastermind (แหล่งความจริงคือ getAutoSortFee() ใน server gameConfig.ts) */
+              costBadge="750"
               onPress={handleAutoSort}
               style={s.actionBtnSize}
             />
@@ -2912,6 +2920,12 @@ const s = StyleSheet.create({
   swapHint:     { fontSize: 8, color: 'rgba(201,168,76,.9)', textAlign: 'center', marginBottom: 2 },
   foulText:     { fontSize: 12, color: '#FF6B6B', fontWeight: '800', letterSpacing: 1, textAlign: 'center', marginBottom: 4 },
   actionBar:      { flexDirection: 'row', justifyContent: 'center', gap: 16, paddingHorizontal: 10, paddingTop: 4, paddingBottom: 20, zIndex: 2 },
+
+  // Grand Finale - ปุ่ม CALL / FOLD (มติลุงเยาะ 2026-07-25: เลิกใช้ gesture + คำอธิบายยาว)
+  gfActionBar:    { position: 'absolute', bottom: 10, left: 0, right: 0, alignItems: 'center', zIndex: 80, gap: 6 },
+  gfActionHint:   { color: '#7A7A6A', fontSize: 9, letterSpacing: 0.5, fontWeight: '600' },
+  gfActionBtn:    { borderWidth: 1.5, borderRadius: 10, paddingVertical: 12, paddingHorizontal: 24, justifyContent: 'center', minWidth: 120, alignItems: 'center' },
+  gfActionBtnTxt: { fontWeight: '900', fontSize: 13, letterSpacing: 1 },
   actionBtnSize:  { width: 130 },
 
   // Overlay

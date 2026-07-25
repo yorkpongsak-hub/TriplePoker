@@ -1,5 +1,5 @@
 import { ReactNode } from 'react'
-import { ImageBackground, StyleSheet, Text, View } from 'react-native'
+import { ImageBackground, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { PANEL_IMAGES } from '../../ui/buttonManifest'
 import { UI_THEME } from '../../ui/theme'
 
@@ -10,10 +10,13 @@ interface ResultPanelProps {
   title?: string
   children?: ReactNode
   footer?: ReactNode
+  // compact: บีบช่องว่างหัวกระดานเมื่อเนื้อหายาวผิดปกติ (Mastermind ตอนชนะ Sentinel)
+  // ค่า default = พฤติกรรมเดิมทุกประการ Tier อื่นจึงไม่ขยับ
+  compact?: boolean
 }
 
 // Panel ผลการแข่งขัน — ลอยบน scrim ดำ 60% เต็มจอ, title วางใต้ไพ่ Ace บนภาพพื้นหลัง
-export function ResultPanel({ variant, title, children, footer }: ResultPanelProps) {
+export function ResultPanel({ variant, title, children, footer, compact = false }: ResultPanelProps) {
   const displayTitle = title ?? (variant === 'victory' ? 'VICTORY' : 'DEFEAT')
   const titleColor = variant === 'victory' ? UI_THEME.gold.primary : UI_THEME.red
 
@@ -26,7 +29,11 @@ export function ResultPanel({ variant, title, children, footer }: ResultPanelPro
               <Text style={[styles.title, { color: titleColor }]}>{displayTitle}</Text>
             </View>
           </View>
-          <View style={styles.contentSlot}>{children}</View>
+          <View style={[styles.contentSlot, compact && styles.contentSlotCompact]}>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.contentScroll}>
+              {children}
+            </ScrollView>
+          </View>
           {footer && <View style={styles.footerSlot}>{footer}</View>}
         </ImageBackground>
       </View>
@@ -77,6 +84,11 @@ const styles = StyleSheet.create({
     marginTop: '27%',
     marginHorizontal: '13%',
   },
+  // 27% -> 20% คืนพื้นที่ราว 24px โดย Victory ไม่ขยับ (titleSlot แยกกัน)
+  contentSlotCompact: {
+    marginTop: '20%',
+  },
+  contentScroll: { paddingBottom: 4 },
   footerSlot: {
     marginHorizontal: '13%',
     marginBottom: '11%',

@@ -77,7 +77,7 @@ interface LayoutTarget { cw: number; ch: number; hardMinCw: number; minExposed: 
 
 // VIP pivot-rotation: geometry ของพัด 1 กอง (bounding box + R ที่ใช้จริง) — ใช้ร่วมกันทั้ง PileColumn
 // (ตำแหน่งใบไพ่แต่ละใบ) และ PlayerHandView (คำนวณ overlap ของแถวล่างที่ทับแถวบน 2-row layout)
-function vipFanGeometry(n: number, cw: number, ch: number) {
+export function vipFanGeometry(n: number, cw: number, ch: number) {
   const maxAngle = n >= 5 ? 16 : n >= 4 ? 12 : 8
   const R = VIP_PIVOT_R[n] ?? VIP_PIVOT_R[3]
   const maxAngleRad = (maxAngle * Math.PI) / 180

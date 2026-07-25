@@ -31,24 +31,34 @@ export interface GameTopBarProps {
   children?: React.ReactNode
   // เผื่อของเฉพาะ Tier ในอนาคตที่ audit รอบนี้ยังไม่เจอ
   rightSlot?: React.ReactNode
+  // ของที่ต้องอยู่ "ซ้ายสุด ก่อน Tier badge" - opt-in ล้วน (Tier ที่ไม่ส่งได้ layout เดิมทุกประการ)
+  // Initiate ใช้วาง Timer ไว้ตรงนี้ เพื่อเปิดพื้นที่มุมขวาบนทั้งแถบให้ Token Flow Panel
+  leftSlot?: React.ReactNode
 }
 
 const GameTopBar: React.FC<GameTopBarProps> = ({
   tierName, tierStars, round, totalRounds = 5, isWeb, insetsTop, opacity,
-  stackAmount, stackDelta, children, rightSlot,
+  stackAmount, stackDelta, children, rightSlot, leftSlot,
 }) => {
   const showStack = stackAmount !== undefined
 
   return (
     <View style={[s.topBar, { paddingTop: isWeb ? 22 : insetsTop + 14, opacity }]}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: 50 }}>
-        <View style={{ alignItems: 'center' }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <View style={s.tierBadge}><Text style={s.tierText}>{tierName}</Text></View>
-            <Text style={s.starsText}>{'★'.repeat(tierStars)}</Text>
+      {/* ห่อ leftSlot + Tier badge ไว้เป็นก้อนเดียว ไม่งั้น justifyContent:'space-between'
+          ของ topBar จะดัน Tier badge กระเด็นไปขวาสุดเมื่อมี leftSlot */}
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        {leftSlot}
+        {/* ลำดับ: Round -> Tier badge -> ดาว (มติลุงเยาะ 2026-07-25 ย้าย Rx/5 มาไว้หน้าชื่อ Tier)
+            แก้ที่ไฟล์กลางจุดเดียว ทุก Tier จึงได้ลำดับเดียวกันหมดตามกติกา "Initiate = ต้นแบบทุก Tier" */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: leftSlot ? 8 : 50 }}>
+          <Text style={s.roundText}>R{round}/{totalRounds}</Text>
+          <View style={{ alignItems: 'center' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <View style={s.tierBadge}><Text style={s.tierText}>{tierName}</Text></View>
+              <Text style={s.starsText}>{'★'.repeat(tierStars)}</Text>
+            </View>
           </View>
         </View>
-        <Text style={s.roundText}>R{round}/{totalRounds}</Text>
       </View>
 
       {showStack && (

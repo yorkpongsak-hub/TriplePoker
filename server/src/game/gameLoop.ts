@@ -11,10 +11,16 @@ import { evaluateHand, compareHands, handRankLabel } from './handEvaluator'
 import { checkFoul, PlayerArrangement, CommunityCards } from './foulChecker'
 import { aiDecideArrangement, AI_CONFIGS, AIConfig, AIPersonality, FOUR_GODS, NINE_SENTINELS, greedyArrangement, pickRandomMinions } from './aiEngine'
 import { Card } from './deck'
-import { gameConfig } from '../config/gameConfig'
+import { gameConfig, getAutoSortFee } from '../config/gameConfig'
 import { supabaseAdmin } from '../config/supabase'
 import { recordMatchStats, BestHandCandidate, StatsTier } from './matchStatsService'
 import { checkTierUnlock } from './tierUnlockService'
+// Token Flow Panel (Spec v1.1) — ใช้ใน Initiate / Adept / Mastermind (ดู usesTokenFlow())
+// High Noble / Last Boss ยังใช้ calcDeltas() เดิม
+import {
+  collectAntes, settleRound, checkConservation, chargeAutoSortFee,
+  chargeAuctionBid, chargeGrandFinaleCall, settleMastermindRound,
+} from './tokenFlow'
 
 // ── Types ────────────────────────────────────────────────────
 export interface RoundResult {
@@ -40,6 +46,19 @@ export interface MatchState {
   phase: 'waiting' | 'arrangement' | 'arrangement_2' | 'showdown' | 'fog_of_war' | 'blind_auction' | 'auction_done' | 'discard' | 'discard_done' | 'grand_finale' | 'grand_finale_done' | 'round_end' | 'match_end'
   buyInAmount: number            // Escrow Buy-in Spec §2 — หักจาก DB ครั้งเดียวตอนเข้าโต๊ะ, AI ได้ virtual stack เท่ากัน
   escrowId?: string              // แถวใน match_escrow — ใช้ settle ตอนจบแมตช์/หลุดกลางเกม
+  // ── Token Flow Panel (Spec v1.1) — เฉพาะ Tier ที่ usesTokenFlow() คืน true ──
+  // Tier อื่นไม่แตะฟิลด์ชุดนี้เลย (คงค่า [0,0,0]/0 ไว้เฉยๆ) เพราะยังใช้ calcDeltas() ที่ net ทีเดียวตอน showdown
+  pot: [number, number, number]  // Pot G1/G2/G3 — reset ทุกต้นรอบ
+  feeRake: number                // holding tank สะสมทั้งเกม burn จริงตอนจบแมตช์
+  /**
+   * Mastermind: เงินที่ผู้เล่นจ่ายไป "ระหว่างรอบ" (Blind Auction bid + Grand Finale call)
+   * หักจาก stack และย้ายเข้า Fee & Rake / Pot ไปแล้วตอนเกิดเหตุการณ์ — เก็บยอดไว้เพื่อส่งเป็น
+   * extraPaid ให้ settleMastermindRound() รายงานใน displayDeltas เท่านั้น ห้ามนำไปหักซ้ำ
+   * reset ทุกต้นรอบพร้อม Pot
+   */
+  extraPaid: Record<string, number>
+  /** กด Auto Sort ไปแล้วในรอบนี้หรือยัง (single human ต่อโต๊ะ) — reset ทุกต้นรอบ กันเรียกเก็บซ้ำ */
+  autoSortUsed: boolean
   // Patch Mastermind: เก็บผล Pile1+2 ไว้รอ Auction/Discard/GrandFinale (patch ถัดไป)
   _pendingPile12?: {
     pile1Winner: string
@@ -387,6 +406,7 @@ export async function startMatch(
     results: [],
     phase: 'waiting',
     buyInAmount, escrowId,
+    pot: [0, 0, 0], feeRake: 0, extraPaid: {}, autoSortUsed: false,
   }
   // Patch High Noble: Boss (P3) ต้องเป็นจตุรเทพ 1 ใน 4 เสมอ — ถ้า devBossId ไม่ระบุ (production จริง) สุ่มเอา
   if (tier === 'highNoble') {
@@ -438,6 +458,16 @@ function getEffectiveAIConfig(state: MatchState, ai: AIConfig): AIConfig {
 // ============================================================
 // startRound — เริ่ม Round ใหม่
 // ============================================================
+// ── Token Flow Panel: Tier ที่ย้ายมาใช้ Pot bucket จริงแล้ว ──
+// initiate  : showdown path ปกติ (submitArrangement)
+// mastermind: Fog of War -> Auction -> Discard -> Grand Finale (finalizeGrandFinale)
+// Adept อยู่ใน MultiMatchState คนละ state ไม่เกี่ยวกับ gate ตัวนี้
+// ⚠️ highNoble/lastBoss ยังใช้ calcDeltas() เดิม ห้ามใส่เพิ่มจนกว่าจะย้ายทั้งเส้น
+type TokenFlowTier = 'initiate' | 'mastermind'
+function usesTokenFlow(tier: string): tier is TokenFlowTier {
+  return tier === 'initiate' || tier === 'mastermind'
+}
+
 export async function startRound(io: Server, roomId: string): Promise<void> {
   const state = matchStates.get(roomId)
   if (!state) return
@@ -448,6 +478,21 @@ export async function startRound(io: Server, roomId: string): Promise<void> {
   // สับและแจกไพ่
   const dealt = dealCards()
   const playerIds = [state.humanPlayerId, ...AI_CONFIGS.map(a => a.id)]
+
+  // ── Token Flow Panel (Spec v1.1 §5): Ante ไหลจาก Stack เข้า Pot ทุกต้นรอบ ──
+  // gate เฉพาะ Tier C — Tier อื่นใช้ startRound() ตัวเดียวกันนี้ร่วมกัน ห้ามให้โดนหางเลข
+  // (Adept/Mastermind/HighNoble ยังหัก ante รวมทีเดียวตอน showdown ผ่าน calcDeltas() เหมือนเดิม)
+  if (usesTokenFlow(state.tier)) {
+    const anteResult = collectAntes(state.tokenBalance, playerIds, gameConfig.tokenPot.tiers[state.tier])
+    state.tokenBalance = anteResult.stacks
+    state.pot = anteResult.pot
+    state.extraPaid = {}       // reset พร้อม Pot — Auction/GF call ของรอบก่อนต้องไม่ค้างมารายงานซ้ำ
+    state.autoSortUsed = false // รอบใหม่ซื้อ Auto Sort ได้อีกครั้ง
+    checkConservation(
+      state.tokenBalance, playerIds, state.pot, state.feeRake, state.buyInAmount,
+      `startRound r${state.roundNumber}`,
+    )
+  }
 
   // map ไพ่แต่ละคน
   const cardsMap: Record<string, Card[]> = {}
@@ -503,6 +548,16 @@ export async function startRound(io: Server, roomId: string): Promise<void> {
     tokenBalance: state.tokenBalance,
     timer: (gameConfig.arrangementTimer as Record<string, number>)[state.tier] ?? gameConfig.arrangementTimer.initiate,
     ...(state.roundNumber === 1 ? { buyInAmount: state.buyInAmount } : {}),
+    // Token Flow Panel — เฉพาะ Tier ที่ย้ายมาใช้ bucket แล้ว (Tier อื่นไม่ได้รับฟิลด์ชุดนี้เลย ไม่มีผลกระทบ)
+    // `buyIn` เป็นฟิลด์แยกจาก `buyInAmount` เพราะตัวหลัง trigger popup Lock-up ที่ต้องเด้งรอบเดียว
+    ...(usesTokenFlow(state.tier)
+      ? {
+          pot: state.pot,
+          feeRake: state.feeRake,
+          buyIn: state.buyInAmount,
+          autoSortFee: getAutoSortFee(state.tier),
+        }
+      : {}),
   })
 }
 
@@ -567,6 +622,43 @@ export async function submitArrangement(
   const hand2W = p2Winner ? evaluateHand([...allArrangements[p2Winner].pile2, ...community.row2]) : null
   const hand3W = p3Winner ? evaluateHand([...allArrangements[p3Winner].pile3.slice(0,3), ...community.row3]) : null
 
+  // ── Settle token ก่อน emit ────────────────────────────────
+  // ย้ายขึ้นมาก่อน emit เพราะ Tier C ต้องส่ง pot/feeRake/tokenDeltas ไปกับ showdown_result
+  // Tier C  : tokenFlow engine (Pot bucket จริง — ante ถูกหักไปแล้วตอนต้นรอบ ห้ามหักซ้ำ)
+  // Tier อื่น: calcDeltas() เดิม net ทีเดียว ไม่เปลี่ยนพฤติกรรมใดๆ ทั้งสิ้น
+  let deltas: Record<string, number>
+  let jackpotWinnerId: string | null = null
+  let jackpotBonus = 0
+  let jackpotRake = 0
+
+  if (state.tier === 'initiate') {
+    const settled = settleRound({
+      stacks: state.tokenBalance,
+      pot: state.pot,
+      feeRake: state.feeRake,
+      playerIds,
+      winners: [p1Winner, p2Winner, p3Winner],
+      stakes: gameConfig.tokenPot.tiers.initiate,
+      rake: gameConfig.tokenPot.rake,
+    })
+    state.tokenBalance = settled.stacks
+    state.pot         = settled.pot
+    state.feeRake     = settled.feeRake
+    deltas            = settled.displayDeltas
+    jackpotWinnerId   = settled.jackpotWinner
+    jackpotBonus      = settled.jackpotBonus
+    jackpotRake       = settled.jackpotRake
+    checkConservation(
+      state.tokenBalance, playerIds, state.pot, state.feeRake, state.buyInAmount,
+      `settle r${state.roundNumber}`,
+    )
+  } else {
+    deltas = calcDeltas(p1Winner, p2Winner, p3Winner, playerIds, state.tier)
+    playerIds.forEach(id => {
+      state.tokenBalance[id] = (state.tokenBalance[id] ?? state.buyInAmount) + (deltas[id] ?? 0)
+    })
+  }
+
   // ── emit showdown_result ครั้งเดียว ─────────────────────
   io.to(roomId).emit('showdown_result', {
     roomId,
@@ -576,11 +668,17 @@ export async function submitArrangement(
       { pileNumber: 2, arrangements: revealArrangements(allArrangements, 2), winner: p2Winner, winnerHandRank: hand2W ? handRankLabel(hand2W) : '', fouled },
       { pileNumber: 3, arrangements: revealArrangements(allArrangements, 3), winner: p3Winner, winnerHandRank: hand3W ? handRankLabel(hand3W) : '', fouled },
     ],
-  })
-
-  const deltas = calcDeltas(p1Winner, p2Winner, p3Winner, playerIds, state.tier)
-  playerIds.forEach(id => {
-    state.tokenBalance[id] = (state.tokenBalance[id] ?? state.buyInAmount) + (deltas[id] ?? 0)
+    // Token Flow Panel — เฉพาะ Tier C (Adept ไม่ได้รับฟิลด์ชุดนี้ พฤติกรรมเดิมทุกประการ)
+    ...(state.tier === 'initiate' ? {
+      tokenDeltas:   deltas,
+      tokenBalance:  state.tokenBalance,
+      pot:           state.pot,
+      feeRake:       state.feeRake,
+      buyIn:         state.buyInAmount,
+      jackpotWinner: jackpotWinnerId,
+      jackpotBonus,
+      jackpotRake,
+    } : {}),
   })
 
   // ── Human win streak ────────────────────────────────────
@@ -611,6 +709,9 @@ export async function submitArrangement(
     tokenDeltas: deltas,
     tokenBalance: state.tokenBalance,
     hasFoul: fouled,
+    ...(state.tier === 'initiate'
+      ? { pot: state.pot, feeRake: state.feeRake, buyIn: state.buyInAmount }
+      : {}),
   })
 
       await waitForContinue(roomId)
@@ -638,6 +739,13 @@ export async function submitArrangement(
       bestHandThisMatch: initiateBestHand,
     }])
 
+    // ── Token Flow Panel §5: จบเกม -> Fee & Rake burn จริง (ออกจากระบบ) ──
+    // Tier C เท่านั้น — ไม่มี DB write เพราะเงินก้อนนี้ไม่เคยเข้า users.token_balance ของใคร
+    // (escrow settle ใช้ stack ของ human ซึ่งหัก rake ไปแล้วตั้งแต่ตอน settleRound)
+    if (state.tier === 'initiate') {
+      console.log('[TOKENFLOW]', Date.now(), 'Burn Fee & Rake', state.feeRake, '| room', roomId)
+    }
+
     io.to(roomId).emit('match_end', {
       roomId,
       finalWinner,
@@ -646,6 +754,7 @@ export async function submitArrangement(
       totalRounds: state.totalRounds,
       buyInAmount: state.buyInAmount,
       newTokenBalance,
+      ...(state.tier === 'initiate' ? { feeRakeBurned: state.feeRake } : {}),
     })
   } else {
     state.roundNumber++
@@ -875,9 +984,34 @@ async function resolveBlindAuctionTimeout(io: Server, roomId: string): Promise<v
     }
 
     const amount = bidLevels[maxLevel] ?? 0
-    state.tokenBalance[winnerId] = (state.tokenBalance[winnerId] ?? 0) - amount // Burn 100%
+
+    if (usesTokenFlow(state.tier)) {
+      // Mastermind: เงินประมูลเข้า Fee & Rake รอ burn ตอนจบเกม (มติลุงเยาะ 2026-07-25)
+      // ผลทางเศรษฐศาสตร์เท่ากับ burn 100% ต่างแค่จังหวะออกจากระบบ — ทำให้ Total บน Panel ไม่แกว่งกลางเกม
+      const charged = chargeAuctionBid(state.tokenBalance, state.feeRake, winnerId, amount)
+      if (!charged.ok) {
+        // จ่ายไม่ไหว -> ไพ่ใบนี้ไม่มีใครได้ (ห้ามแจกฟรี และห้ามปล่อยให้ stack ติดลบ)
+        // ฝั่ง client disable ระดับราคาที่จ่ายไม่ไหวไว้แล้ว เคสนี้เหลือแค่ AI ที่ bid เกินตัว
+        console.warn('[AUCTION] insufficient tokens, bid voided |', winnerId, '| amount', amount)
+        results.push({ cardIndex, winnerId: null, level: null, amount: 0, cardKey: cardKey(blindCards[cardIndex]) })
+        continue
+      }
+      state.tokenBalance = charged.stacks
+      state.feeRake      = charged.feeRake
+      state.extraPaid[winnerId] = (state.extraPaid[winnerId] ?? 0) + charged.charged
+    } else {
+      state.tokenBalance[winnerId] = (state.tokenBalance[winnerId] ?? 0) - amount // Burn 100% (พฤติกรรมเดิม)
+    }
+
     auctionWonCards[winnerId] = blindCards[cardIndex]
     results.push({ cardIndex, winnerId, level: maxLevel, amount, cardKey: cardKey(blindCards[cardIndex]) })
+  }
+
+  if (usesTokenFlow(state.tier)) {
+    checkConservation(
+      state.tokenBalance, [state.humanPlayerId, ...AI_CONFIGS.map(a => a.id)],
+      state.pot, state.feeRake, state.buyInAmount, `auction r${state.roundNumber}`,
+    )
   }
 
   ;(state as any)._auctionWonCards = auctionWonCards
@@ -887,6 +1021,8 @@ async function resolveBlindAuctionTimeout(io: Server, roomId: string): Promise<v
     roomId,
     results,
     tokenBalance: state.tokenBalance,
+    // Token Flow Panel: ให้ Panel ขยับทันทีที่เงินประมูลเข้า Fee & Rake
+    ...(usesTokenFlow(state.tier) ? { pot: state.pot, feeRake: state.feeRake } : {}),
   })
 
   // Patch Discard Phase: หน่วง 3 วิ ให้เห็นผล Auction ก่อน ค่อยเริ่ม Discard
@@ -1588,6 +1724,22 @@ function applyGrandFinaleAction(io: Server, roomId: string, playerId: string, ac
 
   if (action === 'fold') {
     gf.foldedPlayers.push(playerId)
+  } else if (usesTokenFlow(state.tier)) {
+    // Mastermind: เงิน Call ไหลเข้า Pot 3 ของ Panel จริง (มติลุงเยาะ 2026-07-25)
+    // gf.pile3Pot ยังอัปเดตตามไปด้วยเพราะ UI เดิม/AI winrate อ่านค่านี้ — แต่ตัวที่จ่ายเงินจริงตอน
+    // settle คือ state.pot[2] เท่านั้น ห้ามใช้ทั้งสองค่าจ่ายซ้ำ
+    const charged = chargeGrandFinaleCall(state.tokenBalance, state.pot, playerId, callAmount)
+    if (charged.ok) {
+      state.tokenBalance = charged.stacks
+      state.pot          = charged.pot
+      state.extraPaid[playerId] = (state.extraPaid[playerId] ?? 0) + charged.charged
+      gf.pile3Pot += callAmount
+    } else {
+      // จ่ายไม่ไหว -> บังคับ Fold (ไม่มี all-in ในเกมนี้ และห้ามให้ stack ติดลบ)
+      console.warn('[GRANDFINALE] insufficient tokens, forced fold |', playerId, '| call', callAmount)
+      gf.foldedPlayers.push(playerId)
+      action = 'fold'
+    }
   } else {
     state.tokenBalance[playerId] = (state.tokenBalance[playerId] ?? 0) - callAmount
     gf.pile3Pot += callAmount
@@ -1624,6 +1776,8 @@ function applyGrandFinaleAction(io: Server, roomId: string, playerId: string, ac
     roundNumber: gf.roundNumber, // เพิ่ม: ให้ frontend รู้ว่าหงายในรอบไหน
     pile3Pot: gf.pile3Pot,
     tokenBalance: state.tokenBalance,
+    // Token Flow Panel: แถว G3 ต้องโตขึ้นให้เห็นทุกครั้งที่มีคน Call
+    ...(usesTokenFlow(state.tier) ? { pot: state.pot, feeRake: state.feeRake } : {}),
   })
 
   gf.currentTurnIdx++
@@ -1689,34 +1843,68 @@ function finalizeGrandFinale(
   // คำนวณจ่าย Token รวม Pile 1+2 (ที่ resolve ไปก่อนหน้านี้ แต่ยังไม่จ่าย)
   const pile1Winner = (state as any)._pendingPile12?.pile1Winner as string | undefined
   const pile2Winner = (state as any)._pendingPile12?.pile2Winner as string | undefined
-  const deltas: Record<string, number> = {}
+  let deltas: Record<string, number> = {}
   allPlayerIds.forEach(id => deltas[id] = 0)
   const rake = gameConfig.tokenPot.rake
 
-  // Pile 1
-  if (pile1Winner) {
-    const pot = stakes.pile1 * allPlayerIds.length
-    const net = Math.floor(pot * (1 - rake))
-    allPlayerIds.forEach(id => deltas[id] += (id === pile1Winner ? net - stakes.pile1 : -stakes.pile1))
-  }
-  // Pile 2
-  if (pile2Winner) {
-    const pot = stakes.pile2 * allPlayerIds.length
-    const net = Math.floor(pot * (1 - rake))
-    allPlayerIds.forEach(id => deltas[id] += (id === pile2Winner ? net - stakes.pile2 : -stakes.pile2))
-  }
-  // Pile 3 — pile3Pot รวมทั้ง ante เดิม + Call ที่จ่ายไปแล้ว (ถูกหักจาก tokenBalance ระหว่างทาง)
-  // แต่ ante stake ของ pile3 ยังไม่ได้หักจาก tokenBalance เลย ต้องหัก -stakes.pile3 ให้ทุกคนตรงนี้
-  allPlayerIds.forEach(id => deltas[id] += -stakes.pile3)
-  if (winnerId && !burned) {
-    const net = Math.floor(pile3Pot * (1 - rake))
-    deltas[winnerId] += net
-  }
+  // ── Jackpot flag ใช้ร่วมกันทั้ง 2 เส้นทาง ──
+  const jackpotWinnerFlag = (pile1Winner && pile1Winner === pile2Winner && pile2Winner === winnerId) ? winnerId : null
+  let jackpotBonus = 0
+  let jackpotRake = 0
 
-  // อัพเดท tokenBalance รวม (Call ที่จ่ายไปก่อนหน้าโดน hak ไปแล้วใน applyGrandFinaleAction)
-  allPlayerIds.forEach(id => {
-    state.tokenBalance[id] = (state.tokenBalance[id] ?? state.buyInAmount) + (deltas[id] ?? 0)
-  })
+  if (usesTokenFlow(state.tier)) {
+    // ── Mastermind: Pot bucket จริง (tokenFlow engine) ──────────────────
+    // Ante ถูกหักเข้า Pot ตั้งแต่ต้นรอบ และ Call ถูกย้ายเข้า pot[2] ไปแล้วตอนกด
+    // ห้ามหักอะไรซ้ำที่นี่ — หน้าที่เดียวคือจ่าย Pot ออกไปหาผู้ชนะ + เก็บ rake
+    const settled = settleMastermindRound({
+      stacks:    state.tokenBalance,
+      pot:       state.pot,
+      feeRake:   state.feeRake,
+      playerIds: allPlayerIds,
+      // burned (ทุกคน fold/foul) = ไม่มีผู้ชนะกอง 3 -> Pot ก้อนนั้นเข้า Fee & Rake เอง
+      winners:   [pile1Winner ?? '', pile2Winner ?? '', (winnerId && !burned) ? winnerId : ''],
+      stakes,
+      rake,
+      extraPaid: state.extraPaid,
+    })
+    state.tokenBalance = settled.stacks
+    state.pot          = settled.pot
+    state.feeRake      = settled.feeRake
+    deltas             = settled.displayDeltas
+    jackpotBonus       = settled.jackpotBonus
+    jackpotRake        = settled.jackpotRake
+
+    checkConservation(
+      state.tokenBalance, allPlayerIds, state.pot, state.feeRake, state.buyInAmount,
+      `finalizeGrandFinale r${state.roundNumber}`,
+    )
+  } else {
+    // ── High Noble / Last Boss: calcDeltas เดิม (net ทีเดียวตอนจบรอบ) ──
+    // Pile 1
+    if (pile1Winner) {
+      const pot = stakes.pile1 * allPlayerIds.length
+      const net = Math.floor(pot * (1 - rake))
+      allPlayerIds.forEach(id => deltas[id] += (id === pile1Winner ? net - stakes.pile1 : -stakes.pile1))
+    }
+    // Pile 2
+    if (pile2Winner) {
+      const pot = stakes.pile2 * allPlayerIds.length
+      const net = Math.floor(pot * (1 - rake))
+      allPlayerIds.forEach(id => deltas[id] += (id === pile2Winner ? net - stakes.pile2 : -stakes.pile2))
+    }
+    // Pile 3 — pile3Pot รวมทั้ง ante เดิม + Call ที่จ่ายไปแล้ว (ถูกหักจาก tokenBalance ระหว่างทาง)
+    // แต่ ante stake ของ pile3 ยังไม่ได้หักจาก tokenBalance เลย ต้องหัก -stakes.pile3 ให้ทุกคนตรงนี้
+    allPlayerIds.forEach(id => deltas[id] += -stakes.pile3)
+    if (winnerId && !burned) {
+      const net = Math.floor(pile3Pot * (1 - rake))
+      deltas[winnerId] += net
+    }
+
+    // อัพเดท tokenBalance รวม (Call ที่จ่ายไปก่อนหน้าโดน hak ไปแล้วใน applyGrandFinaleAction)
+    allPlayerIds.forEach(id => {
+      state.tokenBalance[id] = (state.tokenBalance[id] ?? state.buyInAmount) + (deltas[id] ?? 0)
+    })
+  }
 
   // Patch: คำนวณ Rank ของผู้ชนะ Pile 3 + Jackpot flag (ชนะทั้ง 3 กอง)
   let winnerRank: string | null = null
@@ -1729,8 +1917,8 @@ function finalizeGrandFinale(
       winnerRank = result.rank // e.g. "one_pair", "two_pair", "three_of_a_kind"
     }
   }
-  // Jackpot: ใครก็ตามที่ชนะทั้ง 3 กอง
-  const jackpotWinner = (pile1Winner && pile1Winner === pile2Winner && pile2Winner === winnerId) ? winnerId : null
+  // Jackpot: ใครก็ตามที่ชนะทั้ง 3 กอง (คำนวณไว้ข้างบนแล้ว ใช้ตัวเดียวกันทั้ง 2 เส้นทาง)
+  const jackpotWinner = jackpotWinnerFlag
 
   // End-of-Match Stats: เก็บ hand pile3 ของ human เอง (ถ้ามีไพ่จริง ไม่ fold/foul) + triple sweep flag
   {
@@ -1751,9 +1939,9 @@ function finalizeGrandFinale(
   //          jackpot_total = pot_net (จาก 3 piles หัก rake 5%) + bonus
   //          rake_jackpot = jackpot_total × 5% burn
   //          winner_extra = bonus - rake_jackpot (เพิ่มจาก delta เดิมที่ได้จาก pot ปกติ)
-  let jackpotBonus = 0
-  let jackpotRake = 0
-  if (jackpotWinner) {
+  // Mastermind: settleMastermindRound() คิด jackpot ให้เสร็จแล้วทั้งก้อน (สูตรเดียวกัน — bonus ดูดจาก
+  // stack ผู้แพ้จริง) ข้ามบล็อกนี้ไป ไม่งั้นผู้แพ้จะถูกเก็บ bonus ซ้ำสองเท่า
+  if (jackpotWinner && !usesTokenFlow(state.tier)) {
     jackpotBonus = stakes.pile3 * (allPlayerIds.length - 1) // ผู้แพ้ 3 คน × pile3 ante
     // pot_net รวม 3 piles (ค่าที่ winner ได้จาก pot ปกติแล้ว — ก่อนลบ ante ของตัวเอง)
     const potNet1 = Math.floor(stakes.pile1 * allPlayerIds.length * (1 - rake))
@@ -1785,6 +1973,10 @@ function finalizeGrandFinale(
     jackpotRake,  // Patch: rake 5% ที่ burn (สำหรับแสดง UI)
     tokenDeltas: deltas,
     tokenBalance: state.tokenBalance,
+    // Token Flow Panel: Pot กลับเป็น [0,0,0] และ Fee & Rake โตขึ้นตาม rake ของรอบนี้
+    ...(usesTokenFlow(state.tier)
+      ? { pot: state.pot, feeRake: state.feeRake, buyIn: state.buyInAmount }
+      : {}),
   })
 
   // ── ต่อ Round หรือจบ Match (เหมือน Initiate)
@@ -1864,6 +2056,14 @@ function finalizeGrandFinale(
         }
       }
 
+      // ── Token Flow Panel: จบเกม -> Fee & Rake burn จริง (ออกจากระบบ) ──
+      // Mastermind เท่านั้น — ก้อนนี้รวม rake + Auto Sort fee + เงินประมูล Blind Auction ทั้งเกม
+      // ไม่มี DB write เพราะเงินก้อนนี้ไม่เคยเข้า users.token_balance ของใคร (escrow settle ใช้ stack
+      // ของ human ซึ่งหักทุกอย่างไปแล้วตามทาง)
+      if (usesTokenFlow(state.tier)) {
+        console.log('[TOKENFLOW]', Date.now(), 'Burn Fee & Rake', state.feeRake, '| room', roomId)
+      }
+
       io.to(roomId).emit('match_end', {
         roomId,
         finalWinner,
@@ -1874,6 +2074,7 @@ function finalizeGrandFinale(
         allSentinelsConquered,
         buyInAmount: state.buyInAmount,
         newTokenBalance,
+        ...(usesTokenFlow(state.tier) ? { feeRakeBurned: state.feeRake } : {}),
       })
     } else {
       state.roundNumber++
@@ -1979,6 +2180,11 @@ interface MultiMatchState {
   tokenBalance: Record<string, number>
   buyInAmount: number             // Escrow Buy-in Spec §2 — เท่ากันทุกคนในแมตช์เดียวกัน (tier เดียวกัน)
   escrowIds: Record<string, string>  // เฉพาะ human seat — ใช้ settle ตอนจบแมตช์/หลุดกลางเกม
+  // ── Token Flow Panel (Spec v1.1) ──
+  // engine นี้ใช้เฉพาะ Adept (tier ตายตัว) จึงไม่ต้อง gate เงื่อนไขเหมือนฝั่ง single-player
+  pot: [number, number, number]   // Pot G1/G2/G3 — reset ทุกต้นรอบ
+  feeRake: number                 // holding tank สะสมทั้งเกม (รวม Auto Sort fee) burn ตอนจบ
+  autoSortUsed: Record<string, boolean>  // กันกด Auto Sort ซ้ำในรอบเดียว (เก็บฝั่ง server ไม่เชื่อ client)
   results: RoundResult[]
   phase: 'waiting' | 'arrangement' | 'showdown' | 'match_end'
   submittedArrangements: Record<string, PlayerArrangement>
@@ -2063,6 +2269,7 @@ export async function startMultiplayerMatch(
     submittedArrangements: {},
     seatOrder,
     afkPlayers: {},
+    pot: [0, 0, 0], feeRake: 0, autoSortUsed: {},
   }
   multiMatchStates.set(roomId, state)
 
@@ -2089,6 +2296,17 @@ async function startMultiRound(io: Server, roomId: string): Promise<void> {
   }
   state.community = community
   state.cardsMap = cardsMap
+
+  // ── Token Flow Panel §5: Ante ไหลจาก Stack เข้า Pot ทุกต้นรอบ ──
+  // Pot reset เป็นยอด ante ใหม่ / feeRake สะสมต่อ / autoSortUsed เคลียร์ให้กดได้ใหม่รอบละครั้ง
+  const anteResult = collectAntes(state.tokenBalance, playerIds, gameConfig.tokenPot.tiers.adept)
+  state.tokenBalance = anteResult.stacks
+  state.pot = anteResult.pot
+  state.autoSortUsed = {}
+  checkConservation(
+    state.tokenBalance, playerIds, state.pot, state.feeRake, state.buyInAmount,
+    `startMultiRound r${state.roundNumber}`,
+  )
 
   const aiArrangements: Record<string, PlayerArrangement> = {}
   state.aiPlayerIds.forEach((aiId) => {
@@ -2120,6 +2338,11 @@ async function startMultiRound(io: Server, roomId: string): Promise<void> {
       tokenBalance: state.tokenBalance,
       timer,
       ...(state.roundNumber === 1 ? { buyInAmount: state.buyInAmount } : {}),
+      // Token Flow Panel — `buyIn` แยกจาก `buyInAmount` เพราะตัวหลัง trigger popup Lock-up ที่เด้งรอบเดียว
+      pot: state.pot,
+      feeRake: state.feeRake,
+      buyIn: state.buyInAmount,
+      autoSortFee: getAutoSortFee(state.tier),
     })
   })
 
@@ -2127,6 +2350,90 @@ async function startMultiRound(io: Server, roomId: string): Promise<void> {
   // AI ตอบแทนครบทุกคนไปแล้วข้างบน — ต้อง resolve เองเลย ไม่งั้นไม่มีใครส่ง player_ready_multi มาอีก
   const allAlreadySubmitted = state.humanPlayerIds.every(uid => state.submittedArrangements[uid])
   if (allAlreadySubmitted) await resolveMultiShowdown(io, roomId)
+}
+
+/**
+ * Auto Sort — หัก fee จาก stack ผู้กดเข้า Fee & Rake แล้ว broadcast ให้ทั้งโต๊ะเห็น Panel ขยับ
+ *
+ * Server-authoritative เต็มตัว: client ได้แค่ "ขอ" ส่วนการอนุญาต/หักเงิน/กันกดซ้ำ ตัดสินที่นี่ทั้งหมด
+ * (ห้ามให้ client เป็นคนบอกว่าตัวเองจ่ายแล้วหรือยัง — `autoSortUsed` เก็บใน state ฝั่ง server)
+ *
+ * รองรับทั้ง 2 โครงสร้างโต๊ะ: multiplayer (Adept) และ single-player (Mastermind)
+ * ค่าธรรมเนียมอ่านจาก config ตาม tier จริงเสมอ ห้าม hardcode
+ *
+ * มติลุงเยาะ 2026-07-25: ไม่มี free rounds แล้ว เสีย fee ทุกครั้งที่กด (Adept 30 / Mastermind 190)
+ */
+export function requestAutoSort(
+  io: Server, roomId: string, userId: string,
+): { ok: boolean; reason?: string } {
+  const multi = multiMatchStates.get(roomId)
+  if (multi) {
+    if (multi.phase !== 'arrangement') return { ok: false, reason: 'WRONG_PHASE' }
+    if (!multi.humanPlayerIds.includes(userId)) return { ok: false, reason: 'NOT_IN_MATCH' }
+    if (multi.autoSortUsed[userId]) return { ok: false, reason: 'ALREADY_USED' }
+
+    const fee = getAutoSortFee(multi.tier)
+    const charged = chargeAutoSortFee(multi.tokenBalance, multi.feeRake, userId, fee)
+    if (!charged.ok) return { ok: false, reason: 'INSUFFICIENT_TOKENS' }
+
+    multi.tokenBalance = charged.stacks
+    multi.feeRake = charged.feeRake
+    multi.autoSortUsed[userId] = true
+
+    const playerIds = [...multi.humanPlayerIds, ...multi.aiPlayerIds]
+    checkConservation(
+      multi.tokenBalance, playerIds, multi.pot, multi.feeRake, multi.buyInAmount,
+      `autoSort r${multi.roundNumber}`,
+    )
+
+    io.to(roomId).emit('token_flow_update', {
+      roomId,
+      tokenBalance: multi.tokenBalance,
+      pot: multi.pot,
+      feeRake: multi.feeRake,
+      buyIn: multi.buyInAmount,
+      autoSortBy: userId,
+      charged: charged.charged,
+    })
+    return { ok: true }
+  }
+
+  // ── Single-player (Mastermind) ─────────────────────────────
+  const solo = matchStates.get(roomId)
+  if (!solo) return { ok: false, reason: 'NO_MATCH' }
+
+  const tier = solo.tier
+  if (!usesTokenFlow(tier)) return { ok: false, reason: 'TIER_NOT_SUPPORTED' }
+  // arrangement_2 (จัดไพ่ใหม่หลัง Auction) รับด้วย เผื่อ Tier ที่มี phase นี้ย้ายมาใช้ tokenFlow ทีหลัง
+  // ปัจจุบัน Mastermind ไม่ผ่าน phase นี้ (arrangement_2 เป็นของ High Noble ซึ่ง gate ตัด tier ไปแล้ว)
+  if (solo.phase !== 'arrangement' && solo.phase !== 'arrangement_2') return { ok: false, reason: 'WRONG_PHASE' }
+  if (solo.humanPlayerId !== userId) return { ok: false, reason: 'NOT_IN_MATCH' }
+  if (solo.autoSortUsed) return { ok: false, reason: 'ALREADY_USED' }
+
+  const fee = getAutoSortFee(tier)
+  const charged = chargeAutoSortFee(solo.tokenBalance, solo.feeRake, userId, fee)
+  if (!charged.ok) return { ok: false, reason: 'INSUFFICIENT_TOKENS' }
+
+  solo.tokenBalance = charged.stacks
+  solo.feeRake = charged.feeRake
+  solo.autoSortUsed = true
+
+  const soloPlayerIds = [solo.humanPlayerId, ...AI_CONFIGS.map(a => a.id)]
+  checkConservation(
+    solo.tokenBalance, soloPlayerIds, solo.pot, solo.feeRake, solo.buyInAmount,
+    `autoSort r${solo.roundNumber}`,
+  )
+
+  io.to(roomId).emit('token_flow_update', {
+    roomId,
+    tokenBalance: solo.tokenBalance,
+    pot: solo.pot,
+    feeRake: solo.feeRake,
+    buyIn: solo.buyInAmount,
+    autoSortBy: userId,
+    charged: charged.charged,
+  })
+  return { ok: true }
 }
 
 export async function submitMultiArrangement(
@@ -2175,6 +2482,27 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
   const hand2W = p2Winner ? evaluateHand([...allArrangements[p2Winner].pile2, ...community.row2]) : null
   const hand3W = p3Winner ? evaluateHand([...allArrangements[p3Winner].pile3.slice(0,3), ...community.row3]) : null
 
+  // ── Settle ก่อน emit (ต้องส่ง pot/feeRake/tokenDeltas ไปกับ showdown_result) ──
+  // Adept ย้ายมาใช้ tokenFlow engine เต็มตัวแล้ว (Pot bucket จริง — ante หักตั้งแต่ต้นรอบ ห้ามหักซ้ำ)
+  // calcDeltas() เดิมไม่ถูกเรียกจากสายนี้อีกต่อไป
+  const settled = settleRound({
+    stacks: state.tokenBalance,
+    pot: state.pot,
+    feeRake: state.feeRake,
+    playerIds,
+    winners: [p1Winner, p2Winner, p3Winner],
+    stakes: gameConfig.tokenPot.tiers.adept,
+    rake: gameConfig.tokenPot.rake,
+  })
+  state.tokenBalance = settled.stacks
+  state.pot          = settled.pot
+  state.feeRake      = settled.feeRake
+  const deltas       = settled.displayDeltas
+  checkConservation(
+    state.tokenBalance, playerIds, state.pot, state.feeRake, state.buyInAmount,
+    `settleMulti r${state.roundNumber}`,
+  )
+
   io.to(roomId).emit('showdown_result', {
     roomId,
     foulReasons,
@@ -2183,11 +2511,14 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
       { pileNumber: 2, arrangements: revealArrangements(allArrangements, 2), winner: p2Winner, winnerHandRank: hand2W ? handRankLabel(hand2W) : '', fouled },
       { pileNumber: 3, arrangements: revealArrangements(allArrangements, 3), winner: p3Winner, winnerHandRank: hand3W ? handRankLabel(hand3W) : '', fouled },
     ],
-  })
-
-  const deltas = calcDeltas(p1Winner, p2Winner, p3Winner, playerIds, state.tier)
-  playerIds.forEach(id => {
-    state.tokenBalance[id] = (state.tokenBalance[id] ?? state.buyInAmount) + (deltas[id] ?? 0)
+    tokenDeltas:   deltas,
+    tokenBalance:  state.tokenBalance,
+    pot:           state.pot,
+    feeRake:       state.feeRake,
+    buyIn:         state.buyInAmount,
+    jackpotWinner: settled.jackpotWinner,
+    jackpotBonus:  settled.jackpotBonus,
+    jackpotRake:   settled.jackpotRake,
   })
 
   const result: RoundResult = {
@@ -2201,6 +2532,7 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
     roomId, roundNumber: state.roundNumber,
     pile1Winner: p1Winner, pile2Winner: p2Winner, pile3Winner: p3Winner,
     tokenDeltas: deltas, tokenBalance: state.tokenBalance, hasFoul: fouled,
+    pot: state.pot, feeRake: state.feeRake, buyIn: state.buyInAmount,
   })
 
   await waitForContinue(roomId)
@@ -2227,11 +2559,16 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
       }
     }))
 
+    // Token Flow Panel §5: จบเกม -> Fee & Rake burn จริง (ไม่มี DB write — เงินก้อนนี้ไม่เคยเข้า
+    // token_balance ของใคร เพราะ escrow settle ใช้ stack ที่หัก rake ไปแล้วตั้งแต่ settleRound)
+    console.log('[TOKENFLOW]', Date.now(), 'Burn Fee & Rake', state.feeRake, '| room', roomId)
+
     io.to(roomId).emit('match_end', {
       roomId, finalWinner, tokenBalance: state.tokenBalance,
       results: state.results, totalRounds: state.totalRounds,
       buyInAmount: state.buyInAmount,
       newTokenBalances,
+      feeRakeBurned: state.feeRake,
     })
     // เคลียร์ grace timer ที่อาจค้างอยู่ (คนหลุดรอบสุดท้ายแต่ยังไม่ครบ 60s ตอนแมตช์จบพอดี) กัน
     // finalizeAFKReplacement ยิงซ้ำใส่ state ที่ลบไปแล้ว (แม้จะปลอดภัยอยู่แล้วเพราะเช็ค !state ก็ตาม)

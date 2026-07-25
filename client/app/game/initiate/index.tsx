@@ -31,6 +31,7 @@ import PlayerHandView from '../../../src/components/game/PlayerHandView'
 import BossHandRow from '../../../src/components/game/BossHandRow'
 import GameTopBar from '../../../src/components/game/GameTopBar'
 import MatchEndOverlay from '../../../src/components/game/MatchEndOverlay'
+import TokenFlowPanel, { PANEL_WIDTH, PANEL_RIGHT } from '../../../src/components/game/TokenFlowPanel'
 
 // Feedback C5 — Showdown result ครอบด้วยพื้นหลังชุดเดียวกับ Profile/Lobby (bg free/vip ตาม isVip)
 const SHOWDOWN_BG_FREE = require('../../../assets/backgrounds/bg_main_free.png')
@@ -316,6 +317,14 @@ const GameTableLive: React.FC = () => {
   const [tokenDeltas, setTokenDeltas]   = useState<Record<string, number>>({})
   const [matchResult, setMatchResult]   = useState<any>(null)
 
+  // Token Flow Panel (Spec v1.1) - ค่าทั้งหมดมาจาก server ล้วน client ไม่คำนวณเอง
+  // แยก flowBuyIn ออกจาก buyInAmount เพราะตัวหลัง set เฉพาะรอบ 1 (คู่กับ popup Lock-up)
+  // ส่วนตัวนี้ server ส่งมาทุกรอบ ทำให้แถว Total ไม่พังถ้าพลาด round_start รอบแรก
+  const [flowPot, setFlowPot]         = useState<[number, number, number]>([0, 0, 0])
+  const [flowFeeRake, setFlowFeeRake] = useState(0)
+  const [flowBuyIn, setFlowBuyIn]     = useState(0)
+  const [burnToast, setBurnToast]     = useState<string | null>(null)
+
   // ── Discard
   const [showDiscard, setShowDiscard]         = useState(false)
   const [buyInAmount, setBuyInAmount]       = useState(0)
@@ -472,6 +481,10 @@ const GameTableLive: React.FC = () => {
       fadeCards.stopAnimation(() => { fadeCards.setValue(0) })
       setBlind([]); setDealCount(0)
       setTokenBalance(data.tokenBalance ?? {})
+      // Token Flow: ต้นรอบ server หัก Ante เข้า Pot มาให้แล้ว (tokenBalance ข้างบนคือยอดหลังหัก)
+      setFlowPot(data.pot ?? [0, 0, 0])
+      setFlowFeeRake(data.feeRake ?? 0)
+      if (typeof data.buyIn === 'number') setFlowBuyIn(data.buyIn)
       const aiNames = data.aiNames ?? []
       setAiList(aiNames)
       aiListRef.current = aiNames
@@ -571,6 +584,12 @@ const GameTableLive: React.FC = () => {
       setHasFoul(newFouled)
       setFoulReasons(data.foulReasons ?? {})
       setTokenDeltas(data.tokenDeltas ?? {})
+      // Token Flow: Pot ไหลออกไปหาผู้ชนะ/Fee & Rake แล้ว - stack ทุกที่นั่งเปลี่ยนตรงนี้
+      // (เดิม client รอถึง round_result กว่าจะอัปเดตยอด ทำให้ Panel กับยอดใต้ชื่อไม่ตรงกันชั่วขณะ)
+      if (data.tokenBalance) setTokenBalance(data.tokenBalance)
+      if (data.pot) setFlowPot(data.pot)
+      if (typeof data.feeRake === 'number') setFlowFeeRake(data.feeRake)
+      if (typeof data.buyIn === 'number') setFlowBuyIn(data.buyIn)
       setPhase('showdown')
 
       // Triple Sweep Jackpot — คนเดียวกันชนะครบทั้ง 3 กอง
@@ -602,12 +621,22 @@ const GameTableLive: React.FC = () => {
       setPhase('result')
       setTokenBalance(data.tokenBalance ?? {})
       setTokenDeltas(data.tokenDeltas ?? {})
+      if (data.pot) setFlowPot(data.pot)
+      if (typeof data.feeRake === 'number') setFlowFeeRake(data.feeRake)
+      if (typeof data.buyIn === 'number') setFlowBuyIn(data.buyIn)
     })
 
     socket.on('match_end', (data: any) => {
       setPhase('end')
       setMatchResult(data)
       setTokenBalance(data.tokenBalance ?? {})
+      // Token Flow Spec ข้อ 5: จบเกม -> Fee & Rake burn จริง (ออกจากจอ)
+      if (typeof data.feeRakeBurned === 'number') {
+        setFlowFeeRake(0)
+        setFlowPot([0, 0, 0])
+        setBurnToast(`House collected: ${data.feeRakeBurned.toLocaleString('en-US')} tokens`)
+        setTimeout(() => setBurnToast(null), 4000)
+      }
       // Server ส่งยอด token_balance จริงหลัง settle มาด้วย — ห้ามคำนวณเองจาก buyin/stack (bug: Profile ค้างยอดเก่า)
       if (typeof data.newTokenBalance === 'number') {
         useUserStore.getState().updateTokenBalance(data.newTokenBalance)
@@ -802,11 +831,10 @@ const GameTableLive: React.FC = () => {
     confettiCompositesRef.current = []
   }
 
-  const handleRematch = () => {
-    stopMatchEndAnimations()
-    setMatchResult(null); setPhase('arrangement')
-    socketRef.current?.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'initiate' })
-  }
+  // handleRematch ถูกลบตาม TokenFlowPanel_Spec_v1_1 ข้อ 5.1 (No Rematch)
+  // เหตุผล: Token Flow ตั้งอยู่บนสมมติฐานว่า Buy-in ล็อคค่าตั้งแต่ต้นเกม (Total = 4 x Buy-in คงที่)
+  // ถ้ารีแมตช์ในโต๊ะเดิม stack แต่ละคนตอนจบไม่เท่ากัน -> "4 x Buy-in" ของเกมถัดไปนิยามไม่ได้ กฎเหล็กพัง
+  // บังคับออกโต๊ะแล้ว buy-in ใหม่ ทำให้ทุกเกมเป็น single-game session ที่ conservation reset สะอาดทุกครั้ง
 
   // ── Sub-components
   const CardBack: React.FC<{ w: number; h: number; ml?: number }> = ({ w, h, ml = 0 }) => (
@@ -1288,7 +1316,6 @@ const GameTableLive: React.FC = () => {
                       isSelf: pid === PLAYER_ID,
                     }
                   })}
-                onRematch={handleRematch}
                 onBackToLobby={() => router.replace('/(home)/lobby')}
                 insetsBottom={insets.bottom}
               />
@@ -1331,12 +1358,6 @@ const GameTableLive: React.FC = () => {
           {/* LOGOS — position absolute */}
           <View style={{ position: 'absolute', top: 8, left: 10, zIndex: 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }} pointerEvents="none">
             <Image source={studioLogo} style={{ width: 28, height: 28, opacity: 0.9 }} resizeMode="contain" />
-          </View>
-          <View style={{ position: 'absolute', top: 70, left: 0, zIndex: (phase === 'showdown' || phase === 'result') ? 0 : 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }}>
-            <TouchableOpacity onPress={() => { setShowTierInfo(true); setActiveTierTab('INITIATE') }}
-              style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(180,0,0,0.3)', borderWidth: 1.5, borderColor: '#ff3333', alignItems: 'center', justifyContent: 'center' }}>
-              <Text style={{ fontSize: 11, color: '#ff3333', fontWeight: '900' }}>i</Text>
-            </TouchableOpacity>
           </View>
           <View style={{ position: 'absolute', top: 8, left: 0, right: 0, alignItems: 'center', zIndex: 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }} pointerEvents="box-none">
             <TouchableOpacity onPress={() => setShowRankTable(true)}
@@ -1519,9 +1540,42 @@ const GameTableLive: React.FC = () => {
             isWeb={isWeb}
             insetsTop={insets.top}
             opacity={(phase === 'showdown' || phase === 'result') ? 0 : 1}
-          >
-            <TimerDisplay valRef={timerValRef} />
-          </GameTopBar>
+            /* Timer ย้ายจาก children (ขวาสุด) มาเป็น leftSlot (ซ้ายสุด) เพื่อเปิดพื้นที่มุมขวาบน
+               ทั้งแถบให้ Token Flow Panel  ไม่ต้องเว้นระยะหลบโลโก้ studio เพราะโลโก้อยู่ที่
+               top 8 ซึ่งเป็นคนละแถวกับ TopBar (top = insets.top + 14) ไม่เคยชนกันจริง */
+            leftSlot={
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                {/* ปุ่ม i (Tier Info) ย้ายมาจาก absolute top:70 left:0 ที่เดิมลอยเดี่ยวข้าง avatar Boss
+                    มาต่อแถวเดียวกับ Timer + Tier badge  ยังกดได้ปกติเพราะ TopBar ไม่ได้ตั้ง pointerEvents */}
+                <TouchableOpacity
+                  onPress={() => { setShowTierInfo(true); setActiveTierTab('INITIATE') }}
+                  style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(180,0,0,0.3)', borderWidth: 1.5, borderColor: '#ff3333', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Text style={{ fontSize: 11, color: '#ff3333', fontWeight: '900' }}>i</Text>
+                </TouchableOpacity>
+                <TimerDisplay valRef={timerValRef} />
+              </View>
+            }
+          />
+
+          {/* TOKEN FLOW PANEL - ค้างตลอดเกม (Spec ข้อ 2) ซ่อนเฉพาะตอนจบเกมที่มีจอสรุปทับ
+              ชิดขอบบนสุด (แถบขวาว่างแล้วหลังย้าย Timer ไปซ้าย) กันไม่ให้ห้อยลงมาบังไพ่กองกลาง/ชื่อ P4 */}
+          {phase !== 'end' && flowBuyIn > 0 && (
+            <TokenFlowPanel
+              pot={flowPot}
+              feeRake={flowFeeRake}
+              stacks={tokenBalance}
+              seatIds={[PLAYER_ID, ...aiList.map(a => a.id)]}
+              buyIn={flowBuyIn}
+              topOffset={isWeb ? 6 : insets.top + 2}
+            />
+          )}
+
+          {burnToast && (
+            <View style={s.burnToast} pointerEvents="none">
+              <Text style={s.burnToastText}>{burnToast}</Text>
+            </View>
+          )}
 
           {/* AI SEAT + MAIN + USER — fade เมื่อ continue, ซ่อนระหว่าง dealing
               ห้ามสลับ opacity ระหว่าง literal 0 กับ fadeCards node ตรงนี้ (native driver
@@ -1530,8 +1584,10 @@ const GameTableLive: React.FC = () => {
           <Animated.View style={{ flex: 1, opacity: fadeCards }}>
           <View style={[s.aiSeat, { opacity: (phase === 'countdown' || phase === 'showdown' || phase === 'result') ? 0 : 1 }]}>
             <View style={s.aiRow}>
-              <View style={{ transform: [{ translateX: -50 }] /* Patch 2026-07-18: ขยับ avatar บอสไปซ้าย 50px */ }}><AvatarBubble emoji={bossAI?.emoji ?? '🤖'} size={36} /></View>
-              <View style={{ transform: [{ translateX: -50 }] /* Patch 2026-07-18: ชื่อ+ยอดโทเคนบอสตาม avatar ไปซ้าย 50px */ }}>
+              {/* translateX -50 เดิม (Patch 2026-07-18) ถูกลบแล้ว - ตอนนี้ aiSeat เป็น flex-start
+                  ทั้งบล็อกชิดซ้ายพร้อมกันอยู่แล้ว ไม่ต้องเลื่อนเฉพาะ avatar ให้เยื้องจากกรอบไพ่อีก */}
+              <View><AvatarBubble emoji={bossAI?.emoji ?? '🤖'} size={36} /></View>
+              <View>
                 <Text style={s.aiName}>{bossAI?.name ?? 'BOSS AI'}</Text>
                 <Text style={s.seatToken}>🪙 {fmtToken(tokenBalance[bossAI?.id ?? ''])}</Text>
               </View>
@@ -1672,12 +1728,18 @@ const s = StyleSheet.create({
   logoWatermark: { alignItems: 'center', justifyContent: 'center' },
 
   studioLogo: { width: 28, height: 28, opacity: 0.9 },
-  timerText:  { fontSize: 20, fontWeight: '700', minWidth: 48, textAlign: 'right' },
+  // minWidth ลด 48 -> 34 (พอดี 3 หลักที่ fontSize 20) คง textAlign right ไว้ให้เลขอยู่นิ่งตอนนับถอยหลัง
+  // ของเดิม 48 ทำให้เลข 2 หลักลอยห่างขอบซ้ายราว 20px ดันแถบ Tier ไปชน Token Flow Panel
+  timerText:  { fontSize: 20, fontWeight: '700', minWidth: 34, textAlign: 'right' },
   tbarWrap:   { paddingHorizontal: 12, paddingBottom: 2, zIndex: 2 },
   tbarBg:     { height: 3, backgroundColor: 'rgba(255,255,255,.08)', borderRadius: 2, overflow: 'hidden' },
   tbarFill:   { height: '100%' as any, borderRadius: 2 },
 
-  aiSeat:       { paddingHorizontal: 12, paddingVertical: 4, alignItems: 'center', gap: 4, zIndex: 2 },
+  // จัดบล็อก Boss ชิดขวาแล้วเว้น paddingRight เท่ากับพื้นที่ที่ Token Flow Panel กินไปพอดี
+  // ผลคือขอบขวาของกรอบไพ่สีทองไปชนขอบซ้ายของ Panel เป๊ะ (มติลุงเยาะ 2026-07-25)
+  // ผูกค่ากับ PANEL_WIDTH/PANEL_RIGHT ที่ export มาจาก TokenFlowPanel ไม่ใช้เลขตายตัว
+  // เพราะทั้งคู่อ้างอิงขอบขวาของจอเหมือนกัน จอขนาดไหนก็ชนพอดีเสมอ (เลขตายตัวจะเพี้ยนทันทีที่จอกว้างไม่เท่านี้)
+  aiSeat:       { paddingLeft: 12, paddingRight: PANEL_WIDTH + PANEL_RIGHT, paddingVertical: 4, alignItems: 'flex-end', gap: 4, zIndex: 2 },
   aiRow:        { flexDirection: 'row', alignItems: 'center', gap: 6 },
   avatarBubble: { backgroundColor: '#132019', borderWidth: 2, borderColor: '#c9a84c', alignItems: 'center', justifyContent: 'center', shadowColor: '#c9a84c', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6, elevation: 4 },
   aiName:       { fontSize: 9, color: '#ff3333', letterSpacing: 1.5, textTransform: 'uppercase', fontWeight: '800' },
@@ -1739,6 +1801,10 @@ const s = StyleSheet.create({
   countdownLabel: { fontSize: 13, color: '#c9a84c', letterSpacing: 4, fontWeight: '800', marginBottom: 10 },
   countdownNum:   { fontSize: 88, color: '#fff', fontWeight: '900' },
   countdownSub:   { fontSize: 11, color: 'rgba(201,168,76,0.6)', letterSpacing: 2, marginTop: 10 },
+
+  // Token Flow Panel - toast แจ้ง burn ตอนจบเกม (Spec ข้อ 9)
+  burnToast:     { position: 'absolute', top: '42%', alignSelf: 'center', zIndex: 400, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: '#3A5A44', backgroundColor: 'rgba(15,36,24,0.94)' },
+  burnToastText: { fontSize: 11, color: '#FFD76A', fontFamily: 'JetBrainsMono_600SemiBold', letterSpacing: 0.5 },
 
   // Server log
   logZone:   { flex: 10, backgroundColor: '#080808', borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,.12)' },

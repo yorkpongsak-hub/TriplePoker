@@ -54,7 +54,7 @@ const MatchEndOverlay: React.FC<MatchEndOverlayProps> = ({
 
   return (
     <>
-      <ResultPanel variant={variant}>
+      <ResultPanel variant={variant} compact={!!extraContent}>
         {tierBadge && (
           <View style={[s.tierBadge, { alignSelf: 'center', marginBottom: 6 }]}>
             <Text style={s.tierText}>{tierBadge}</Text>

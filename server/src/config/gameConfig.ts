@@ -81,7 +81,11 @@ export const gameConfig = {
   buyIn: {
     initiate:   500,
     adept:      2_000,  // Buy-in Spec v1.1 — แก้บั๊ก game balance: worst case จริง 1,500 > buy-in เดิม 1,000
-    mastermind: 9_000,
+    // มติลุงเยาะ 2026-07-25: ขึ้นจาก 9,000 -> 15,000 เพราะ worst case จริงของ Tier นี้ (ante 1,000 +
+    // Auto Sort 165 + Auction 150 + Grand Finale Call 600 x 2 = 2,515/รอบ x 5 รอบ = 12,575) ทะลุ
+    // buy-in เดิม ผู้เล่นที่ Call ทุกครั้งจะหมด stack ก่อนจบแมตช์ (เคสเดียวกับที่ Adept แก้ไปแล้วใน
+    // Buy-in Spec v1.1) — 15,000 ครอบคลุม worst case + เหลือ headroom เผื่อ Triple Sweep ซ้อน
+    mastermind: 15_000,
     highNoble:  30_000,
     lastBoss:   60_000,  // reserve — Arena Phase 3
   },
@@ -159,16 +163,25 @@ export const gameConfig = {
   },
 
   // ─── Auto-Sort Fee ───────────────────────────────────────────
-  // *** ADDED v1.1 — ค่าธรรมเนียม Auto-sort ต่อ Tier ***
-  // Beginner ได้ Auto-sort ฟรี 10 Round แรก (นับรวมทุกเกม)
+  // มติลุงเยาะ 2026-07-25 (เขียนทับ design เดิม "ฟรี 10 Round แรก" ทั้งหมด):
+  //   - ยกเลิกระบบ free rounds ถาวร — `freeRoundsForNewUser` ถูกลบทิ้งแล้ว ไม่มีการนับรอบฟรีอีก
+  //   - ฟรีเฉพาะ Tier C (initiate = 0) เท่านั้น  Tier อื่นคิดเงิน "ทุกครั้งที่กด" และแพงขึ้นตาม Tier
+  //   - เหตุผล: กันผู้เล่นติดนิสัยพึ่ง Auto Sort ก่อนขึ้น The Arena ซึ่งห้ามใช้เด็ดขาด (Hardcore Rule)
+  // ค่าที่หักไหลเข้า Fee & Rake ของ Token Flow Panel แล้ว burn ตอนจบเกม
+  // มติลุงเยาะ 2026-07-25 (ชุดที่ 2 — เขียนทับเลขตายตัวทุกตัวที่เคยขัดกัน 3 แหล่ง):
+  //   ค่าธรรมเนียม = % ของ **Ante กอง 3** (กองใหญ่สุดของ Tier นั้น) ไม่ใช่เลขตายตัวอีกต่อไป
+  //     C = Free | B = 25% | A = 33% | A+ = 50%
+  //   เจตนา: ยิ่ง Tier สูงยิ่งแพง เพื่อกึ่งบังคับให้ผู้เล่นฝึกจัดไพ่เองให้เป็นก่อนขึ้น The Arena
+  //   ซึ่งห้ามใช้ Auto Sort เด็ดขาด (Hardcore Rule)
+  // ⚠️ ห้ามกลับไป hardcode ตัวเลขอีก — ให้อ่านผ่าน getAutoSortFee() ท้ายไฟล์เสมอ
+  //    เพื่อให้ปรับ ante ของ Tier ไหนแล้ว fee ขยับตามเองจุดเดียว
   autoSort: {
-    freeRoundsForNewUser: 10,
-    feeAfterFreeRounds: {
-      initiate:   15,
-      adept:      30,
-      mastermind: 60,
-      highNoble:  100,
-      lastBoss:   100,
+    feeRateOfPile3Ante: {
+      initiate:   0,      // Free ตลอด (Tier เรียนรู้เกม)
+      adept:      0.25,   // 25% x 140  = 35
+      mastermind: 0.33,   // 33% x 500  = 165
+      highNoble:  0.50,   // 50% x 1500 = 750
+      lastBoss:   0.50,   // 50% x 3000 = 1500 — Arena ห้าม Auto Sort อยู่แล้ว ค่านี้ไม่ควรถูกใช้จริง
     },
   },
 
@@ -428,6 +441,23 @@ export type ProgressiveMechanics = typeof gameConfig.progressiveMechanics[Tier];
 // ดึง Progressive Mechanics ของ Tier ที่กำหนด — ใช้ในทุก module
 export function getMechanics(tier: Tier): ProgressiveMechanics {
   return gameConfig.progressiveMechanics[tier];
+}
+
+/**
+ * ค่าธรรมเนียม Auto Sort ของ Tier — คิดสดจาก config ทุกครั้ง (มติลุงเยาะ 2026-07-25)
+ *
+ * สูตร: อัตราของ Tier x Ante กอง 3 ของ Tier นั้น
+ *   initiate 0 (Free) | adept 35 | mastermind 165 | highNoble 750 | lastBoss 1,500
+ *
+ * ที่ต้องเป็นฟังก์ชันไม่ใช่ตัวเลขในตาราง เพราะของเดิมเคยมีเลขตายตัวขัดกันเอง 3 แหล่ง
+ * (gameConfig / CLAUDE.md / TokenFlowPanel Spec) จนไม่มีใครรู้ว่าอันไหนจริง — แบบนี้เหลือแหล่งเดียว
+ * และปรับ ante ของ Tier ไหน fee ก็ขยับตามเองทันที
+ */
+export function getAutoSortFee(tier: string): number {
+  const rate = (gameConfig.autoSort.feeRateOfPile3Ante as Record<string, number>)[tier] ?? 0;
+  const stakes = (gameConfig.tokenPot.tiers as Record<string, { pile3: number }>)[tier];
+  if (!rate || !stakes) return 0;
+  return Math.round(stakes.pile3 * rate);
 }
 
 // ดึง Tier จาก Token balance ของผู้เล่น

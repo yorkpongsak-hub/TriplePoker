@@ -10,7 +10,7 @@
 import { Server, Socket } from "socket.io";
 import { dealCards, validateDeal } from "../game/cardEngine";
 import { startMatch, submitArrangement, submitArrangementRound2, resolveContinue, submitAuctionBid, submitDiscard, submitGrandFinaleAction, settleAndEndSoloMatch } from "../game/gameLoop";
-import { startMultiplayerMatch, submitMultiArrangement, markPlayerAFK, resendRoundStartToPlayer, settleAndEndMultiMatch } from "../game/gameLoop";
+import { startMultiplayerMatch, submitMultiArrangement, markPlayerAFK, resendRoundStartToPlayer, settleAndEndMultiMatch, requestAutoSort } from "../game/gameLoop";
 import { getMatchState, getMultiMatchState, settleEscrow } from "../game/gameLoop";
 import {
   startHighNobleMultiMatch, submitHNArrangement, submitHNAuctionBid, submitHNArrangementRound2,
@@ -709,6 +709,16 @@ export function registerGameSocket(io: Server): void {
       const { roomId, userId, action, revealedCardKey } = data;
       const result = submitHNGrandFinaleAction(io, roomId, userId, action, revealedCardKey);
       socket.emit("hn_grand_finale_action_ack", result);
+    });
+
+    // Auto Sort (Adept multiplayer + Mastermind single-player) — client ขอจัดไพ่อัตโนมัติ,
+    // server หัก fee ตาม tier เข้า Fee & Rake แล้ว broadcast ให้ทั้งโต๊ะเห็น Panel ขยับ
+    // ตอบ ack กลับให้ผู้กดเท่านั้น (ok=false -> client ไม่จัดไพ่ให้ + โชว์เหตุผล)
+    // requestAutoSort หา state ให้เองทั้ง 2 โครงสร้าง (multiMatchStates ก่อน แล้ว matchStates)
+    socket.on("auto_sort_request", (data: { roomId: string; userId: string }) => {
+      const { roomId, userId } = data;
+      const result = requestAutoSort(io, roomId, userId);
+      socket.emit("auto_sort_ack", result);
     });
 
     socket.on("player_ready_multi", async (data: {

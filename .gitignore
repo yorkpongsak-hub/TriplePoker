@@ -37,3 +37,7 @@ Thumbs.db
 *_Url_and_*.txt
 *.bak_*
 expo-log.txt
+*.bak
+# สำเนา .env ที่เซฟเป็น .txt (เช่น client/env.txt.Thesimply.txt) — กฎ .env/.env.* ด้านบนไม่ครอบถึง
+env.txt*
+*env.txt*

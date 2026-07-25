@@ -9,6 +9,7 @@ import { router } from 'expo-router'
 import { ThemedBackground } from '../../src/components/ui/ThemedBackground'
 import { glassPanel, glassPanelDense, textOnGlass } from '../../src/ui/glassStyles'
 import { useAuthStore } from '../../src/store/authStore'
+import { AvatarDisplay, PRESET_AVATARS, AvatarConfig } from '../../src/components/profile/AvatarPicker'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
@@ -76,6 +77,26 @@ function RankBadge({ rank }: { rank: number }) {
   )
 }
 
+// avatar_url มีได้ 3 แบบ ต้องแยก render ไม่งั้นพัง (bug เดิมของหน้านี้: render preset key เป็นข้อความ)
+//   1. preset key ใหม่ ('wolf', 'avatar_vip_01') -> AvatarDisplay
+//   2. emoji ดิบของเก่า (ก่อนมีระบบ preset)      -> Text ตรงๆ
+//   3. ค่าที่ไม่รู้จัก / preset ที่ถูกลบ / path   -> fallback มังกร (กันข้อความยาวดันคอลัมน์พัง)
+// หมายเหตุ: VIP profile image จริง (profile_image_url) ไม่ได้แสดงที่นี่ ต้องใช้ signed URL จาก server
+function RowAvatar({ avatarUrl }: { avatarUrl: string | null }) {
+  const isKnownPreset = !!avatarUrl && PRESET_AVATARS.some(p => p.key === avatarUrl)
+  if (isKnownPreset) {
+    const config: AvatarConfig = { type: 'preset', presetKey: avatarUrl as string, frameKey: 'default' }
+    return (
+      <View style={s.rowAvatarWrap}>
+        <AvatarDisplay config={config} size={26} showFrame={false} />
+      </View>
+    )
+  }
+  // นับ code point ไม่ใช่ .length เพราะ emoji 1 ตัวกิน 2 UTF-16 units (บางตัวมี ZWJ ยาวกว่านั้น)
+  const isEmojiLike = !!avatarUrl && [...avatarUrl].length <= 3
+  return <Text style={s.rowAvatarEmoji}>{isEmojiLike ? avatarUrl : '🐉'}</Text>
+}
+
 function Row({ entry, type }: { entry: LeaderboardEntry; type: LeaderboardType }) {
   const handlePress = () => {
     // TODO: ยังไม่มีหน้า public profile viewer — เปิดใช้เมื่อสร้างเสร็จ (router.push(`/(home)/player/${entry.user_id}`))
@@ -84,7 +105,7 @@ function Row({ entry, type }: { entry: LeaderboardEntry; type: LeaderboardType }
   return (
     <TouchableOpacity onPress={handlePress} activeOpacity={0.75} style={s.row}>
       <RankBadge rank={entry.rank} />
-      <Text style={s.rowAvatar}>{entry.avatar_url || '🐉'}</Text>
+      <RowAvatar avatarUrl={entry.avatar_url} />
       <Text style={s.rowName} numberOfLines={1}>{entry.display_name}</Text>
       <Text style={[s.rowValue, { color: valueColor(type) }]} numberOfLines={1}>
         {formatValue(type, entry.value)}
@@ -295,7 +316,8 @@ const s = StyleSheet.create({
   rankShieldTxt: { fontSize: 13 },
   rankShieldNum: { fontSize: 10, fontWeight: '900', marginLeft: -2 },
 
-  rowAvatar: { fontSize: 20, width: 26, textAlign: 'center' },
+  rowAvatarWrap: { width: 26, height: 26, alignItems: 'center', justifyContent: 'center' },
+  rowAvatarEmoji: { fontSize: 20, width: 26, textAlign: 'center' },
   rowName: { flex: 1, color: C.textPrimary, fontSize: 13, fontWeight: '700' },
   rowValue: {
     width: 80,

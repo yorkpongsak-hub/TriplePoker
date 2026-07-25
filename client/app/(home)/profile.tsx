@@ -251,8 +251,8 @@ export default function ProfileScreen() {
   }
 
   const handleTableOfLegends = () => {
-    // TODO: ยังไม่มีหน้า Table of The Legends — เปิดใช้เมื่อสร้างเสร็จ
-    console.log('Table of The Legends — coming soon')
+    // Graveyard of the Legends — สุสาน AI Boss ของ The Arena (teaser, ยังไม่มีข้อมูลจริงจนกว่า Arena เปิด)
+    router.push('/(home)/legends')
   }
 
   return (
@@ -347,9 +347,7 @@ export default function ProfileScreen() {
         <GoldCard style={s.resourceCard}>
           <ResourceBox icon="🪙" label="TOKEN" value={fmt(token)} valueColor={C.gold} />
           <View style={s.vLine} />
-          <ResourceBox icon="👑" label="CROWN" value={`${crown}`} valueColor={C.goldDark} />
-          <View style={s.vLine} />
-          <ResourceBox icon="💎" label="VIP STATUS" value={vipInfo?.label ?? 'FREE'} valueColor={vipInfo?.color ?? C.textPrimary} />
+          <ResourceBox icon="👑" label="CROWN" value={fmt(crown)} valueColor={C.goldDark} />
         </GoldCard>
 
         {/* ═══════════════ PERFORMANCE SCORE — Dual-Track (Tier A+ ขึ้นไปเท่านั้น — Monarch_Spec_v1_3 §4) ═══════════════ */}
@@ -415,9 +413,17 @@ function ResourceBox({ icon, label, value, valueColor }: { icon: string; label: 
   return (
     <View style={s.resourceBox}>
       <Text style={s.resourceIcon}>{icon}</Text>
-      <View>
-        <Text style={s.resourceLabel}>{label}</Text>
-        <Text style={[s.resourceValue, valueColor ? { color: valueColor } : null]}>{value}</Text>
+      {/* resourceTextWrap: ต้องมี flexShrink+minWidth:0 ไม่งั้นตัวเลขยาวจะดันตัวเองล้นไปทับ box ข้างๆ แทนที่จะหด */}
+      <View style={s.resourceTextWrap}>
+        <Text style={s.resourceLabel} numberOfLines={1}>{label}</Text>
+        <Text
+          style={[s.resourceValue, valueColor ? { color: valueColor } : null]}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.6}
+        >
+          {value}
+        </Text>
       </View>
     </View>
   )
@@ -576,8 +582,9 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  resourceBox: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  resourceIcon: { fontSize: 24 },
+  resourceBox: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  resourceTextWrap: { flexShrink: 1, minWidth: 0 },
+  resourceIcon: { fontSize: 24, flexShrink: 0 },
   resourceLabel: { color: C.textSec, fontSize: 9, fontWeight: '800', letterSpacing: 1 },
   resourceValue: { color: C.textPrimary, fontSize: 15, fontWeight: '900', marginTop: 2 },
   vLine: { width: 1, minHeight: 36, backgroundColor: C.border },
