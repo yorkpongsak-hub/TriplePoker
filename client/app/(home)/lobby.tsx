@@ -427,7 +427,7 @@ export default function LobbyScreen() {
 
           {selected === 'mastermind' && (
             <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('mastermind', handleEnterMastermind)}>
-              <Text style={s.enterBtnTxt}>▶ Play (1 Human + AI)</Text>
+              <Text style={s.enterBtnTxt}>▶ Play (Conquest Mode: 9 Sentinels)</Text>
             </TouchableOpacity>
           )}
 
