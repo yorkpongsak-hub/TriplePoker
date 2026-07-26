@@ -21,6 +21,7 @@ import {
   collectAntes, settleRound, checkConservation, chargeAutoSortFee,
   chargeAuctionBid, chargeGrandFinaleCall, settleMastermindRound,
 } from './tokenFlow'
+import { getRoom } from './roomRegistry'
 
 // ── Types ────────────────────────────────────────────────────
 export interface RoundResult {
@@ -38,6 +39,9 @@ export interface MatchState {
   roomId: string
   tier: string
   humanPlayerId: string
+  // Server Activity feed (มติลุงเยาะ 2026-07-26): ชื่อ Human จริง อ่านจาก room.seats ตอน startMatch()
+  // (ก่อนหน้านี้ MatchState ไม่เก็บชื่อเลย มีแค่ userId) ใช้ตอน broadcast "win" event เท่านั้น
+  humanName: string
   roundNumber: number       // 1-3
   totalRounds: number       // 3
   humanWinStreak: number
@@ -77,6 +81,16 @@ export interface MatchState {
 
 // เก็บ MatchState ใน memory (production ใช้ Redis)
 const matchStates = new Map<string, MatchState>()
+
+// Server Activity feed (มติลุงเยาะ 2026-07-26): แปลง winner id → ชื่อที่โชว์ในหน้า Server Activity ได้
+// Human ใช้ state.humanName (อ่านจาก room.seats ตอน startMatch) ส่วน AI/Boss หาใน config lists ที่มีอยู่แล้ว
+function resolveWinnerName(state: MatchState, winnerId: string): string {
+  if (winnerId === state.humanPlayerId) return state.humanName
+  return AI_CONFIGS.find(a => a.id === winnerId)?.name
+    ?? NINE_SENTINELS.find(s => s.id === winnerId)?.name
+    ?? FOUR_GODS.find(g => g.id === winnerId)?.name
+    ?? winnerId
+}
 
 // ── Helper: แปลง Card[] เป็น key string ──────────────────────
 function cardKey(c: Card): string {
@@ -398,8 +412,13 @@ export async function startMatch(
   const initBalance: Record<string, number> = { [humanPlayerId]: buyInAmount }
   AI_CONFIGS.forEach(ai => initBalance[ai.id] = buyInAmount)
 
+  // ชื่อจริงถูกเก็บไว้ใน room.seats ตั้งแต่ตอน join ห้อง (roomRegistry.joinRoom) — อ่านมาเก็บไว้ใน
+  // state ตรงนี้ทีเดียว กันต้อง query ซ้ำตอน broadcast win event ตอนจบแมตช์
+  const room = await getRoom(roomId)
+  const humanName = room?.seats.find(s => s.type === 'human' && s.userId === humanPlayerId)?.name ?? humanPlayerId
+
   const state: MatchState = {
-    roomId, tier, humanPlayerId,
+    roomId, tier, humanPlayerId, humanName,
     roundNumber: 1, totalRounds,
     humanWinStreak: 0,
     tokenBalance: initBalance,
@@ -755,6 +774,11 @@ export async function submitArrangement(
       buyInAmount: state.buyInAmount,
       newTokenBalance,
       ...(state.tier === 'initiate' ? { feeRakeBurned: state.feeRake } : {}),
+    })
+    // Server Activity feed: broadcast ให้ทุก client เห็น ไม่ใช่แค่คนในห้องนี้
+    io.emit('server_activity', {
+      kind: 'win', tier: state.tier, winnerName: resolveWinnerName(state, finalWinner),
+      isHuman: finalWinner === state.humanPlayerId, timestamp: Date.now(),
     })
   } else {
     state.roundNumber++
@@ -2076,6 +2100,13 @@ function finalizeGrandFinale(
         newTokenBalance,
         ...(usesTokenFlow(state.tier) ? { feeRakeBurned: state.feeRake } : {}),
       })
+      // Server Activity feed: เฉพาะ Mastermind (ห้ามปนกับ lastBoss — Last Boss อยู่แอปแยก The Arena)
+      if (state.tier === 'mastermind') {
+        io.emit('server_activity', {
+          kind: 'win', tier: 'mastermind', winnerName: resolveWinnerName(state, finalWinner),
+          isHuman: finalWinner === state.humanPlayerId, timestamp: Date.now(),
+        })
+      }
     } else {
       state.roundNumber++
       state.phase = 'arrangement'
@@ -2569,6 +2600,13 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
       buyInAmount: state.buyInAmount,
       newTokenBalances,
       feeRakeBurned: state.feeRake,
+    })
+    // Server Activity feed: seatOrder เก็บ displayName ของทุกที่นั่งไว้อยู่แล้ว (snapshot ตอนเริ่มแมตช์)
+    io.emit('server_activity', {
+      kind: 'win', tier: 'adept',
+      winnerName: state.seatOrder.find(s => s.userId === finalWinner)?.displayName ?? finalWinner,
+      isHuman: state.seatOrder.find(s => s.userId === finalWinner)?.isHuman ?? false,
+      timestamp: Date.now(),
     })
     // เคลียร์ grace timer ที่อาจค้างอยู่ (คนหลุดรอบสุดท้ายแต่ยังไม่ครบ 60s ตอนแมตช์จบพอดี) กัน
     // finalizeAFKReplacement ยิงซ้ำใส่ state ที่ลบไปแล้ว (แม้จะปลอดภัยอยู่แล้วเพราะเช็ค !state ก็ตาม)

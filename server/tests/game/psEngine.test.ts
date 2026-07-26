@@ -8,13 +8,24 @@ function makeQueryBuilder(): any {
   const builder: any = {}
   const chain = () => builder
   builder.select = jest.fn(chain)
-  builder.upsert = jest.fn(chain)
   builder.in = jest.fn(chain)
+  // psEngine.ts เขียนผลทีละคนผ่าน .update(fields).eq('user_id', userId) (ไม่ใช่ .upsert(rows) ก้อนเดียว
+  // แบบเก่า) — update()/eq() ต้อง chain ต่อกันได้แล้ว resolve { error: null } เหมือน read query เดิม
+  builder.update = jest.fn(chain)
+  builder.eq = jest.fn(chain)
   builder.then = (resolve: any, reject?: any) => Promise.resolve(mockResolvedValue).then(resolve, reject)
   return builder
 }
 let currentBuilder = makeQueryBuilder()
 const mockFrom = jest.fn(() => currentBuilder)
+
+// หา payload ของ .update(fields) ที่ตามด้วย .eq('user_id', userId) ตรงกับ userId ที่ต้องการ —
+// update.mock.calls[i] กับ eq.mock.calls[i] เรียงคู่กันเสมอ เพราะ psEngine.ts เขียนทีละแถวเรียงตามลำดับ
+// (ไม่มี .eq() อื่นเรียกใน write loop นี้เลย มีแค่ 'user_id' ตัวเดียว)
+function updatedFieldsFor(builder: any, userId: string): { performance_score: number; ps_season: number } | undefined {
+  const idx = builder.eq.mock.calls.findIndex(([col, val]: [string, any]) => col === 'user_id' && val === userId)
+  return idx === -1 ? undefined : builder.update.mock.calls[idx][0]
+}
 
 jest.mock('../../src/config/supabase', () => ({
   supabase: { from: mockFrom },
@@ -59,8 +70,7 @@ describe('psEngine.awardPerformanceScore — Dual-Track (Career + Season)', () =
       isMonarchMatch: false,
       humanNetDeltas: { winner: 500, 'loser-positive': 0, 'loser-negative': -100 },
     })
-    const rows = currentBuilder.upsert.mock.calls[0][0]
-    expect(rows).toEqual(expect.arrayContaining([{ user_id: 'winner', performance_score: 15, ps_season: 9 }]))
+    expect(updatedFieldsFor(currentBuilder, 'winner')).toEqual({ performance_score: 15, ps_season: 9 })
   })
 
   test('ผู้ชนะ Monarch ได้ x2 (+10 แทน +5) ทั้งสอง track — ตาม monarchMultiplier เสมอ', async () => {
@@ -70,20 +80,19 @@ describe('psEngine.awardPerformanceScore — Dual-Track (Career + Season)', () =
       isMonarchMatch: true,
       humanNetDeltas: { winner: 500 },
     })
-    const rows = currentBuilder.upsert.mock.calls[0][0]
-    expect(rows).toEqual(expect.arrayContaining([{ user_id: 'winner', performance_score: 20, ps_season: 14 }]))
+    expect(updatedFieldsFor(currentBuilder, 'winner')).toEqual({ performance_score: 20, ps_season: 14 })
   })
 
   test('Ascendant tier ปกติ +7 / Monarch +14 — เท่ากันทั้ง Career และ Season', async () => {
     mockResolvedValue = { data: [{ user_id: 'winner', performance_score: 0, ps_season: 0 }], error: null }
     await awardPerformanceScore({ tier: 'ascendant', finalWinnerId: 'winner', isMonarchMatch: false, humanNetDeltas: { winner: 1 } })
-    expect(currentBuilder.upsert.mock.calls[0][0]).toEqual(expect.arrayContaining([{ user_id: 'winner', performance_score: 7, ps_season: 7 }]))
+    expect(updatedFieldsFor(currentBuilder, 'winner')).toEqual({ performance_score: 7, ps_season: 7 })
 
     currentBuilder = makeQueryBuilder()
     mockFrom.mockImplementation(() => currentBuilder)
     mockResolvedValue = { data: [{ user_id: 'winner', performance_score: 0, ps_season: 0 }], error: null }
     await awardPerformanceScore({ tier: 'ascendant', finalWinnerId: 'winner', isMonarchMatch: true, humanNetDeltas: { winner: 1 } })
-    expect(currentBuilder.upsert.mock.calls[0][0]).toEqual(expect.arrayContaining([{ user_id: 'winner', performance_score: 14, ps_season: 14 }]))
+    expect(updatedFieldsFor(currentBuilder, 'winner')).toEqual({ performance_score: 14, ps_season: 14 })
   })
 
   test('ไม่ชนะแต่ token สุทธิไม่ติดลบ ได้ +2 ทั้งสอง track', async () => {
@@ -93,8 +102,7 @@ describe('psEngine.awardPerformanceScore — Dual-Track (Career + Season)', () =
       isMonarchMatch: false,
       humanNetDeltas: { winner: 500, 'loser-positive': 0 },
     })
-    const rows = currentBuilder.upsert.mock.calls[0][0]
-    expect(rows).toEqual(expect.arrayContaining([{ user_id: 'loser-positive', performance_score: 5, ps_season: 3 }]))
+    expect(updatedFieldsFor(currentBuilder, 'loser-positive')).toEqual({ performance_score: 5, ps_season: 3 })
   })
 
   test('token สุทธิติดลบ ได้ +0 (ไม่มี PS ติดลบ) — ทั้งสอง track คงค่าเดิม', async () => {
@@ -104,8 +112,7 @@ describe('psEngine.awardPerformanceScore — Dual-Track (Career + Season)', () =
       isMonarchMatch: false,
       humanNetDeltas: { winner: 500, 'loser-negative': -100 },
     })
-    const rows = currentBuilder.upsert.mock.calls[0][0]
-    expect(rows).toEqual(expect.arrayContaining([{ user_id: 'loser-negative', performance_score: 1, ps_season: 0 }]))
+    expect(updatedFieldsFor(currentBuilder, 'loser-negative')).toEqual({ performance_score: 1, ps_season: 0 })
   })
 
   test('finalWinnerId เป็น null (Boss ชนะ ไม่มี human อันดับ 1) — ไม่มีใครได้แต้ม win-tier', async () => {
@@ -115,11 +122,8 @@ describe('psEngine.awardPerformanceScore — Dual-Track (Career + Season)', () =
       isMonarchMatch: false,
       humanNetDeltas: { 'loser-positive': 0, 'loser-negative': -50 },
     })
-    const rows = currentBuilder.upsert.mock.calls[0][0]
-    expect(rows).toEqual(expect.arrayContaining([
-      { user_id: 'loser-positive', performance_score: 5, ps_season: 3 },
-      { user_id: 'loser-negative', performance_score: 1, ps_season: 0 },
-    ]))
+    expect(updatedFieldsFor(currentBuilder, 'loser-positive')).toEqual({ performance_score: 5, ps_season: 3 })
+    expect(updatedFieldsFor(currentBuilder, 'loser-negative')).toEqual({ performance_score: 1, ps_season: 0 })
   })
 
   test('humanNetDeltas ว่าง — ไม่เรียก supabase เลย', async () => {

@@ -29,6 +29,7 @@ import { useFocusEffect } from 'expo-router'
 import { useAuthStore } from '../../store/authStore'
 import { ThemedBackground } from '../ui/ThemedBackground'
 import { glassPanel, glassPanelDense, textOnGlass } from '../../ui/glassStyles'
+import { TIER_CONFIG } from '../../config/tierConfig'
 
 // ─── ธีมสีหลัก (Website Theme Spec v1.0 — เหมือน profile.tsx เป๊ะ) ─────────
 const C = {
@@ -55,6 +56,17 @@ const fmt = (n: number) => n.toLocaleString('en-US')
 
 type TabKey = 'items' | 'fun' | 'vip' | 'packs' | 'cosmetics'
 
+// Tier progression lock — Competitive Items ปลดล็อคทีละ Tier (มติลุงเยาะ 2026-07-26)
+// ceiling model เดียวกับ profile.tsx (TIER_ORDER local const): 'D' = ยังไม่เคยปลด Tier ไหนเลย
+type TierKeyLocal = 'initiate' | 'adept' | 'mastermind' | 'highNoble'
+const CEILING_ORDER = ['D', 'initiate', 'adept', 'mastermind', 'highNoble'] as const
+const TIER_LETTER: Record<TierKeyLocal, string> = {
+  initiate:   TIER_CONFIG.initiate.letter,
+  adept:      TIER_CONFIG.adept.letter,
+  mastermind: TIER_CONFIG.mastermind.letter,
+  highNoble:  TIER_CONFIG.high_noble.letter,
+}
+
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'items',      label: 'ITEMS' },
   { key: 'fun',        label: 'FUN' },
@@ -72,19 +84,22 @@ interface CatalogItem {
   icon: string
   price: number
   desc: string
+  unlockTier?: TierKeyLocal
 }
 
+// unlockTier: Tier ที่ต้องปลดถึงก่อนถึงจะซื้อได้ (ซ้อนกับ VIP PRO gate เดิม ไม่แทนที่)
+// มติลุงเยาะ 2026-07-26: 2 ตัวแรกปลดที่ C, อีก 3 ตัวปลดที่ B (รวม 5), อีก 5 ตัวปลดที่ A (รวม 10)
 const COMPETITIVE_ITEMS: CatalogItem[] = [
-  { key: 'vision',           name: "Oracle's Vision",      icon: '👁️', price: 300,  desc: 'Peek at a hidden community card before it reveals.' },
-  { key: 'auction_veil',     name: 'Shadow Bid',           icon: '🌑', price: 200,  desc: 'Hide your Blind Auction bid from other players.' },
-  { key: 'chrono_shard',     name: 'Chrono Shard',         icon: '⏳', price: 250,  desc: 'Extend your arrangement timer for one round.' },
-  { key: 'free_sort',        name: 'Free Sort',            icon: '🃏', price: 0,    desc: 'Waive the Auto Sort fee for one round.', tiered: [15, 40, 80] },
-  { key: 'alliance_of_fate', name: 'Alliance of Fate',     icon: '🤝', price: 400,  desc: 'Temporarily team up with another player for one pile.' },
-  { key: 'streak_shield',    name: 'Eternal Streak',       icon: '🔥', price: 350,  desc: 'Protect your win streak from breaking on one loss.' },
-  { key: 'swap',             name: "The Alchemist's Swap", icon: '⚗️', price: 600,  desc: 'Swap one card in your hand for a random new one.' },
-  { key: 'auction_peek',     name: "Thief's Glance",       icon: '🔍', price: 700,  desc: 'See one auction card before bidding opens.' },
-  { key: 'recall',           name: 'Memory Sigil',         icon: '🔮', price: 800,  desc: 'Recall a previously discarded card back into play.' },
-  { key: 'super_vision',     name: 'Eye of the Demon',     icon: '👹', price: 2000, desc: 'Reveal an opponent\'s full hand for one round.' },
+  { key: 'vision',           name: "Oracle's Vision",      icon: '👁️', price: 300,  desc: 'Peek at a hidden community card before it reveals.', unlockTier: 'initiate' },
+  { key: 'auction_veil',     name: 'Shadow Bid',           icon: '🌑', price: 200,  desc: 'Hide your Blind Auction bid from other players.', unlockTier: 'initiate' },
+  { key: 'chrono_shard',     name: 'Chrono Shard',         icon: '⏳', price: 250,  desc: 'Extend your arrangement timer for one round.', unlockTier: 'adept' },
+  { key: 'free_sort',        name: 'Free Sort',            icon: '🃏', price: 0,    desc: 'Waive the Auto Sort fee for one round.', tiered: [15, 40, 80], unlockTier: 'adept' },
+  { key: 'alliance_of_fate', name: 'Alliance of Fate',     icon: '🤝', price: 400,  desc: 'Temporarily team up with another player for one pile.', unlockTier: 'adept' },
+  { key: 'streak_shield',    name: 'Eternal Streak',       icon: '🔥', price: 350,  desc: 'Protect your win streak from breaking on one loss.', unlockTier: 'mastermind' },
+  { key: 'swap',             name: "The Alchemist's Swap", icon: '⚗️', price: 600,  desc: 'Swap one card in your hand for a random new one.', unlockTier: 'mastermind' },
+  { key: 'auction_peek',     name: "Thief's Glance",       icon: '🔍', price: 700,  desc: 'See one auction card before bidding opens.', unlockTier: 'mastermind' },
+  { key: 'recall',           name: 'Memory Sigil',         icon: '🔮', price: 800,  desc: 'Recall a previously discarded card back into play.', unlockTier: 'mastermind' },
+  { key: 'super_vision',     name: 'Eye of the Demon',     icon: '👹', price: 2000, desc: 'Reveal an opponent\'s full hand for one round.', unlockTier: 'mastermind' },
 ] as (CatalogItem & { tiered?: number[] })[]
 
 const FUN_ITEMS: CatalogItem[] = [
@@ -393,12 +408,21 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
   const isVipPro   = vipStatus === 'vip_pro'
   const tokenBalance = profile?.token_balance ?? 0
 
+  // Tier progression lock — ceiling model จาก tier_unlocked_max (ไม่ลดกลับแม้ token จะลดลงทีหลัง)
+  const unlockedIdx = CEILING_ORDER.indexOf((profile?.tier_unlocked_max as any) ?? 'D')
+  const tierMet = (required?: TierKeyLocal) =>
+    !required || CEILING_ORDER.indexOf(required) <= (unlockedIdx === -1 ? 0 : unlockedIdx)
+
   // ยังไม่มี backend ที่ใช้งานได้จริง (shopRoutes ไม่ได้ register ใน index.ts — ดู comment บนไฟล์) —
   // ทุกปุ่มซื้อตอนนี้โชว์ toast แทนการยิง API เพื่อไม่ให้ผู้เล่นเข้าใจผิดว่าโดนหักเงินจริง
   const handleComingSoon = (label: string) => setToastMsg(`${label} — Coming Soon`)
 
   const handleBuyCompetitive = (item: CatalogItem) => {
     if (!isVipPro) { setUpgradeSheetVisible(true); return }
+    if (!tierMet(item.unlockTier)) {
+      setToastMsg(`Reach Tier ${TIER_LETTER[item.unlockTier!]} to unlock ${item.name}`)
+      return
+    }
     handleComingSoon(item.name)
   }
 
@@ -478,15 +502,19 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
           {activeTab === 'items' && (
             <>
               <SectionTitle title="Competitive Items" />
-              <SectionNote text="Competitive Items are exclusive to VIP PRO members. Free & VIP players can still see everything here." />
+              <SectionNote text="Competitive Items are exclusive to VIP PRO members and unlock progressively as you reach higher Tiers." />
               <View style={s.grid}>
                 {COMPETITIVE_ITEMS.map(item => {
                   const tiered = (item as any).tiered as number[] | undefined
+                  const tierLocked = !tierMet(item.unlockTier)
+                  const locked = !isVipPro || tierLocked
+                  const lockLabel = !isVipPro ? 'VIP PRO ONLY' : `TIER ${TIER_LETTER[item.unlockTier!]} REQUIRED`
                   return (
                     <ShopItemCard
                       key={item.key}
                       item={item}
-                      locked={!isVipPro}
+                      locked={locked}
+                      lockLabel={lockLabel}
                       priceLabel={tiered ? `${tiered.join(' / ')} 🪙` : undefined}
                       onBuy={() => handleBuyCompetitive(item)}
                     />

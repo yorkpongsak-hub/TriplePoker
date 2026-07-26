@@ -234,9 +234,12 @@ export async function createRoom(tier: Tier, isPrivate = false): Promise<GameRoo
   return room
 }
 
-export async function findOrCreateRoom(tier: Tier): Promise<GameRoom> {
+// isNew: บอก caller ว่าห้องที่ได้เป็นห้องใหม่ (ไม่มีคนรอ) หรือห้องเดิมที่มีคนอยู่แล้ว —
+// ใช้ตัดสินใจ broadcast "server_activity" (table_open) เฉพาะห้องที่เพิ่งเกิดขึ้นจริง
+export async function findOrCreateRoom(tier: Tier): Promise<{ room: GameRoom; isNew: boolean }> {
   const open = await findOpenRoom(tier)
-  return open ?? (await createRoom(tier))
+  if (open) return { room: open, isNew: false }
+  return { room: await createRoom(tier), isNew: true }
 }
 
 // ─── Distributed lock (Redis SET NX EX) ─────────────────────────
@@ -276,8 +279,9 @@ export async function findOrCreateRoomAndJoin(
   tier: Tier, userId: string, userName: string, avatarUrl?: string,
 ): Promise<JoinResult> {
   return withLock(`matchmaking:${tier}`, async () => {
-    const room = await findOrCreateRoom(tier)
-    return joinRoom(room.roomId, userId, userName, undefined, avatarUrl)
+    const { room, isNew } = await findOrCreateRoom(tier)
+    const result = await joinRoom(room.roomId, userId, userName, undefined, avatarUrl)
+    return { ...result, isNew }
   })
 }
 
@@ -322,6 +326,7 @@ export interface JoinResult {
   seatIndex?: number
   room?: GameRoom
   reason?: 'not_found' | 'full' | 'wrong_pin' | 'closed'
+  isNew?: boolean // true = ห้องนี้เพิ่งถูกสร้างจาก findOrCreateRoomAndJoin() (ดู findOrCreateRoom)
 }
 
 export async function joinRoom(

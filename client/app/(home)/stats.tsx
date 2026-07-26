@@ -99,8 +99,7 @@ function RowAvatar({ avatarUrl }: { avatarUrl: string | null }) {
 
 function Row({ entry, type }: { entry: LeaderboardEntry; type: LeaderboardType }) {
   const handlePress = () => {
-    // TODO: ยังไม่มีหน้า public profile viewer — เปิดใช้เมื่อสร้างเสร็จ (router.push(`/(home)/player/${entry.user_id}`))
-    console.log('View profile — coming soon:', entry.user_id)
+    router.push(`/(home)/player/${entry.user_id}`)
   }
   return (
     <TouchableOpacity onPress={handlePress} activeOpacity={0.75} style={s.row}>

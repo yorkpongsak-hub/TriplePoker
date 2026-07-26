@@ -1132,6 +1132,13 @@ function finalizeHNGrandFinale(
       })
 
       io.to(roomId).emit('match_end', { roomId, finalWinner, tokenBalance: state.tokenBalance, results: state.results, totalRounds: state.totalRounds, buyInAmount: state.buyInAmount, finalStackByHuman, newTokenBalances })
+      // Server Activity feed: winnerSeat.name ครอบคลุมทั้ง Human/AI/Monarch อยู่แล้ว (HNSeat.name)
+      io.emit('server_activity', {
+        kind: 'win', tier: 'highNoble',
+        winnerName: winnerSeat?.name ?? finalWinner,
+        isHuman: isHumanWinner,
+        timestamp: Date.now(),
+      })
       hnMatchStates.delete(roomId)
     } else {
       state.roundNumber++

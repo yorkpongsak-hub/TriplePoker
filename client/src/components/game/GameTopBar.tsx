@@ -48,16 +48,15 @@ const GameTopBar: React.FC<GameTopBarProps> = ({
           ของ topBar จะดัน Tier badge กระเด็นไปขวาสุดเมื่อมี leftSlot */}
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
         {leftSlot}
-        {/* ลำดับ: Round -> Tier badge -> ดาว (มติลุงเยาะ 2026-07-25 ย้าย Rx/5 มาไว้หน้าชื่อ Tier)
+        {/* ลำดับ: Tier badge (ติด Timer ใน leftSlot ทันที) -> ดาว (ใต้ชื่อ Tier) -> Round
+            มติลุงเยาะ 2026-07-26: ย้าย Tier badge มาติด Timer + ย้ายดาวจากข้างชื่อ Tier ไปอยู่ใต้ชื่อ Tier
             แก้ที่ไฟล์กลางจุดเดียว ทุก Tier จึงได้ลำดับเดียวกันหมดตามกติกา "Initiate = ต้นแบบทุก Tier" */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: leftSlot ? 8 : 50 }}>
-          <Text style={s.roundText}>R{round}/{totalRounds}</Text>
-          <View style={{ alignItems: 'center' }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <View style={s.tierBadge}><Text style={s.tierText}>{tierName}</Text></View>
-              <Text style={s.starsText}>{'★'.repeat(tierStars)}</Text>
-            </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: leftSlot ? 6 : 50 }}>
+          <View style={{ alignItems: 'center', gap: 2 }}>
+            <View style={s.tierBadge}><Text style={s.tierText}>{tierName}</Text></View>
+            <Text style={s.starsText}>{'★'.repeat(tierStars)}</Text>
           </View>
+          <Text style={s.roundText}>R{round}/{totalRounds}</Text>
         </View>
       </View>
 

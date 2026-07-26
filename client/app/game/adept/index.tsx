@@ -134,12 +134,21 @@ const AiStatusDots = React.memo(({ label }: { label: string }) => {
   return <Text style={s.statusText}>{label}{'.'.repeat(dots)}</Text>
 })
 
-const ServerLog = React.memo(() => {
+const ServerLog = React.memo(({ socket }: { socket: Socket | null }) => {
   interface LogEntry { id: number; icon: string; text: string; time: string }
   const [logs, setLogs]     = useState<LogEntry[]>([])
   const [online, setOnline] = useState(247)
   const idRef   = useRef(0)
   const dotAnim = useRef(new Animated.Value(1)).current
+
+  const pushLog = useCallback((icon: string, text: string) => {
+    const now = new Date()
+    const time = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`
+    setLogs(prev => {
+      const next = [...prev, { id: ++idRef.current, icon, text, time }]
+      return next.length > 8 ? next.slice(-8) : next
+    })
+  }, [])
 
   const addLog = useCallback(() => {
     const n = rnd(NAMES), t = rnd(TABLES)
@@ -151,27 +160,38 @@ const ServerLog = React.memo(() => {
       { icon: '🔮', text: `${n} won a Blind Auction!` },
       { icon: '💎', text: `${n} upgraded to VIP` },
     ]
-    const ev  = rnd(evts)
-    const now = new Date()
-    const time = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`
-    setLogs(prev => {
-      const next = [...prev, { id: ++idRef.current, ...ev, time }]
-      return next.length > 8 ? next.slice(-8) : next
-    })
-  }, [])
+    const ev = rnd(evts)
+    pushLog(ev.icon, ev.text)
+  }, [pushLog])
+
+  // Server Activity จริง (มติลุงเยาะ 2026-07-26): online count + table_open/win มาจาก
+  // io.emit('server_activity', ...) จริงฝั่ง server ผสมกับ mock event ด้านบน (join/entered/lost/auction/vip)
+  useEffect(() => {
+    if (!socket) return
+    const onActivity = (payload: { kind: string; tier?: string; winnerName?: string; isHuman?: boolean; count?: number }) => {
+      if (payload.kind === 'online_count') {
+        if (typeof payload.count === 'number') setOnline(payload.count)
+      } else if (payload.kind === 'win') {
+        pushLog(payload.isHuman ? '🏆' : '🤖', `${payload.winnerName} won a match at ${(payload.tier ?? '').toUpperCase()}!`)
+      } else if (payload.kind === 'table_open') {
+        pushLog('🆕', `New ${(payload.tier ?? '').toUpperCase()} table opened`)
+      }
+    }
+    socket.on('server_activity', onActivity)
+    return () => { socket.off('server_activity', onActivity) }
+  }, [socket, pushLog])
 
   useEffect(() => {
     for (let i = 0; i < 4; i++) setTimeout(() => addLog(), i * 200)
     let t: ReturnType<typeof setTimeout>
     const sched = () => { t = setTimeout(() => { addLog(); sched() }, 1500 + Math.random() * 2000) }
     sched()
-    const oi = setInterval(() => setOnline(180 + Math.floor(Math.random() * 140)), 15000)
     const p = Animated.loop(Animated.sequence([
       Animated.timing(dotAnim, { toValue: 0.25, duration: 900, useNativeDriver: false }),
       Animated.timing(dotAnim, { toValue: 1,    duration: 900, useNativeDriver: false }),
     ]))
     p.start()
-    return () => { clearTimeout(t); clearInterval(oi); p.stop() }
+    return () => { clearTimeout(t); p.stop() }
   }, [addLog])
 
   return (
@@ -1811,7 +1831,7 @@ const GameTableLive: React.FC = () => {
             </ImageBackground>
           </View>
         )}
-        <ServerLog />
+        <ServerLog socket={socketRef.current} />
       </View>
     </View>
   )

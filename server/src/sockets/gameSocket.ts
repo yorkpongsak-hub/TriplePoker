@@ -125,6 +125,16 @@ export function registerGameSocket(io: Server): void {
     });
   }, 10_000);
 
+  // Server Activity feed (มติลุงเยาะ 2026-07-26): จำนวนคนออนไลน์จริงจาก io.engine.clientsCount
+  // แทนเลขสุ่มฝั่ง client เดิม — broadcast ทุก 15 วิ ให้ทุก client ที่ต่ออยู่ (ไม่ผูก room ไหน)
+  setInterval(() => {
+    io.emit("server_activity", {
+      kind: "online_count",
+      count: io.engine.clientsCount,
+      timestamp: Date.now(),
+    });
+  }, 15_000);
+
   // Room Registry (ใหม่): เช็คห้องที่หมดเวลา → AI-fill ที่นั่งที่เหลือ ทุก 10 วิ
   // หมายเหตุ: Adept และ High Noble ไม่อยู่ในลูปนี้แล้ว — ใช้ waiting timeout dialog flow แยกด้านล่างแทน (§4.4/§6.1)
   setInterval(async () => {
@@ -559,6 +569,12 @@ export function registerGameSocket(io: Server): void {
         socket.emit("room_matched", { room: result.room, seatIndex: result.seatIndex });
         io.to(result.room.roomId).emit("room_status", { room: result.room });
 
+        // Server Activity feed: broadcast เฉพาะห้องที่เพิ่งถูกสร้างจริง (isNew) — ไม่ broadcast
+        // ตอนคนที่ 2/3 join ห้องเดิมที่รออยู่แล้ว (ดู findOrCreateRoom ใน roomRegistry.ts)
+        if (result.isNew) {
+          io.emit("server_activity", { kind: "table_open", tier, roomId: result.room.roomId, timestamp: Date.now() });
+        }
+
         if (result.room.status === 'full') {
           await finalizeAndStartRoom(io, result.room);
         }
@@ -577,6 +593,8 @@ export function registerGameSocket(io: Server): void {
         socket.join(room.roomId);
         socket.emit("room_created", { room });
         io.to(`lobby:${tier}`).emit("lobby:tableUpdate", { tier, room });
+        // Server Activity feed: createPrivateRoom() สร้างห้องใหม่เสมอ ไม่มี branch เจอห้องเดิม
+        io.emit("server_activity", { kind: "table_open", tier, roomId: room.roomId, timestamp: Date.now() });
       } catch (err: any) {
         socket.emit("room_error", { message: err.message ?? "สร้างห้องไม่สำเร็จ" });
       }

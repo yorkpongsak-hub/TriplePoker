@@ -51,7 +51,20 @@ function makeSupabaseAdminMock() {
       }
       if (table === 'match_escrow' && pendingUpdate?.status) {
         const escrowId = lastEqValues.find(([c]) => c === 'escrow_id')?.[1]
-        if (escrowId) escrowStatuses[escrowId] = pendingUpdate.status
+        // settleEscrow() ใช้ claim-first: .update(...).eq('escrow_id', id).eq('status', 'in_match').select(...)
+        // กัน Double Settle — ต้องจำลอง WHERE status=<filter> จริง ไม่ใช่คืน [] เสมอ (บั๊กเดิม: ทำให้
+        // settleEscrow เข้าใจผิดว่ามีคน settle ไปแล้วทุกครั้ง แม้เป็นครั้งแรกจริง — leavingBalance เลยเป็น null เสมอ)
+        const statusFilter = lastEqValues.find(([c]) => c === 'status')?.[1]
+        if (escrowId) {
+          const filterMatches = statusFilter === undefined || escrowStatuses[escrowId] === statusFilter
+          if (filterMatches) {
+            escrowStatuses[escrowId] = pendingUpdate.status
+            resolve({ data: [{ escrow_id: escrowId }], error: null })
+            return
+          }
+          resolve({ data: [], error: null })
+          return
+        }
       }
       resolve({ data: table === 'match_escrow' ? [] : null, error: null })
     }
