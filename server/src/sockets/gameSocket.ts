@@ -17,6 +17,11 @@ import {
   submitHNDiscard, submitHNGrandFinaleAction, replaceHNPlayerWithAI, resendHNRoundStartToPlayer,
   getHNMatchState,
 } from "../game/highNobleMultiEngine";
+import {
+  rollMonarchEntry, startMonarchMatch, startMonarchRound, getMonarchMatchState,
+  buildMonarchRoundSnapshot, submitMonarchArrangement, submitMonarchGrandFinaleAction,
+  settleAndEndMonarchMatch,
+} from "../game/monarchEngine";
 import { getTierFromToken } from "../config/gameConfig";
 import { registerLobbySocket } from "./lobbySocket";
 import { createTableWithId, setSeat, deleteTable } from "../game/tableRegistry";
@@ -479,6 +484,27 @@ export function registerGameSocket(io: Server): void {
     }) => {
       const { tier, userId, userName, avatarUrl } = data;
       try {
+        // Sprint 2 (Boss Monarch 1v1): เช็คก่อนเข้า flow ปกติเลย — roll แยกจาก pity ของ
+        // rollHighNobleBoss() เดิมโดยเจตนา (ดู monarchEngine.ts) ถ้าติด Monarch ดึง human คนนี้
+        // ออกไปโต๊ะ solo ใหม่ทันที ไม่เข้า findOrCreateRoomAndJoin/joinRoom ของ High Noble ปกติเลย —
+        // ปลอดภัยกับ pity ของ Four Gods 100% เพราะไม่เรียก rollHighNobleBoss() ที่นี่เลย
+        if (tier === 'highNoble' && rollMonarchEntry()) {
+          const monarchRoomId = `monarch_${userId}_${Date.now()}`;
+          const state = await startMonarchMatch(io, monarchRoomId, userId, userName);
+          if (state) {
+            startMonarchRound(monarchRoomId);
+            // ไม่ join ห้อง/emit round data จาก socket นี้ (matchmaking socket เดิม กำลังจะ
+            // disconnect ตอน client navigate) — client ต่อ socket ใหม่แล้ว pull เอาเองผ่าน
+            // monarch_join ด้านล่าง (pattern เดียวกับ known bug #2)
+            socket.emit("monarch_encounter", { roomId: monarchRoomId });
+            // Sprint 8: broadcast กว้างให้คนที่กำลังเล่นโต๊ะอื่นเห็นว่ามี Monarch ปรากฏตัว
+            io.emit("server_activity", { kind: "monarch_spawn", timestamp: Date.now() });
+          } else {
+            socket.emit("room_error", { message: "Could not join the table. Please try again." });
+          }
+          return;
+        }
+
         const result = await findOrCreateRoomAndJoin(tier, userId, userName, avatarUrl);
         if (!result.ok || !result.room) {
           // Patch (2026-07-17): แก้ข้อความเป็นภาษาอังกฤษ (canon บังคับ UI/error message ทั้งหมดเป็น
@@ -501,6 +527,46 @@ export function registerGameSocket(io: Server): void {
     });
 
     // สร้างห้อง Private (VIP+PIN หรือ Free=public no-pin)
+    // Sprint 3 (Boss Monarch 1v1) — pull model ตาม known bug #2: client mount หน้า monarch/index.tsx
+    // แล้วต่อ socket ใหม่ (คนละตัวกับ matchmaking socket ที่ตั้ง room_auto_match เดิม) ต้องขอ state
+    // เองผ่าน event นี้ ห้าม push ตรงจาก room_auto_match เพราะ client ยัง mount/join ไม่ทัน
+    socket.on("monarch_join", (data: { roomId: string; userId: string }) => {
+      const { roomId, userId } = data;
+      const state = getMonarchMatchState(roomId);
+      if (!state) {
+        socket.emit("room_error", { message: "Match not found. Please try again." });
+        return;
+      }
+      socket.join(roomId);
+      socket.join(userId);
+      // Sprint 10: ลงทะเบียน socket นี้ให้ disconnect handler หา info เจอ (เดิมไม่เคย track เลย —
+      // ทำให้ disconnect ตอนกลางเกม Monarch ไม่มีอะไรมา settle/cleanup ให้ ดู audit Sprint 9)
+      socketUserMap.set(socket.id, { userId, roomId, tier: "monarch" });
+      socket.emit("monarch_round_start", buildMonarchRoundSnapshot(state));
+    });
+
+    // Sprint 3: Auto Arrange (arrangement omitted → server auto-arrange, logic เดียวกับ Minion)
+    // Sprint 6: ส่ง arrangement ที่จัดเองมาด้วยได้ (tap-swap UI ผ่าน PlayerHandView) — foul คืน
+    // reason:'FOUL' ให้แก้ไขต่อได้ ไม่ mark submitted (ต่างจาก error อื่นที่เป็น dead-end)
+    socket.on("submit_monarch_arrangement", (data: {
+      roomId: string; userId: string; arrangement?: { g1: string[]; g2: string[]; g3: string[] };
+    }) => {
+      const result = submitMonarchArrangement(io, data.roomId, data.userId, data.arrangement);
+      if (!result.ok) {
+        socket.emit("room_error", { message: result.reason ?? "Could not submit. Please try again." });
+      } else {
+        socket.emit("monarch_arrangement_ok", { roomId: data.roomId });
+      }
+    });
+
+    // Sprint 5: Grand Finale Call/Fold (G3 เท่านั้น — G1/G2 เป็นแค่ reveal ธรรมดา)
+    socket.on("submit_monarch_grand_finale_action", (data: { roomId: string; userId: string; action: 'call' | 'fold' }) => {
+      const result = submitMonarchGrandFinaleAction(io, data.roomId, data.userId, data.action);
+      if (!result.ok) {
+        socket.emit("room_error", { message: result.reason ?? "Could not submit. Please try again." });
+      }
+    });
+
     socket.on("room_create_private", async (data: {
       tier: RoomTier; userId: string; userName: string; isVip: boolean; pin?: string;
     }) => {
@@ -677,6 +743,11 @@ export function registerGameSocket(io: Server): void {
           } else if (info.tier === 'initiate' || info.tier === 'mastermind') {
             // Buy-in Spec §4: solo tier ไม่มี Human อื่นให้เล่นต่อ — settle ทันทีด้วย stack ปัจจุบันแล้วปิดแมตช์
             await settleAndEndSoloMatch(info.roomId);
+          } else if (info.tier === 'monarch') {
+            // Sprint 10: Monarch เป็นโต๊ะ solo-like (1 human + AI ล้วน) เหมือน initiate/mastermind —
+            // settle ทันที ไม่มี grace period (เดิมไม่มี branch นี้เลย ทำให้ escrow ค้าง in_match
+            // จนกว่า stale-recovery 60 นาทีจะทำงาน + monarchMatchStates leak ตลอดไป — ดู audit Sprint 9)
+            await settleAndEndMonarchMatch(info.roomId);
           }
         } catch (err) {
           console.error('[DISCONNECT] handler failed for', info.userId, 'in', info.roomId, err);

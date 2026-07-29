@@ -237,6 +237,15 @@ export default function LobbyScreen() {
       router.push(`${route}?roomId=${data.roomId}&userId=${userId}` as any);
     });
 
+    // Sprint 2 (Boss Monarch 1v1): server เจอ Monarch ตอน roll เข้า A+/High Noble แล้ว redirect
+    // มาโต๊ะ solo แยกทันที — คู่ขนานกับ room_ready ปกติด้านบน ไม่แทนที่กัน
+    socket.on('monarch_encounter', (data: { roomId: string }) => {
+      setMmStatus('matched');
+      socket.disconnect();
+      fadeOutBgm();
+      router.push(`/game/monarch?roomId=${data.roomId}&userId=${userId}` as any);
+    });
+
     socket.on('room_error', (data: { message: string }) => {
       setMmStatus('idle');
       socket.disconnect();
