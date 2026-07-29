@@ -23,6 +23,7 @@ import { useAuthStore } from '../../../src/store/authStore'
 import { PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
 import { useUserStore } from '../../../src/store/userStore'
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
+import MonarchConquestBanner from '../../../src/components/game/MonarchConquestBanner'
 import { ActionButton } from '../../../src/components/ui/ActionButton'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
 import { GuideOverlay } from '../../../src/components/onboarding/GuideOverlay'
@@ -132,7 +133,7 @@ const AiStatusDots = React.memo(({ label }: { label: string }) => {
   return <Text style={s.statusText}>{label}{'.'.repeat(dots)}</Text>
 })
 
-const ServerLog = React.memo(({ socket }: { socket: Socket | null }) => {
+const ServerLog = React.memo(({ socket, onMonarchWin }: { socket: Socket | null; onMonarchWin?: (name: string) => void }) => {
   interface LogEntry { id: number; icon: string; text: string; time: string }
   const [logs, setLogs]     = useState<LogEntry[]>([])
   const [online, setOnline] = useState(247)
@@ -173,11 +174,19 @@ const ServerLog = React.memo(({ socket }: { socket: Socket | null }) => {
         pushLog(payload.isHuman ? '🏆' : '🤖', `${payload.winnerName} won a match at ${(payload.tier ?? '').toUpperCase()}!`)
       } else if (payload.kind === 'table_open') {
         pushLog('🆕', `New ${(payload.tier ?? '').toUpperCase()} table opened`)
+      } else if (payload.kind === 'monarch_spawn') {
+        // Sprint 8: Boss Monarch 1v1 — broadcast กว้างตอนโต๊ะเริ่ม (gameSocket.ts room_auto_match)
+        pushLog('👑', 'A Monarch has appeared at the High Noble tables!')
+      } else if (payload.kind === 'monarch_win') {
+        // Sprint 8: broadcast ตอนมีคนพิชิต Monarch ได้ (monarchEngine.ts finalizeMonarchG3) — พิเศษ
+        // กว่าการชนะทั่วไป มีการ์ดเลื่อนลงจากขอบบนจอด้วย (ดู MonarchConquestBanner)
+        pushLog('👑', `${payload.winnerName} has conquered the Monarch!`)
+        if (payload.winnerName) onMonarchWin?.(payload.winnerName)
       }
     }
     socket.on('server_activity', onActivity)
     return () => { socket.off('server_activity', onActivity) }
-  }, [socket, pushLog])
+  }, [socket, pushLog, onMonarchWin])
 
   useEffect(() => {
     for (let i = 0; i < 4; i++) setTimeout(() => addLog(), i * 200)
@@ -268,6 +277,7 @@ const GameTableLive: React.FC = () => {
   const [countdown, setCountdown]     = useState(3)
   // Pre-Game Countdown (LobbyMatchmaking_Spec_v1_0 §7.1) — คนละตัวกับ `countdown` ข้างบน (Simultaneous Showdown 3-2-1 เดิม ห้ามแตะ)
   const [showPreGameCountdown, setShowPreGameCountdown] = useState(false)
+  const [monarchWinner, setMonarchWinner] = useState<string | null>(null) // Sprint 8: Boss Monarch conquest banner
   const preGameCountdownShownRef = useRef(false)
   const countAnim = useRef(new Animated.Value(1)).current
   const fadeCards    = useRef(new Animated.Value(1)).current
@@ -1166,6 +1176,7 @@ const GameTableLive: React.FC = () => {
         <View style={s.gameArea}>
 
           <PreGameCountdown visible={showPreGameCountdown} onComplete={() => setShowPreGameCountdown(false)} />
+          <MonarchConquestBanner winnerName={monarchWinner} onHidden={() => setMonarchWinner(null)} />
 
           <View style={StyleSheet.absoluteFill as any} pointerEvents="none"><Image source={tableImg} style={{ width: '100%', height: '100%' }} resizeMode="cover" /></View>
           <View style={[StyleSheet.absoluteFill as any, s.logoWatermark]} pointerEvents="none">
@@ -1729,7 +1740,7 @@ const GameTableLive: React.FC = () => {
             </ImageBackground>
           </View>
         )}
-        <ServerLog socket={socketRef.current} />
+        <ServerLog socket={socketRef.current} onMonarchWin={setMonarchWinner} />
       </View>
     </View>
   )
