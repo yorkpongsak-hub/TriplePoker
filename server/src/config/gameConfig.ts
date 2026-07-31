@@ -11,14 +11,32 @@ export const gameConfig = {
 
   // ─── Tier Ranges ─────────────────────────────────────────────
   // กำหนดช่วง Token ของแต่ละ Tier — ใช้สำหรับ matchmaking และ feature gate
+  // Canon: TriplePoker_EconomyProgression_Spec_v2_0.md §5 (2026-07-30) — แทนที่ชุดเดิม (10k/40k/100k)
   // ⚠️ Threshold ชุดนี้ต้องตรงกับ client/src/config/tierConfig.ts (TIER_CONFIG.minToken) เสมอ — แก้ที่นี่ต้องแก้อีกที่ด้วย
-  // getTierFromToken() ด้านล่างยังเป็น dead code (ไม่มีใครเรียกใช้จริงในปัจจุบัน) — แก้ค่าให้ถูกไว้กันบั๊กตอน Matchmaking เริ่มเรียกใช้จริงในอนาคต
+  // และต้อง align กับ progressionGate.*.minToken ด้านล่างเสมอ (validateGameConfig() เช็คให้ตอน server start)
   tierRanges: {
-    initiate:   { min: 100,      max: 9_999    },  // Tier 1 — เรียนรู้เกม
-    adept:      { min: 10_000,   max: 39_999   },  // Tier 2 — เริ่มเจอคนจริง
-    mastermind: { min: 40_000,   max: 99_999   },  // Tier 3 — ปลดล็อค Auction + Betting
-    highNoble:  { min: 100_000,  max: Infinity },  // Tier 4 — Full experience + จตุรเทพ AI
-    lastBoss:   { min: 400_000,  max: Infinity },  // ย้ายไป The Arena แล้ว — ห้ามใช้ใน matchmaking แอปหลัก (ยังไม่ลบ กัน import พัง — ค่อยเก็บกวาดตอน refactor Ascendant)
+    initiate:   { min: 100,        max: 5_999     },  // Tier 1 — เรียนรู้เกม
+    adept:      { min: 6_000,      max: 19_999    },  // Tier 2 — เริ่มเจอคนจริง
+    mastermind: { min: 20_000,     max: 99_999    },  // Tier 3 — ปลดล็อค Auction + Betting
+    highNoble:  { min: 100_000,    max: 999_999   },  // Tier 4 — Full experience + จตุรเทพ AI
+    lastBoss:   { min: 1_000_000,  max: Infinity  },  // ย้ายไป The Arena แล้ว — ห้ามใช้ใน matchmaking แอปหลัก (ยังไม่ลบ กัน import พัง — ค่อยเก็บกวาดตอน refactor Ascendant)
+  },
+
+  // ─── Progression Gate (3-Axis: Token + Time + Skill) ─────────
+  // Canon: TriplePoker_EconomyProgression_Spec_v2_0.md §6 — คุมความเร็วขึ้น Tier ไม่ให้เร็วเกินไป
+  // minToken ต้องตรงกับ tierRanges.*.min เสมอ (validateGameConfig() เช็คให้)
+  // minDays นับจาก users.created_at (server-side) — ดู server/src/game/progressionGate.ts
+  // skill: "pass" ผ่านเสมอ | "nineSentinels" เช็ค conquered_sentinels >= 9 (highNoble) |
+  // "monarchSlayer" เช็ค monarch_victories >= 1 (ascendant) — logic จริงอยู่ที่
+  // progressionGate.ts's canUnlockTier() ทั้งหมดแล้ว (รวมจาก tierUnlockService.ts/ascendantGate.ts
+  // ที่เคยเช็คแยกกันคนละที่มาไว้ที่เดียว)
+  // ⚠️ arena ยังไม่ถูก wire เข้า flow จริงรอบนี้ (Arena/S+ ทั้งระบบยังเป็น stub) — ใส่ค่าไว้ตาม Spec เผื่ออนาคต
+  progressionGate: {
+    adept:      { minToken: 6_000,      minDays: 3,    skill: 'pass' as const },
+    mastermind: { minToken: 20_000,     minDays: 10,   skill: 'pass' as const },
+    highNoble:  { minToken: 100_000,    minDays: 90,   skill: 'nineSentinels' as const },
+    ascendant:  { minToken: 600_000,    minDays: null as number | null, skill: 'monarchSlayer' as const },
+    arena:      { minToken: 1_000_000,  minDays: 180,  skill: 'pass' as const },
   },
 
   // ─── Token Economy (Daily) ──────────────────────────────────
@@ -43,13 +61,15 @@ export const gameConfig = {
 
   // ─── Token Pot ───────────────────────────────────────────────
   // ค่า Ante และ Call Amount ต่อ Tier — จ่ายอัตโนมัติต้น Hand
+  // ⚠️ ไม่มี field `call` ในนี้อีกแล้ว (เดิมซ้ำกับ grandFinale.callAmount ด้านล่างจนขัดกันเอง 2 แหล่ง —
+  // แหล่งเดียวสำหรับ Call Amount คือ grandFinale.callAmount เท่านั้น validateGameConfig() เช็คให้)
   tokenPot: {
     tiers: {
-      initiate:   { pile1: 10,  pile2: 20,   pile3: 40,   call: null  }, // ไม่มี Call
-      adept:      { pile1: 60,  pile2: 100,  pile3: 140,  call: null  }, // ไม่มี Call
-      mastermind: { pile1: 200, pile2: 300,  pile3: 500,  call: 1_000 },
-      highNoble:  { pile1: 500, pile2: 1_000,pile3: 1_500,call: 3_000 },
-      lastBoss:   { pile1: 1_000,pile2: 2_000,pile3: 3_000,call: 6_000 },
+      initiate:   { pile1: 10,  pile2: 20,   pile3: 40   },
+      adept:      { pile1: 60,  pile2: 100,  pile3: 140  },
+      mastermind: { pile1: 200, pile2: 300,  pile3: 500  },
+      highNoble:  { pile1: 500, pile2: 1_000,pile3: 1_500},
+      lastBoss:   { pile1: 1_000,pile2: 2_000,pile3: 3_000},
     },
     // Patch (2026-07-17): ยกเลิก rakeJackpot 10% ของ Triple Sweep — ใช้ rake อัตราเดียว 5% ทุกกรณี
     // ทุก Tier (ดู gameLoop.ts/highNobleMultiEngine.ts ที่คำนวณ jackpotRake)
@@ -223,12 +243,14 @@ export const gameConfig = {
     bettingRounds:      2,          // สูงสุด 2 Rounds
     autoFoldOnTimeout:  true,       // หมดเวลา → Auto-Fold + Toast แจ้ง
     // Call Amount ต่อ Round ต่อ Tier
+    // Canon: TriplePoker_EconomyProgression_Spec_v2_0.md §4 (2026-07-30) — ลดครึ่งจากชุดเดิม (600/2,000/4,000)
+    // เหตุผล: Call คือตัวปั๊ม token หลัก (~84% ของกำไร Strong ที่ HighNoble) ต้องชะลอไม่ให้ถึง 1M ก่อน 3 เดือน
     callAmount: {
       initiate:   null,
       adept:      null,
-      mastermind: 600,
-      highNoble:  2_000,
-      lastBoss:   4_000,
+      mastermind: 300,
+      highNoble:  1_000,
+      lastBoss:   2_000,
     },
     betTimer: {
       // Patch v1.2 (2026-07-24): highNoble เดิม 8s สั้นกว่า mastermind (20s) ทั้งที่ callAmount.highNoble
@@ -334,18 +356,40 @@ export const gameConfig = {
     4: { id: 4, name: 'Bamboo Rice Field', tiers: ['highNoble'], assetPath: 'assets/tables/skin_4_bamboo.png' }
   },
 
-  // ─── Monarch (TriplePoker_Monarch_Spec_v1_3) ──────────────────
-  // บอสลับตัวที่ 5 ของ Tier A+ (High Noble) — สุ่ม Base 3% + Pity Counter ต่อผู้เล่น (max ของโต๊ะ)
+  // ─── Monarch (TriplePoker_Monarch_Spec_v2_1 — Batch 1 คลีนอัป v1.3 เดิม) ──
+  // บอสลับ special encounter ของ Tier A+ (High Noble) — entry-roll ที่ gameSocket.ts ก่อนเข้า
+  // matchmaking ปกติเลย (ดู rollMonarchEntry() ใน monarchEngine.ts) — เส้นทางเดียวเท่านั้น
+  // (Batch 1 Task 2: ถอด Monarch ออกจาก rollHighNobleBoss()/pity เดิมที่อยู่คู่ขนานกันแล้ว)
+  // pity เป็นต่อผู้เล่นจริง (user_id) ไม่ใช่ max ของโต๊ะอีกต่อไป — ดู rollMonarchEntry() (Batch 1 Task 3)
   monarchConfig: {
-    spawnRateBase:   0.03,   // 3% พื้นฐาน
+    spawnRateBase:   0.03,   // Batch 1 Task 1: รีเซ็ตจาก 0.97 (ค่าเทสที่ลืมเปลี่ยนกลับ) — ห้ามแก้ค่านี้ตรงๆ เพื่อเทสอีก ใช้ MONARCH_TEST_RATE env var ผ่าน getMonarchSpawnRate() แทน (อ่านค่าจริงต้องผ่าน helper นั้นเท่านั้น ไม่อ่าน field นี้ตรงๆ)
     pityStepPerGame: 0.005,  // +0.5% ต่อเกม High Noble ที่ไม่เจอ Monarch (นับจาก reset ล่าสุด)
     pityGuaranteeAt: 30,     // เกมที่ 30 นับจาก reset ยังไม่เจอ → บังคับ spawn (effective rate = 100%)
     potMultiplier:   2.0,    // Pot ×2 เมื่อผู้เล่น human ชนะ Monarch — ส่วนต่าง House mint ไม่หักจากผู้เล่นอื่น
-    // น้ำหนักสุ่ม Boss ปกติของ High Noble (รวม Monarch, รวมกัน = 100) — ไม่ใช่ Monarch → normalize 4 ตัวที่เหลือตามสัดส่วนเดิม
-    bossWeights: { reaper: 28, crag: 25, cortex: 25, cipher: 19, monarch: 3 },
+    // Batch 1 Task 4 — Royal Hour: เสาร์ 20:00-20:59:59 (Asia/Bangkok) spawn rate ×2 (คูณเฉพาะ base
+    // rate ผ่าน getMonarchSpawnRate() เท่านั้น ไม่คูณ/ข้าม pity) ห้ามส่งค่าใดๆ ในนี้ไปที่ client เด็ดขาด
+    royalHour: {
+      enabled:    true,
+      dayOfWeek:  6,             // 0=Sun...6=Sat (ตรงกับ Date.getDay() ปกติ)
+      startHour:  20,
+      endHour:    21,            // [startHour, endHour) — 20 เท่านั้นที่เข้าเงื่อนไข = 20:00:00-20:59:59
+      multiplier: 2.0,
+      timezone:   'Asia/Bangkok',
+    },
+    // Batch 1 Task 2 (Monarch v2.2): ถอด Monarch ออกจาก pool นี้แล้ว — rollHighNobleBoss() (monarchSpawn.ts)
+    // สุ่มแค่ Four Gods เท่านั้นตอนนี้ ค่าเดิม 28/25/25/19 (รวม Monarch=3 → 100) normalize ตามสัดส่วนเดิม
+    // ด้วย largest-remainder method ให้รวมกัน = 100 พอดี (28.87→29, 25.77→26, 25.77→26, 19.59→19)
+    bossWeights: { reaper: 29, crag: 26, cortex: 26, cipher: 19 },
+    // Batch 1 Task 6 — เวลาจัดไพ่ก่อนหมดเวลา auto-seal (ห้ามช่วยจัด ดู forceSealMonarchArrangement
+    // ใน monarchEngine.ts) ยังไม่มี UI countdown ในบัตช์นี้ (client ได้ค่านี้ผ่าน monarch_round_start's
+    // arrangementDeadlineAt แล้ว เตรียมไว้ให้ Batch 2 ใช้ต่อ)
+    arrangementDeadlineMs: 40_000,
     // Personality Lock ของ Monarch — แบ่ง Total Hand Strength (bestArrangement) เป็น 4 ช่วงด้วย quartile threshold
     // (Spec v1.3 ให้แค่คำบรรยายเชิงคุณภาพ "แข็งมาก/ปานกลาง/ปานกลางค่อนอ่อน/อ่อน" — ตัวเลขนี้เป็นค่าเริ่มต้นที่ปรับจูนได้หลัง playtest จริง)
     handStrengthQuartile: { veryStrong: 0.75, medium: 0.5, mediumWeak: 0.25 },
+    // Batch 3D-1 — Royal Relic: token bonus ที่ให้ทุกครั้งที่ชนะ Monarch หลังเก็บ relic ครบ 6 ชิ้นแล้ว
+    // (recurring ไม่ใช่ one-time — ปรับตัวเลขนี้ได้อิสระหลัง playtest จริง ไม่กระทบ drop logic ที่อื่น)
+    relicCompleteBonus: 5_000,
   },
 
   // ─── Performance Score (PS) ────────────────────────────────────
@@ -386,13 +430,24 @@ export const gameConfig = {
     assetAvatar: 'boss_Monarch_avatar.png',
   },
 
-  // ─── Ascendant Gate (Monarch_Spec_v1_3 §5 — ทับ MasterPlan §5 เดิม) ─
+  // ─── Ascendant Gate (Ascendant_Spec_v1_1 §2 + มติลุงเยาะ 2026-07-30 — ทับ MasterPlan §5 เดิม) ─
   // Ascendant ยังไม่ใช่ tier เต็มรูปแบบใน tierRanges/getTierFromToken() — ใช้ค่านี้ตรงใน ascendantGate.ts เท่านั้น
+  // ⚠️ tokenMax ถูกตัดออกแล้ว (มติ 2026-07-30 ทับ Spec v1.1 "ตัดเพดานบน 999,999 ออก") — คนที่มี token
+  // เกิน 1M อยู่แล้วยังซื้อ Ascendant Pass ได้ และจะ Instant Pass ทันที (ดู crownVaultService.ts)
   ascendantConfig: {
     tokenMin:              600_000,
-    tokenMax:              999_999,
-    requireMonarchVictory: true,   // ต้องมี monarch_victories >= 1 ก่อนเริ่มนับหน้าต่าง (badge ต้องได้ก่อนเข้า ไม่ใช่ระหว่างนับเวลา)
-    windowDays:            30,     // ต้องขึ้น Tier S (token >= 1M) ภายใน 30 วันหลังเข้า Ascendant
+    requireMonarchVictory: true,   // ต้องมี monarch_victories >= 1 ก่อนซื้อ Ascendant Pass ได้ (badge ต้องได้ก่อนเข้า)
+    windowDays:            30,     // ต้องขึ้น Tier S (token >= 1M) ภายใน 30 วันหลังซื้อ Ascendant Pass (เว้นแต่ Instant Pass)
+  },
+
+  // ─── The Crown Vault (มติลุงเยาะ 2026-07-30 — Shop section ใหม่ เชื่อม Main App กับ The Arena) ─
+  // Token→Crown Exchange ปลดล็อกที่ HighNoble (ไม่ต้องรอ Ascendant) ตาม Ascendant_Spec_v1_1 §5
+  // Ascendant Pass / Arena Pass เป็นกลไกใหม่ที่ไม่มีใน Spec v1.1 เดิม — ยืนยันแล้วไม่ต้อง revise เอกสาร
+  crownVaultConfig: {
+    tokenToCrownRate:          5_000,      // 1 Crown = 5,000 Token ทางเดียว ห้ามแลกกลับ
+    ascendantPassPriceCrown:   20,         // ซื้อเพื่อเปิด Ascendant window (หรือ Instant Pass ถ้า token >= 1M อยู่แล้ว)
+    arenaPassPriceCrown:       20,         // ซื้อเพื่อปลดล็อกเข้า Tier S / The Arena ถาวร — ด่านสุดท้ายบังคับทั้ง 2 เส้นทาง
+    unlockCrownExchangeAtTier: 'highNoble' as const, // ต้องเคยปลด tier_unlocked_max ถึง highNoble ก่อนแลก Crown ได้
   },
 
   // ─── Matchmaking Timeouts (LobbyMatchmaking_Spec_v1_1) ─────────
@@ -460,13 +515,88 @@ export function getAutoSortFee(tier: string): number {
   return Math.round(stakes.pile3 * rate);
 }
 
-// ดึง Tier จาก Token balance ของผู้เล่น
-export function getTierFromToken(tokenBalance: number): Tier {
-  const { tierRanges } = gameConfig;
-  if (tokenBalance >= tierRanges.highNoble.min) return "highNoble";
-  if (tokenBalance >= tierRanges.mastermind.min) return "mastermind";
-  if (tokenBalance >= tierRanges.adept.min) return "adept";
-  return "initiate";
-  // หมายเหตุ: lastBoss เป็น special encounter — กำหนดผ่าน encounter conditions
-  // Tier progression: Initiate(~6d) → Adept(~12d) → Mastermind(~31d) → High Noble(endgame)
+/**
+ * Batch 1 Task 4 — เช็คว่าตอนนี้อยู่ใน Royal Hour หรือไม่ (เสาร์ 20:00-20:59:59 Asia/Bangkok ตาม
+ * gameConfig.monarchConfig.royalHour) คำนวณจาก Intl.DateTimeFormat กับ timeZone ที่ config ไว้เสมอ
+ * ห้ามพึ่ง TZ ของเครื่อง server (เทียบ getBangkokDateString ใน matchStatsService.ts)
+ *
+ * Fail-open: คำนวณพลาด (เช่น timezone string ผิด) → คืน false เสมอ (ใช้ base rate ปกติ ไม่คูณ ไม่ throw)
+ */
+export function isRoyalHour(now: Date = new Date()): boolean {
+  const cfg = gameConfig.monarchConfig.royalHour;
+  if (!cfg.enabled) return false;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: cfg.timezone, weekday: 'short', hour: 'numeric', hourCycle: 'h23',
+    }).formatToParts(now);
+    const weekdayStr = parts.find(p => p.type === 'weekday')?.value;
+    const hourStr = parts.find(p => p.type === 'hour')?.value;
+    const WEEKDAY_INDEX: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    const weekday = weekdayStr ? WEEKDAY_INDEX[weekdayStr] : undefined;
+    const hour = hourStr ? parseInt(hourStr, 10) : NaN;
+    if (weekday === undefined || Number.isNaN(hour)) return false;
+    return weekday === cfg.dayOfWeek && hour >= cfg.startHour && hour < cfg.endHour;
+  } catch (err) {
+    console.error('[MONARCH] isRoyalHour() calculation failed — fail-open (treated as not Royal Hour):', err);
+    return false;
+  }
+}
+
+/**
+ * Batch 1 Task 1/4 — อัตราสุ่ม Monarch ที่ใช้งานจริง ห้ามอ่าน gameConfig.monarchConfig.spawnRateBase
+ * ตรงๆ อีกที่ไหนเลย (ต้นเหตุเดิม: แก้ spawnRateBase เป็น 0.97 ไว้เทสบนมือถือแล้วลืมเปลี่ยนกลับ ค้าง
+ * production-bound หลาย sprint) — เทสต่อไปให้ปรับผ่าน MONARCH_TEST_RATE env var แทน ซึ่งใช้ได้เฉพาะ
+ * ตอน NODE_ENV !== 'production' เท่านั้น กัน env หลุดเข้า production โดยเด็ดขาด — Royal Hour คูณ
+ * multiplier ทับ base (env หรือ config ก็ตาม) เป็นขั้นตอนสุดท้ายเสมอ แล้ว clamp ไม่ให้เกิน 1
+ */
+export function getMonarchSpawnRate(): number {
+  let base: number;
+  if (process.env.NODE_ENV !== 'production' && process.env.MONARCH_TEST_RATE !== undefined) {
+    const parsed = parseFloat(process.env.MONARCH_TEST_RATE);
+    base = Number.isFinite(parsed) ? Math.max(0, Math.min(1, parsed)) : gameConfig.monarchConfig.spawnRateBase;
+    console.warn(`[MONARCH] spawn rate overridden by MONARCH_TEST_RATE=${process.env.MONARCH_TEST_RATE} → ${base} (NODE_ENV=${process.env.NODE_ENV ?? 'undefined'}) — ห้ามลืมลบ env var นี้ก่อน deploy จริง`);
+  } else {
+    base = gameConfig.monarchConfig.spawnRateBase;
+  }
+  if (isRoyalHour()) {
+    base = Math.min(1, base * gameConfig.monarchConfig.royalHour.multiplier);
+  }
+  return base;
+}
+
+/**
+ * ตรวจความสอดคล้องของค่า Economy ทั้งหมดตอน server start — fail fast ถ้าพัง
+ * (Economy Progression Spec v2.0 §11 ข้อ 5) เรียกจาก server/src/index.ts ก่อน app.listen()
+ *
+ * เช็ค:
+ *   1. grandFinale.callAmount ต้อง null เฉพาะ Tier ที่ progressiveMechanics.grandFinaleBetting === false
+ *      และต้องเป็นตัวเลขบวกเมื่อ grandFinaleBetting === true (กัน duplicate/ขัดกันแบบที่เคยเกิดกับ
+ *      tokenPot.tiers.call ที่ถูกลบทิ้งไปแล้ว)
+ *   2. progressionGate.*.minToken ต้องตรงกับ tierRanges.*.min เสมอ (Spec §5 — "ต้อง align เสมอ")
+ */
+export function validateGameConfig(): void {
+  const errors: string[] = [];
+
+  for (const tier of Object.keys(gameConfig.progressiveMechanics) as Tier[]) {
+    const mechanics = gameConfig.progressiveMechanics[tier];
+    const call = (gameConfig.grandFinale.callAmount as Record<string, number | null>)[tier];
+    if (mechanics.grandFinaleBetting && (call == null || call <= 0)) {
+      errors.push(`grandFinale.callAmount.${tier} ต้องเป็นตัวเลขบวก เพราะ ${tier}.grandFinaleBetting === true (ปัจจุบัน: ${call})`);
+    }
+    if (!mechanics.grandFinaleBetting && call != null) {
+      errors.push(`grandFinale.callAmount.${tier} ต้องเป็น null เพราะ ${tier}.grandFinaleBetting === false (ปัจจุบัน: ${call})`);
+    }
+  }
+
+  for (const tier of Object.keys(gameConfig.progressionGate) as Array<keyof typeof gameConfig.progressionGate>) {
+    const gateMinToken = gameConfig.progressionGate[tier].minToken;
+    const rangeMinToken = (gameConfig.tierRanges as Record<string, { min: number }>)[tier]?.min;
+    if (rangeMinToken != null && gateMinToken !== rangeMinToken) {
+      errors.push(`progressionGate.${tier}.minToken (${gateMinToken}) ≠ tierRanges.${tier}.min (${rangeMinToken}) — ต้อง align กันเสมอ`);
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new Error('[gameConfig] validateGameConfig() ล้มเหลว:\n' + errors.map(e => '  - ' + e).join('\n'));
+  }
 }

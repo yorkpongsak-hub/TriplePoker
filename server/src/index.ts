@@ -4,10 +4,16 @@ import { Server } from 'socket.io'
 import { authRoutes } from './routes/auth'
 import { profileRoutes } from './routes/profile'
 import statsRoutes from './routes/stats'
+import crownVaultRoutes from './routes/crownVault'
 import { registerGameSocket } from './sockets/gameSocket'
+import { validateGameConfig } from './config/gameConfig'
 import * as dotenv from 'dotenv'
 
 dotenv.config()
+
+// Economy Progression Spec v2.0 §11 ข้อ 5 — fail fast ถ้า gameConfig.ts ขัดกันเอง (เช่น callAmount
+// ไม่ตรงกับ grandFinaleBetting หรือ progressionGate.minToken ไม่ตรงกับ tierRanges.min)
+validateGameConfig()
 
 // สร้าง Fastify instance
 const app = Fastify({ logger: true })
@@ -19,6 +25,7 @@ app.register(cors, { origin: '*' })
 app.register(authRoutes)
 app.register(profileRoutes)
 app.register(statsRoutes)
+app.register(crownVaultRoutes)
 
 // Health check
 app.get('/health', async () => ({

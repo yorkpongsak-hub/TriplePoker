@@ -10,6 +10,7 @@ import { ThemedBackground } from '../../../src/components/ui/ThemedBackground'
 import { glassPanel, textOnGlass } from '../../../src/ui/glassStyles'
 import { AvatarDisplay, PRESET_AVATARS, AvatarConfig } from '../../../src/components/profile/AvatarPicker'
 import { useAuthStore } from '../../../src/store/authStore'
+import MatchHistoryList from '../../../src/components/profile/MatchHistoryList'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
@@ -132,6 +133,10 @@ export default function PlayerProfileScreen() {
                 <StatRow label="Token Balance" value={player.token_balance.toLocaleString('en-US')} color={C.gold} />
                 <StatRow label="Performance Score" value={player.performance_score.toLocaleString('en-US')} color={C.purple} />
               </View>
+
+              {/* Win History — ล่าสุด 20 รายการ (มติลุงเยาะ 2026-07-26) — layout จริงรอลุงออกแบบทีหลังเช่นกัน */}
+              <Text style={s.historyTitle}>RECENT WINS</Text>
+              <MatchHistoryList userId={userId} />
             </>
           )}
         </ScrollView>
@@ -185,4 +190,13 @@ const s = StyleSheet.create({
   },
   statLabel: { color: C.textDim, fontSize: 12, fontWeight: '700' },
   statValue: { fontFamily: 'JetBrainsMono_600SemiBold', color: C.textPrimary, fontSize: 13 },
+
+  historyTitle: {
+    color: C.gold,
+    fontFamily: 'Cinzel_700Bold',
+    fontSize: 12,
+    letterSpacing: 1,
+    marginTop: 18,
+    marginBottom: 8,
+  },
 })

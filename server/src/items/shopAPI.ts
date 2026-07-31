@@ -5,7 +5,7 @@
 // Patch (2026-07-17): ลบการอ้างอิง "Retention Spec v1.5 §5.0" ออก — ค้นทั้ง docs/ แล้วไม่พบ
 // ไฟล์เอกสารนี้อยู่จริง ราคา/กติกา VIP Purchase ด้านล่างคือ canon ปัจจุบันโดยตรง
 
-import { supabase } from '../config/supabase'
+import { supabase, supabaseAdmin } from '../config/supabase'
 import { assertVip, isVipOnlyCategory, getUserVipStatus } from '../middleware/vipGuard'
 import {
   openLootBox,
@@ -129,20 +129,47 @@ async function hasBagExpansion(userId: string): Promise<boolean> {
   return !error && !!data
 }
 
-// หักเงิน Token และบันทึกธุรกรรม
-async function deductTokens(
+// หักเงิน Token แบบ atomic (guarded SQL update ในทรานแซกชันเดียว กัน race condition) — ใช้ RPC
+// deduct_user_tokens ใหม่ (แทน RPC เก่า deduct_tokens ที่หา source ไม่เจอในโปรเจค — มติลุงเยาะ 2026-07-30
+// ไม่ reuse ของเก่า) reason เก็บไว้ใน signature เพื่อ compat กับ call site เดิม 5 จุดด้านล่าง ไม่ได้ใช้จริง
+export async function deductTokens(
   userId: string,
   amount: number,
-  reason: string
+  _reason: string
 ): Promise<number> {
-  const { data, error } = await supabase.rpc('deduct_tokens', {
+  const { data, error } = await supabaseAdmin.rpc('deduct_user_tokens', {
     p_user_id: userId,
     p_amount: amount,
-    p_reason: reason,
   })
 
-  if (error) throw new Error(`Token deduction failed: ${error.message}`)
+  if (error) {
+    throw new Error(error.message === 'INSUFFICIENT_TOKENS' ? 'Insufficient tokens' : `Token deduction failed: ${error.message}`)
+  }
   return data as number // new balance
+}
+
+// เพิ่ม Earned Crown แบบ atomic (Crown Vault) — ไม่แตะ crown_package_balance (IAP) เด็ดขาด
+export async function creditCrown(userId: string, amount: number): Promise<number> {
+  const { data, error } = await supabaseAdmin.rpc('credit_user_crown', {
+    p_user_id: userId,
+    p_amount: amount,
+  })
+
+  if (error) throw new Error(`Crown credit failed: ${error.message}`)
+  return data as number // new crown_balance
+}
+
+// หัก Earned Crown แบบ atomic (ใช้ซื้อ Ascendant Pass / Arena Pass เท่านั้น — ไม่แตะ crown_package_balance)
+export async function deductCrown(userId: string, amount: number): Promise<number> {
+  const { data, error } = await supabaseAdmin.rpc('deduct_user_crown', {
+    p_user_id: userId,
+    p_amount: amount,
+  })
+
+  if (error) {
+    throw new Error(error.message === 'INSUFFICIENT_CROWN' ? 'Insufficient crown' : `Crown deduction failed: ${error.message}`)
+  }
+  return data as number // new crown_balance
 }
 
 // เพิ่ม item เข้า inventory

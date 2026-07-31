@@ -8,12 +8,11 @@
 // G2=player3+commB2, G3=player5+0) — ต่างจาก resolvePile/checkFoul เดิมที่ทุก pile ใช้ player3+community2
 // เสมอ (รวม pile3) เพราะงั้นห้าม reuse ฟังก์ชันเดิมตรงๆ ต้องมี monarchResolvePile/monarchCheckFoul ของตัวเอง
 //
-// Entry roll (Sprint 2): 3% คงที่ทุกครั้งที่ human คนแรก join โต๊ะ A+ (High Noble) — "ทับ pity ทิ้ง"
-// rollMonarchEntry() ด้านล่างแยกจาก rollHighNobleBoss() ใน monarchSpawn.ts โดยเจตนา ไม่แก้ไฟล์นั้นเลย
-// แม้แต่บรรทัดเดียว เพราะ rollHighNobleBoss() ยังเป็นกลไก Pity ของโต๊ะ High Noble ปกติ (Four Gods 97%)
-// ที่เสร็จ 100% แล้ว — ⚠️ ผลข้างเคียงที่ทราบแล้ว: โต๊ะ High Noble ปกติยังมีโอกาสสุ่มเจอ Monarch ผ่าน
-// pity เดิมได้อยู่คู่ขนานกัน (ดู Sprint 2 audit) จะเคลียร์ทางนั้นต้องเป็น sprint แยกที่ขอแตะ
-// monarchSpawn.ts โดยเฉพาะ
+// Entry roll (Sprint 2 → Batch 1 Task 2/3, Monarch v2.2): ทุกครั้งที่ human คนแรก join โต๊ะ A+
+// (High Noble) — เส้นทางเดียวเท่านั้นที่จะสุ่มเจอ Monarch ได้ (rollHighNobleBoss() ใน monarchSpawn.ts
+// ถูกถอด Monarch ออกไปแล้วที่ Batch 1 Task 2 เหลือแค่ Four Gods ไม่มีทางคืน Monarch อีกต่อไป — ปัญหา
+// เดิมที่ Monarch สุ่มได้ 2 ทางคู่ขนานกันถูกแก้แล้ว) pity ผูกกับ user_id ของคนที่ trigger การ roll เอง
+// (ไม่ใช่ max ของโต๊ะแบบเดิม — reuse คอลัมน์ users.monarch_pity_counter เดิมจาก migration 006)
 //
 // Round flow (Sprint 3): deal → auto-arrange Minion/Boss ทันที (foul-only, dumb ตาม Monarch Minion
 // spec) → human กด "Auto Arrange & Submit" (MVP มติลุงเยาะ Sprint 3 — ยังไม่มี UI จัดไพ่เองจริง
@@ -29,9 +28,11 @@ import { dealCards } from './cardEngine'
 import { evaluateHand, compareHands, HandResult } from './handEvaluator'
 import { FoulCheckResult, PlayerArrangement } from './foulChecker'
 import { AIPersonality, pickRandomMinions } from './aiEngine'
-import { gameConfig } from '../config/gameConfig'
+import { gameConfig, getMonarchSpawnRate, isRoyalHour } from '../config/gameConfig'
+import { supabaseAdmin } from '../config/supabase'
 import { escrowBuyIn, settleEscrow } from './gameLoop'
-import { recordMonarchVictory } from './monarchSpawn'
+import { recordMonarchVictory, recordMonarchEncounter, rollAndRecordMonarchRelic, MonarchRelicResult } from './monarchSpawn'
+import { computeHNHumanPayout } from './highNobleMultiEngine'
 
 // ── Seat & Match State ──────────────────────────────────────
 export interface MonarchSeat {
@@ -41,6 +42,10 @@ export interface MonarchSeat {
   name: string
   emoji: string
   personality?: AIPersonality   // เฉพาะ Minion — Boss ใช้ personality lock แยกต่างหาก (sprint ถัดไป, เทียบ monarchAI.ts เดิม)
+  // Hotfix (token leak): เดิมพันจริงมีแค่ Human vs Monarch เท่านั้นตาม Spec v2.1 §5.1/§6 — Minion
+  // ไม่มีเดิมพันจริง ต้อง gate ทุกจุดที่แตะ tokenBalance/pot ด้วย flag นี้ (root cause เดิม: seats
+  // ทั้ง 4 ถูกตั้ง tokenBalance เท่ากันหมดตอน init ไม่มีอะไรแยกว่าที่นั่งไหน "มีเงินจริง" ในเกม)
+  hasRealStake: boolean
 }
 
 export interface MonarchMatchState {
@@ -69,6 +74,24 @@ export interface MonarchMatchState {
   // clockwise/counterclockwise เพราะมีแค่ 2 คนที่ตัดสินใจได้จริง)
   grandFinale?: { foldedPlayers: string[]; pot: number; turn: 'human' | 'boss' | 'done' }
   matchEnded?: boolean
+  // Batch 1 Task 6 — arrangement deadline (40s, ไม่มี auto-arrange ช่วยแล้ว) arrangementDeadlineAt
+  // เป็น epoch ms ส่งออกผ่าน buildMonarchRoundSnapshot ให้ Batch 2 เอาไปทำ UI countdown ต่อ
+  arrangementDeadlineAt?: number
+  arrangementTimer?: ReturnType<typeof setTimeout>
+  // Batch 1.5 Task 6 — human หลุดการเชื่อมต่อหลัง seal แล้ว (reuse state.phase/grandFinale.turn ที่มี
+  // อยู่แล้วเป็นตัวบอก "sealed หรือยัง"/"commit Call หรือยัง" ตามที่โจทย์เสนอเป็นทางเลือก ไม่เพิ่ม field
+  // ซ้ำซ้อน) flag นี้มีไว้จุดเดียว: บอก startMonarchGrandFinale ว่าต้อง auto-fold ทันทีแทนตั้ง
+  // turn:'human' รอ action ที่ไม่มีทางมาอีกแล้ว (ครอบคลุมเคส disconnect ตอน g1_reveal/g2_reveal ที่ยัง
+  // ไม่ถึง Grand Finale ด้วย ไม่ใช่แค่เคส disconnect ตอนอยู่ใน grand_finale พอดี)
+  humanDisconnected?: boolean
+  // Batch 3E Task 1 — grace 20s เฉพาะ grand_finale ตอน turn==='human' เท่านั้น (ดู markMonarchGrace/
+  // clearMonarchGrace) แยก field ใหม่จาก humanDisconnected เดิมโดยเจตนา เพราะ humanDisconnected
+  // สื่อความหมาย "หลุดแล้ว ให้ resolve/fold ทันที" (commit-based §11) ส่วน 2 field นี้สื่อความหมายคนละ
+  // อย่าง "หลุดแล้ว แต่ยังไม่ต้อง resolve — รอดูก่อนว่าจะกลับมาทันไหม" ถ้าเอามาปนกันจะทำให้
+  // startMonarchGrandFinale (ที่เช็ค humanDisconnected อยู่แล้ว) งงว่า "หลุด" ที่เจอหมายถึง fold ทันที
+  // หรือรอ grace กันแน่ — ห้ามลบ/แก้ humanDisconnected เดิมเด็ดขาด
+  disconnectedAt?: number
+  graceTimer?: ReturnType<typeof setTimeout>
 }
 
 const monarchMatchStates = new Map<string, MonarchMatchState>()
@@ -90,10 +113,47 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-// ── Entry Roll (Sprint 2 Part A) ────────────────────────────
-// Pure random 3% ทุกครั้ง ไม่มี pity/guarantee — ตัดสินใจ isMonarch แยกจาก rollHighNobleBoss() เดิมโดยเจตนา
-export function rollMonarchEntry(): boolean {
-  return Math.random() < gameConfig.monarchConfig.spawnRateBase
+// ── Entry Roll (Sprint 2 Part A → Batch 1 Task 3: pity ต่อผู้เล่นจริง) ──────
+// เดิม flat rate ไม่มี pity — ย้าย pity mechanism มาไว้ตรงนี้แทน (เดิมอยู่ที่ rollHighNobleBoss() ใน
+// monarchSpawn.ts ซึ่งถูกถอด Monarch ออกไปแล้วที่ Batch 1 Task 2) reuse คอลัมน์ users.monarch_pity_counter
+// เดิม (migration 006_monarch_spawn_reward.sql มีอยู่แล้ว ไม่ต้องรัน SQL เพิ่ม) — ไม่แตะ
+// monarch_encounters ที่นี่ (นับตอน match settlement แทน ดู recordMonarchVictory ที่ Batch 1 Task 5)
+// getMonarchSpawnRate() คูณ Royal Hour multiplier ให้แล้วถ้าเข้าเงื่อนไข (Batch 1 Task 4) — คูณเฉพาะ
+// base ก่อนบวก pity step ไม่ใช่คูณทั้ง effectiveRate (ห้าม Royal Hour ข้าม pity)
+export async function rollMonarchEntry(userId: string): Promise<boolean> {
+  const cfg = gameConfig.monarchConfig
+  let pity = 0
+  try {
+    const { data } = await supabaseAdmin
+      .from('users')
+      .select('monarch_pity_counter')
+      .eq('user_id', userId)
+      .single()
+    pity = data?.monarch_pity_counter ?? 0
+  } catch (err) {
+    // fallback pity=0 ถ้าอ่านไม่ได้ (เช่น migration ยังไม่รัน) — ไม่ throw กัน matchmaking ค้าง
+    console.error('[MONARCH] Error reading pity counter for', userId, err)
+  }
+
+  const guaranteed = pity >= cfg.pityGuaranteeAt
+  const effectiveRate = guaranteed ? 1 : Math.min(1, getMonarchSpawnRate() + pity * cfg.pityStepPerGame)
+  const isMonarch = Math.random() < effectiveRate
+
+  // Batch 1 Task 4 — log ไว้ tuning ทีหลัง (ไม่ส่งอะไรไปที่ client ทั้งสิ้น)
+  if (isMonarch && isRoyalHour()) {
+    console.log(`[MONARCH] Spawned during Royal Hour (userId=${userId}, pity=${pity}, effectiveRate=${effectiveRate.toFixed(4)})`)
+  }
+
+  try {
+    await supabaseAdmin
+      .from('users')
+      .update({ monarch_pity_counter: isMonarch ? 0 : pity + 1 })
+      .eq('user_id', userId)
+  } catch (err) {
+    console.error('[MONARCH] Error updating pity counter for', userId, err)
+  }
+
+  return isMonarch
 }
 
 // ── Matchmaking (Sprint 2 Part B) — 1 Human + 2 Minion + Boss คงที่ ไม่ต้องรอ human คนอื่น ──
@@ -116,10 +176,10 @@ export async function startMonarchMatch(
   const randomPersonality = () => minionPersonalities[Math.floor(Math.random() * minionPersonalities.length)]
 
   const seats: [MonarchSeat, MonarchSeat, MonarchSeat, MonarchSeat] = [
-    { id: humanUserId, role: 'human', isHuman: true, name: humanName, emoji: '🧑' },
-    { id: 'MONARCH_MINION_1', role: 'minion1', isHuman: false, name: minionNames[0], emoji: '🤖', personality: randomPersonality() },
-    { id: 'MONARCH_MINION_2', role: 'minion2', isHuman: false, name: minionNames[1], emoji: '🤖', personality: randomPersonality() },
-    { id: 'MONARCH_BOSS', role: 'boss', isHuman: false, name: gameConfig.monarchIdentity.name, emoji: gameConfig.monarchIdentity.emoji },
+    { id: humanUserId, role: 'human', isHuman: true, name: humanName, emoji: '🧑', hasRealStake: true },
+    { id: 'MONARCH_MINION_1', role: 'minion1', isHuman: false, name: minionNames[0], emoji: '🤖', personality: randomPersonality(), hasRealStake: false },
+    { id: 'MONARCH_MINION_2', role: 'minion2', isHuman: false, name: minionNames[1], emoji: '🤖', personality: randomPersonality(), hasRealStake: false },
+    { id: 'MONARCH_BOSS', role: 'boss', isHuman: false, name: gameConfig.monarchIdentity.name, emoji: gameConfig.monarchIdentity.emoji, hasRealStake: true },
   ]
 
   const tokenBalance: Record<string, number> = {}
@@ -263,7 +323,7 @@ function monarchBossWeights(personality: AIPersonality): { w1: number; w2: numbe
 // ── Round Start (Sprint 3, Boss upgrade Sprint 7) — deal + auto-arrange Minion/Boss ทันที ──
 // ไม่ emit ตรงจากตรงนี้ (known bug #2, CLAUDE.md: client ยัง mount/join ห้องไม่ทันตอน room_auto_match
 // สั่งเริ่มแมตช์ทันที) — client ต้อง pull เอาเองผ่าน monarch_join หลัง mount แล้ว (ดู buildMonarchRoundSnapshot)
-export function startMonarchRound(roomId: string): void {
+export function startMonarchRound(io: Server, roomId: string): void {
   const state = monarchMatchStates.get(roomId)
   if (!state) return
 
@@ -281,6 +341,14 @@ export function startMonarchRound(roomId: string): void {
   state.g2Winner = undefined
   state.g3Winner = undefined
   state.phase = 'arrangement'
+
+  // Batch 1 Task 6 — เริ่มนับเวลาจัดไพ่ของ human (Minion/Boss auto-arrange ทันทีอยู่แล้วด้านล่าง ไม่ต้องรอ)
+  state.arrangementDeadlineAt = Date.now() + gameConfig.monarchConfig.arrangementDeadlineMs
+  if (state.arrangementTimer) clearTimeout(state.arrangementTimer)
+  state.arrangementTimer = setTimeout(
+    () => forceSealMonarchArrangement(io, roomId),
+    gameConfig.monarchConfig.arrangementDeadlineMs,
+  )
 
   // Minion auto-arrange แบบเดิม (dumb, foul-only ตาม Monarch Minion spec) — Boss ยกระดับเป็น
   // personality-weighted optimal solver (Sprint 7)
@@ -310,17 +378,69 @@ export function startMonarchRound(roomId: string): void {
 }
 
 // ── Snapshot สำหรับ pull model (monarch_join) ───────────────
+// Batch 3E Task 3 (Full Reconnect) — เดิม snapshot นี้รองรับแค่ phase 'arrangement' จริง (ไม่มี reveal
+// history/grand finale live state เลย) reconnect ตอน g1_reveal/g2_reveal/grand_finale จะได้ phase
+// ถูกต้องแต่ไม่มีข้อมูลพอวาด UI เฟสนั้น (ดู audit 3E ข้อ 7) แก้โดย reconstruct g1Result/g2Result/
+// grandFinale จาก state ที่เก็บถาวรอยู่แล้ว (g1Winner/g2Winner/arrangements/foulMap/tokenBalance —
+// ไม่มีอะไรหายเพราะไม่เคย delete ตัวแปรพวกนี้ทิ้งเลยตลอดแมตช์) shape เดียวกับ event สดที่ resolveG1/
+// resolveG2 เคย emit ไปแล้วเป๊ะ (client ใช้ handler เดิม monarch_g1_result/monarch_g2_result รับต่อได้
+// เลยไม่ต้องแยกโค้ดฝั่ง client) — field เดิมทั้งหมดไม่ถูกแตะ แค่เพิ่ม field ใหม่ต่อท้าย
 export function buildMonarchRoundSnapshot(state: MonarchMatchState): Record<string, any> {
   const humanCards = state.cardsMap?.[state.humanUserId] ?? []
+  const commA = state.community?.commA ?? []
+  const commB = state.community?.commB ?? []
+
+  // reveal เฉพาะกองที่ "เปิดไปแล้วจริง" เท่านั้น (phase ผ่านจุดนั้นมาแล้ว) — arrangements ของทุกที่นั่ง
+  // ล็อกไว้ตั้งแต่ seal แล้ว ไม่ใช่ไพ่ที่ยังไม่ตัดสินใจ จึงไม่มีทางหลุดไพ่ที่ยังไม่ควรเห็นออกไป
+  const revealedG1 = state.phase !== 'waiting' && state.phase !== 'arrangement'
+  const revealedG2 = revealedG1 && state.phase !== 'g1_reveal'
+
+  const g1Result = revealedG1 && state.arrangements ? {
+    roomId: state.roomId,
+    g1Winner: state.g1Winner || null,
+    foulMap: state.foulMap ?? {},
+    reveals: state.seats.map(s => ({
+      id: s.id,
+      g1Cards: assembleMonarchHands(state.arrangements![s.id], commA, commB).g1.map(cardKey),
+    })),
+    tokenBalance: state.tokenBalance,
+  } : null
+
+  const g2Result = revealedG2 && state.arrangements ? {
+    roomId: state.roomId,
+    g2Winner: state.g2Winner || null,
+    foulMap: state.foulMap ?? {},
+    reveals: state.seats.map(s => ({
+      id: s.id,
+      g2Cards: assembleMonarchHands(state.arrangements![s.id], commA, commB).g2.map(cardKey),
+      folded: !s.hasRealStake,
+    })),
+    tokenBalance: state.tokenBalance,
+  } : null
+
+  const grandFinale = state.grandFinale ? {
+    roomId: state.roomId,
+    foldedPlayers: state.grandFinale.foldedPlayers,
+    pot: state.grandFinale.pot,
+    callAmount: gameConfig.grandFinale.callAmount.highNoble ?? 0,
+    turn: state.grandFinale.turn,
+  } : null
+
   return {
     roomId: state.roomId,
     phase: state.phase,
     seats: state.seats.map(s => ({ id: s.id, role: s.role, isHuman: s.isHuman, name: s.name, emoji: s.emoji })),
     yourCards: humanCards.map(cardKey),
-    commA: (state.community?.commA ?? []).map(cardKey),
-    commB: (state.community?.commB ?? []).map(cardKey),
+    commA: commA.map(cardKey),
+    commB: commB.map(cardKey),
     tokenBalance: state.tokenBalance,
     buyInAmount: state.buyInAmount,
+    // Batch 1 Task 6 — เตรียมไว้ให้ Batch 2 ทำ UI countdown (ยังไม่มี client อ่านค่านี้ในบัตช์นี้)
+    arrangementDeadlineAt: state.arrangementDeadlineAt ?? null,
+    // Batch 3E Task 3 — null ถ้ายังไม่ถึงจุดนั้น ให้ client (Task 6) hydrate UI กลับให้ถูก phase จริง
+    g1Result,
+    g2Result,
+    grandFinale,
   }
 }
 
@@ -352,8 +472,24 @@ function resolveArrangementFromKeys(
   return { pile1, pile2, pile3 }
 }
 
-// ── Human submit arrangement (Sprint 3: Auto Arrange ปุ่มเดียว | Sprint 6: ส่ง arrangement ที่จัด
-// เองมาด้วยได้ — ถ้า foul คืน ok:false reason:'FOUL' ให้แก้ไขต่อได้ ไม่ mark submitted) ──────────
+// ── Batch 1 Task 6 — ปิดผนึก arrangement ของผู้เล่น (ใช้ร่วมกันทั้ง submit เอง และ auto-seal ตอน
+// หมดเวลา) ไม่เช็ค foul ตรงนี้เลย — resolveG1 คำนวณ+เก็บ foulMap ของทุกที่นั่งเองอยู่แล้วตอนเปิดกอง ──
+function sealMonarchArrangement(io: Server, state: MonarchMatchState, userId: string, arr: PlayerArrangement): void {
+  if (state.arrangementTimer) { clearTimeout(state.arrangementTimer); state.arrangementTimer = undefined }
+  state.arrangements![userId] = arr
+  state.submittedArrangement.add(userId)
+
+  if (state.submittedArrangement.size === state.seats.length) {
+    void resolveG1(io, state)
+  }
+}
+
+// ── Human submit arrangement (Sprint 3/6 → Batch 1 Task 6, Monarch v2.2 canon: "ไม่มีปุ่มช่วยจัด
+// ไพ่ใดๆ ในโต๊ะ Monarch" + "Foul → ยัง submit ได้ แต่แพ้ทันที") ──────────────────────────────────
+// เปลี่ยนจากเดิม 2 จุด: (1) arrangementKeys ไม่ใช่ optional ในทางปฏิบัติอีกต่อไป — ไม่ส่งมา = reject
+// ตรงๆ (ไม่มี auto-arrange fallback ให้ช่วยจัดแล้ว) (2) foul ไม่ reject ให้แก้ใหม่แบบเดิมอีกต่อไป —
+// รับ submit เสมอแล้วปล่อยให้แพ้ตามกติกา Foul ทั่วไป (resolveG1/resolveG2 กันไม่ให้ที่นั่ง foul ชนะ
+// อยู่แล้ว, resolveMonarchBossTurn มี guard เพิ่มให้ G3 แพ้แน่นอนด้วยเช่นกัน)
 export function submitMonarchArrangement(
   io: Server, roomId: string, userId: string,
   arrangementKeys?: { g1: string[]; g2: string[]; g3: string[] },
@@ -364,27 +500,33 @@ export function submitMonarchArrangement(
   if (userId !== state.humanUserId) return { ok: false, reason: 'NOT_YOUR_SEAT' }
   if (state.submittedArrangement.has(userId)) return { ok: false, reason: 'ALREADY_SUBMITTED' }
   if (!state.cardsMap || !state.community) return { ok: false, reason: 'NOT_DEALT' }
+  if (!arrangementKeys) return { ok: false, reason: 'INVALID_ARRANGEMENT' }
 
-  const { commA, commB } = state.community
-  let arr: PlayerArrangement
+  const resolved = resolveArrangementFromKeys(state.cardsMap[userId], arrangementKeys)
+  if (!resolved) return { ok: false, reason: 'INVALID_ARRANGEMENT' }
 
-  if (arrangementKeys) {
-    const resolved = resolveArrangementFromKeys(state.cardsMap[userId], arrangementKeys)
-    if (!resolved) return { ok: false, reason: 'INVALID_ARRANGEMENT' }
-    const { g1, g2, g3 } = assembleMonarchHands(resolved, commA, commB)
-    if (monarchCheckFoul(g1, g2, g3).isFoul) return { ok: false, reason: 'FOUL' }
-    arr = resolved
-  } else {
-    arr = monarchFirstValidArrangement(state.cardsMap[userId], commA, commB)
-  }
-
-  state.arrangements![userId] = arr
-  state.submittedArrangement.add(userId)
-
-  if (state.submittedArrangement.size === state.seats.length) {
-    void resolveG1(io, state)
-  }
+  sealMonarchArrangement(io, state, userId, resolved)
   return { ok: true }
+}
+
+// ── Batch 1 Task 6 — หมดเวลาจัดไพ่ (gameConfig.monarchConfig.arrangementDeadlineMs) แล้ว human
+// ยังไม่ submit → auto-seal ด้วยไพ่ตามลำดับที่แจกจริงเป๊ะ (cardsMap ดิบ ตัด 3/3/5) ห้ามใช้
+// monarchFirstValidArrangement/monarchBestArrangement ช่วยจัดโดยเด็ดขาด (canon: ไม่มีปุ่มช่วยจัดไพ่
+// ใดๆ ในโต๊ะนี้ — auto-seal ต้อง "ไม่ช่วย" ด้วยเช่นกัน) ผลลัพธ์มีโอกาสสูงที่จะ foul เพราะไม่ได้จัดตาม
+// กติกา G1<G2<G3 เลย ซึ่งจะแพ้ทันทีตามกติกา Foul ปกติ — ยังไม่มี UI countdown ในบัตช์นี้
+function forceSealMonarchArrangement(io: Server, roomId: string): void {
+  const state = monarchMatchStates.get(roomId)
+  if (!state || state.matchEnded) return
+  if (state.phase !== 'arrangement') return // submit ทันเวลาไปแล้ว (เข้า resolveG1 แล้ว) ไม่ต้องทำอะไร
+  if (state.submittedArrangement.has(state.humanUserId)) return // กันชนกับ submit ที่มาถึงพอดีตอน timer ยิง
+
+  const rawHand = state.cardsMap![state.humanUserId]
+  const arr: PlayerArrangement = {
+    pile1: rawHand.slice(0, 3),
+    pile2: rawHand.slice(3, 6),
+    pile3: rawHand.slice(6),
+  }
+  sealMonarchArrangement(io, state, state.humanUserId, arr)
 }
 
 // ── resolveG1 (Sprint 3) — เปิดกอง G1 ก่อน แล้วหน่วง 4s ต่อด้วย resolveG2 อัตโนมัติ (Sprint 4) —
@@ -415,16 +557,24 @@ export async function resolveG1(io: Server, state: MonarchMatchState): Promise<v
     if (score > bestScore) { bestScore = score; winnerId = seat.id }
   }
 
+  // Hotfix (token leak, Spec v2.1 §5.1): Minion ยังร่วมเทียบไพ่ G1 ได้เพื่อ "ชนะเชิงสัญลักษณ์"
+  // ตาม canon แต่ต้องไม่มีผลเงินเด็ดขาด — ถ้าผู้ชนะ overall เป็น Minion (hasRealStake===false)
+  // ให้ข้าม token movement ทั้งกอง (ไม่หัก ไม่จ่ายใครเลยรอบนี้ รวมถึง Human/Monarch เอง) เทียบเท่า
+  // "กองนี้ไม่มีเดิมพันจริงเกิดขึ้น" ส่วนถ้าผู้ชนะเป็น Human/Monarch คำนวณเงินตามเดิมแต่หาร pot
+  // เฉพาะที่นั่งที่ hasRealStake จริง (ไม่ใช่ seats.length เต็ม 4) กัน pot พองจากสตางค์ผีของ Minion
+  const winnerSeat = state.seats.find(s => s.id === winnerId)
+  const isSymbolicWin = !!winnerSeat && !winnerSeat.hasRealStake
   const stake = gameConfig.tokenPot.tiers.highNoble.pile1
   const rake = gameConfig.tokenPot.rake
-  if (winnerId) {
-    const totalPot = stake * state.seats.length
+  if (winnerId && !isSymbolicWin) {
+    const realSeats = state.seats.filter(s => s.hasRealStake)
+    const totalPot = stake * realSeats.length
     const net = Math.floor(totalPot * (1 - rake))
-    for (const seat of state.seats) {
+    for (const seat of realSeats) {
       state.tokenBalance[seat.id] += (seat.id === winnerId ? net - stake : -stake)
     }
-    state.g1Winner = winnerId
   }
+  if (winnerId) state.g1Winner = winnerId
   // เคส "ทุกที่นั่ง foul หมด" ทางปฏิบัติแทบเป็นไปไม่ได้ (monarchFirstValidArrangement การันตี
   // foul-free ด้วย retry+fallback brute force) — ถ้าเกิดขึ้นจริง pot รอบนี้ไม่ถูกแจก/ไม่หัก
   // TODO sprint ถัดไปถ้าต้องการ Fee&Rake bucket จริงแบบ Tier อื่น (state ยังไม่มี field นี้)
@@ -434,6 +584,7 @@ export async function resolveG1(io: Server, state: MonarchMatchState): Promise<v
   io.to(state.roomId).emit('monarch_g1_result', {
     roomId: state.roomId,
     g1Winner: winnerId || null,
+    g1WinnerSymbolic: isSymbolicWin,   // true = Minion ชนะเชิงสัญลักษณ์ ไม่มีผลเงิน (client แสดง badge เฉยๆ)
     foulMap: state.foulMap,
     reveals: state.seats.map(s => ({
       id: s.id,
@@ -451,12 +602,18 @@ export async function resolveG1(io: Server, state: MonarchMatchState): Promise<v
 // เช็คไว้แล้วตรงๆ ไม่ recompute ซ้ำ (foul เป็นการตัดสินทั้ง arrangement ไม่ใช่รายกอง) — stake ใช้
 // gameConfig.tokenPot.tiers.highNoble.pile2 (มติลุงเยาะ Sprint 3 ใช้เศรษฐกิจ highNoble ทุกกอง) —
 // G3/Grand Finale ยัง stub รอ sprint ถัดไป
+// Hotfix (token leak, Spec v2.1 §5.1): "G2: Minion หมอบทันที (auto-fold)" — ต่างจาก resolveG1
+// ตรงที่ G1 ยอมให้ Minion ร่วมเทียบแบบสัญลักษณ์ได้ แต่ G2 ต้องตัด Minion ออกจาก comparison
+// ทั้งหมดตั้งแต่ต้น (ไม่ใช่แค่ gate เงินทีหลังแบบ G1) ผู้ชนะ G2 มาจาก Human vs Monarch เท่านั้น —
+// EV decision ที่ G3 (decideMonarchBossAction/estimateMonarchBossWinrate) อ่าน state.arrangements
+// ตรงๆ ไม่ได้อ่าน state.g2Winner เลย ยืนยันแล้วว่าไม่กระทบ (ดู audit ก่อนหน้า)
 export async function resolveG2(io: Server, state: MonarchMatchState): Promise<void> {
   if (state.matchEnded) return // Sprint 10: match ถูกจบไปแล้ว (เช่น human disconnect) — เลิก chain ต่อ
   const { commA, commB } = state.community!
+  const realSeats = state.seats.filter(s => s.hasRealStake)
   const g2Hands: Record<string, HandResult> = {}
 
-  for (const seat of state.seats) {
+  for (const seat of realSeats) {
     const arr = state.arrangements![seat.id]
     const { g2 } = assembleMonarchHands(arr, commA, commB)
     g2Hands[seat.id] = monarchResolvePile(g2)
@@ -464,7 +621,7 @@ export async function resolveG2(io: Server, state: MonarchMatchState): Promise<v
 
   let winnerId = ''
   let bestScore = -Infinity
-  for (const seat of state.seats) {
+  for (const seat of realSeats) {
     if (state.foulMap![seat.id]) continue
     const score = g2Hands[seat.id].score
     if (score > bestScore) { bestScore = score; winnerId = seat.id }
@@ -473,14 +630,14 @@ export async function resolveG2(io: Server, state: MonarchMatchState): Promise<v
   const stake = gameConfig.tokenPot.tiers.highNoble.pile2
   const rake = gameConfig.tokenPot.rake
   if (winnerId) {
-    const totalPot = stake * state.seats.length
+    const totalPot = stake * realSeats.length
     const net = Math.floor(totalPot * (1 - rake))
-    for (const seat of state.seats) {
+    for (const seat of realSeats) {
       state.tokenBalance[seat.id] += (seat.id === winnerId ? net - stake : -stake)
     }
     state.g2Winner = winnerId
   }
-  // เคส "ทุกที่นั่ง foul หมด" — เหมือน resolveG1 ทางปฏิบัติแทบเป็นไปไม่ได้ ถ้าเกิดขึ้นจริง pot
+  // เคส "ทุกที่นั่งจริง foul หมด" — เหมือน resolveG1 ทางปฏิบัติแทบเป็นไปไม่ได้ ถ้าเกิดขึ้นจริง pot
   // รอบนี้ไม่ถูกแจก/ไม่หัก (TODO เดียวกับ resolveG1 — รอ Fee&Rake bucket จริงถ้าจำเป็น)
 
   state.phase = 'g2_reveal'
@@ -492,6 +649,7 @@ export async function resolveG2(io: Server, state: MonarchMatchState): Promise<v
     reveals: state.seats.map(s => ({
       id: s.id,
       g2Cards: assembleMonarchHands(state.arrangements![s.id], commA, commB).g2.map(cardKey),
+      folded: !s.hasRealStake,   // Minion หมอบตั้งแต่ G2 ตาม Spec §5.1 — client ใช้ badge "Folded" แทนการเทียบ
     })),
     tokenBalance: state.tokenBalance,
   })
@@ -510,10 +668,14 @@ export function startMonarchGrandFinale(io: Server, state: MonarchMatchState): v
   const stake = gameConfig.tokenPot.tiers.highNoble.pile3
   const minion1 = state.seats.find(s => s.role === 'minion1')!
   const minion2 = state.seats.find(s => s.role === 'minion2')!
+  // Hotfix (token leak, Spec v2.1 §5.1/§6): pot ตั้งต้นต้องนับเฉพาะที่นั่งที่ hasRealStake จริง
+  // (Human + Monarch = 2) ไม่ใช่ seats.length เต็ม 4 — เดิม pot พองจาก "เงินผี" ของ Minion ที่ไม่มี
+  // เดิมพันจริง ทำให้ผู้ชนะได้ payout เกินจริง
+  const realSeatCount = state.seats.filter(s => s.hasRealStake).length
 
   state.grandFinale = {
     foldedPlayers: [minion1.id, minion2.id],
-    pot: stake * state.seats.length,
+    pot: stake * realSeatCount,
     turn: 'human',
   }
   state.phase = 'grand_finale'
@@ -525,6 +687,16 @@ export function startMonarchGrandFinale(io: Server, state: MonarchMatchState): v
     callAmount: gameConfig.grandFinale.callAmount.highNoble ?? 0,
     turn: 'human',
   })
+
+  // Batch 1.5 Task 6 (มติ commit-based 2026-07-30): human หลุดการเชื่อมต่อไปแล้วก่อนถึงจุดนี้ (เช่น
+  // disconnect ตอน g1_reveal/g2_reveal ที่ automatic chain เพิ่งวิ่งมาถึง Grand Finale ทีหลัง) —
+  // ไม่มี timer สำหรับ human's turn เหมือน High Noble ปกติ (ต่างจาก boss ที่มี 2.5s decision timer
+  // เสมอ) ถ้าปล่อยไว้จะค้างที่ turn:'human' ตลอดไป → บังคับ Fold ทันที (ไม่บังคับจ่ายเพิ่ม)
+  if (state.humanDisconnected) {
+    const bossSeat = state.seats.find(s => s.role === 'boss')!
+    state.grandFinale.foldedPlayers.push(state.humanUserId)
+    void finalizeMonarchG3(io, state, bossSeat.id)
+  }
 }
 
 // ── Human submit Call/Fold ──────────────────────────────────
@@ -644,10 +816,19 @@ function decideMonarchBossAction(state: MonarchMatchState): 'call' | 'fold' {
   return Math.random() < callProb ? 'call' : 'fold'
 }
 
-async function resolveMonarchBossTurn(io: Server, state: MonarchMatchState): Promise<void> {
+export async function resolveMonarchBossTurn(io: Server, state: MonarchMatchState): Promise<void> {
   if (state.matchEnded) return // Sprint 10: match ถูกจบไปแล้ว (เช่น human disconnect) — เลิก chain ต่อ
   const bossSeat = state.seats.find(s => s.role === 'boss')!
   const humanSeat = state.seats.find(s => s.role === 'human')!
+
+  // Batch 1 Task 6 (Foul rule): Human ที่ arrangement foul แพ้ G3 เสมอ ไม่ว่า Boss จะตัดสินใจอย่างไร
+  // (กันเคส Boss สุ่ม Fold ทั้งที่ Human การันตีแพ้อยู่แล้ว ซึ่งจะทำให้ Human ชนะทั้งที่ foul) — ข้าม
+  // การตัดสินใจของ Boss ไปเลยในเคสนี้ ไม่ต้องมี broadcast แยก (UI ของกรณีนี้เป็นงาน Batch 2)
+  if (state.foulMap![humanSeat.id]) {
+    await finalizeMonarchG3(io, state, bossSeat.id)
+    return
+  }
+
   const { commA, commB } = state.community!
   const { g3: bossG3 } = assembleMonarchHands(state.arrangements![bossSeat.id], commA, commB)
   const bossHand = monarchResolvePile(bossG3)
@@ -688,7 +869,11 @@ async function finalizeMonarchG3(io: Server, state: MonarchMatchState, winnerId:
   const rake = gameConfig.tokenPot.rake
   const pot = state.grandFinale!.pot
 
+  // Hotfix (token leak, Spec v2.1 §5.1/§6): หัก ante เฉพาะที่นั่งที่ hasRealStake จริง (Human +
+  // Monarch) ให้ตรงกับ pot ที่ตั้งไว้ตอน startMonarchGrandFinale (stake * realSeatCount) — เดิมหัก
+  // จากทั้ง 4 ที่นั่งรวม Minion ที่ไม่มีเดิมพันจริง
   for (const seat of state.seats) {
+    if (!seat.hasRealStake) continue
     state.tokenBalance[seat.id] -= stake
   }
   state.tokenBalance[winnerId] += Math.floor(pot * (1 - rake))
@@ -707,29 +892,57 @@ async function finalizeMonarchG3(io: Server, state: MonarchMatchState, winnerId:
     tokenBalance: state.tokenBalance,
   })
 
-  // Sprint 8: Human ชนะ Monarch — บันทึก monarch_victories จริง (reuse recordMonarchVictory เดิม
-  // จาก monarchSpawn.ts ที่ badge "Monarch Slayer" ใน profile.tsx อ่านอยู่แล้ว แต่ยังไม่เคยถูกเรียก
-  // จากโต๊ะนี้เลย) + broadcast กว้างไป Server Activity ให้คนที่กำลังเล่นโต๊ะอื่นเห็น (คนละ event
-  // กับ monarch_spawn ตอนโต๊ะเริ่ม — ดู gameSocket.ts's room_auto_match pre-check)
-  if (winnerId === state.humanUserId) {
-    const humanSeat = state.seats.find(s => s.role === 'human')!
-    void recordMonarchVictory(state.humanUserId)
-    io.emit('server_activity', { kind: 'monarch_win', winnerName: humanSeat.name, timestamp: Date.now() })
-  }
-
+  // Batch 1 Task 5: victory/badge ย้ายไปตัดสินด้วย netDelta > 0 ใน settleMonarchMatch แทน (ไม่ใช่
+  // g3Winner ตรงๆ แบบเดิม) — ดูเหตุผลที่นั่น ต้องรอ netDelta คำนวณเสร็จก่อนถึงจะรู้ผลแพ้ชนะจริง
   await settleMonarchMatch(io, state)
 }
 
 // ── Match End (Sprint 5) — จุดแรกที่ Monarch เขียนเงินจริงกลับ Supabase (Sprint 2-4 หักแค่ escrow
 // ตอนเข้าเกม ยังไม่เคย settle) ────────────────────────────────────────────────────────────
-async function settleMonarchMatch(io: Server, state: MonarchMatchState): Promise<void> {
-  const finalStack = state.tokenBalance[state.humanUserId]
+// Bug fix (audit): เดิมใช้ state.tokenBalance ตรงๆ เป็น finalStack เลย ไม่เคยคูณ Pot×2 ตอน human
+// ชนะ Monarch จริงสักครั้ง (ต่างจากเส้นทางเก่า computeHNHumanPayout ใน highNobleMultiEngine.ts ที่ทำ
+// ถูกอยู่แล้ว) — reuse ฟังก์ชันเดียวกันแทนเขียนสูตรซ้ำ กัน 2 สูตรขัดกันในอนาคต
+export async function settleMonarchMatch(io: Server, state: MonarchMatchState): Promise<void> {
+  // Batch 1.5 Task 4 (ยืนยัน audit 2026-07-30 — ลำดับนี้ถูกต้องอยู่แล้ว ห้ามสลับ ห้ามเรียก
+  // computeHNHumanPayout ซ้ำที่ไหนอีก กัน apply Pot×2 ซ้อน): ลำดับบังคับ 4 ขั้น —
+  //   1) คำนวณ netDelta จากผล G1/G2/G3 จริง (state.tokenBalance ที่สะสมมาแล้วตลอด G1/G2/G3)
+  //   2) isHumanWinner = netDelta > 0 (เกณฑ์ "ชนะ Monarch" เดียว ไม่ใช่ g3Winner — Canon 2026-07-30)
+  //   3) ถ้าชนะ → apply Pot×2 ผ่าน computeHNHumanPayout ครั้งเดียวเท่านั้น (คูณ netDelta ก่อน apply
+  //      ไม่ใช่คูณ pot ดิบ) ได้ payout สุดท้าย
+  //   4) ถ้าชนะ → badge (recordMonarchVictory) + encounter/monarch_defeats — ใช้ isHumanWinner ตัวเดียวกับ (3)
+  const netDelta = (state.tokenBalance[state.humanUserId] ?? state.buyInAmount) - state.buyInAmount // (1)
+  const isHumanWinner = netDelta > 0 // (2) — netDelta===0 (เสมอพอดี) ก็ isHumanWinner=false เช่นกัน ไม่ใช่แค่ < 0
+  const payout = computeHNHumanPayout(netDelta, isHumanWinner, gameConfig.monarchConfig.potMultiplier) // (3) ครั้งเดียว
+  const finalStack = state.buyInAmount + payout
+
+  // Batch 1 Task 5: encounter นับทุกกรณี (ชนะ/แพ้) — disconnect ถูกนับแยกที่ settleAndEndMonarchMatch
+  void recordMonarchEncounter(state.humanUserId)
+  let relicResult: MonarchRelicResult | null = null
+  if (isHumanWinner) { // (4) — badge เกตด้วย isHumanWinner ตัวเดียวกับ (2)/(3) กันนิยาม "ชนะ" 2 มาตรฐาน
+    const humanSeat = state.seats.find(s => s.role === 'human')!
+    void recordMonarchVictory(state.humanUserId)
+    io.emit('server_activity', { kind: 'monarch_win', winnerName: humanSeat.name, timestamp: Date.now() })
+    // Batch 3D-1 Task 4: try/catch แยกของตัวเอง — relic roll พลาดต้อง "ไม่" ทำให้ settlement/badge/
+    // Pot×2 ข้างบนพัง (ทุกอย่างข้างบนคำนวณ/เขียนเสร็จไปแล้วก่อนถึงบรรทัดนี้) log error พอ ไม่ throw ต่อ
+    try {
+      relicResult = await rollAndRecordMonarchRelic(state.humanUserId)
+    } catch (err) {
+      console.error('[MONARCH_RELIC] Unexpected error rolling relic for', state.humanUserId, err)
+    }
+  }
+
   const newBalance = await settleEscrow(state.humanUserId, state.escrowId, finalStack)
   state.matchEnded = true
   io.to(state.roomId).emit('monarch_match_end', {
     roomId: state.roomId,
     finalStack,
     tokenBalance: newBalance,
+    // Batch 3C-2 Task 1: ส่ง foulReasons ไปด้วยเฉยๆ (field อ่านอย่างเดียว ไม่กระทบ finalStack/settlement
+    // ข้างบนเลย) ให้ client โชว์เหตุผลที่แพ้ตรงๆ กัน sudden-death งงว่าโดนโกง
+    foulReasons: state.foulReasons ?? {},
+    // Batch 3D-1 Task 5: ส่ง relicResult ไปด้วยเฉยๆ (field อ่านอย่างเดียว, null ถ้าแพ้หรือ roll พลาด)
+    // ไม่กระทบ finalStack/settlement ข้างบนเลยเช่นกัน — client (3D-2) เอาไปทำ reveal popup ต่อ
+    relicResult: relicResult ?? undefined,
   })
   // Sprint 10: เคลียร์ state ออกจาก memory หลังจบแมตช์จริง (เดิมค้างอยู่ตลอดไป ไม่มีใครลบเลย)
   monarchMatchStates.delete(state.roomId)
@@ -743,12 +956,88 @@ async function settleMonarchMatch(io: Server, state: MonarchMatchState): Promise
 // monarchMatchStates leak ตลอดไป — เมธอดนี้ set matchEnded=true ก่อนเสมอ (guard เดียวกับที่ resolveG1/
 // resolveG2/startMonarchGrandFinale/resolveMonarchBossTurn/finalizeMonarchG3 เช็คไว้แล้ว) กัน delay/
 // setTimeout ที่ค้างอยู่ (เช่น resolveG1→delay(4s)→resolveG2) มาแก้ tokenBalance ซ้ำหลัง settle ไปแล้ว
-export async function settleAndEndMonarchMatch(roomId: string): Promise<void> {
+// Batch 1.5 Task 6 (มติ commit-based 2026-07-30 — ทับ Batch 1 Task 6 เดิมทั้งหมด): เดิมเคยแค่หยิบ
+// tokenBalance ดิบมา settle ตรงๆ ไม่ resolve อะไรเลย (freeze) ตอนนี้แยก 2 เคสตาม state.phase
+// (reuse ที่มีอยู่แล้วแทนเพิ่ม sealedByPlayer flag ใหม่ตามที่โจทย์เสนอเป็นทางเลือก — phase==='arrangement'
+// ก็คือ "ยังไม่ seal" เป๊ะอยู่แล้ว):
+//   ก่อน Seal (phase==='arrangement') — ไม่มีเดิมพันเกิดขึ้นเลย จบทันทีเหมือนเดิม (ถูกต้องอยู่แล้ว)
+//   หลัง Seal — ต้อง resolve จนถึง match_end เสมอ ห้าม freeze: "ปล่อย" ให้ automatic chain ที่วิ่งอยู่จริง
+//     (resolveG1→delay→resolveG2→delay→startMonarchGrandFinale, หรือ boss's 2.5s decision timer หลัง
+//     human call ไปแล้ว — reuse grandFinale.turn เดิมแทนเพิ่ม grandFinaleCommitted flag ใหม่: turn==='boss'
+//     คือ "commit ไปแล้ว") วิ่งต่อไปเองจนจบแล้ว settle ผ่าน settleMonarchMatch ปกติทุกประการ (badge/Pot×2
+//     ตัดสินจาก netDelta จริงของไพ่ที่ผนึกไว้แล้ว ไม่ใช่ snapshot ดิบ)
+//
+// Batch 3E Task 2 (มติ 2026-07-30 — Royal Challenge Lock, grace 20s เฉพาะจุดเดียว): ก่อนหน้านี้เคส
+// grand_finale+turn==='human' บังคับ Fold ทันทีไม่มีโอกาสแก้ตัวเลย ตอนนี้แยก "grace" (รอเฉยๆ ก่อน
+// ตัดสิน) ออกจาก "resolve" (ลงมือจริง) เป็นคนละ step กันชัดเจน โดยใช้ field ใหม่ disconnectedAt/
+// graceTimer (ดู comment ที่ประกาศ field ด้านบน) ⚠️ ไม่แตะความหมาย/จุดใช้งานของ humanDisconnected เดิม
+// เลย (ยังเป็นตัวเดียวที่ startMonarchGrandFinale เช็คเพื่อ auto-fold ทันทีถ้าไปถึงจุดนั้นโดยไม่เคย
+// reconnect มาเคลียร์ก่อน — ดู monarch_join Task 4) กติกาต่อ phase:
+//   arrangement      — คงเดิมเป๊ะ ไม่มี grace (risk profile เดิม: หลุด=คืนเงินทันที ไม่เสี่ยงอะไร)
+//   g1_reveal/g2_reveal — ไม่มีอะไรรอ human อยู่แล้ว (chain วิ่งเองอัตโนมัติ) ไม่ grace ไม่ resolve
+//     แค่ตั้ง humanDisconnected=true เหมือนเดิมทุกประการ (เผื่อไปถึง grand_finale โดยไม่เคย reconnect)
+//   grand_finale + turn==='human' — จุดเดียวที่มี grace 20s จริง: ตั้ง graceTimer แทนบังคับ Fold ทันที
+//     reconnect ทันใน 20s (monarch_join เคลียร์ timer ให้) = เล่นต่อได้ปกติ ไม่งั้นหมดเวลา = default
+//     Fold แล้ว resolve เหมือนพฤติกรรมเดิมทุกประการ (แค่ช้าลง 20s เท่านั้น ผลลัพธ์สุดท้ายไม่เปลี่ยน)
+//   grand_finale + turn==='boss' — คงเดิมเป๊ะ ไม่ต้องทำอะไรเลย (boss's 2.5s timer เดินเองไม่รอ human)
+export async function settleAndEndMonarchMatch(io: Server, roomId: string): Promise<void> {
   const state = monarchMatchStates.get(roomId)
   if (!state || state.matchEnded) return
-  state.matchEnded = true
 
-  const finalStack = state.tokenBalance[state.humanUserId]
-  await settleEscrow(state.humanUserId, state.escrowId, finalStack)
-  monarchMatchStates.delete(roomId)
+  if (state.phase === 'arrangement') {
+    // ก่อน Seal — ไม่มีเดิมพันเกิดขึ้นเลย (ante ทุกกองหักตอน resolveG1/G2/G3 เท่านั้น) settle ตรงๆ
+    // ไม่ต้อง resolve อะไร encounter+1 ไม่ได้ badge (ยืนยันพฤติกรรมเดิมถูกต้องแล้ว — audit Batch 1.5)
+    if (state.arrangementTimer) { clearTimeout(state.arrangementTimer); state.arrangementTimer = undefined }
+    state.matchEnded = true
+    void recordMonarchEncounter(state.humanUserId)
+    const finalStack = state.tokenBalance[state.humanUserId]
+    await settleEscrow(state.humanUserId, state.escrowId, finalStack)
+    monarchMatchStates.delete(roomId)
+    return
+  }
+
+  // หลัง Seal: ห้าม set matchEnded=true ตรงนี้ (จะไปตัด chain ที่กำลังวิ่งอยู่จริงทิ้งกลางคัน — นี่คือ
+  // bug เดิมที่ต้องแก้) ปล่อยให้วิ่งต่อจนถึง finalizeMonarchG3→settleMonarchMatch ที่จะ set matchEnded/
+  // settleEscrow/ลบ state ให้เองเมื่อจบจริง — mark เวลาหลุดไว้เสมอ (bookkeeping, reconnect เคลียร์เอง)
+  state.disconnectedAt = Date.now()
+
+  if (
+    state.phase === 'grand_finale' && state.grandFinale?.turn === 'human' &&
+    !state.grandFinale.foldedPlayers.includes(state.humanUserId)
+  ) {
+    // Batch 3E Task 2 — grace 20s: กันซ้อนถ้า disconnect event ยิงซ้ำ (เช่น socket flap สั้นๆ)
+    if (state.graceTimer) clearTimeout(state.graceTimer)
+    state.graceTimer = setTimeout(() => {
+      void (async () => {
+        if (state.matchEnded) return // เกมจบไปแล้วด้วยทางอื่นระหว่าง grace (กันซ้อน)
+        state.graceTimer = undefined
+        state.disconnectedAt = undefined
+        const bossSeat = state.seats.find(s => s.role === 'boss')!
+        state.grandFinale!.foldedPlayers.push(state.humanUserId)
+        await finalizeMonarchG3(io, state, bossSeat.id)
+      })()
+    }, 20_000)
+    return
+  }
+
+  if (state.phase === 'g1_reveal' || state.phase === 'g2_reveal') {
+    state.humanDisconnected = true
+  }
+  // เคสอื่น (grand_finale ที่ turn==='boss' อยู่แล้ว) ไม่ต้องทำอะไรเพิ่ม — boss's decision timer ที่ตั้งไว้
+  // แล้วจะพาไปจบเองตามธรรมชาติ ไม่รอ human
+}
+
+// Batch 3E Task 4 — เรียกทุกครั้งที่ monarch_join ยิงมา (ทั้ง join แรกสุดและ reconnect) เคลียร์
+// ร่องรอยการหลุดทั้งหมดที่อาจค้างจากก่อนหน้า: graceTimer (ยกเลิก timer แทนปล่อยให้หมดแล้ว auto-fold
+// ทั้งที่กลับมาแล้ว), disconnectedAt (bookkeeping เฉยๆ), humanDisconnected (คืนสถานะ "ปกติ" ให้
+// startMonarchGrandFinale ไม่ auto-fold ทันทีถ้าไปถึงจุดนั้นทั้งที่กลับมาออนไลน์แล้วจริง — เดิม Batch 1.5
+// ไม่เคยเคลียร์ flag นี้เลยหลัง set เป็น true ครั้งเดียว ทำให้ reconnect ระหว่าง g1_reveal/g2_reveal
+// เสียเปล่า ยังโดน auto-fold ที่ grand_finale อยู่ดี — แก้จุดนี้ด้วย ไม่ใช่แค่เพิ่ม grace)
+// เรียกซ้ำกับ state ที่ไม่เคยหลุดเลยก็ปลอดภัย (ทุก field เป็น falsy/undefined อยู่แล้ว เท่ากับ no-op)
+export function clearMonarchDisconnectState(roomId: string, userId: string): void {
+  const state = monarchMatchStates.get(roomId)
+  if (!state || state.humanUserId !== userId) return
+  if (state.graceTimer) { clearTimeout(state.graceTimer); state.graceTimer = undefined }
+  state.disconnectedAt = undefined
+  state.humanDisconnected = false
 }

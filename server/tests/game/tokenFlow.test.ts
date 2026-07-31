@@ -444,11 +444,11 @@ describe('กฎเหล็กของ Mastermind (Total = 36,000)', () => {
     return s
   }
 
-  test('config Mastermind: ante 200/300/500, buy-in 15,000, autoSort 165 (33% ของ ante กอง 3), call 600', () => {
+  test('config Mastermind: ante 200/300/500, buy-in 15,000, autoSort 165 (33% ของ ante กอง 3), call 300', () => {
     expect([M_STAKES.pile1, M_STAKES.pile2, M_STAKES.pile3]).toEqual([200, 300, 500])
     expect(M_BUYIN).toBe(15_000)     // ขึ้นจาก 9,000 เพราะ worst case เดิมทะลุ buy-in
     expect(M_FEE).toBe(165)          // 33% x 500
-    expect(M_CALL).toBe(600)
+    expect(M_CALL).toBe(300)         // Economy Progression Spec v2.0 §4 (2026-07-30) — ลดจาก 600 เหลือครึ่ง
     expect(M_BIDS).toEqual([25, 50, 100, 150])
   })
 
@@ -503,12 +503,12 @@ describe('กฎเหล็กของ Mastermind (Total = 36,000)', () => {
       const ante = collectAntes(mFresh(), M_PLAYERS, M_STAKES)
       const r = chargeGrandFinaleCall(ante.stacks, ante.pot, HUMAN, M_CALL)
       expect(r.ok).toBe(true)
-      expect(r.pot).toEqual([800, 1_200, 2_600])
-      expect(r.stacks[HUMAN]).toBe(M_BUYIN - 1_000 - M_CALL) // ante 1,000 + call 600
+      expect(r.pot).toEqual([800, 1_200, 2_300])
+      expect(r.stacks[HUMAN]).toBe(M_BUYIN - 1_000 - M_CALL) // ante 1,000 + call 300
       expect(computeTotal(r.stacks, M_PLAYERS, r.pot, 0)).toBe(M_TOTAL)
     })
 
-    test('Call ครบ 4 คน 2 รอบ -> Pot 3 = 2,000 + 4,800', () => {
+    test('Call ครบ 4 คน 2 รอบ -> Pot 3 = 2,000 + 2,400', () => {
       let stacks = collectAntes(mFresh(), M_PLAYERS, M_STAKES).stacks
       let pot = collectAntes(mFresh(), M_PLAYERS, M_STAKES).pot
       for (let round = 0; round < 2; round++) {
@@ -567,16 +567,16 @@ describe('กฎเหล็กของ Mastermind (Total = 36,000)', () => {
       expect(withExtra.displayDeltas[HUMAN]).toBe(noExtra.displayDeltas[HUMAN] - 750) // แต่ UI เห็นว่าเสียเพิ่ม
     })
 
-    test('ผู้ชนะกอง 3 ได้ Pot ที่โตจาก Call ไปแล้ว (2,000 + 1,200 = 3,200 -> net 3,040)', () => {
+    test('ผู้ชนะกอง 3 ได้ Pot ที่โตจาก Call ไปแล้ว (2,000 + 600 = 2,600 -> net 2,470)', () => {
       let stacks = collectAntes(mFresh(), M_PLAYERS, M_STAKES).stacks
       let pot = collectAntes(mFresh(), M_PLAYERS, M_STAKES).pot
       const c1 = chargeGrandFinaleCall(stacks, pot, HUMAN, M_CALL); stacks = c1.stacks; pot = c1.pot
       const c2 = chargeGrandFinaleCall(stacks, pot, P2, M_CALL);    stacks = c2.stacks; pot = c2.pot
 
-      expect(pot[2]).toBe(3_200)
+      expect(pot[2]).toBe(2_600)
       const r = mSettle(stacks, pot, 0, ['', '', HUMAN], { [HUMAN]: M_CALL, [P2]: M_CALL })
       // กอง 1+2 ไม่มีผู้ชนะ (ทุกคน foul/fold) -> เข้า Fee & Rake ทั้งก้อน
-      expect(r.feeRake).toBe(800 + 1_200 + 160)
+      expect(r.feeRake).toBe(800 + 1_200 + 130)
       expect(computeTotal(r.stacks, M_PLAYERS, r.pot, r.feeRake)).toBe(M_TOTAL)
     })
 
@@ -653,14 +653,15 @@ describe('กฎเหล็กของ Mastermind (Total = 36,000)', () => {
   })
 
   test('worst case: Call ครบ 2 รอบทุกเกม + Auction แพงสุด + Auto Sort ทุกรอบ ยังไม่เกิน buy-in', () => {
-    // เดิม buy-in 9,000 เคสนี้ทะลุ (12,575 > 9,000) ผู้เล่นที่ Call ทุกครั้งจะหมด stack ก่อนจบแมตช์
-    // แก้แล้วด้วยการขึ้น buy-in เป็น 15,000 (มติลุงเยาะ 2026-07-25) — เทสนี้กันไม่ให้ regress กลับไป
+    // เดิม buy-in 9,000 เคสนี้เคยทะลุตอน call=600 (12,575 > 9,000) จึงขึ้น buy-in เป็น 15,000
+    // (มติลุงเยาะ 2026-07-25) — Economy Progression Spec v2.0 (2026-07-30) ลด call เหลือ 300 แล้ว
+    // worst case ใหม่จึงเหลือ 9,575 มี headroom มากขึ้นกว่าเดิม ไม่ต้องลด buy-in ตาม (buy-in ไม่อยู่ใน scope งานนี้)
     const perRound =
       (M_STAKES.pile1 + M_STAKES.pile2 + M_STAKES.pile3) // ante 1,000
       + M_FEE                                            // auto sort 165
       + M_BIDS[3]                                        // auction 150
-      + M_CALL * 2                                       // call 2 รอบ 1,200
-    expect(perRound * 5).toBe(12_575)
+      + M_CALL * 2                                       // call 2 รอบ 600
+    expect(perRound * 5).toBe(9_575)
     expect(perRound * 5).toBeLessThan(M_BUYIN)
   })
 })

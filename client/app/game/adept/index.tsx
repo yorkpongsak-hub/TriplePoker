@@ -18,6 +18,7 @@ import { io, Socket } from 'socket.io-client'
 import * as Haptics from 'expo-haptics'
 import { autoSort } from '../../../src/utils/autoSort'
 import { getReduceMotion } from '../../../src/utils/reduceMotion'
+import { clearPendingMatch, markPendingMatch } from '../../../src/utils/pendingMatch'
 import { useAuthStore } from '../../../src/store/authStore'
 // Patch 2026-07-18: resolve avatar preset key → emoji/รูปภาพ (แก้ VIP preset ไม่โชว์ที่โต๊ะ)
 import { PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
@@ -31,7 +32,19 @@ import PlayerHandView from '../../../src/components/game/PlayerHandView'
 import BossHandRow from '../../../src/components/game/BossHandRow'
 import GameTopBar from '../../../src/components/game/GameTopBar'
 import MatchEndOverlay from '../../../src/components/game/MatchEndOverlay'
+import { TierInfoModal } from '../../../src/components/game/TierInfoModal'
+import type { TierInfoLabel } from '../../../src/config/tierInfoData'
 import TokenFlowPanel, { PANEL_WIDTH, PANEL_RIGHT } from '../../../src/components/game/TokenFlowPanel'
+import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/game/FlyingCoins'
+
+// ตำแหน่งที่นั่งเดียวกับ targets ใน startDealAnimation (Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย)
+const SEAT_TARGETS = {
+  boss:   { x: -50,  y: -240 },
+  p4:     { x: 90,   y: -10  },
+  user:   { x: -50,  y: 200  },
+  p2:     { x: -190, y: -10  },
+  center: { x: 0,    y: 0    },
+} as const
 // Gold Radiance: กรอบทองเฉพาะโต๊ะที่มี buy-in (Adept ขึ้นไป) และเฉพาะที่นั่งของผู้เล่นเอง
 import AvatarFrame from '../../../src/components/game/AvatarFrame'
 
@@ -258,6 +271,17 @@ const GameTableLive: React.FC = () => {
   const timerValRef = useRef({ val: 90, max: 90 })
   const continueValRef = useRef(0)
   const aiListRef = useRef<AIInfo[]>([])
+  const flyingCoinsRef = useRef<FlyingCoinsHandle>(null)
+  // Coin Flying VFX (มติลุงเยาะ 2026-07-26) — แปลง playerId -> ตำแหน่งที่นั่งจริง อ่าน aiListRef.current
+  // สดทุกครั้งที่เรียก (aiList ตอนนี้คือ "คู่แข่งทั้งหมด" ไม่ใช่แค่ AI แล้ว — ดู comment เดิมตอน setAiList(opponents))
+  const seatTargetFor = (playerId: string): Point => {
+    if (playerId === PLAYER_ID) return SEAT_TARGETS.user
+    const opp = aiListRef.current
+    if (opp[0]?.id === playerId) return SEAT_TARGETS.boss
+    if (opp[1]?.id === playerId) return SEAT_TARGETS.p2
+    if (opp[2]?.id === playerId) return SEAT_TARGETS.p4
+    return SEAT_TARGETS.center
+  }
   const timerRef    = useRef<any>(null)
   const countdownAnimTimeoutRef = useRef<any>(null)
   const dealAnimCompositeRef = useRef<Animated.CompositeAnimation | null>(null)
@@ -529,6 +553,7 @@ const GameTableLive: React.FC = () => {
     })
 
     socket.on('round_start', (data: any) => {
+      if (typeof data.buyInAmount === 'number') void markPendingMatch('adept')
       // Pre-Game Countdown §7.1 — โชว์ครั้งเดียวตอนเริ่มแมตช์
       if (data.roundNumber === 1 && !preGameCountdownShownRef.current) {
         preGameCountdownShownRef.current = true
@@ -571,6 +596,11 @@ const GameTableLive: React.FC = () => {
       const init: Record<string, string> = {}
       opponents.forEach((o) => { init[o.id] = 'Arranging' })
       setAiStatus(init)
+
+      // Coin Flying VFX — Ante: ทุกที่นั่งส่งเหรียญเข้ากองกลางตอนเริ่มรอบ (มติลุงเยาะ 2026-07-26)
+      ;[SEAT_TARGETS.boss, SEAT_TARGETS.p4, SEAT_TARGETS.user, SEAT_TARGETS.p2].forEach(from => {
+        flyingCoinsRef.current?.fire('ante', from, SEAT_TARGETS.center)
+      })
 
       setComm({
         p1: data.communityCards.pile1,
@@ -677,6 +707,13 @@ const GameTableLive: React.FC = () => {
       if (typeof data.buyIn === 'number') setFlowBuyIn(data.buyIn)
       setPhase('showdown')
 
+      // Coin Flying VFX — รางวัลออกจากกองกลางไปหาผู้ชนะแต่ละกอง (มติลุงเยาะ 2026-07-26)
+      const pileCoinVariant = { 1: 'pile1', 2: 'pile2', 3: 'pile3' } as const
+      ;([1, 2, 3] as const).forEach(pNum => {
+        const winnerId = newWinners[pNum]
+        if (winnerId) flyingCoinsRef.current?.fire(pileCoinVariant[pNum], SEAT_TARGETS.center, seatTargetFor(winnerId))
+      })
+
       // Triple Sweep Jackpot — คนเดียวกันชนะครบทั้ง 3 กอง
       if (newWinners[1] && newWinners[1] === newWinners[2] && newWinners[2] === newWinners[3]) {
         triggerJackpot(newWinners[1])
@@ -720,6 +757,7 @@ const GameTableLive: React.FC = () => {
     })
 
     socket.on('match_end', (data: any) => {
+      void clearPendingMatch()
       setPhase('end')
       setMatchResult(data)
       setTokenBalance(data.tokenBalance ?? {})
@@ -1346,6 +1384,11 @@ const GameTableLive: React.FC = () => {
               })}
           </View>
 
+          {/* ── COIN FLYING VFX (มติลุงเยาะ 2026-07-26) ── */}
+          <View style={[StyleSheet.absoluteFill as any, { alignItems: 'center', justifyContent: 'center', zIndex: 55 }]} pointerEvents="none">
+            <FlyingCoins ref={flyingCoinsRef} />
+          </View>
+
           {/* ── LOCKUP OVERLAY (Round 1 only, พร้อม deal animation) ── */}
           {showLockup && phase === 'dealing' && (
             <View style={{ position: 'absolute', bottom: 120, left: 20, right: 20, zIndex: 60,
@@ -1489,7 +1532,10 @@ const GameTableLive: React.FC = () => {
           <View style={{ position: 'absolute', top: 8, left: 10, zIndex: 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }} pointerEvents="none">
             <Image source={studioLogo} style={{ width: 28, height: 28, opacity: 0.9 }} resizeMode="contain" />
           </View>
-          <View style={{ position: 'absolute', top: 8, left: 0, right: 0, alignItems: 'center', zIndex: 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }} pointerEvents="box-none">
+          {/* Hand Ranking (?) — ย้ายจากกลางบนจอ (ชนกล้องหน้ามือถือ กดไม่ได้) ไปอยู่ใต้ปุ่ม i ใน
+              leftSlot ของ GameTopBar แทน (มติลุงเยาะ 2026-07-26) — top ใช้สูตรเดียวกับ paddingTop
+              ของ topBar เอง (isWeb?22:insets.top+14) บวกความสูงแถว i/Timer อีก ~30 */}
+          <View style={{ position: 'absolute', top: (isWeb ? 22 : insets.top + 14) + 30, left: 14, zIndex: 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }} pointerEvents="box-none">
             <TouchableOpacity onPress={() => setShowRankTable(true)}
               style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(201,168,76,0.2)', borderWidth: 1, borderColor: 'rgba(201,168,76,0.5)', alignItems: 'center', justifyContent: 'center' }}>
               <Text style={{ fontSize: 11, color: '#c9a84c', fontWeight: '800' }}>?</Text>
@@ -1497,136 +1543,17 @@ const GameTableLive: React.FC = () => {
           </View>
 
           {/* ── TIER INFO OVERLAY ── */}
-{showTierInfo && (
-  <View style={[s.overlay, { justifyContent: 'flex-start', paddingTop: 20, backgroundColor: 'rgba(15,36,24,0.97)' }]}>
-    <Text style={[s.showdownTitle, { marginBottom: 12 }]}>Tier Information</Text>
-
-    {/* แท็บ */}
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginBottom: 12, justifyContent: 'center' }}>
-      {['INITIATE','ADEPT','MASTERMIND','HIGH NOBLE','LAST BOSS'].map(t => (
-        <TouchableOpacity key={t} onPress={() => setActiveTierTab(t)}
-          style={{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1,
-            borderColor: activeTierTab === t ? '#c9a84c' : 'rgba(201,168,76,0.5)',
-            backgroundColor: activeTierTab === t ? 'rgba(201,168,76,0.2)' : 'transparent' }}>
-          <Text style={{ fontSize: 9, color: activeTierTab === t ? '#c9a84c' : '#a89060', fontWeight: '800' }}>{t}</Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-
-    {/* เนื้อหาแต่ละ Tier */}
-    <ScrollView style={{ width: '100%' }} showsVerticalScrollIndicator={false}>
-    {(() => {
-      const TIERS: Record<string, any> = {
-        'INITIATE': {
-          name: 'Initiate', tagline: 'The First Step',
-          tokenRange: '100 – 49,999',
-          table: 'Bot × 3',
-          ante: { pile1: 10, pile2: 20, pile3: 40, call: '-' },
-          pot:  { pile1: 40, pile2: 80, pile3: 160 },
-          jackpot: { payout: 504, penalty: 90 },
-          features: ['Simultaneous Showdown', 'No Fog of War', 'No Blind Auction', 'No Grand Finale Betting', 'Learn the basics (~6 days to advance)'],
-        },
-        'ADEPT': {
-          name: 'Adept', tagline: 'The Rising Player',
-          tokenRange: '50,000 – 149,999',
-          table: 'Real Player × 1 + Bot × 2',
-          ante: { pile1: 60, pile2: 100, pile3: 140, call: '-' },
-          pot:  { pile1: 230, pile2: 380, pile3: 530 },
-          jackpot: { payout: 2052, penalty: 380 },
-          features: ['Simultaneous Showdown', 'No Fog of War', 'No Blind Auction', 'No Grand Finale Betting', 'First real opponents (~12 days to advance)'],
-        },
-        'MASTERMIND': {
-          name: 'Mastermind', tagline: 'The Auction Begins',
-          tokenRange: '150,000 – 399,999',
-          table: 'Real Player × 2 + Minion AI × 1',
-          ante: { pile1: 200, pile2: 300, pile3: 500, call: 1000 },
-          pot:  { pile1: 760, pile2: 1140, pile3: 1900 },
-          jackpot: { payout: 6840, penalty: 1260 },
-          features: ['Sequential Showdown', 'Fog of War ✅', 'Blind Auction ✅', 'Grand Finale Betting ✅', 'Discard Phase ✅ (~31 days to advance)'],
-        },
-        'HIGH NOBLE': {
-          name: 'High Noble', tagline: 'Audience with the Four Gods',
-          tokenRange: '400,000+',
-          table: 'Real Player × 2 + Four Gods AI × 1',
-          ante: { pile1: 500, pile2: 1000, pile3: 1500, call: 3000 },
-          pot:  { pile1: 1900, pile2: 3800, pile3: 5700 },
-          jackpot: { payout: 20520, penalty: 3800 },
-          features: ['Sequential Showdown', 'Fog of War ✅', 'Blind Auction ✅', 'Grand Finale Betting ✅', 'Full Competitive Experience'],
-        },
-        'LAST BOSS': {
-          name: 'The Last Boss', tagline: 'Beyond the Four Gods',
-          tokenRange: 'Special Condition',
-          table: 'Special Condition',
-          ante: { pile1: 1000, pile2: 2000, pile3: 3000, call: 6000 },
-          pot:  { pile1: 3800, pile2: 7600, pile3: 11400 },
-          jackpot: { payout: 41040, penalty: 7600 },
-          features: ['Sequential Showdown', 'Fog of War ✅', 'Blind Auction ✅', 'Grand Finale Betting ✅', 'Final Challenge'],
-        },
-      }
-      const t = TIERS[activeTierTab]
-      if (!t) return null
-      const Row = ({ label, value, valueColor = '#e8dfc0' }: { label: string; value: string; valueColor?: string }) => (
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: 'rgba(201,168,76,0.2)' }}>
-          <Text style={{ fontSize: 10, color: '#a89060', flex: 1 }}>{label}</Text>
-          <Text style={{ fontSize: 10, color: valueColor, fontWeight: '700', flex: 2, textAlign: 'right' }}>{value}</Text>
-        </View>
-      )
-      return (
-        <View>
-          {/* Header */}
-          <View style={{ alignItems: 'center', marginBottom: 12, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(201,168,76,0.2)' }}>
-            <Text style={{ fontSize: 16, color: '#c9a84c', fontWeight: '900', letterSpacing: 2 }}>{t.name}</Text>
-            <Text style={{ fontSize: 10, color: '#c9a84c', marginTop: 2, fontStyle: 'italic' }}>"{t.tagline}"</Text>
-          </View>
-
-          {/* General */}
-          <Text style={{ fontSize: 9, color: '#38bdf8', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 4 }}>GENERAL</Text>
-          <Row label="Token Range" value={t.tokenRange} valueColor="#4ade80" />
-          <Row label="Table" value={t.table} />
-
-          {/* Ante */}
-          <Text style={{ fontSize: 9, color: '#38bdf8', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>ANTE PER HAND</Text>
-          <Row label="Pile 1" value={`${t.ante.pile1} tokens`} />
-          <Row label="Pile 2" value={`${t.ante.pile2} tokens`} />
-          <Row label="Pile 3" value={`${t.ante.pile3} tokens`} />
-          <Row label="Grand Finale Call" value={t.ante.call === '-' ? 'N/A' : `${t.ante.call} tokens/round`} valueColor={t.ante.call === '-' ? '#555' : '#e8dfc0'} />
-
-          {/* Pot */}
-          <Text style={{ fontSize: 14, color: '#8DFFB5', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>POT PAYOUT (Rake 5%)</Text>
-          <Row label="Win Pile 1" value={`${t.pot.pile1} tokens`} valueColor="#8DFFB5" />
-          <Row label="Win Pile 2" value={`${t.pot.pile2} tokens`} valueColor="#8DFFB5" />
-          <Row label="Win Pile 3" value={`${t.pot.pile3} tokens`} valueColor="#8DFFB5" />
-
-          {/* Triple Sweep */}
-          <Text style={{ fontSize: 14, color: '#FFB74D', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>⚡ TRIPLE SWEEP JACKPOT</Text>
-          <Row label="Winner Payout" value={`${t.jackpot.payout} tokens`} valueColor="#FFD76A" />
-          <Row label="Loser Penalty" value={`${t.jackpot.penalty} tokens each`} valueColor="#FFB74D" />
-          <Row label="Rake" value="5% (burn)" valueColor="#FFB74D" />
-
-          {/* Features */}
-          <Text style={{ fontSize: 14, color: '#8DFFB5', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>FEATURES</Text>
-          {t.features.map((f: string, i: number) => (
-            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 4 }}>
-              <Text style={{ fontSize: 14, color: '#FFD76A', marginRight: 8 }}>•</Text>
-              <Text style={{ fontSize: 16, color: '#F5F2E8' }}>{f}</Text>
-            </View>
-          ))}
-          <View style={{ height: 20 }} />
-        </View>
-      )
-    })()}
-    </ScrollView>
-
-    <TouchableOpacity style={[s.continueBtn, { marginTop: 12, backgroundColor: '#102218', borderColor: '#FFD76A' }]} onPress={() => setShowTierInfo(false)}>
-      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>Close</Text>
-    </TouchableOpacity>
-  </View>
-)}
+          <TierInfoModal
+            visible={showTierInfo}
+            activeTab={activeTierTab as TierInfoLabel}
+            onTabChange={setActiveTierTab}
+            onClose={() => setShowTierInfo(false)}
+          />
 
           {/* ── RANK TABLE OVERLAY ── */}
 {showRankTable && (
   <View style={[s.overlay, { justifyContent: 'flex-start', paddingTop: 40, backgroundColor: 'rgba(11,21,16,0.92)' }]}>
-    <Text style={[s.showdownTitle, { marginBottom: 12, fontSize: 24, color: '#FFD76A' }]}>Hand Rankings</Text>
+    <Text style={[s.showdownTitle, { marginBottom: 12, fontSize: 18, color: '#FFD76A' }]}>Hand Rankings</Text>
     <ScrollView style={{ width: '100%' }} showsVerticalScrollIndicator={false}>
     {[
       { rank: 9, name: 'Royal Flush',     desc: '5 same-suit cards in sequence',        low: 'A♠ K♠ Q♠ J♠ 10♠',  high: 'A♥ K♥ Q♥ J♥ 10♥' },
@@ -1640,16 +1567,16 @@ const GameTableLive: React.FC = () => {
       { rank: 1, name: 'One Pair',        desc: '2 cards of the same value',            low: '2♠ 2♥ 3♦ 4♣ 5♠',   high: 'A♠ A♥ K♦ Q♣ J♠' },
       { rank: 0, name: 'High Card',       desc: 'No combination — highest card wins',   low: '2♠ 3♥ 5♦ 7♣ 9♠',   high: 'A♠ K♥ Q♦ J♣ 9♠' },
     ].map((h, i) => (
-      <View key={i} style={{ flexDirection: 'row', alignItems: 'center', width: '100%', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#2A4A34' }}>
-        <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: 'rgba(255,215,106,0.15)', borderWidth: 1, borderColor: '#FFD76A', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
-          <Text style={{ fontSize: 13, color: '#FFD76A', fontWeight: '900' }}>{h.rank}</Text>
+      <View key={i} style={{ flexDirection: 'row', alignItems: 'center', width: '100%', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#2A4A34' }}>
+        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(255,215,106,0.15)', borderWidth: 1, borderColor: '#FFD76A', alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
+          <Text style={{ fontSize: 10, color: '#FFD76A', fontWeight: '900' }}>{h.rank}</Text>
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: 18, color: '#F5F2E8', fontWeight: '700' }}>{h.name}</Text>
-          <Text style={{ fontSize: 14, color: '#c9b87a', marginTop: 2 }}>{h.desc}</Text>
-          <View style={{ flexDirection: 'row', gap: 12, marginTop: 3 }}>
-            <Text style={{ fontSize: 14, color: '#8DFFB5' }}>Low: {h.low}</Text>
-            <Text style={{ fontSize: 14, color: '#FFC857' }}>High: {h.high}</Text>
+          <Text style={{ fontSize: 13, color: '#F5F2E8', fontWeight: '700' }}>{h.name}</Text>
+          <Text style={{ fontSize: 10, color: '#c9b87a', marginTop: 1 }}>{h.desc}</Text>
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 2 }}>
+            <Text style={{ fontSize: 10, color: '#8DFFB5' }}>Low: {h.low}</Text>
+            <Text style={{ fontSize: 10, color: '#FFC857' }}>High: {h.high}</Text>
           </View>
         </View>
       </View>
@@ -1657,7 +1584,7 @@ const GameTableLive: React.FC = () => {
     <View style={{ height: 16 }} />
     </ScrollView>
     <TouchableOpacity style={[s.continueBtn, { marginTop: 12, backgroundColor: '#102218', borderColor: '#FFD76A' }]} onPress={() => setShowRankTable(false)}>
-      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>Close</Text>
+      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 14 }]}>Close</Text>
     </TouchableOpacity>
   </View>
 )}

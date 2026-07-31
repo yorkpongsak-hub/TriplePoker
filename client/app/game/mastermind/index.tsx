@@ -20,6 +20,7 @@ import BossVictoryVFX, { VictoryTier } from '../../../src/components/vfx/BossVic
 import { useUserStore } from '../../../src/store/userStore'
 import { autoSort } from '../../../src/utils/autoSort'
 import { getReduceMotion } from '../../../src/utils/reduceMotion'
+import { clearPendingMatch, markPendingMatch } from '../../../src/utils/pendingMatch'
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
 import MonarchConquestBanner from '../../../src/components/game/MonarchConquestBanner'
 import { MINION_AVATAR } from '../../../src/constants/minionAvatars'
@@ -31,7 +32,23 @@ import GFHandView from '../../../src/components/game/GFHandView'
 import BossHandRow from '../../../src/components/game/BossHandRow'
 import GameTopBar from '../../../src/components/game/GameTopBar'
 import MatchEndOverlay from '../../../src/components/game/MatchEndOverlay'
+import { TierInfoModal } from '../../../src/components/game/TierInfoModal'
+import type { TierInfoLabel } from '../../../src/config/tierInfoData'
 import TokenFlowPanel, { PANEL_WIDTH, PANEL_RIGHT } from '../../../src/components/game/TokenFlowPanel'
+import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/game/FlyingCoins'
+
+// ตำแหน่งที่นั่งเดียวกับ targets ใน startDealAnimation (Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย)
+const SEAT_TARGETS = {
+  boss:   { x: -50,  y: -240 },
+  p4:     { x: 90,   y: -10  },
+  user:   { x: -50,  y: 200  },
+  p2:     { x: -190, y: -10  },
+  center: { x: 0,    y: 0    },
+  // Token Flow Panel มุมขวาบน (มติลุงเยาะ 2026-07-26 — Grand Finale Call VFX) ประมาณจาก
+  // right:PANEL_RIGHT(8)+width:PANEL_WIDTH(72) ของ panel เทียบกับจอทั่วไป — ยังไม่ได้วัดจริง
+  // บนอุปกรณ์ (รอลุงเทสแล้วบอกจำนวน px ถ้าต้องขยับ)
+  tokenPanel: { x: 150, y: -260 },
+} as const
 // Gold Radiance: กรอบทองเฉพาะโต๊ะที่มี buy-in (Adept ขึ้นไป) และเฉพาะที่นั่งของผู้เล่นเอง
 import AvatarFrame from '../../../src/components/game/AvatarFrame'
 
@@ -267,6 +284,16 @@ const GameTableLive: React.FC = () => {
   const timerValRef = useRef({ val: 90, max: 90 })
   const continueValRef = useRef(0)
   const aiListRef = useRef<AIInfo[]>([])
+  const flyingCoinsRef = useRef<FlyingCoinsHandle>(null)
+  // Coin Flying VFX (มติลุงเยาะ 2026-07-26) — แปลง playerId -> ตำแหน่งที่นั่งจริง อ่าน aiListRef.current สด
+  const seatTargetFor = (playerId: string): Point => {
+    if (playerId === PLAYER_ID) return SEAT_TARGETS.user
+    const opp = aiListRef.current
+    if (opp[0]?.id === playerId) return SEAT_TARGETS.boss
+    if (opp[1]?.id === playerId) return SEAT_TARGETS.p2
+    if (opp[2]?.id === playerId) return SEAT_TARGETS.p4
+    return SEAT_TARGETS.center
+  }
   const timerRef    = useRef<any>(null)
 
   // ── Game state
@@ -576,6 +603,11 @@ const GameTableLive: React.FC = () => {
       data.aiNames?.forEach((a: any) => { init[a.id] = 'Arranging' })
       setAiStatus(init)
 
+      // Coin Flying VFX — Ante: ทุกที่นั่งส่งเหรียญเข้ากองกลางตอนเริ่มรอบ (มติลุงเยาะ 2026-07-26)
+      ;[SEAT_TARGETS.boss, SEAT_TARGETS.p4, SEAT_TARGETS.user, SEAT_TARGETS.p2].forEach(from => {
+        flyingCoinsRef.current?.fire('ante', from, SEAT_TARGETS.center)
+      })
+
       setComm({
         p1: data.communityCards.pile1,
         p2: data.communityCards.pile2,
@@ -621,6 +653,7 @@ const GameTableLive: React.FC = () => {
       }, 1000)
     }
     socket.on('round_start', (data: any) => {
+      if (typeof data.buyInAmount === 'number') void markPendingMatch('mastermind')
       // Pre-Game Countdown §7.1 — โชว์ครั้งเดียวตอนเริ่มแมตช์
       if (data.roundNumber === 1 && !preGameCountdownShownRef.current) {
         preGameCountdownShownRef.current = true
@@ -676,6 +709,14 @@ const GameTableLive: React.FC = () => {
       setFoulReasons(data.foulReasons ?? {})
       setTokenDeltas(data.tokenDeltas ?? {})
       setPhase('showdown')
+
+      // Coin Flying VFX — Mastermind = Sequential Showdown: showdown_result มีแค่ Pile1/2
+      // (Pile3/Grand Finale แยกไปยิงที่ grand_finale_result ด้านล่าง)
+      const pileCoinVariant = { 1: 'pile1', 2: 'pile2', 3: 'pile3' } as const
+      ;([1, 2] as const).forEach(pNum => {
+        const winnerId = newWinners[pNum]
+        if (winnerId) flyingCoinsRef.current?.fire(pileCoinVariant[pNum], SEAT_TARGETS.center, seatTargetFor(winnerId))
+      })
     })
 
     // pile_reveal — Pro+ sequential (ยังคงไว้สำหรับ Mastermind+)
@@ -940,6 +981,11 @@ const GameTableLive: React.FC = () => {
       syncTokenFlow(data)  // คน Call -> แถว G3 โตขึ้นทันที
       if (gfTimerRef.current) clearInterval(gfTimerRef.current)
       gfBlinkAnim.stopAnimation()
+      // Coin Flying VFX — Call เท่านั้น (Fold ไม่มีเงินไหล) บินจากที่นั่งผู้เล่นไป Token Flow Panel
+      // มุมขวาบน (มติลุงเยาะ 2026-07-26) ใช้ variant 'ante' เพราะเป็นการจ่ายจากผู้เล่นเข้ากองแบบเดียวกัน
+      if (data.action !== 'fold') {
+        flyingCoinsRef.current?.fire('ante', seatTargetFor(data.playerId), SEAT_TARGETS.tokenPanel)
+      }
       if (data.action === 'fold') {
         setGfFoldedPlayers(prev => [...prev, data.playerId])
       } else if (data.revealedCard) {
@@ -966,6 +1012,9 @@ const GameTableLive: React.FC = () => {
       setGfResultStage(1)
       // หลัง 5 วิ ไป stage 2 (Round Summary)
       setTimeout(() => setGfResultStage(2), 5000)
+
+      // Coin Flying VFX — Pile3 (Grand Finale) รู้ผลแยกจาก Pile1/2 (winnerId ว่างได้ถ้า all-foul)
+      if (data.winnerId) flyingCoinsRef.current?.fire('pile3', SEAT_TARGETS.center, seatTargetFor(data.winnerId))
     })
     socket.on('grand_finale_all_foul', (_data: any) => {
       // emit ก่อน grand_finale_result — ไม่ต้องทำอะไรเพิ่ม รอ grand_finale_result มา
@@ -988,6 +1037,7 @@ const GameTableLive: React.FC = () => {
     })
 
     socket.on('match_end', (data: any) => {
+      void clearPendingMatch()
       setPhase('end')
       setMatchResult(data)
       setTokenBalance(data.tokenBalance ?? {})
@@ -1142,7 +1192,8 @@ const GameTableLive: React.FC = () => {
     setPiles(np); setSelected(null); setSortDone(false)
   }, [isReady, phase, selected, piles])
 
-  // Auto Sort (Mastermind เสีย 190 ทุกครั้งที่กด ไม่มีรอบฟรี - มติลุงเยาะ 2026-07-25)
+  // Auto Sort (เสียทุกครั้งที่กด ไม่มีรอบฟรี - มติลุงเยาะ 2026-07-25) ค่า Auto Sort อ่านจาก server
+  // (ดู gameConfig.autoSortFee / getAutoSortFee() — ห้าม hardcode ตัวเลขในนี้อีก)
   // Server-authoritative: ต้องขออนุญาต + ให้ server หัก fee เข้า Fee & Rake ก่อน ถึงจะจัดไพ่ให้จริง
   // (ห้ามจัดไพ่ก่อนแล้วค่อยแจ้ง server ไม่งั้นผู้เล่นได้ของฟรีเมื่อ request ล้มเหลว)
   const handleAutoSort = () => {
@@ -1359,6 +1410,139 @@ const GameTableLive: React.FC = () => {
       }
     </View>
   )
+
+  // Grand Finale: แถวไพ่ 3 ใบเรียงแนวนอน (หลังไพ่หรือหงาย) — ต้อง useCallback ห่อไว้เสมอ (มติลุงเยาะ
+  // 2026-07-26 แก้บั๊กไพ่กระพริบ) เดิม component นี้ถูกนิยามใหม่ทุก render อยู่ข้างในของ IIFE ที่รันซ้ำ
+  // ทุกครั้งที่ phase เป็น grand_finale (ตัว parent re-render ถี่มากจาก timer ต่างๆ) ทำให้ React เห็นเป็น
+  // component คนละตัวทุกครั้งแล้ว unmount/remount subtree ทิ้ง — GFFanCard (VIP fan, useSharedValue lift)
+  // เจอปัญหานี้ตรงๆ เพราะ mount ใหม่ทุกครั้ง lift รีเซ็ตเป็น 0 แล้ว animate กลับที่เดิมซ้ำๆ ดูเหมือนกระพริบ
+  // (เหตุผลเดียวกับ comment บนสุดของ AvatarFrame.tsx ที่เจอบั๊กคลาสเดียวกันมาก่อนแล้ว)
+  const GF_CW = 50, GF_CH = 72, GF_GAP = -25 // overlap 50% หลังไพ่
+  const GFPile3Row = useCallback(({ playerId, isHuman = false }: { playerId: string; isHuman?: boolean }) => {
+    // Patch: User ใช้ขนาดไพ่ใหญ่เท่าตอน arrangement (62×90); AI คงขนาดเล็กเดิม (50×72)
+    const CW_USER_OR_AI = isHuman ? CW : GF_CW
+    const CH_USER_OR_AI = isHuman ? CH : GF_CH
+    const GAP_USER_OR_AI = isHuman ? OVERLAP : GF_GAP
+    const calledKeys = gfRevealedCards[playerId] ?? []
+    const finalRev = gfFinalReveals[playerId] ?? []
+    // Round 2 จบ → หงายครบ 3 ใบ
+    if (finalRev.length === 3) {
+      return (
+        <View style={{ flexDirection: 'row', gap: GAP_USER_OR_AI, alignSelf: 'center' }}>
+          {finalRev.map((k, i) => (
+            <View key={i} style={{
+              width: CW_USER_OR_AI, height: CH_USER_OR_AI, borderRadius: 4, overflow: 'hidden',
+              borderWidth: 1.5, borderColor: '#FFD76A',
+            }}>
+              {CARD_IMG[k] && <Image source={CARD_IMG[k]} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />}
+            </View>
+          ))}
+        </View>
+      )
+    }
+    // P1 (Human) เห็นไพ่ตัวเอง 3 ใบ — ใบที่ Call ย้ายไปอยู่ขวาเสมอ (รองรับหลายใบที่หงายในรอบ 1+2)
+    if (isHuman) {
+      const rawCards = piles[2] ?? []
+      // Patch: ใบที่ Call แล้วย้ายไปอยู่ขวาสุด (เรียงตามลำดับที่หงาย)
+      const calledCards = calledKeys
+        .map(k => rawCards.find(c => c.key === k))
+        .filter((c): c is NonNullable<typeof c> => !!c)
+      const cards = calledKeys.length > 0
+        ? [...rawCards.filter(c => !calledKeys.includes(c.key)), ...calledCards]
+        : rawCards
+      // Patch High Noble: ตา Human ใน Grand Finale — คลิกเลือก/หงาย + swipe down เพื่อ Fold
+      const isMyTurn = phase === 'grand_finale' && gfTurnPlayerId === PLAYER_ID
+      const unrevealedCards = cards.filter(c => !calledKeys.includes(c.key))
+      // ตั้ง default selected = ใบอ่อนสุดที่ยังไม่หงาย (อ้างจาก rank ของ card key)
+      const cardValue = (key: string) => {
+        const r = key.slice(0, -1).toLowerCase()
+        if (r === 'a') return 14; if (r === 'k') return 13; if (r === 'q') return 12; if (r === 'j') return 11
+        return parseInt(r) || 0
+      }
+      const defaultSelected = unrevealedCards.length > 0
+        ? unrevealedCards.reduce((min, c) => cardValue(c.key) < cardValue(min.key) ? c : min, unrevealedCards[0]).key
+        : null
+      const effectiveSelected = gfSelectedCardKey ?? defaultSelected
+
+      // VIP: ไพ่พัดชุดเดียวกับ arrangement -- Free ใช้ path แถวตรงเดิมด้านล่างต่อไป
+      // event/payload ของ mastermind ต่างจาก highNoble: 'grand_finale_action' + playerId
+      if (isVip) {
+        return (
+          <GFHandView
+            cards={cards}
+            calledKeys={calledKeys}
+            selectedKey={effectiveSelected}
+            isMyTurn={isMyTurn}
+            onSelect={setGfSelectedCardKey}
+          />
+        )
+      }
+
+      // มติลุงเยาะ 2026-07-25: ตัด swipe down = Fold ออก ใช้ปุ่ม FOLD จริงด้านล่างแทน
+      return (
+        <View style={{ flexDirection: 'row', alignSelf: 'center' }}>
+          {cards.map((c, i) => {
+            const isCalled = calledKeys.includes(c.key)
+            const isSelected = isMyTurn && !isCalled && c.key === effectiveSelected
+            // แตะ = เลือกใบที่จะหงายเท่านั้น ไม่ยิง Call เอง (กันกดพลาดเสียเงิน) ยืนยันที่ปุ่ม CALL
+            const handlePress = !isMyTurn || isCalled ? undefined : () => setGfSelectedCardKey(c.key)
+            const cardBox = (
+              <View style={{
+                width: CW_USER_OR_AI, height: CH_USER_OR_AI, borderRadius: 4, overflow: 'hidden',
+                borderWidth: (isCalled || isSelected) ? 2.5 : 1,
+                borderColor: isCalled ? '#FFD76A' : isSelected ? '#8DFFB5' : 'rgba(201,168,76,0.4)',
+                marginLeft: i === 0 ? 0 : GAP_USER_OR_AI,
+                shadowColor: isCalled ? '#FFD76A' : isSelected ? '#8DFFB5' : 'transparent',
+                shadowOpacity: (isCalled || isSelected) ? 0.8 : 0, shadowRadius: 8,
+                // Patch: ไพ่ที่ Call แล้วยกขึ้น 10px ให้เห็นโดดเด่น
+                transform: [{ translateY: isCalled ? -10 : 0 }],
+              }}>
+                {CARD_IMG[c.key] && <Image source={CARD_IMG[c.key]} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />}
+                {isSelected && (
+                  <View style={{ position: 'absolute', top: 2, right: 2, width: 18, height: 18, borderRadius: 9, backgroundColor: '#8DFFB5', alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ fontSize: 11, color: '#0F2418', fontWeight: '900' }}>✓</Text>
+                  </View>
+                )}
+              </View>
+            )
+            return handlePress
+              ? <TouchableOpacity key={c.id} onPress={handlePress} activeOpacity={0.7}>{cardBox}</TouchableOpacity>
+              : <View key={c.id}>{cardBox}</View>
+          })}
+        </View>
+      )
+    }
+    // AI: 3 ใบหลัง — ใบที่ Call หงายแทน (right-most อันดับสุดท้าย, รองรับหลายใบจากรอบ 1+2)
+    // ถ้า Call 1 ใบ → ใบที่ 3 หงาย, 2 ใบ → ใบที่ 2-3 หงาย
+    const numRevealed = Math.min(calledKeys.length, 3)
+    return (
+      <View style={{ flexDirection: 'row', alignSelf: 'center' }}>
+        {[0, 1, 2].map(i => {
+          // slot i = 2 คือใบขวาสุด, i = 1 ใบกลาง (หงายลำดับ 2), i = 0 ซ้ายสุด
+          const revealIdx = i - (3 - numRevealed) // index ใน calledKeys array (เรียงจากซ้ายไปขวา)
+          const isCalledSlot = revealIdx >= 0 && revealIdx < calledKeys.length
+          const ml = i === 0 ? 0 : GAP_USER_OR_AI
+          return (
+            <View key={i} style={{
+              width: CW_USER_OR_AI, height: CH_USER_OR_AI, borderRadius: 4, overflow: 'hidden',
+              borderWidth: isCalledSlot ? 2.5 : 1, borderColor: isCalledSlot ? '#FFD76A' : 'rgba(201,168,76,0.4)',
+              marginLeft: ml,
+              shadowColor: isCalledSlot ? '#FFD76A' : 'transparent',
+              shadowOpacity: isCalledSlot ? 0.8 : 0, shadowRadius: 8,
+              // Patch 3.5 Step 5: ไพ่ที่ AI/opponent Call แล้ว เด้งลง 10px แทนเด้งขึ้น
+              // (แยกทิศจาก P1 — กันดูสับสนว่าใบไหนเป็นของใคร ขนาด offset เท่าเดิม)
+              transform: [{ translateY: isCalledSlot ? 10 : 0 }],
+            }}>
+              {isCalledSlot
+                ? <Image source={CARD_IMG[calledKeys[revealIdx]]} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />
+                : <Image source={cardBackImg} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />
+              }
+            </View>
+          )
+        })}
+      </View>
+    )
+  }, [gfRevealedCards, gfFinalReveals, piles, phase, gfTurnPlayerId, gfSelectedCardKey, isVip, setGfSelectedCardKey])
 
   const renderCard = (key: string | undefined, w: number, h: number, ml: number = 0, elKey?: string) => {
     if (key && CARD_IMG[key]) {
@@ -1746,6 +1930,11 @@ const GameTableLive: React.FC = () => {
                 ))
               })}
             </View>
+
+          {/* ── COIN FLYING VFX (มติลุงเยาะ 2026-07-26) ── */}
+          <View style={[StyleSheet.absoluteFill as any, { alignItems: 'center', justifyContent: 'center', zIndex: 55 }]} pointerEvents="none">
+            <FlyingCoins ref={flyingCoinsRef} />
+          </View>
 
           {/* ── BLIND AUCTION OVERLAY ── */}
           {(phase === 'blind_auction' || phase === 'auction_done') && (
@@ -2157,7 +2346,10 @@ const GameTableLive: React.FC = () => {
           <View style={{ position: 'absolute', top: 8, left: 10, zIndex: 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }} pointerEvents="none">
             <Image source={studioLogo} style={{ width: 28, height: 28, opacity: 0.9 }} resizeMode="contain" />
           </View>
-          <View style={{ position: 'absolute', top: 8, left: 0, right: 0, alignItems: 'center', zIndex: 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }} pointerEvents="box-none">
+          {/* Hand Ranking (?) — ย้ายจากกลางบนจอ (ชนกล้องหน้ามือถือ กดไม่ได้) ไปอยู่ใต้ปุ่ม i ใน
+              leftSlot ของ GameTopBar แทน (มติลุงเยาะ 2026-07-26) — top ใช้สูตรเดียวกับ paddingTop
+              ของ topBar เอง (isWeb?22:insets.top+14) บวกความสูงแถว i/Timer อีก ~30 */}
+          <View style={{ position: 'absolute', top: (isWeb ? 22 : insets.top + 14) + 30, left: 14, zIndex: 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }} pointerEvents="box-none">
             <TouchableOpacity onPress={() => setShowRankTable(true)}
               style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(201,168,76,0.2)', borderWidth: 1, borderColor: 'rgba(201,168,76,0.5)', alignItems: 'center', justifyContent: 'center' }}>
               <Text style={{ fontSize: 11, color: '#c9a84c', fontWeight: '800' }}>?</Text>
@@ -2165,136 +2357,17 @@ const GameTableLive: React.FC = () => {
           </View>
 
           {/* ── TIER INFO OVERLAY ── */}
-{showTierInfo && (
-  <View style={[s.overlay, { justifyContent: 'flex-start', paddingTop: 20, backgroundColor: 'rgba(15,36,24,0.97)' }]}>
-    <Text style={[s.showdownTitle, { marginBottom: 12 }]}>Tier Information</Text>
-
-    {/* แท็บ */}
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginBottom: 12, justifyContent: 'center' }}>
-      {['INITIATE','ADEPT','MASTERMIND','HIGH NOBLE','LAST BOSS'].map(t => (
-        <TouchableOpacity key={t} onPress={() => setActiveTierTab(t)}
-          style={{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1,
-            borderColor: activeTierTab === t ? '#c9a84c' : 'rgba(201,168,76,0.5)',
-            backgroundColor: activeTierTab === t ? 'rgba(201,168,76,0.2)' : 'transparent' }}>
-          <Text style={{ fontSize: 9, color: activeTierTab === t ? '#c9a84c' : '#a89060', fontWeight: '800' }}>{t}</Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-
-    {/* เนื้อหาแต่ละ Tier */}
-    <ScrollView style={{ width: '100%' }} showsVerticalScrollIndicator={false}>
-    {(() => {
-      const TIERS: Record<string, any> = {
-        'INITIATE': {
-          name: 'Initiate', tagline: 'The First Step',
-          tokenRange: '100 – 49,999',
-          table: 'Bot × 3',
-          ante: { pile1: 10, pile2: 20, pile3: 40, call: '-' },
-          pot:  { pile1: 40, pile2: 80, pile3: 160 },
-          jackpot: { payout: 504, penalty: 90 },
-          features: ['Simultaneous Showdown', 'No Fog of War', 'No Blind Auction', 'No Grand Finale Betting', 'Learn the basics (~6 days to advance)'],
-        },
-        'ADEPT': {
-          name: 'Adept', tagline: 'The Rising Player',
-          tokenRange: '50,000 – 149,999',
-          table: 'Real Player × 1 + Bot × 2',
-          ante: { pile1: 60, pile2: 100, pile3: 140, call: '-' },
-          pot:  { pile1: 230, pile2: 380, pile3: 530 },
-          jackpot: { payout: 2052, penalty: 380 },
-          features: ['Simultaneous Showdown', 'No Fog of War', 'No Blind Auction', 'No Grand Finale Betting', 'First real opponents (~12 days to advance)'],
-        },
-        'MASTERMIND': {
-          name: 'Mastermind', tagline: 'The Auction Begins',
-          tokenRange: '150,000 – 399,999',
-          table: 'Real Player × 2 + Minion AI × 1',
-          ante: { pile1: 200, pile2: 300, pile3: 500, call: 1000 },
-          pot:  { pile1: 760, pile2: 1140, pile3: 1900 },
-          jackpot: { payout: 6840, penalty: 1260 },
-          features: ['Sequential Showdown', 'Fog of War ✅', 'Blind Auction ✅', 'Grand Finale Betting ✅', 'Discard Phase ✅ (~31 days to advance)'],
-        },
-        'HIGH NOBLE': {
-          name: 'High Noble', tagline: 'Audience with the Four Gods',
-          tokenRange: '400,000+',
-          table: 'Real Player × 2 + Four Gods AI × 1',
-          ante: { pile1: 500, pile2: 1000, pile3: 1500, call: 3000 },
-          pot:  { pile1: 1900, pile2: 3800, pile3: 5700 },
-          jackpot: { payout: 20520, penalty: 3800 },
-          features: ['Sequential Showdown', 'Fog of War ✅', 'Blind Auction ✅', 'Grand Finale Betting ✅', 'Full Competitive Experience'],
-        },
-        'LAST BOSS': {
-          name: 'The Last Boss', tagline: 'Beyond the Four Gods',
-          tokenRange: 'Special Condition',
-          table: 'Special Condition',
-          ante: { pile1: 1000, pile2: 2000, pile3: 3000, call: 6000 },
-          pot:  { pile1: 3800, pile2: 7600, pile3: 11400 },
-          jackpot: { payout: 41040, penalty: 7600 },
-          features: ['Sequential Showdown', 'Fog of War ✅', 'Blind Auction ✅', 'Grand Finale Betting ✅', 'Final Challenge'],
-        },
-      }
-      const t = TIERS[activeTierTab]
-      if (!t) return null
-      const Row = ({ label, value, valueColor = '#e8dfc0' }: { label: string; value: string; valueColor?: string }) => (
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: 'rgba(201,168,76,0.2)' }}>
-          <Text style={{ fontSize: 10, color: '#a89060', flex: 1 }}>{label}</Text>
-          <Text style={{ fontSize: 10, color: valueColor, fontWeight: '700', flex: 2, textAlign: 'right' }}>{value}</Text>
-        </View>
-      )
-      return (
-        <View>
-          {/* Header */}
-          <View style={{ alignItems: 'center', marginBottom: 12, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(201,168,76,0.2)' }}>
-            <Text style={{ fontSize: 16, color: '#c9a84c', fontWeight: '900', letterSpacing: 2 }}>{t.name}</Text>
-            <Text style={{ fontSize: 10, color: '#c9a84c', marginTop: 2, fontStyle: 'italic' }}>"{t.tagline}"</Text>
-          </View>
-
-          {/* General */}
-          <Text style={{ fontSize: 9, color: '#38bdf8', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 4 }}>GENERAL</Text>
-          <Row label="Token Range" value={t.tokenRange} valueColor="#4ade80" />
-          <Row label="Table" value={t.table} />
-
-          {/* Ante */}
-          <Text style={{ fontSize: 9, color: '#38bdf8', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>ANTE PER HAND</Text>
-          <Row label="Pile 1" value={`${t.ante.pile1} tokens`} />
-          <Row label="Pile 2" value={`${t.ante.pile2} tokens`} />
-          <Row label="Pile 3" value={`${t.ante.pile3} tokens`} />
-          <Row label="Grand Finale Call" value={t.ante.call === '-' ? 'N/A' : `${t.ante.call} tokens/round`} valueColor={t.ante.call === '-' ? '#555' : '#e8dfc0'} />
-
-          {/* Pot */}
-          <Text style={{ fontSize: 14, color: '#8DFFB5', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>POT PAYOUT (Rake 5%)</Text>
-          <Row label="Win Pile 1" value={`${t.pot.pile1} tokens`} valueColor="#8DFFB5" />
-          <Row label="Win Pile 2" value={`${t.pot.pile2} tokens`} valueColor="#8DFFB5" />
-          <Row label="Win Pile 3" value={`${t.pot.pile3} tokens`} valueColor="#8DFFB5" />
-
-          {/* Triple Sweep */}
-          <Text style={{ fontSize: 14, color: '#FFB74D', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>⚡ TRIPLE SWEEP JACKPOT</Text>
-          <Row label="Winner Payout" value={`${t.jackpot.payout} tokens`} valueColor="#FFD76A" />
-          <Row label="Loser Penalty" value={`${t.jackpot.penalty} tokens each`} valueColor="#FFB74D" />
-          <Row label="Rake" value="5% (burn)" valueColor="#FFB74D" />
-
-          {/* Features */}
-          <Text style={{ fontSize: 14, color: '#8DFFB5', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>FEATURES</Text>
-          {t.features.map((f: string, i: number) => (
-            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 4 }}>
-              <Text style={{ fontSize: 14, color: '#FFD76A', marginRight: 8 }}>•</Text>
-              <Text style={{ fontSize: 16, color: '#F5F2E8' }}>{f}</Text>
-            </View>
-          ))}
-          <View style={{ height: 20 }} />
-        </View>
-      )
-    })()}
-    </ScrollView>
-
-    <TouchableOpacity style={[s.continueBtn, { marginTop: 12, backgroundColor: '#102218', borderColor: '#FFD76A' }]} onPress={() => setShowTierInfo(false)}>
-      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>Close</Text>
-    </TouchableOpacity>
-  </View>
-)}
+          <TierInfoModal
+            visible={showTierInfo}
+            activeTab={activeTierTab as TierInfoLabel}
+            onTabChange={setActiveTierTab}
+            onClose={() => setShowTierInfo(false)}
+          />
 
           {/* ── RANK TABLE OVERLAY ── */}
 {showRankTable && (
   <View style={[s.overlay, { justifyContent: 'flex-start', paddingTop: 40, backgroundColor: 'rgba(11,21,16,0.92)' }]}>
-    <Text style={[s.showdownTitle, { marginBottom: 12, fontSize: 24, color: '#FFD76A' }]}>Hand Rankings</Text>
+    <Text style={[s.showdownTitle, { marginBottom: 12, fontSize: 18, color: '#FFD76A' }]}>Hand Rankings</Text>
     <ScrollView style={{ width: '100%' }} showsVerticalScrollIndicator={false}>
     {[
       { rank: 9, name: 'Royal Flush',     desc: '5 same-suit cards in sequence',        low: 'A♠ K♠ Q♠ J♠ 10♠',  high: 'A♥ K♥ Q♥ J♥ 10♥' },
@@ -2308,16 +2381,16 @@ const GameTableLive: React.FC = () => {
       { rank: 1, name: 'One Pair',        desc: '2 cards of the same value',            low: '2♠ 2♥ 3♦ 4♣ 5♠',   high: 'A♠ A♥ K♦ Q♣ J♠' },
       { rank: 0, name: 'High Card',       desc: 'No combination — highest card wins',   low: '2♠ 3♥ 5♦ 7♣ 9♠',   high: 'A♠ K♥ Q♦ J♣ 9♠' },
     ].map((h, i) => (
-      <View key={i} style={{ flexDirection: 'row', alignItems: 'center', width: '100%', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#2A4A34' }}>
-        <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: 'rgba(255,215,106,0.15)', borderWidth: 1, borderColor: '#FFD76A', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
-          <Text style={{ fontSize: 13, color: '#FFD76A', fontWeight: '900' }}>{h.rank}</Text>
+      <View key={i} style={{ flexDirection: 'row', alignItems: 'center', width: '100%', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#2A4A34' }}>
+        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(255,215,106,0.15)', borderWidth: 1, borderColor: '#FFD76A', alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
+          <Text style={{ fontSize: 10, color: '#FFD76A', fontWeight: '900' }}>{h.rank}</Text>
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: 18, color: '#F5F2E8', fontWeight: '700' }}>{h.name}</Text>
-          <Text style={{ fontSize: 14, color: '#c9b87a', marginTop: 2 }}>{h.desc}</Text>
-          <View style={{ flexDirection: 'row', gap: 12, marginTop: 3 }}>
-            <Text style={{ fontSize: 14, color: '#8DFFB5' }}>Low: {h.low}</Text>
-            <Text style={{ fontSize: 14, color: '#FFC857' }}>High: {h.high}</Text>
+          <Text style={{ fontSize: 13, color: '#F5F2E8', fontWeight: '700' }}>{h.name}</Text>
+          <Text style={{ fontSize: 10, color: '#c9b87a', marginTop: 1 }}>{h.desc}</Text>
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 2 }}>
+            <Text style={{ fontSize: 10, color: '#8DFFB5' }}>Low: {h.low}</Text>
+            <Text style={{ fontSize: 10, color: '#FFC857' }}>High: {h.high}</Text>
           </View>
         </View>
       </View>
@@ -2325,7 +2398,7 @@ const GameTableLive: React.FC = () => {
     <View style={{ height: 16 }} />
     </ScrollView>
     <TouchableOpacity style={[s.continueBtn, { marginTop: 12, backgroundColor: '#102218', borderColor: '#FFD76A' }]} onPress={() => setShowRankTable(false)}>
-      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>Close</Text>
+      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 14 }]}>Close</Text>
     </TouchableOpacity>
   </View>
 )}
@@ -2605,135 +2678,8 @@ const GameTableLive: React.FC = () => {
           {/*  P3 บนสุด • [P2|Community|P4] กลาง • P1 ล่าง                  */}
           {/* ═════════════════════════════════════════════════════════ */}
           {(phase === 'grand_finale' || phase === 'grand_finale_done') && (() => {
-            // helper component: แถวไพ่ 3 ใบเรียงแนวนอน (หลังไพ่หรือหงาย)
-            const GF_CW = 50, GF_CH = 72, GF_GAP = -25, GF_CALL_GAP = 6 // overlap 50% หลังไพ่ + ใบ Call gap ปกติ
-            const GFPile3Row: React.FC<{
-              playerId: string; isHuman?: boolean
-            }> = ({ playerId, isHuman = false }) => {
-              // Patch: User ใช้ขนาดไพ่ใหญ่เท่าตอน arrangement (62×90); AI คงขนาดเล็กเดิม (50×72)
-              const CW_USER_OR_AI = isHuman ? CW : GF_CW
-              const CH_USER_OR_AI = isHuman ? CH : GF_CH
-              const GAP_USER_OR_AI = isHuman ? OVERLAP : GF_GAP
-              const calledKeys = gfRevealedCards[playerId] ?? []
-              const finalRev = gfFinalReveals[playerId] ?? []
-              // Round 2 จบ → หงายครบ 3 ใบ
-              if (finalRev.length === 3) {
-                return (
-                  <View style={{ flexDirection: 'row', gap: GAP_USER_OR_AI, alignSelf: 'center' }}>
-                    {finalRev.map((k, i) => (
-                      <View key={i} style={{
-                        width: CW_USER_OR_AI, height: CH_USER_OR_AI, borderRadius: 4, overflow: 'hidden',
-                        borderWidth: 1.5, borderColor: '#FFD76A',
-                      }}>
-                        {CARD_IMG[k] && <Image source={CARD_IMG[k]} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />}
-                      </View>
-                    ))}
-                  </View>
-                )
-              }
-              // P1 (Human) เห็นไพ่ตัวเอง 3 ใบ — ใบที่ Call ย้ายไปอยู่ขวาเสมอ (รองรับหลายใบที่หงายในรอบ 1+2)
-              if (isHuman) {
-                const rawCards = piles[2] ?? []
-                // Patch: ใบที่ Call แล้วย้ายไปอยู่ขวาสุด (เรียงตามลำดับที่หงาย)
-                const calledCards = calledKeys
-                  .map(k => rawCards.find(c => c.key === k))
-                  .filter((c): c is NonNullable<typeof c> => !!c)
-                const cards = calledKeys.length > 0
-                  ? [...rawCards.filter(c => !calledKeys.includes(c.key)), ...calledCards]
-                  : rawCards
-                // Patch High Noble: ตา Human ใน Grand Finale — คลิกเลือก/หงาย + swipe down เพื่อ Fold
-                const isMyTurn = phase === 'grand_finale' && gfTurnPlayerId === PLAYER_ID
-                const unrevealedCards = cards.filter(c => !calledKeys.includes(c.key))
-                // ตั้ง default selected = ใบอ่อนสุดที่ยังไม่หงาย (อ้างจาก rank ของ card key)
-                const cardValue = (key: string) => {
-                  const r = key.slice(0, -1).toLowerCase()
-                  if (r === 'a') return 14; if (r === 'k') return 13; if (r === 'q') return 12; if (r === 'j') return 11
-                  return parseInt(r) || 0
-                }
-                const defaultSelected = unrevealedCards.length > 0
-                  ? unrevealedCards.reduce((min, c) => cardValue(c.key) < cardValue(min.key) ? c : min, unrevealedCards[0]).key
-                  : null
-                const effectiveSelected = gfSelectedCardKey ?? defaultSelected
-
-                // VIP: ไพ่พัดชุดเดียวกับ arrangement -- Free ใช้ path แถวตรงเดิมด้านล่างต่อไป
-                // event/payload ของ mastermind ต่างจาก highNoble: 'grand_finale_action' + playerId
-                if (isVip) {
-                  return (
-                    <GFHandView
-                      cards={cards}
-                      calledKeys={calledKeys}
-                      selectedKey={effectiveSelected}
-                      isMyTurn={isMyTurn}
-                      onSelect={setGfSelectedCardKey}
-                    />
-                  )
-                }
-
-                // มติลุงเยาะ 2026-07-25: ตัด swipe down = Fold ออก ใช้ปุ่ม FOLD จริงด้านล่างแทน
-                return (
-                  <View style={{ flexDirection: 'row', alignSelf: 'center' }}>
-                    {cards.map((c, i) => {
-                      const isCalled = calledKeys.includes(c.key)
-                      const isSelected = isMyTurn && !isCalled && c.key === effectiveSelected
-                      // แตะ = เลือกใบที่จะหงายเท่านั้น ไม่ยิง Call เอง (กันกดพลาดเสียเงิน) ยืนยันที่ปุ่ม CALL
-                      const handlePress = !isMyTurn || isCalled ? undefined : () => setGfSelectedCardKey(c.key)
-                      const cardBox = (
-                        <View style={{
-                          width: CW_USER_OR_AI, height: CH_USER_OR_AI, borderRadius: 4, overflow: 'hidden',
-                          borderWidth: (isCalled || isSelected) ? 2.5 : 1,
-                          borderColor: isCalled ? '#FFD76A' : isSelected ? '#8DFFB5' : 'rgba(201,168,76,0.4)',
-                          marginLeft: i === 0 ? 0 : GAP_USER_OR_AI,
-                          shadowColor: isCalled ? '#FFD76A' : isSelected ? '#8DFFB5' : 'transparent',
-                          shadowOpacity: (isCalled || isSelected) ? 0.8 : 0, shadowRadius: 8,
-                          // Patch: ไพ่ที่ Call แล้วยกขึ้น 10px ให้เห็นโดดเด่น
-                          transform: [{ translateY: isCalled ? -10 : 0 }],
-                        }}>
-                          {CARD_IMG[c.key] && <Image source={CARD_IMG[c.key]} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />}
-                          {isSelected && (
-                            <View style={{ position: 'absolute', top: 2, right: 2, width: 18, height: 18, borderRadius: 9, backgroundColor: '#8DFFB5', alignItems: 'center', justifyContent: 'center' }}>
-                              <Text style={{ fontSize: 11, color: '#0F2418', fontWeight: '900' }}>✓</Text>
-                            </View>
-                          )}
-                        </View>
-                      )
-                      return handlePress
-                        ? <TouchableOpacity key={c.id} onPress={handlePress} activeOpacity={0.7}>{cardBox}</TouchableOpacity>
-                        : <View key={c.id}>{cardBox}</View>
-                    })}
-                  </View>
-                )
-              }
-              // AI: 3 ใบหลัง — ใบที่ Call หงายแทน (right-most อันดับสุดท้าย, รองรับหลายใบจากรอบ 1+2)
-              // ถ้า Call 1 ใบ → ใบที่ 3 หงาย, 2 ใบ → ใบที่ 2-3 หงาย
-              const numRevealed = Math.min(calledKeys.length, 3)
-              return (
-                <View style={{ flexDirection: 'row', alignSelf: 'center' }}>
-                  {[0, 1, 2].map(i => {
-                    // slot i = 2 คือใบขวาสุด, i = 1 ใบกลาง (หงายลำดับ 2), i = 0 ซ้ายสุด
-                    const revealIdx = i - (3 - numRevealed) // index ใน calledKeys array (เรียงจากซ้ายไปขวา)
-                    const isCalledSlot = revealIdx >= 0 && revealIdx < calledKeys.length
-                    const ml = i === 0 ? 0 : GAP_USER_OR_AI
-                    return (
-                      <View key={i} style={{
-                        width: CW_USER_OR_AI, height: CH_USER_OR_AI, borderRadius: 4, overflow: 'hidden',
-                        borderWidth: isCalledSlot ? 2.5 : 1, borderColor: isCalledSlot ? '#FFD76A' : 'rgba(201,168,76,0.4)',
-                        marginLeft: ml,
-                        shadowColor: isCalledSlot ? '#FFD76A' : 'transparent',
-                        shadowOpacity: isCalledSlot ? 0.8 : 0, shadowRadius: 8,
-                        // Patch 3.5 Step 5: ไพ่ที่ AI/opponent Call แล้ว เด้งลง 10px แทนเด้งขึ้น
-                        // (แยกทิศจาก P1 — กันดูสับสนว่าใบไหนเป็นของใคร ขนาด offset เท่าเดิม)
-                        transform: [{ translateY: isCalledSlot ? 10 : 0 }],
-                      }}>
-                        {isCalledSlot
-                          ? <Image source={CARD_IMG[calledKeys[revealIdx]]} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />
-                          : <Image source={cardBackImg} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />
-                        }
-                      </View>
-                    )
-                  })}
-                </View>
-              )
-            }
+            // GFPile3Row ย้ายไป useCallback ที่ระดับบนสุดของ component แล้ว (มติลุงเยาะ 2026-07-26 —
+            // แก้บั๊กไพ่กระพริบจากการ remount ทุก render) ดู comment เต็มที่จุดนิยามจริงด้านบน
             // Seat glow/dim ผูกกับตาจริงของ Grand Finale (gfTurnPlayerId) แทน static hardcode glow=true ที่ boss เดิม
             const SeatHeader: React.FC<{ pid: string; emoji: string; name: string; image?: any }> = ({ pid, emoji, name, image }) => {
               const isTurnSeat = gfTurnPlayerId === pid
@@ -2743,13 +2689,19 @@ const GameTableLive: React.FC = () => {
                     <AvatarBubble emoji={emoji} size={32} image={image} glow={isTurnSeat} />
                     <Text style={{ color: '#FFD76A', fontSize: 11, fontWeight: '700', letterSpacing: 1 }}>{name}</Text>
                   </View>
+                  {/* Stack ปัจจุบัน (มติลุงเยาะ 2026-07-26) — ต้องเห็นก่อนตัดสินใจ Call/Fold รอบท้ายๆ */}
+                  <Text style={{ fontFamily: 'JetBrainsMono_600SemiBold', color: '#C8C4B0', fontSize: 9 }}>
+                    🪙 {(tokenBalance[pid] ?? 0).toLocaleString('en-US')}
+                  </Text>
                   <GFStatusBadge playerId={pid} />
                   <GFHealthBar playerId={pid} />
                 </View>
               )
             }
             return (
-              <View style={{ position: 'absolute', top: 60, left: 0, right: 0, bottom: 0, zIndex: 40, paddingHorizontal: 10 }} pointerEvents="box-none">
+              // top 60->78 (มติลุงเยาะ 2026-07-26): GameTopBar สูงขึ้นหลังย้ายดาวลงมาอยู่ใต้ชื่อ Tier
+              // (แก้ก่อนหน้านี้) เดิม P3 (Boss) ไปทับแถวดาว ต้องเลื่อนลงให้พ้น
+              <View style={{ position: 'absolute', top: 78, left: 0, right: 0, bottom: 0, zIndex: 40, paddingHorizontal: 10 }} pointerEvents="box-none">
                 {/* ═══ P3 (Boss) บนสุด ═══ */}
                 {bossAI && (
                   <View style={{ alignItems: 'center', marginTop: 4, gap: 4 }}>

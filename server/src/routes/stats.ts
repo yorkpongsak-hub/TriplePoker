@@ -172,4 +172,27 @@ export default async function statsRoutes(fastify: FastifyInstance) {
       })
     }
   )
+
+  // GET /stats/player/:userId/history — ประวัติชนะอันดับ 1 ล่าสุด 20 รายการ (มติลุงเยาะ 2026-07-26)
+  // match_wins ไม่มี cap ที่ตาราง (เก็บตลอดกาล) — LIMIT ที่ query ตรงนี้แทนตามที่ตกลงกัน
+  const HISTORY_LIMIT = 20
+  fastify.get<{ Params: { userId: string } }>(
+    '/stats/player/:userId/history',
+    async (request: FastifyRequest<{ Params: { userId: string } }>, reply: FastifyReply) => {
+      const { userId } = request.params
+      const { data, error } = await supabaseAdmin
+        .from('match_wins')
+        .select('tier, mode, won_at, tokens_won, is_triple_sweep, best_hand, opponents')
+        .eq('user_id', userId)
+        .order('won_at', { ascending: false })
+        .limit(HISTORY_LIMIT)
+
+      if (error) {
+        console.error('[STATS] Error querying match_wins for', userId, error)
+        return reply.send({ success: true, history: [], note: 'Match history unavailable — check that match_wins table exists.' })
+      }
+
+      return reply.send({ success: true, history: data ?? [] })
+    }
+  )
 }

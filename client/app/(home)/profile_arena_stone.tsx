@@ -108,9 +108,9 @@ export default function ProfileScreen() {
     console.log('Settings pressed')
   }
 
-  //const handleEditProfile = () => {
-//    router.push('/(auth)/setup-profile')
- // }
+  const handleEditProfile = () => {
+    router.push('/(auth)/setup-profile')
+  }
 
   const handlePlay = () => {
     router.push('/(home)/lobby')

@@ -1,6 +1,7 @@
 import 'react-native-url-polyfill/auto'
 import { Stack } from 'expo-router'
-import { Alert, Platform, View } from 'react-native'
+import { Alert, AppState, Platform, View } from 'react-native'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { StatusBar } from 'expo-status-bar'
 import { useEffect, useRef } from 'react'
@@ -8,6 +9,7 @@ import { useFonts, Cinzel_400Regular, Cinzel_700Bold } from '@expo-google-fonts/
 import { JetBrainsMono_400Regular, JetBrainsMono_600SemiBold } from '@expo-google-fonts/jetbrains-mono'
 import { useAuthStore } from '../src/store/authStore'
 import { useUserStore } from '../src/store/userStore'
+import { PENDING_MATCH_KEY, PendingMatch } from '../src/utils/pendingMatch'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
@@ -30,6 +32,50 @@ export default function RootLayout() {
   // Escrow Stale Recovery §b — เช็คครั้งเดียวต่อ session ตอนเปิดแอป/login (ก่อนผู้เล่นพยายาม join โต๊ะด้วยซ้ำ)
   // กู้คืน escrow ที่ค้าง 'in_match' เกิน 60 นาทีจาก session ก่อนหน้าที่ force-close/crash กลางแมตช์
   const recoveryCheckedRef = useRef(false)
+  const settlementCheckRunningRef = useRef(false)
+
+  const checkPendingSettlement = async () => {
+    if (!session?.access_token || settlementCheckRunningRef.current) return
+    const raw = await AsyncStorage.getItem(PENDING_MATCH_KEY)
+    if (!raw) return
+
+    settlementCheckRunningRef.current = true
+    try {
+      const pending = JSON.parse(raw) as PendingMatch
+      const response = await fetch(`${SERVER_URL}/profile/latest-settlement`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ since: pending.startedAt }),
+      })
+      const result = await response.json()
+      const settlement = result?.settlement
+      if (!response.ok || !settlement) return
+
+      await refreshProfile()
+      await AsyncStorage.removeItem(PENDING_MATCH_KEY)
+      const amount = Number(settlement.amountReturned ?? 0)
+      Alert.alert(
+        'Match Settled',
+        `Unfinished match settled: +${amount.toLocaleString('en-US')} tokens returned to your wallet.`,
+      )
+    } catch (e) {
+      console.error('[layout] pending settlement check failed:', e)
+    } finally {
+      settlementCheckRunningRef.current = false
+    }
+  }
+
+  useEffect(() => {
+    if (!session?.access_token) return
+    void checkPendingSettlement()
+    const subscription = AppState.addEventListener('change', nextState => {
+      if (nextState === 'active') void checkPendingSettlement()
+    })
+    return () => subscription.remove()
+  }, [session?.access_token])
   useEffect(() => {
     if (authUser && authProfile) {
       setUser({

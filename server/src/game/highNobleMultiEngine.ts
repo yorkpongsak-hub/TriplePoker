@@ -23,13 +23,14 @@ import { checkFoul, PlayerArrangement, CommunityCards } from './foulChecker'
 import { aiDecideArrangement, AIConfig, AIPersonality, FOUR_GODS, greedyArrangement, pickRandomMinions } from './aiEngine'
 import { Card } from './deck'
 import { gameConfig } from '../config/gameConfig'
-import { supabase } from '../config/supabase'
+import { supabaseAdmin } from '../config/supabase'
 import { escrowBuyIn, settleEscrow, refundEscrow } from './gameLoop'
 import { Seat as RoomSeat } from './roomRegistry'
 import { lockMonarchPersonality } from './monarchAI'
 import { recordMonarchVictory } from './monarchSpawn'
 import { awardPerformanceScore } from './psEngine'
 import { recordMatchStats, BestHandCandidate } from './matchStatsService'
+import { recordMatchWin } from './matchWinsService'
 
 // ── Local copies of small pure helpers (ตั้งใจ duplicate จาก gameLoop.ts แทนการ import
 //    เพื่อไม่ให้ engine ใหม่นี้ผูกกับการแก้ไขไฟล์เดิมในอนาคต — ของเดิมพิสูจน์แล้วว่าถูกต้อง) ──
@@ -149,6 +150,7 @@ export interface HNSeat {
   personality?: AIPersonality  // เฉพาะ AI seat — สำหรับ Monarch คือบุคลิกที่ล็อคไว้ (client ไม่เห็นค่านี้ เห็นแค่ name="Monarch")
   isMonarch?: boolean          // Monarch Spec v1.3: true เฉพาะที่นั่ง Boss ที่สุ่มโดน Monarch — บุคลิกล็อคครั้งเดียวตอนแจกไพ่ ไม่สลับกลางเกม
   isMinion?: boolean           // LobbyMatchmaking_Spec_v1_0 §6.1: true เฉพาะที่นั่งเติมด้วย Minion (Deadlock "Start Now") — ใช้ greedyArrangement เสมอ
+  isVip?: boolean              // เฉพาะ Human (มติลุงเยาะ 2026-07-26) — Gold Radiance frame ทุกที่นั่ง ไม่ใช่แค่ P1
 }
 
 interface HNGrandFinaleState {
@@ -162,7 +164,7 @@ interface HNGrandFinaleState {
   decisionTimerId?: any
 }
 
-interface HNMatchState {
+export interface HNMatchState {
   roomId: string
   seats: [HNSeat, HNSeat, HNSeat, HNSeat]
   roundNumber: number
@@ -195,6 +197,11 @@ interface HNMatchState {
   // End-of-Match Stats Recording — live tracking ต่อ human seat (userId) ตลอดแมตช์
   bestHandThisMatch?: Record<string, BestHandCandidate>
   tripleSweepThisMatch?: Set<string>
+  // Full Reconnect System Step 2B (MasterPlan §6.16) — grace period 60s ก่อน settle+replace ถาวร
+  // ⚠️ INVARIANT: ตราบใดที่ userId อยู่ใน map นี้ seat.isHuman ต้องคง true เสมอ (ห้าม flip จนกว่า
+  // finalizeHNAFKReplacement จะทำงานจริง) เพราะ aiSeats()/AI decision loop ทุกจุด filter จาก !isHuman
+  // — flip ก่อนกำหนด = seat ถูก AI logic จับไปเล่นแทนทันที ไม่ passive ตามที่ออกแบบไว้
+  afkPlayers: Record<string, { disconnectedAt: number; graceTimer: NodeJS.Timeout }>
 }
 
 const hnMatchStates = new Map<string, HNMatchState>()
@@ -203,33 +210,155 @@ export function getHNMatchState(roomId: string): HNMatchState | undefined {
   return hnMatchStates.get(roomId)
 }
 
-// Client เข้ามาถึง game screen แล้ว (socket ใหม่คนละอันจาก queueing socket) → join user room + ขอไพ่ปัจจุบัน
-// mirror ของ resendRoundStartToPlayer เดิม (Adept) — ช่วยแก้ race ที่ round_start ถูก emit ไปแล้ว
-// ก่อน client จะ join ห้อง userId ทัน (ครอบคลุมเฉพาะตอน phase ยังเป็น 'arrangement' เหมือนต้นแบบ)
-export function resendHNRoundStartToPlayer(io: Server, roomId: string, userId: string): void {
-  const state = hnMatchStates.get(roomId)
-  if (!state) return
-  const seat = seatById(state, userId)
-  if (!seat || !seat.isHuman) return
-  if (state.phase !== 'arrangement') return
-  if (!state.community || !state.cardsMap) return
+// ============================================================
+// buildHNSnapshotForPlayer — Full Reconnect System Step 2A (MasterPlan §6.16)
+// ประกอบ state ปัจจุบันเป็น snapshot สำหรับ "userId" คนเดียว ครอบคลุมทุก phase
+// (ต่างจาก resend เดิมที่ทำได้แค่ phase 'arrangement')
+//
+// หลักการ: WHITELIST ล้วน — ใส่เฉพาะ field ที่ยืนยันแล้วว่าปลอดภัยต่อ userId นี้
+// (ดู Reconnect Visibility Matrix ที่ตรวจไว้ก่อนหน้า) field ไหนไม่อยู่ในนี้ = ไม่ส่ง
+// ลืมใส่ field ใหม่ในอนาคต = ปลอดภัยโดยอัตโนมัติ (ตรงข้ามกับ blacklist ที่ลืม = leak)
+//
+// ⚠️ ANTI-CHEAT CRITICAL: ห้าม spread state ทั้งก้อนหรือส่ง field ที่มีไพ่ดิบของคนอื่น
+// เด็ดขาด โดยเฉพาะ pendingPile12.allArrangements กับ bestHandThisMatch (มีไพ่จริงของ
+// ทุกคนรวมผู้แพ้ที่ไม่เคยถูกเปิดเผยต่อสาธารณะ) — ใช้ได้แค่ "ภายใน" ฟังก์ชันนี้เพื่อ derive
+// ค่าที่ปลอดภัยผ่าน revealWinnerOnly() เท่านั้น ห้ามส่งค่าดิบออกไปเป็นอันขาด
+// ============================================================
+export function buildHNSnapshotForPlayer(state: HNMatchState, userId: string): Record<string, any> {
+  // ── Public เสมอทุก phase (ตรงกับ payload ที่ event เดิมเคย broadcast ให้ทุกคนอยู่แล้ว) ──
+  const community = state.community
+    ? { pile1: state.community.row1.map(cardKey), pile2: state.community.row2.map(cardKey), pile3: state.community.row3.map(cardKey) }
+    : null
+  const seatsPublic = state.seats.map(s => ({
+    id: s.id, name: s.name, emoji: s.emoji, role: s.role, isHuman: s.isHuman, isVip: s.isVip,
+    // personality / isMonarch / isMinion ห้ามส่งเด็ดขาด — ground truth (round_start เดิม) ไม่เคยส่งเช่นกัน
+  }))
+  const auctionWonCards = state.auctionWonCards
+    ? Object.fromEntries(Object.entries(state.auctionWonCards).map(([pid, c]) => [pid, cardKey(c)]))
+    : null
+  const grandFinale = state.grandFinale
+    ? {
+        turnOrder: state.grandFinale.turnOrder,
+        currentTurnIdx: state.grandFinale.currentTurnIdx,
+        foldedPlayers: state.grandFinale.foldedPlayers,
+        foulPlayers: state.grandFinale.foulPlayers,
+        pile3Pot: state.grandFinale.pile3Pot,
+        roundNumber: state.grandFinale.roundNumber,
+        // revealedCards = ไพ่ที่ "ถูกหงายไปแล้วจริง" ผ่าน grand_finale_action เท่านั้น ปลอดภัยส่งได้ทุกคน
+        // (decisionTimerId ไม่ใส่ — เป็น NodeJS timer handle serialize ไม่ได้ + ไม่มีประโยชน์ต่อ client)
+        revealedCards: Object.fromEntries(
+          Object.entries(state.grandFinale.revealedCards).map(([pid, cards]) => [pid, cards.map(cardKey)])
+        ),
+      }
+    : null
 
-  const timer = gameConfig.arrangementTimer.highNoble
-  io.to(userId).emit('round_start', {
-    roomId,
+  // ── SELF เท่านั้น (own-key ล้วน ห้ามหลุดไปถึงคนอื่น) ──
+  // myCards = มือดิบของตัวเอง (คนละความหมายกับ myArrangement ด้านล่างที่คือการจัดกองแล้ว) —
+  // ตั้งแต่ arrangement_2 เป็นต้นไป (หลังประมูลจบ) ถ้าชนะใบประมูลมา ต้อง concat เข้าไปด้วยให้ครบ 12 ใบ
+  // ก่อนหน้านั้น (arrangement/blind_auction) ยังไม่ถึงจังหวะได้ไพ่ประมูล คงไว้ที่ 11 ใบเดิม
+  // ⚠️ merge เฉพาะ auctionWonCards[userId] (own key) เท่านั้น + สร้าง array ใหม่ด้วย spread ไม่แตะ
+  // state.cardsMap ต้นฉบับเด็ดขาด (กัน side-effect กระทบ flow จริงที่ยังใช้ cardsMap อยู่)
+  const MERGE_AUCTION_PHASES = new Set<HNMatchState['phase']>([
+    'arrangement_2', 'discard', 'discard_done', 'fog_of_war', 'grand_finale', 'match_end',
+  ])
+  let myCards: string[] | null = null
+  if (state.cardsMap?.[userId]) {
+    const rawHand = state.cardsMap[userId]
+    const wonCard = state.auctionWonCards?.[userId]
+    const fullHand = (MERGE_AUCTION_PHASES.has(state.phase) && wonCard) ? [...rawHand, wonCard] : rawHand
+    myCards = fullHand.map(cardKey)
+  }
+  const myArrangement = state.arrangements?.[userId]
+    ? {
+        pile1: state.arrangements[userId].pile1.map(cardKey),
+        pile2: state.arrangements[userId].pile2.map(cardKey),
+        pile3: state.arrangements[userId].pile3.map(cardKey),
+      }
+    : null
+  const myAuctionBid = state.auctionBids?.[userId] ?? null
+  const myFinalPile3 = state.finalPile3?.[userId] ? state.finalPile3[userId].map(cardKey) : null
+  const ownSubmitted = {
+    arrangement: state.submittedArrangement.has(userId),
+    auctionBid: state.submittedAuctionBid.has(userId),
+    discard: state.submittedDiscard.has(userId),
+  } // เฉพาะ boolean ของ userId เจ้าของเท่านั้น — ห้าม loop ส่ง status ของคนอื่น
+
+  // ── Opponent pile1/pile2 — เปิดเผยเฉพาะ "ผู้ชนะกอง" เท่านั้น ตั้งแต่ discard_done เป็นต้นไป
+  // reuse revealWinnerOnly() เดิม (98-111) ไม่เขียน masker ซ้ำ — pendingPile12 ถูก set ตอน
+  // resolveHNDiscardComplete (บรรทัด 760) เท่านั้น ก่อนหน้านั้นเป็น undefined จึงได้ null โดยธรรมชาติ
+  // ไม่ต้องเช็ค phase แยก
+  let pileReveals: { pile1: Record<string, string[] | null>; pile2: Record<string, string[] | null> } | null = null
+  if (state.pendingPile12) {
+    const { pile1Winner, pile2Winner, allArrangements } = state.pendingPile12
+    pileReveals = {
+      pile1: revealWinnerOnly(allArrangements, 1, pile1Winner),
+      pile2: revealWinnerOnly(allArrangements, 2, pile2Winner),
+    }
+  }
+
+  // ── foulMap/foulReasons — ปิดบังจนกว่าจะถึง discard_done (จังหวะเดียวกับที่ pile_reveal เปิดเผย
+  // จริงในโค้ดเดิม บรรทัด 735/751) ใช้ pendingPile12 เป็นตัวบ่งชี้ว่าถึงจังหวะเปิดเผยหรือยัง
+  const foulRevealed = state.pendingPile12 !== undefined
+  const foulMap = foulRevealed ? (state.foulMap ?? null) : null
+  const foulReasons = foulRevealed ? (state.foulReasons ?? null) : null
+
+  return {
+    // public
+    phase: state.phase,
+    roomId: state.roomId,
     roundNumber: state.roundNumber,
     totalRounds: state.totalRounds,
-    cards: { [userId]: state.cardsMap[userId].map(cardKey) },
-    communityCards: {
-      pile1: state.community.row1.map(cardKey),
-      pile2: state.community.row2.map(cardKey),
-      pile3: state.community.row3.map(cardKey),
-    },
-    seats: state.seats.map(s => ({ id: s.id, name: s.name, emoji: s.emoji, role: s.role, isHuman: s.isHuman })),
     tokenBalance: state.tokenBalance,
-    timer,
-    ...(state.roundNumber === 1 ? { buyInAmount: state.buyInAmount } : {}),
-  })
+    buyInAmount: state.buyInAmount,
+    results: state.results,
+    community,
+    blindAuctionCards: state.blindAuctionCards ? state.blindAuctionCards.map(cardKey) : null,
+    auctionWonCards,
+    seats: seatsPublic,
+    grandFinale,
+    pot: null,             // ยังไม่ wire Token Flow Panel เข้า HNMatchState (pending #7) — ห้ามคำนวณเอง
+    timeRemainingMs: null, // state ไม่เก็บ deadline timestamp ไว้เลย (มีแค่ setTimeout handle) — รอ Step 2B/2C
+
+    // self-only
+    myCards,
+    myArrangement,
+    myAuctionBid,
+    myFinalPile3,
+    ownSubmitted,
+
+    // opponent-masked (null จนกว่าจะถึงจังหวะที่ข้อมูลนั้นถูกเปิดเผยต่อสาธารณะจริงแล้ว)
+    pileReveals,
+    foulMap,
+    foulReasons,
+  }
+}
+
+// Client เข้ามาถึง game screen แล้ว (socket ใหม่คนละอันจาก queueing socket) → join user room + ขอ state ปัจจุบัน
+// Full Reconnect System Step 2A: ขยายจากเดิมที่ resend ได้แค่ phase 'arrangement' (ผ่าน 'round_start')
+// เป็นครอบทุก phase ผ่าน buildHNSnapshotForPlayer (whitelist-only) แล้ว emit event ใหม่
+// 'game_state_snapshot' แยกต่างหาก (Step 2C ฝั่ง client จะ handle event นี้) — ไม่แตะ manual filter
+// จุดเดิมที่ยัง broadcast ปกติอยู่ (401-417, 587, 648, 718 ฯลฯ)
+export function resendHNRoundStartToPlayer(io: Server, roomId: string, userId: string): void {
+  const state = hnMatchStates.get(roomId)
+  if (!state) {
+    // ห้าม silent-fail — client (Step 2C) ต้องรู้ว่าแมตช์นี้จบ/ไม่มีอยู่จริงแล้ว เพื่อเด้งกลับ lobby
+    // แทนที่จะค้างจอรอ event ที่ไม่มีวันมาถึง (เช่น reconnect หลัง match_end ที่ลบ state ไปแล้ว)
+    io.to(userId).emit('match_not_found', { roomId })
+    return
+  }
+  const seat = seatById(state, userId)
+  if (!seat || !seat.isHuman) return
+
+  // Full Reconnect System Step 2B — reconnect ทันใน grace 60s: ยกเลิก timer ทันที คืนที่นั่งให้คุมต่อ
+  // ได้เลย (seat ยัง isHuman:true อยู่แล้วตาม INVARIANT จึงผ่านเช็คด้านบนได้ปกติ ไม่ต้องทำอะไรเพิ่ม)
+  const afk = state.afkPlayers[userId]
+  if (afk) {
+    clearTimeout(afk.graceTimer)
+    delete state.afkPlayers[userId]
+  }
+
+  const snapshot = buildHNSnapshotForPlayer(state, userId)
+  io.to(userId).emit('game_state_snapshot', snapshot)
 }
 
 // ── AI seat naming (filler, ไม่ใช่ Boss) ──────────────────────
@@ -258,16 +387,44 @@ export async function startHighNobleMultiMatch(
   let nonBossRoleIdx = 0
   let fillerIdx = 0
 
+  // Query VIP status ของ human ทุกคนในห้องครั้งเดียว (มติลุงเยาะ 2026-07-26) — Gold Radiance frame
+  // ต้องเช็ค VIP จริงทุกที่นั่ง ไม่ใช่แค่ P1 เหมือนเดิม
+  const humanUserIds = roomSeats.filter(rs => rs.type === 'human' && rs.userId).map(rs => rs.userId!)
+  const vipStatusByUserId: Record<string, string> = {}
+  try {
+    const { data: vipRows, error: vipErr } = await supabaseAdmin.from('users').select('user_id, vip_status').in('user_id', humanUserIds)
+    if (vipErr) console.error('[HIGHNOBLE] Failed to read vip_status for seats:', vipErr)
+    ;(vipRows ?? []).forEach(r => { vipStatusByUserId[r.user_id] = r.vip_status ?? 'none' })
+  } catch (err) {
+    console.error('[HIGHNOBLE] Unexpected error reading vip_status for seats:', err)
+  }
+
   const seats = roomSeats.map((rs, i): HNSeat => {
     const role: HNSeat['role'] = i === bossIdx ? 'boss' : nonBossRoles[nonBossRoleIdx++]
     if (rs.type === 'human' && rs.userId) {
-      return { id: rs.userId, role, isHuman: true, name: rs.name, emoji: '👤' }
+      const isVip = (vipStatusByUserId[rs.userId] ?? 'none') !== 'none'
+      return { id: rs.userId, role, isHuman: true, name: rs.name, emoji: '👤', isVip }
     }
     if (role === 'boss') {
+      // Batch 1.5 Task 2 (Monarch v2.2 quarantine) — เส้นทางนี้ตายแล้วจริง: rollHighNobleBoss()
+      // (monarchSpawn.ts, Batch 1) ไม่มีทางคืน isMonarch:true อีกต่อไป → rs.isMonarch ต้องเป็น
+      // falsy เสมอ ณ จุดนี้ — เหลือ guard ไว้กันกรณีมี legacy state ค้าง/บั๊กในอนาคตทำให้ค่านี้หลุด
+      // มาอีก (ดู audit Batch 1.5) ไม่ลบ branch นี้ทิ้งเพื่อไม่ต้องแตะ HNSeat.isMonarch type
       if (rs.isMonarch) {
-        // Monarch Spec v1.3: personality ยังไม่ล็อค ณ จุดนี้ — startHNRound (Round 1) จะล็อคตาม hand strength
-        // ทันทีที่แจกไพ่เสร็จ (ดู monarchAI.ts) แล้วคงบุคลิกนั้นตลอดแมตช์ ไม่สลับอีก
-        return { id: 'AI_BOSS', role, isHuman: false, name: gameConfig.monarchIdentity.name, emoji: gameConfig.monarchIdentity.emoji, personality: FOUR_GODS[0].personality, isMonarch: true }
+        if (process.env.NODE_ENV !== 'production') {
+          throw new Error(
+            '[QUARANTINE] Dead Monarch-in-HighNoble path hit (rs.isMonarch=true) — ' +
+            'เส้นทางนี้ควรตายไปแล้วตั้งแต่ Batch 1 ถ้าเห็น error นี้แปลว่ามีจุดอื่นเซ็ต isMonarch:true ' +
+            'กลับมาอีก ต้องตามหาต้นเหตุ ไม่ใช่ปิด error นี้ทิ้งเฉยๆ'
+          )
+        }
+        // Production: ห้าม crash โต๊ะจริง — log เป็น alert แล้ว fallback เป็น Four Gods ปกติแทน
+        console.error(
+          '[QUARANTINE][ALERT] Dead Monarch-in-HighNoble path hit in PRODUCTION (rs.isMonarch=true) — ' +
+          'fallback เป็น Four Gods ปกติ ต้องตามหาต้นเหตุด่วน seat:', JSON.stringify(rs),
+        )
+        const fallbackGod = FOUR_GODS.find(g => g.id === rs.aiConfigId) ?? FOUR_GODS[0]
+        return { id: 'AI_BOSS', role, isHuman: false, name: fallbackGod.name, emoji: fallbackGod.emoji, personality: fallbackGod.personality }
       }
       const god = FOUR_GODS.find(g => g.id === rs.aiConfigId) ?? FOUR_GODS[0]
       return { id: 'AI_BOSS', role, isHuman: false, name: god.name, emoji: god.emoji, personality: god.personality }
@@ -312,6 +469,7 @@ export async function startHighNobleMultiMatch(
     submittedArrangement: new Set(),
     submittedAuctionBid: new Set(),
     submittedDiscard: new Set(),
+    afkPlayers: {},
   }
   hnMatchStates.set(roomId, state)
 
@@ -326,6 +484,10 @@ function aiSeats(state: HNMatchState): HNSeat[] {
 }
 function seatById(state: HNMatchState, id: string): HNSeat | undefined {
   return state.seats.find(s => s.id === id)
+}
+// Full Reconnect System Step 2B — true ระหว่าง grace 60s (seat.isHuman ยังคง true อยู่เสมอตอนนี้)
+function isHNPlayerAFK(state: HNMatchState, userId: string): boolean {
+  return !!state.afkPlayers?.[userId]
 }
 // v1.1 fix: หา boss seat จาก role field ตรงๆ ไม่ใช่ state.seats[0] — เดิมสมมติว่า boss อยู่ index 0
 // เสมอ ซึ่งไม่จริงอีกต่อไปสำหรับ public room หลัง LobbyMatchmaking_Spec_v1_1 (Human อาจอยู่ index 0
@@ -364,8 +526,19 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
 
   // Monarch Spec v1.3: ล็อคบุคลิกตาม hand strength ทันทีที่แจกไพ่เสร็จ — เฉพาะ Round 1 เท่านั้น
   // (ล็อคครั้งเดียวทั้งแมตช์ ไม่สลับอีก, client ไม่เห็นค่า personality — เห็นแค่ name="Monarch")
+  // Batch 1.5 Task 2 (quarantine): เส้นทางนี้ตายแล้วจริงเช่นกัน (boss.isMonarch มาจาก seat ที่สร้าง
+  // ใน startHighNobleMultiMatch ด้านบน ซึ่ง guard ไว้แล้วว่าไม่มีทางเป็น true อีก) — เหลือ guard ไว้
+  // กันกรณี state ถูกแก้จากที่อื่น (defense in depth) คง logic เดิม (lockMonarchPersonality) ไว้ทุก
+  // ประการหลัง guard ไม่ได้ลบทิ้ง เพราะไม่มีทางรันจริงใน production อยู่แล้ว
   const boss = bossSeat(state) // v1.1 fix: หาจาก role ไม่ใช่ index 0 ตรงๆ (ดู bossSeat() ด้านบน)
   if (boss.isMonarch && state.roundNumber === 1) {
+    if (process.env.NODE_ENV !== 'production') {
+      throw new Error(
+        '[QUARANTINE] Dead Monarch personality-lock path hit (boss.isMonarch=true) — ' +
+        'เส้นทางนี้ควรตายไปแล้วตั้งแต่ Batch 1 ต้องตามหาต้นเหตุที่ isMonarch หลุดมาอีก',
+      )
+    }
+    console.error('[QUARANTINE][ALERT] Dead Monarch personality-lock path hit in PRODUCTION (boss.isMonarch=true) — ต้องตามหาต้นเหตุด่วน boss:', JSON.stringify(boss))
     boss.personality = lockMonarchPersonality(cardsMap[boss.id], community)
   }
 
@@ -380,7 +553,7 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
   })
 
   const timer = gameConfig.arrangementTimer.highNoble
-  const aiNamesPublic = state.seats.map(s => ({ id: s.id, name: s.name, emoji: s.emoji, role: s.role, isHuman: s.isHuman }))
+  const aiNamesPublic = state.seats.map(s => ({ id: s.id, name: s.name, emoji: s.emoji, role: s.role, isHuman: s.isHuman, isVip: s.isVip }))
 
   humanSeats(state).forEach(seat => {
     io.to(seat.id).emit('round_start', {
@@ -431,14 +604,43 @@ export async function submitHNArrangement(
   return { ok: true }
 }
 
+// ============================================================
+// Naive fallback helpers — ใช้ร่วมกันทั้ง timeout ปกติ (คนออนไลน์แต่ไม่กด) และ
+// finalizeHNAFKReplacement safety-net (STEP 2B-FIX) เจตนา "naive" ล้วนๆ ไม่ใช่ greedy/AI:
+// passive ghost mode ต้องไม่เล่นให้ดีแทนคนที่หลุด — ทำแค่ worst-case fallback เหมือนที่ระบบเคย
+// ทำกับคนออนไลน์ที่แค่ตัดสินใจช้าเท่านั้น (เท่าเทียมกัน ไม่ได้เปรียบ/เสียเปรียบจากการ AFK)
+// ⛔ ไม่มี submittedX.add()/flow-control ในนี้เด็ดขาด — เป็นหน้าที่ของแต่ละ caller (ต่างบริบทกัน
+// เช่น resolveHNDiscardTimeout ไม่เคย add submittedDiscard เลย ถ้าใส่ในนี้จะเปลี่ยนพฤติกรรม timeout เดิม)
+// ============================================================
+function naiveArrangeR1(state: HNMatchState, seatId: string): void {
+  const hand = state.cardsMap![seatId]
+  state.arrangements![seatId] = { pile1: hand.slice(0, 3), pile2: hand.slice(3, 6), pile3: hand.slice(6, 11) }
+}
+
+function naiveArrangeR2(state: HNMatchState, seatId: string): void {
+  const arr = state.arrangements![seatId]
+  const won = state.auctionWonCards![seatId]
+  state.arrangements![seatId] = won ? { pile1: arr.pile1, pile2: arr.pile2, pile3: [...arr.pile3, won] } : arr
+}
+
+function naiveDiscard(state: HNMatchState, seatId: string): void {
+  const arr = state.arrangements![seatId]
+  const trim = (pile: Card[]) => pile.length > 3 ? pile.slice(0, 3) : pile
+  const finalArr: PlayerArrangement = { pile1: trim(arr.pile1), pile2: trim(arr.pile2), pile3: trim(arr.pile3) }
+  state.arrangements![seatId] = finalArr
+  const foul = checkFoul(finalArr, state.community!)
+  state.foulMap![seatId] = foul.isFoul
+  if (foul.isFoul && foul.reason) state.foulReasons![seatId] = foul.reason
+  state.finalPile3![seatId] = finalArr.pile3
+}
+
 async function resolveHNArrangementTimeout(io: Server, roomId: string): Promise<void> {
   const state = hnMatchStates.get(roomId)
   if (!state || state.phase !== 'arrangement') return
   // Human ที่ยังไม่ submit — auto-submit ไพ่ตามที่แจกมาเรียง 3/3/5 (fallback ง่ายสุด กันเกม stall)
   humanSeats(state).forEach(seat => {
     if (state.submittedArrangement.has(seat.id)) return
-    const hand = state.cardsMap![seat.id]
-    state.arrangements![seat.id] = { pile1: hand.slice(0, 3), pile2: hand.slice(3, 6), pile3: hand.slice(6, 11) }
+    naiveArrangeR1(state, seat.id)
     state.submittedArrangement.add(seat.id)
   })
   await resolveHNArrangementPhaseComplete(io, roomId)
@@ -596,9 +798,7 @@ async function resolveHNArrangementRound2Timeout(io: Server, roomId: string): Pr
   humanSeats(state).forEach(seat => {
     if (state.submittedArrangement.has(seat.id)) return
     // ไม่ submit ทัน — ใช้ arrangement รอบ1 เดิม + ไพ่ประมูล (ถ้ามี) ต่อท้าย pile3
-    const arr = state.arrangements![seat.id]
-    const won = state.auctionWonCards![seat.id]
-    state.arrangements![seat.id] = won ? { pile1: arr.pile1, pile2: arr.pile2, pile3: [...arr.pile3, won] } : arr
+    naiveArrangeR2(state, seat.id)
     state.submittedArrangement.add(seat.id)
   })
   startHNDiscardPhase(io, roomId)
@@ -682,14 +882,7 @@ async function resolveHNDiscardTimeout(io: Server, roomId: string): Promise<void
   humanSeats(state).forEach(seat => {
     if (state.submittedDiscard.has(seat.id)) return
     // หมดเวลา — ทิ้งใบสุดท้ายของแต่ละกองอัตโนมัติ (ตรงกับ single-player)
-    const arr = state.arrangements![seat.id]
-    const trim = (pile: Card[]) => pile.length > 3 ? pile.slice(0, 3) : pile
-    const finalArr: PlayerArrangement = { pile1: trim(arr.pile1), pile2: trim(arr.pile2), pile3: trim(arr.pile3) }
-    state.arrangements![seat.id] = finalArr
-    const foul = checkFoul(finalArr, state.community!)
-    state.foulMap![seat.id] = foul.isFoul
-    if (foul.isFoul && foul.reason) state.foulReasons![seat.id] = foul.reason
-    state.finalPile3![seat.id] = finalArr.pile3
+    naiveDiscard(state, seat.id)
   })
   await resolveHNDiscardComplete(io, roomId)
 }
@@ -826,10 +1019,27 @@ function startHNNextTurn(io: Server, roomId: string): void {
 
   io.to(roomId).emit('grand_finale_turn', { roomId, playerId: currentPid, roundNumber: gf.roundNumber, callAmount, timeLimitMs })
 
+  // Full Reconnect System Step 2B — passive ghost mode: ถ้าคนที่ถึง turn กำลัง grace-AFK อยู่ fold ทันที
+  // ไม่รอ timeLimitMs (ต่างจาก auto-call ปกติของคนที่ยัง online แค่ตัดสินใจช้า) กันไม่ให้เสียเงินซ้ำๆ ทุก
+  // turn ระหว่างที่ยังไม่รู้ว่าจะ reconnect ทันไหม — ต้องเช็คก่อน if(seat.isHuman) เสมอ เพราะ AFK seat ยัง
+  // isHuman:true อยู่ (ดู INVARIANT ต้นไฟล์) ไม่งั้นจะตกไปเข้า auto-call branch เดิมแทน
+  if (isHNPlayerAFK(state, currentPid)) {
+    applyHNGrandFinaleAction(io, roomId, currentPid, 'fold')
+    return
+  }
+
   if (seat.isHuman) {
     if (gf.decisionTimerId) clearTimeout(gf.decisionTimerId)
     // หมดเวลา = Auto-Call ใบ default (ตรงกับ single-player High Noble UX — Fold ต้อง swipe เอง)
-    gf.decisionTimerId = setTimeout(() => applyHNGrandFinaleAction(io, roomId, currentPid, 'call'), timeLimitMs)
+    gf.decisionTimerId = setTimeout(() => {
+      // Full Reconnect System Step 2B-FIX2 — re-check AFK ตอน timer "ยิงจริง" (ไม่ใช่ตอนตั้ง) กัน
+      // stale timer: ถ้าคนหลุดเน็ตระหว่างเป็น turn ตัวเองพอดี (timer นี้ตั้งไว้ตั้งแต่ตอนยังออนไลน์)
+      // ต้อง fold แทน auto-call เดิม ไม่งั้นเสียเงินไปเรื่อยๆ ขัด passive design — คน online ปกติที่
+      // แค่ตัดสินใจช้า (ไม่ AFK) ยังได้ auto-call เหมือนเดิมทุกประการ ไม่กระทบ (guard clearTimeout
+      // ที่ applyHNGrandFinaleAction บรรทัดแรกกันการยิงซ้อนหลัง human กดเองไปแล้วอยู่ครบแล้ว ไม่ต้องเพิ่ม)
+      const hnAutoAction = isHNPlayerAFK(state, currentPid) ? 'fold' : 'call'
+      applyHNGrandFinaleAction(io, roomId, currentPid, hnAutoAction)
+    }, timeLimitMs)
   } else {
     const aiThinkMs = 7000 + Math.floor(Math.random() * 3000)
     setTimeout(() => {
@@ -1090,7 +1300,19 @@ function finalizeHNGrandFinale(
       // computeHNHumanPayout เดิมไม่แตะ — effectiveFinalStack = buyInAmount + payout ทำให้ settleEscrow ให้ผลรวมเท่าเดิมทุกกรณี
       const bossSeatFinal = bossSeat(state) // v1.1 fix: หาจาก role ไม่ใช่ index 0 ตรงๆ (ดู bossSeat() ด้านบน) — ผลตัดสิน Pot×2 ผูกกับ Monarch จริง ไม่ใช่ที่นั่ง index 0
       const winnerSeat = seatById(state, finalWinner)
-      const isMonarchMatch = bossSeatFinal.isMonarch === true
+      let isMonarchMatch = bossSeatFinal.isMonarch === true
+      // Batch 1.5 Task 2 (quarantine): เส้นทางนี้ตายแล้วจริง (bossSeatFinal.isMonarch มาจาก seat ที่
+      // guard ไว้แล้วที่ startHighNobleMultiMatch — ไม่มีทางเป็น true อีก) เหลือ guard ไว้ defense in depth
+      if (isMonarchMatch) {
+        if (process.env.NODE_ENV !== 'production') {
+          throw new Error(
+            '[QUARANTINE] Dead Monarch-settlement path hit (bossSeatFinal.isMonarch=true) — ' +
+            'เส้นทางนี้ควรตายไปแล้วตั้งแต่ Batch 1 ต้องตามหาต้นเหตุที่ isMonarch หลุดมาอีก',
+          )
+        }
+        console.error('[QUARANTINE][ALERT] Dead Monarch-settlement path hit in PRODUCTION — settle เป็น High Noble ปกติแทน (ไม่ apply Pot×2/badge ทางนี้) boss:', JSON.stringify(bossSeatFinal))
+        isMonarchMatch = false // production fallback: ห้าม apply Pot×2/badge จากเส้นทางที่ไม่น่าเชื่อถือนี้
+      }
       const isHumanWinner = !!winnerSeat?.isHuman
 
       const humanNetDeltas: Record<string, number> = {}
@@ -1118,6 +1340,21 @@ function finalizeHNGrandFinale(
         bestHandThisMatch: state.bestHandThisMatch?.[s.id] ?? null,
       })))
 
+      // Match Win History (มติลุงเยาะ 2026-07-26) — เฉพาะตอน human ชนะอันดับ 1 เท่านั้น (isMonarchMatch เป็นเรื่องแยก)
+      if (isHumanWinner) {
+        await recordMatchWin({
+          userId: finalWinner,
+          tier: 'highNoble',
+          mode: 'multiplayer',
+          tokensWon: humanNetDeltas[finalWinner] ?? 0,
+          isTripleSweep: state.tripleSweepThisMatch?.has(finalWinner) ?? false,
+          bestHand: state.bestHandThisMatch?.[finalWinner] ?? null,
+          opponents: state.seats
+            .filter(s => s.id !== finalWinner)
+            .map(s => ({ name: s.name, isHuman: s.isHuman })),
+        })
+      }
+
       // Badge "Monarch Slayer" + เงื่อนไข Ascendant Gate (Spec v1.3 §5)
       if (isMonarchMatch && isHumanWinner) {
         await recordMonarchVictory(finalWinner)
@@ -1139,6 +1376,9 @@ function finalizeHNGrandFinale(
         isHuman: isHumanWinner,
         timestamp: Date.now(),
       })
+      // Full Reconnect System Step 2B — เคลียร์ graceTimer ที่อาจค้างอยู่ (คนหลุดรอบสุดท้ายแต่ยังไม่ครบ
+      // 60s ตอนแมตช์จบพอดี) กัน finalizeHNAFKReplacement ยิงซ้ำใส่ state ที่ลบไปแล้ว
+      clearHNAFKTimers(state)
       hnMatchStates.delete(roomId)
     } else {
       state.roundNumber++
@@ -1149,24 +1389,17 @@ function finalizeHNGrandFinale(
 }
 
 // ============================================================
-// DISCONNECT — แทน Human ด้วย AI ทันที
-// mirror ของ replaceMultiPlayerWithAI เดิม แต่ครอบคลุมทุก phase ของ High Noble
-// Buy-in Spec §4: settle ทันทีด้วย stack ปัจจุบัน (ante ที่จ่ายเข้า Pot ไปแล้วไม่คืน — เปลี่ยนจาก burn ทั้งก้อนเดิม)
+// Full Reconnect System Step 2B (MasterPlan §6.16) — Grace Period 60s + Passive Ghost Mode
+// disconnect → markHNPlayerAFK (grace 60s, seat ยังคุมได้ถ้า reconnect ทัน ไม่ settle ทันที)
+// reconnect ไม่ทันใน 60s → finalizeHNAFKReplacement (settle จริง + replace เป็น Minion ถาวร)
 // ============================================================
-export async function replaceHNPlayerWithAI(io: Server, roomId: string, userId: string): Promise<void> {
-  const state = hnMatchStates.get(roomId)
-  if (!state) return
+
+// แยก "เปลี่ยน identity เป็น Minion" ออกมาเป็น pure helper (ไม่มี io/settle) — ห้ามเรียกตอนยัง grace
+// อยู่เด็ดขาด (ขัด INVARIANT ที่ต้นไฟล์ทันที) เรียกได้จาก finalizeHNAFKReplacement เท่านั้น
+function replaceSeatWithMinion(state: HNMatchState, userId: string): HNSeat | undefined {
   const seat = seatById(state, userId)
-  if (!seat || !seat.isHuman) return
-
-  const escrowId = state.escrowIds[userId]
-  if (escrowId) {
-    try { await settleEscrow(userId, escrowId, state.tokenBalance[userId] ?? state.buyInAmount) }
-    catch (err) { console.error('[HN-DISCONNECT] settle error:', err) }
-  }
-
-  // LobbyMatchmaking_Spec_v1_0 §6.1: filler ใน High Noble = Minion ทั้งระบบแล้ว (ไม่ใช่แค่ตอน Deadlock "Start Now")
-  // — ตอน Human หลุดกลางเกมก็แทนที่ด้วย Minion สุ่มเช่นกัน เพื่อความสอดคล้อง (personality สุ่มอิสระ 1 ใน 3 เหมือนเดิม)
+  if (!seat) return undefined
+  // LobbyMatchmaking_Spec_v1_0 §6.1: filler ใน High Noble = Minion ทั้งระบบแล้ว — personality สุ่มอิสระ 1 ใน 3
   const p = FILLER_PERSONALITIES[Math.floor(Math.random() * FILLER_PERSONALITIES.length)]
   const [minionName] = pickRandomMinions(1)
   seat.isHuman = false
@@ -1174,33 +1407,86 @@ export async function replaceHNPlayerWithAI(io: Server, roomId: string, userId: 
   seat.emoji = '🤖'
   seat.personality = p
   seat.isMinion = true
+  return seat
+}
 
-  io.to(roomId).emit('player_disconnected_replaced', { roomId, userId, replacementName: seat.name })
+// เคลียร์ graceTimer ทุกตัวที่ค้างอยู่ในแมตช์ — เรียกก่อน hnMatchStates.delete เสมอ กัน
+// finalizeHNAFKReplacement ยิงซ้ำใส่ state ที่ลบไปแล้ว (แม้ปลอดภัยอยู่แล้วเพราะเช็ค !state ก่อนก็ตาม)
+function clearHNAFKTimers(state: HNMatchState): void {
+  Object.values(state.afkPlayers).forEach(afk => clearTimeout(afk.graceTimer))
+}
 
-  // Auto-ตัดสินใจแทนตำแหน่งที่ค้างอยู่ ณ phase ปัจจุบัน กันเกม stall — Minion ใช้ greedyArrangement เสมอ
+// Disconnect — เริ่ม grace 60s เฉยๆ ⛔ ไม่ settle ⛔ ไม่แตะ seat.isHuman (INVARIANT) ระหว่าง grace ถ้าถึง
+// turn/deadline ของ phase ปัจจุบัน ปล่อยให้ naive fallback เดิมจัดการ (seat ยังนับเป็น human จึงยังเข้า
+// naive-fallback loop ปกติทุกจุด) ยกเว้น grand_finale ที่ override เป็น fold ทันที (ดู startHNNextTurn)
+// ส่วน blind_auction passive โดยธรรมชาติอยู่แล้ว (aiSeats() ไม่จับเพราะยัง isHuman:true — ไม่ต้องเขียนเพิ่ม)
+export function markHNPlayerAFK(io: Server, roomId: string, userId: string): void {
+  const state = hnMatchStates.get(roomId)
+  if (!state) return
+  const seat = seatById(state, userId)
+  if (!seat || !seat.isHuman) return
+  if (isHNPlayerAFK(state, userId)) return // กันซ้ำ (เช่น disconnect event ยิงซ้ำ)
+
+  state.afkPlayers[userId] = {
+    disconnectedAt: Date.now(),
+    graceTimer: setTimeout(() => {
+      finalizeHNAFKReplacement(io, roomId, userId).catch(err => {
+        console.error('[HN-AFK] finalizeHNAFKReplacement failed for', userId, 'in', roomId, err)
+      })
+    }, 60_000),
+  }
+
+  io.to(roomId).emit('player_disconnected_replaced', { roomId, userId, temporary: true, graceSeconds: 60 })
+}
+
+// Grace 60s หมด ไม่มี reconnect — settle escrow จริงตอนนี้เท่านั้น (ย้ายมาจาก disconnect handler เดิม)
+// แล้วเปลี่ยน seat เป็น Minion ถาวร
+export async function finalizeHNAFKReplacement(io: Server, roomId: string, userId: string): Promise<void> {
+  const state = hnMatchStates.get(roomId)
+  if (!state) return // เกมจบไปแล้ว (clearHNAFKTimers ควรกัน timer นี้ไว้แล้ว แต่กันซ้ำอีกชั้น)
+  if (!isHNPlayerAFK(state, userId)) return // reconnect ไปแล้วก่อนหน้านี้ (resendHNRoundStartToPlayer clear ให้แล้ว) ไม่ต้องทำอะไร
+
+  delete state.afkPlayers[userId]
+
+  const escrowId = state.escrowIds[userId]
+  if (escrowId) {
+    try { await settleEscrow(userId, escrowId, state.tokenBalance[userId] ?? state.buyInAmount) }
+    catch (err) { console.error('[HN-AFK] settle error:', err) }
+  }
+
+  const seat = replaceSeatWithMinion(state, userId)
+  if (!seat) return
+
+  io.to(roomId).emit('player_disconnected_replaced', { roomId, userId, temporary: false, replacementName: seat.name })
+
+  // ⚠️ Safety net เพิ่มจากที่ STEP 2B-AUDIT รายงานไว้ (ไม่ใช่ token/settle logic — เป็นความจำเป็นด้าน
+  // data-integrity กันเกม crash เท่านั้น): arrangementTimer.highNoble (120s, ใช้ทั้ง arrangement R1 และ
+  // arrangement_2) ยาวกว่า grace 60s — ถ้า finalize มาถึงก่อน phase timeout ของมันเอง seat จะกลายเป็น AI
+  // (isHuman=false) กลางทาง หลุดจาก humanSeats() ที่ naive-fallback timeout เดิมใช้ตรวจ ทำให้
+  // arrangements[userId] ไม่มีทางถูกเติมเลย → discard/showdown พังทันที (undefined access) จึงคง
+  // พฤติกรรม "เติมให้ตำแหน่งที่ค้างอยู่" ไว้ตรงนี้ — discard ไม่ต้องพึ่งจุดนี้ (discard timer 20s < grace
+  // 60s จบไปก่อนเสมอ) branch นี้จึงแทบไม่มีทาง trigger จริงในทางปฏิบัติ เก็บไว้เป็น fallback เฉยๆ
+  //
+  // STEP 2B-FIX: เปลี่ยนจาก greedyArrangement/bestThreeFromHand (smart-AI เดิม) → naiveArrangeR1/R2/
+  // Discard (helper เดียวกับที่ timeout ปกติใช้) เพราะ passive ghost mode ต้อง "ไม่เล่นให้ดีแทนคนที่หลุด"
+  // คนที่หลุดเน็ตควรได้ผลลัพธ์แย่พอๆ กับคนออนไลน์ที่เฉยๆ ไม่กด ไม่ใช่ได้ AI ช่วยเล่นให้ดีกว่า
+  //
+  // grand_finale: ลบ branch ทิ้ง (ไม่ใช่ naive fallback ที่ขาดไป) — พิสูจน์แล้วว่าไม่จำเป็น: ถ้าถึง turn ของ
+  // AFK player พอดี startHNNextTurn จะ fold ให้ทันทีอยู่แล้ว (ไม่รอ grace) ทำให้หลุดจาก turnOrder ไปก่อน
+  // finalize จะมาถึงเสมอในทางปฏิบัติ ส่วนกรณี finalize มาถึงตอนยังไม่ใช่ turn ของเขา ก็ไม่มีอะไรต้องทำ ณ จุดนั้น
+  // — พอ seat.isHuman ถูก flip เป็น false ไปแล้ว รอบถัดไปที่ถึง turn เขาจะตกเข้า AI branch ปกติของ
+  // startHNNextTurn เอง (เล่นเป็น Minion ถาวรตามปกติ ไม่ใช่ AFK อีกต่อไป)
   if (state.phase === 'arrangement' && !state.submittedArrangement.has(userId)) {
-    state.arrangements![userId] = greedyArrangement(state.cardsMap![userId], state.community!)
+    naiveArrangeR1(state, userId)
     state.submittedArrangement.add(userId)
     if (allHumansSubmitted(state, state.submittedArrangement)) await resolveHNArrangementPhaseComplete(io, roomId)
   } else if (state.phase === 'arrangement_2' && !state.submittedArrangement.has(userId)) {
-    const fullHand = state.auctionWonCards?.[userId]
-      ? [...state.cardsMap![userId], state.auctionWonCards[userId]]
-      : state.cardsMap![userId]
-    state.arrangements![userId] = greedyArrangement(fullHand, state.community!)
+    naiveArrangeR2(state, userId)
     state.submittedArrangement.add(userId)
     if (allHumansSubmitted(state, state.submittedArrangement)) startHNDiscardPhase(io, roomId)
   } else if (state.phase === 'discard' && !state.submittedDiscard.has(userId)) {
-    const arr = state.arrangements![userId]
-    const { keep } = bestThreeFromHand([...arr.pile3], state.community!.row3)
-    const finalArr: PlayerArrangement = { pile1: arr.pile1.slice(0, 3), pile2: arr.pile2.slice(0, 3), pile3: keep }
-    state.arrangements![userId] = finalArr
-    const foul = checkFoul(finalArr, state.community!)
-    state.foulMap![userId] = foul.isFoul
-    state.finalPile3![userId] = keep
+    naiveDiscard(state, userId)
     state.submittedDiscard.add(userId)
     if (allHumansSubmitted(state, state.submittedDiscard)) await resolveHNDiscardComplete(io, roomId)
-  } else if (state.phase === 'grand_finale' && state.grandFinale?.turnOrder[state.grandFinale.currentTurnIdx] === userId) {
-    const action = decideHNAIGrandFinaleAction(state, userId)
-    applyHNGrandFinaleAction(io, roomId, userId, action)
   }
 }

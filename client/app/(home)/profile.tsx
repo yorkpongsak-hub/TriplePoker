@@ -21,6 +21,8 @@ import ProfilePicturePicker from '../../src/components/profile/ProfilePicturePic
 import SettingsModal from '../../src/components/profile/SettingsModal'
 import { AvatarDisplay, PRESET_AVATARS, AvatarConfig } from '../../src/components/profile/AvatarPicker'
 import { TierUnlockOverlay } from '../../src/components/vfx/TierUnlockOverlay'
+import MatchHistoryList from '../../src/components/profile/MatchHistoryList'
+import AvatarFrame from '../../src/components/game/AvatarFrame'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
@@ -290,17 +292,22 @@ export default function ProfileScreen() {
         {/* ═══════════════ HERO PLAYER CARD ═══════════════ */}
         <GoldCard style={s.heroCard}>
           <TouchableOpacity onPress={handleEditProfile} style={s.avatarFrame} activeOpacity={0.85}>
-            {profileImageSignedUrl ? (
-              <Image
-                source={{ uri: profileImageSignedUrl }}
-                style={{ width: '100%', height: '100%', borderRadius: 999 }}
-              />
-            ) : isKnownAvatarPreset ? (
-              <AvatarDisplay config={avatarConfig} size={82} showFrame={false} />
-            ) : (
-              // avatar_url เก่าเป็น emoji ดิบ (ก่อนระบบ preset) — render ตรงๆ เหมือนเดิม ไม่ crash
-              <Text style={s.avatarEmoji}>{avatar}</Text>
-            )}
+            {(() => {
+              const avatarVisual = profileImageSignedUrl ? (
+                <Image
+                  source={{ uri: profileImageSignedUrl }}
+                  style={{ width: 82, height: 82, borderRadius: 999 }}
+                />
+              ) : isKnownAvatarPreset ? (
+                <AvatarDisplay config={avatarConfig} size={82} showFrame={false} />
+              ) : (
+                // avatar_url เก่าเป็น emoji ดิบ (ก่อนระบบ preset) — render ตรงๆ เหมือนเดิม ไม่ crash
+                <Text style={s.avatarEmoji}>{avatar}</Text>
+              )
+              // Gold Radiance frame (มติลุงเยาะ 2026-07-26) — reuse กรอบเดียวกับที่ใช้ในหน้าเล่นเกม
+              // (buy-in tables, active turn) เฉพาะสมาชิก VIP เท่านั้น — active=false เพราะไม่มีแนวคิด "ถึงตา" ที่นี่
+              return isVip ? <AvatarFrame size={82} active={false}>{avatarVisual}</AvatarFrame> : avatarVisual
+            })()}
             <View style={s.editBubble}>
               <Text style={s.editIcon}>✎</Text>
             </View>
@@ -387,7 +394,7 @@ export default function ProfileScreen() {
           <ComingSoonPanel icon="🗿" title="HALL OF BOSSES" sub="The Nine Sentinels are coming in a future update" />
         )}
         {activeTab === 'history' && (
-          <ComingSoonPanel icon="📜" title="MATCH HISTORY" sub="Your recent matches will appear here soon" />
+          <MatchHistoryList userId={profile?.user_id ?? authUser?.id ?? ''} />
         )}
         {activeTab === 'social' && (
           <ComingSoonPanel icon="👥" title="SOCIAL" sub="Following & followers are coming in a future update" />

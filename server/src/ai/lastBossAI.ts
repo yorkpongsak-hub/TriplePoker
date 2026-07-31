@@ -23,7 +23,8 @@
 
 import { checkFoul } from '../game/foulChecker';
 import { evaluateHand } from '../game/handEvaluator';
-import type { Card, Arrangement, CommunityCards } from '../types/game.types';
+import type { Card } from '../game/deck';
+import type { PlayerArrangement as Arrangement, CommunityCards } from '../game/foulChecker';
 
 // ─── Constants ───────────────────────────────────────────────
 const PILE1_SIZE         = 3;

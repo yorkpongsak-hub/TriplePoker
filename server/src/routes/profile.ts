@@ -3,6 +3,7 @@ import { supabase, supabaseAdmin } from '../config/supabase'
 import { recoverStaleEscrow } from '../game/gameLoop'
 import { assertVip, assertVipPro, VipStatus } from '../middleware/vipGuard'
 import { getAvatarPreset, isAvatarKeyAllowed, DEFAULT_AVATAR_KEY } from '../constants/avatarPresets'
+import { getAscendantStatus } from '../game/crownVaultService'
 
 // camelCase ตาม tier_unlocked_max ceiling model (TIER_ORDER ฝั่ง tierUnlockService.ts) -
 // ไม่รวม 'D' (ค่าเริ่มต้นก่อนปลดล็อค ไม่มีอะไรให้ฉลอง) และไม่รวม last_boss (Last Boss อยู่ใน The Arena
@@ -10,6 +11,45 @@ import { getAvatarPreset, isAvatarKeyAllowed, DEFAULT_AVATAR_KEY } from '../cons
 const VALID_TIERS = ['initiate', 'adept', 'mastermind', 'highNoble'] as const
 
 export async function profileRoutes(app: FastifyInstance) {
+
+  // หลัง app กลับจาก background/crash: คืนข้อมูล escrow ล่าสุดให้ client ใช้แจ้งยอดที่คืนจริง
+  // endpoint นี้ไม่ settle เองและไม่คำนวณเงิน — อ่านผลที่ atomic RPC เขียนสำเร็จแล้วเท่านั้น
+  app.post<{ Body: { since?: string } }>('/profile/latest-settlement', async (request, reply) => {
+    const token = request.headers.authorization?.replace('Bearer ', '')
+    if (!token) return reply.status(401).send({ error: 'Unauthorized' })
+
+    const { data: authData, error: authError } = await supabase.auth.getUser(token)
+    if (authError || !authData.user) return reply.status(401).send({ error: 'Invalid token' })
+
+    const since = request.body?.since
+    if (!since || Number.isNaN(Date.parse(since))) {
+      return reply.status(400).send({ error: 'INVALID_SINCE' })
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('match_escrow')
+      .select('escrow_id, tier, buyin_amount, status, final_stack, settled_at')
+      .eq('user_id', authData.user.id)
+      .in('status', ['settled', 'refunded'])
+      .gte('settled_at', since)
+      .order('settled_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (error) return reply.status(500).send({ error: 'DB_ERROR' })
+    if (!data) return reply.send({ success: true, settlement: null })
+
+    return reply.send({
+      success: true,
+      settlement: {
+        escrowId: data.escrow_id,
+        tier: data.tier,
+        status: data.status,
+        amountReturned: data.status === 'refunded' ? data.buyin_amount : data.final_stack,
+        settledAt: data.settled_at,
+      },
+    })
+  })
 
   // เรียกตอนเปิดแอป/login (client/app/_layout.tsx) — กู้คืน escrow ที่ค้าง 'in_match' เกิน 60 นาที
   // (client force-close/crash กลางแมตช์ก่อนหน้า) ก่อนที่ผู้เล่นจะพยายาม join โต๊ะใหม่ด้วยซ้ำ (Buy-in Spec §4)
@@ -63,6 +103,14 @@ export async function profileRoutes(app: FastifyInstance) {
       }
     } catch (e) {
       console.log('[profile] avatar cleanup skipped:', e)
+    }
+
+    // Ascendant window on-demand check (Ascendant_Spec_v1_1 §7.2 "เช็คตอน login") — ไม่มี cron
+    // job ในโปรเจคนี้ แยก try/catch เอง ห้ามให้เช็คพังแล้วลาก escrow recovery ล้มไปด้วย
+    try {
+      await getAscendantStatus(authData.user.id)
+    } catch (e) {
+      console.log('[profile] ascendant window check skipped:', e)
     }
 
     return reply.send({ success: true, ...result })

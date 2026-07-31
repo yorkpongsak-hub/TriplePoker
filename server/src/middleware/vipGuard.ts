@@ -45,7 +45,7 @@ export async function getUserVipStatus(userId: string): Promise<boolean> {
 // Fastify middleware — ใช้กับ route ที่ต้องการ VIP check
 // ดึง category จาก request body แล้วเช็ค vip_status
 export async function vipGuard(
-  request: FastifyRequest<{ Body: { category?: string; item_category?: string } }>,
+  request: FastifyRequest,
   reply: FastifyReply
 ): Promise<void> {
   const userId = (request as any).userId as string | undefined
@@ -55,7 +55,8 @@ export async function vipGuard(
   }
 
   // ดึง category จาก body (รองรับทั้ง category และ item_category)
-  const category = request.body?.category ?? request.body?.item_category
+  const body = request.body as { category?: string; item_category?: string } | undefined
+  const category = body?.category ?? body?.item_category
 
   if (!category) {
     // ไม่มี category ใน body → ไม่ต้อง guard ผ่านได้เลย

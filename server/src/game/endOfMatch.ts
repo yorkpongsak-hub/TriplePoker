@@ -111,7 +111,7 @@ async function checkDebtRecovery(
   const { data } = await db
     .from('users')
     .select('token_balance, subscription_status, tier')
-    .eq('id', player.userId)
+    .eq('user_id', player.userId)
     .single()
 
   const balance : number = data?.token_balance ?? 0
@@ -124,7 +124,7 @@ async function checkDebtRecovery(
   const cfg  = gameConfig.debtRecovery
 
   // Auto-forgive: Boss/LastBoss หรือ VIP
-  if (cfg.autoForgive.tiers.includes(tier) || isVIP) {
+  if ((cfg.autoForgive.tiers as readonly Tier[]).includes(tier) || isVIP) {
     await db.rpc('set_user_tokens', { p_user_id: player.userId, p_amount: 0 })
     io.to(player.userId).emit('DEBT_FORGIVEN', {
       message: 'Your debt has been cleared automatically.',

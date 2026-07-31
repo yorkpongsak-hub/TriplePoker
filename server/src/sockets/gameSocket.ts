@@ -14,15 +14,16 @@ import { startMultiplayerMatch, submitMultiArrangement, markPlayerAFK, resendRou
 import { getMatchState, getMultiMatchState, settleEscrow } from "../game/gameLoop";
 import {
   startHighNobleMultiMatch, submitHNArrangement, submitHNAuctionBid, submitHNArrangementRound2,
-  submitHNDiscard, submitHNGrandFinaleAction, replaceHNPlayerWithAI, resendHNRoundStartToPlayer,
+  submitHNDiscard, submitHNGrandFinaleAction, markHNPlayerAFK, resendHNRoundStartToPlayer,
   getHNMatchState,
 } from "../game/highNobleMultiEngine";
 import {
   rollMonarchEntry, startMonarchMatch, startMonarchRound, getMonarchMatchState,
   buildMonarchRoundSnapshot, submitMonarchArrangement, submitMonarchGrandFinaleAction,
-  settleAndEndMonarchMatch,
+  settleAndEndMonarchMatch, clearMonarchDisconnectState,
 } from "../game/monarchEngine";
-import { getTierFromToken } from "../config/gameConfig";
+import { supabaseAdmin } from "../config/supabase";
+import { TIER_ORDER } from "../game/progressionGate";
 import { registerLobbySocket } from "./lobbySocket";
 import { createTableWithId, setSeat, deleteTable } from "../game/tableRegistry";
 import { createAdeptTable, joinAdeptTable, getTimedOutAdeptTables } from "../game/tableRegistry";
@@ -561,15 +562,39 @@ export function registerGameSocket(io: Server): void {
     }) => {
       const { tier, userId, userName, avatarUrl } = data;
       try {
-        // Sprint 2 (Boss Monarch 1v1): เช็คก่อนเข้า flow ปกติเลย — roll แยกจาก pity ของ
-        // rollHighNobleBoss() เดิมโดยเจตนา (ดู monarchEngine.ts) ถ้าติด Monarch ดึง human คนนี้
-        // ออกไปโต๊ะ solo ใหม่ทันที ไม่เข้า findOrCreateRoomAndJoin/joinRoom ของ High Noble ปกติเลย —
-        // ปลอดภัยกับ pity ของ Four Gods 100% เพราะไม่เรียก rollHighNobleBoss() ที่นี่เลย
-        if (tier === 'highNoble' && rollMonarchEntry()) {
+        // Progression Gate enforcement (Economy Progression Spec v2.0 §9 — Server Authority):
+        // อ่าน tier_unlocked_max ตรงๆ (ceiling model เดียวกับ tierUnlockService.ts) ไม่คำนวณสดจาก
+        // token_balance ตรงนี้ — กัน balance โตเร็วกว่า Time/Skill Gate แล้วลัดคิวเข้าก่อนเวลา
+        // (client lobby.tsx ยังคง lock icon จาก token อย่างเดียวไว้เป็นแค่ preview ก่อนกดเข้าคิวจริง)
+        const { data: userRow, error: userErr } = await supabaseAdmin
+          .from('users')
+          .select('tier_unlocked_max')
+          .eq('user_id', userId)
+          .single();
+        if (userErr || !userRow) {
+          socket.emit("room_error", { message: "Could not verify your account. Please try again." });
+          return;
+        }
+        const unlockedIdx = TIER_ORDER.indexOf((userRow.tier_unlocked_max ?? 'D') as typeof TIER_ORDER[number]);
+        // tier เป็น RoomTier ('adept'|'mastermind'|'highNoble' เท่านั้น) ซึ่งเป็น subset ของ TIER_ORDER
+        // เสมอ (ไม่มีทางเป็น 'ascendant'/'arena' — สอง tier นั้นไม่ใช่ matchmaking room tier) — เดิม cast
+        // เป็น GateTier ผิด (GateTier มี 'ascendant'/'arena' ที่ไม่อยู่ใน TIER_ORDER ทำ tsc พังตอน strict
+        // check) แก้เป็น cast ตรง type ของ TIER_ORDER เอง ไม่กระทบ runtime (ยังเป็นแค่ .indexOf() เดิม)
+        const requestedIdx = TIER_ORDER.indexOf(tier as typeof TIER_ORDER[number]);
+        if (unlockedIdx === -1 || requestedIdx === -1 || requestedIdx > unlockedIdx) {
+          socket.emit("room_error", { message: "This tier is locked. Keep playing to unlock it." });
+          return;
+        }
+
+        // Sprint 2 (Boss Monarch 1v1) → Batch 1 Task 2/3 (Monarch v2.2): เช็คก่อนเข้า flow ปกติเลย —
+        // เส้นทางเดียวที่จะสุ่มเจอ Monarch ได้ (rollHighNobleBoss() ไม่มีทางคืน Monarch อีกแล้ว) ถ้าติด
+        // Monarch ดึง human คนนี้ออกไปโต๊ะ solo ใหม่ทันที ไม่เข้า findOrCreateRoomAndJoin/joinRoom ของ
+        // High Noble ปกติเลย — pity ผูกกับ userId ของคนนี้เอง (Batch 1 Task 3)
+        if (tier === 'highNoble' && await rollMonarchEntry(userId)) {
           const monarchRoomId = `monarch_${userId}_${Date.now()}`;
           const state = await startMonarchMatch(io, monarchRoomId, userId, userName);
           if (state) {
-            startMonarchRound(monarchRoomId);
+            startMonarchRound(io, monarchRoomId);
             // ไม่ join ห้อง/emit round data จาก socket นี้ (matchmaking socket เดิม กำลังจะ
             // disconnect ตอน client navigate) — client ต่อ socket ใหม่แล้ว pull เอาเองผ่าน
             // monarch_join ด้านล่าง (pattern เดียวกับ known bug #2)
@@ -624,6 +649,10 @@ export function registerGameSocket(io: Server): void {
       // Sprint 10: ลงทะเบียน socket นี้ให้ disconnect handler หา info เจอ (เดิมไม่เคย track เลย —
       // ทำให้ disconnect ตอนกลางเกม Monarch ไม่มีอะไรมา settle/cleanup ให้ ดู audit Sprint 9)
       trackMatchmakingSocket(socket.id, { userId, roomId, tier: "monarch" });
+      // Batch 3E Task 4 — reconnect: เคลียร์ graceTimer/disconnectedAt/humanDisconnected ที่อาจค้าง
+      // จากตอนหลุดไปก่อนหน้า ให้เล่นต่อได้ปกติทุกจุด (เรียกทุกครั้งรวมถึง join แรกสุดก็ปลอดภัย เป็น
+      // no-op ถ้าไม่เคยหลุดมาก่อน) buildMonarchRoundSnapshot (Task 3) ส่ง state เต็มกลับให้ hydrate UI
+      clearMonarchDisconnectState(roomId, userId);
       socket.emit("monarch_round_start", buildMonarchRoundSnapshot(state));
     });
 
@@ -840,15 +869,17 @@ export function registerGameSocket(io: Server): void {
             console.log('[DEBUG_AFK_TRIGGER]', Date.now(), 'marking AFK for', info.userId, 'in room', info.roomId, 'from socket', socket.id);
             await markPlayerAFK(io, info.roomId, info.userId);
           } else if (info.tier === 'highNoble') {
-            await replaceHNPlayerWithAI(io, info.roomId, info.userId);
+            // Full Reconnect System Step 2B: mark AFK + grace 60s (ไม่ settle/replace ถาวรทันทีอีกต่อไป —
+            // ดู markHNPlayerAFK/finalizeHNAFKReplacement ใน highNobleMultiEngine.ts)
+            markHNPlayerAFK(io, info.roomId, info.userId);
           } else if (info.tier === 'initiate' || info.tier === 'mastermind') {
             // Buy-in Spec §4: solo tier ไม่มี Human อื่นให้เล่นต่อ — settle ทันทีด้วย stack ปัจจุบันแล้วปิดแมตช์
             await settleAndEndSoloMatch(info.roomId);
           } else if (info.tier === 'monarch') {
-            // Sprint 10: Monarch เป็นโต๊ะ solo-like (1 human + AI ล้วน) เหมือน initiate/mastermind —
-            // settle ทันที ไม่มี grace period (เดิมไม่มี branch นี้เลย ทำให้ escrow ค้าง in_match
-            // จนกว่า stale-recovery 60 นาทีจะทำงาน + monarchMatchStates leak ตลอดไป — ดู audit Sprint 9)
-            await settleAndEndMonarchMatch(info.roomId);
+            // Sprint 10 → Batch 1.5 Task 6: Monarch เป็นโต๊ะ solo-like (1 human + AI ล้วน) ไม่มี grace
+            // period (ไม่มี human อื่นให้รอ) แต่ต้อง resolve จนจบเสมอถ้า seal ไปแล้ว (ห้าม freeze) —
+            // ต้องส่ง io เข้าไปด้วยเพราะอาจต้องเรียก finalizeMonarchG3 ต่อ (ดู settleAndEndMonarchMatch)
+            await settleAndEndMonarchMatch(io, info.roomId);
           }
         } catch (err) {
           console.error('[DISCONNECT]', Date.now(), 'handler failed for', info.userId, 'in', info.roomId, err);

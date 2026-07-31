@@ -34,11 +34,14 @@ export interface GameTopBarProps {
   // ของที่ต้องอยู่ "ซ้ายสุด ก่อน Tier badge" - opt-in ล้วน (Tier ที่ไม่ส่งได้ layout เดิมทุกประการ)
   // Initiate ใช้วาง Timer ไว้ตรงนี้ เพื่อเปิดพื้นที่มุมขวาบนทั้งแถบให้ Token Flow Panel
   leftSlot?: React.ReactNode
+  // Monarch (มติลุงเยาะ): ซ่อน "R1/1" — บอกผู้เล่นตรงๆ ว่าเล่นแค่รอบเดียวจะเสียเซอร์ไพรส์
+  // opt-in ล้วน (default false = ของเดิมทุก Tier ไม่เปลี่ยน)
+  hideRound?: boolean
 }
 
 const GameTopBar: React.FC<GameTopBarProps> = ({
   tierName, tierStars, round, totalRounds = 5, isWeb, insetsTop, opacity,
-  stackAmount, stackDelta, children, rightSlot, leftSlot,
+  stackAmount, stackDelta, children, rightSlot, leftSlot, hideRound = false,
 }) => {
   const showStack = stackAmount !== undefined
 
@@ -56,7 +59,7 @@ const GameTopBar: React.FC<GameTopBarProps> = ({
             <View style={s.tierBadge}><Text style={s.tierText}>{tierName}</Text></View>
             <Text style={s.starsText}>{'★'.repeat(tierStars)}</Text>
           </View>
-          <Text style={s.roundText}>R{round}/{totalRounds}</Text>
+          {!hideRound && <Text style={s.roundText}>R{round}/{totalRounds}</Text>}
         </View>
       </View>
 

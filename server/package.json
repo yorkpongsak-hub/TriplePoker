@@ -4,11 +4,11 @@
   "description": "TriplePoker Server - The Sage Unicorn Studio",
   "main": "dist/index.js",
   "scripts": {
-    "test": "jest",
+    "test": "node node_modules/jest/bin/jest.js --testPathIgnorePatterns=tests/game/hnGracePeriod.test.ts && node node_modules/jest/bin/jest.js --runInBand tests/game/hnGracePeriod.test.ts",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "dev": "nodemon --watch src --ext ts --exec ts-node src/index.ts",
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js"
   },
   "dependencies": {

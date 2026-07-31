@@ -84,6 +84,85 @@ export default function LobbyScreen() {
   const [mmClosedInsufficientPlayers, setMmClosedInsufficientPlayers] = useState(false);
   const [mmClosedTier, setMmClosedTier] = useState<MatchmakingTier | null>(null);
 
+  // ── Batch 3A Task 1 — Decoy Matchmaking (Monarch v2.2) ───────────────────────────
+  // แยก state จาก mm* ของจริงทั้งหมดโดยตั้งใจ (audit เตือนแล้ว: real queue อ่าน state จาก server
+  // ตรงๆ ผ่าน room_status/room_matched — ผสมกันเสี่ยง edge case ของ queue จริงหลุด) สุ่มฝั่ง client
+  // ล้วน ไม่แตะ server payload เลยตามมติลุงเยาะ
+  const [monarchDecoyActive, setMonarchDecoyActive] = useState(false);
+  const [monarchDecoySeats, setMonarchDecoySeats] = useState<Array<{ type: string; name: string }>>([]);
+  const monarchDecoyRoomIdRef = useRef<string | null>(null);
+  const monarchDecoyTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  const clearMonarchDecoyTimers = () => {
+    monarchDecoyTimersRef.current.forEach(t => clearTimeout(t));
+    monarchDecoyTimersRef.current = [];
+  };
+  // unmount (navigate away/back ระหว่าง decoy) ต้อง clear timer เสมอ กัน setTimeout ค้างยิง
+  // router.push หลังออกจากหน้านี้ไปแล้ว (memory leak + อาจ crash ถ้า navigate ซ้อนตอน component ตายแล้ว)
+  useEffect(() => () => clearMonarchDecoyTimers(), []);
+
+  // ชื่อปลอมชุดเดียวกับ Minion pool ฝั่ง server (aiEngine.ts:59-63) — copy ตรงๆ เพราะ client เรียก
+  // server code ไม่ได้ ชื่อกลุ่มนี้ pre-vetted อยู่แล้ว ไม่ต้อง validate ซ้ำ (มติ Batch 3 audit ข้อ A.4)
+  const MONARCH_DECOY_NAMES = [
+    'Alex', 'Bella', 'Charlie', 'Diana', 'Edward', 'Fiona', 'Gabriel', 'Hana', 'Ivan', 'Julia',
+    'Kevin', 'Lily', 'Max', 'Natalie', 'Oliver', 'Prim', 'Queenie', 'Ryan', 'Sophia', 'Tom',
+    'Uma', 'Vincent', 'Willow', 'Xander', 'Yuri',
+  ];
+
+  // สุ่ม 8-20s รวม แบ่ง 2 ช่วง (35-65% : เหลือ) ให้คนที่ 2/3 เข้าไม่พร้อมกัน สมจริงเทียบ queue จริง
+  // (mini-audit: queue จริงไม่มีเวลาคงที่ อยู่ในช่วง 0-135s ตาม server population — 8-20s อยู่ในโซน
+  // "แมตช์เร็ว" ที่พบได้จริง ไม่ใช่ค่าที่แต่งขึ้นลอยๆ)
+  const startMonarchDecoy = (roomId: string) => {
+    monarchDecoyRoomIdRef.current = roomId;
+    clearMonarchDecoyTimers();
+
+    const pool = [...MONARCH_DECOY_NAMES];
+    const pickName = () => pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+    const fakeName1 = pickName();
+    const fakeName2 = pickName();
+
+    // seat index 3 (boss) เว้นว่างตลอด decoy — เทียบ real queue ที่ seat บอสยังไม่โผล่จนกว่าห้องเต็มจริง
+    setMonarchDecoySeats([
+      { type: 'human', name: displayName }, { type: 'empty', name: '' },
+      { type: 'empty', name: '' }, { type: 'empty', name: '' },
+    ]);
+    setMonarchDecoyActive(true);
+
+    const totalMs = 8000 + Math.random() * 12000;
+    const split1 = 0.35 + Math.random() * 0.3;
+    const delay1 = Math.round(totalMs * split1);
+    const delay2 = Math.round(totalMs - delay1);
+
+    const t1 = setTimeout(() => {
+      setMonarchDecoySeats([
+        { type: 'human', name: displayName }, { type: 'human', name: fakeName1 },
+        { type: 'empty', name: '' }, { type: 'empty', name: '' },
+      ]);
+      const t2 = setTimeout(() => {
+        setMonarchDecoySeats([
+          { type: 'human', name: displayName }, { type: 'human', name: fakeName1 },
+          { type: 'human', name: fakeName2 }, { type: 'empty', name: '' },
+        ]);
+        // หน่วงสั้นๆ ให้เห็น 3/3 เต็มก่อน redirect จริง (เทียบ mmStatus='matched' ช่วงสั้นๆ ก่อนเด้งจริง)
+        const t3 = setTimeout(() => {
+          const rid = monarchDecoyRoomIdRef.current;
+          setMonarchDecoyActive(false);
+          if (rid) router.push(`/game/monarch?roomId=${rid}&userId=${userId}` as any);
+        }, 600);
+        monarchDecoyTimersRef.current.push(t3);
+      }, delay2);
+      monarchDecoyTimersRef.current.push(t2);
+    }, delay1);
+    monarchDecoyTimersRef.current.push(t1);
+  };
+
+  const handleCancelMonarchDecoy = () => {
+    clearMonarchDecoyTimers();
+    setMonarchDecoyActive(false);
+    setMonarchDecoySeats([]);
+    monarchDecoyRoomIdRef.current = null;
+  };
+
   useEffect(() => {
     if (mmStatus !== 'queued' || !mmTimeoutAt) return;
     const tick = () => {
@@ -221,13 +300,15 @@ export default function LobbyScreen() {
       router.push(`${route}?roomId=${data.roomId}&userId=${userId}` as any);
     });
 
-    // Sprint 2 (Boss Monarch 1v1): server เจอ Monarch ตอน roll เข้า A+/High Noble แล้ว redirect
-    // มาโต๊ะ solo แยกทันที — คู่ขนานกับ room_ready ปกติด้านบน ไม่แทนที่กัน
+    // Sprint 2 (Boss Monarch 1v1) -> Batch 3A Task 1: server เจอ Monarch ตอน roll เข้า A+/High Noble
+    // เดิม redirect ทันที (ผู้เล่นจับได้ว่าเจอ Monarch จากความเร็วเข้าเกม พัง fake-out) — ตอนนี้เข้าสู่
+    // Decoy Matchmaking ก่อนเสมอ (ดู startMonarchDecoy) ตัด socket จริงทิ้งทันที (จังหวะเดียวกับเดิม
+    // เป๊ะ — เลือกตอนเริ่ม decoy ไม่ใช่ตอนจบ เพราะไม่มีอะไรต้องคุยกับ server ระหว่าง decoy เลย ปล่อย
+    // socket ค้างไว้เฉยๆ จะเปลืองทรัพยากรฟรีๆ + ต้องกัน stray event ที่ไม่เกี่ยวข้องมาแทรกโดยไม่จำเป็น)
     socket.on('monarch_encounter', (data: { roomId: string }) => {
-      setMmStatus('matched');
       socket.disconnect();
       fadeOutBgm();
-      router.push(`/game/monarch?roomId=${data.roomId}&userId=${userId}` as any);
+      startMonarchDecoy(data.roomId);
     });
 
     socket.on('room_error', (data: { message: string }) => {
@@ -285,6 +366,35 @@ export default function LobbyScreen() {
   useEffect(() => {
     return () => { socketRef.current?.disconnect(); };
   }, []);
+
+  // ── Lobby Subscribe (tierEligibility preview — ยังไม่มี UI ใช้จริง แค่เก็บ state ไว้ตรวจสอบ) ──
+  // Socket แยกจาก socketRef ด้านบน (ตัวนั้นเป็น matchmaking socket แบบ transient เปิดเฉพาะตอนกด Play
+  // แล้ว disconnect ทันทีที่ match ได้) — ตัวนี้ค้างอยู่ตลอดที่อยู่หน้า Lobby เพื่อรับ lobby:tables
+  // payload ที่ตอนนี้พก tierEligibility (Token/Days/Skill gate ต่อ Tier) มาด้วยจาก lobbySocket.ts
+  const lobbySocketRef = useRef<Socket | null>(null);
+  const [tierEligibility, setTierEligibility] = useState<Record<string, {
+    tokenOk: boolean; daysOk: boolean; skillOk: boolean; unlocked: boolean; daysRemaining?: number;
+  }> | null>(null);
+
+  useEffect(() => {
+    if (!userId) return; // Lobby อยู่ใต้ auth guard เสมอ แต่กันไว้เผื่อ userId ยังไม่ hydrate ทัน
+    const lobbySocket = io(SERVER_URL, { transports: ['websocket'], reconnection: false });
+    lobbySocketRef.current = lobbySocket;
+
+    lobbySocket.on('connect', () => {
+      // tierEligibility เป็นข้อมูลระดับ user ไม่ใช่ระดับ tier — ค่า tier ที่ส่งไปแค่กำหนดว่า subscribe
+      // room lobby:{tier} ไหน (ยังไม่มีจุดใช้จริงของ table list ส่วนนี้) เลือก 'adept' เพราะเป็น Tier
+      // แรกที่มี Progression Gate จริง
+      lobbySocket.emit('lobby:subscribe', { tier: 'adept', userId });
+    });
+
+    lobbySocket.on('lobby:tables', (data: { tier: string; tables: any[]; tierEligibility?: Record<string, any> }) => {
+      setTierEligibility(data.tierEligibility ?? null);
+      console.log('[Lobby] tierEligibility:', data.tierEligibility);
+    });
+
+    return () => { lobbySocket.disconnect(); lobbySocketRef.current = null; };
+  }, [userId]);
 
   const renderTierButton = (tier: Tier, fullWidth: boolean) => {
     const cfg = TIER_CONFIG[tier];
@@ -452,7 +562,9 @@ export default function LobbyScreen() {
             </TouchableOpacity>
           )}
 
-          {(selected === 'adept' || selected === 'high_noble') && mmStatus === 'queued' && mmTier === (selected === 'high_noble' ? 'highNoble' : 'adept') && (
+          {/* Batch 3A Task 1: เพิ่ม !monarchDecoyActive กันโชว์ซ้อนกับ decoy block ด้านล่าง — ไม่แตะ
+              เงื่อนไข/state เดิมของ queue จริงเลยแม้แต่จุดเดียว แค่เพิ่มเงื่อนไขต่อท้าย */}
+          {(selected === 'adept' || selected === 'high_noble') && mmStatus === 'queued' && mmTier === (selected === 'high_noble' ? 'highNoble' : 'adept') && !monarchDecoyActive && (
             <View style={{
               ...glassPanel, // เดิม COLOR.bgSecondary ทึบ
               padding: 16, alignItems: 'center', marginBottom: 12,
@@ -490,6 +602,41 @@ export default function LobbyScreen() {
                 </Text>
               )}
               <TouchableOpacity onPress={handleCancelMatchmaking}
+                style={{ borderWidth: 1, borderColor: COLOR.red, borderRadius: 8, paddingHorizontal: 20, paddingVertical: 8 }}>
+                <Text style={{ color: COLOR.red, fontSize: 12, fontWeight: '700' }}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Batch 3A Task 1 — Decoy Matchmaking: UI เหมือน real queue เป๊ะ (สายตาแยกไม่ออก) แต่อ่านจาก
+              monarchDecoySeats (fake ล้วน, ไม่แตะ mmSeats/server เลย) แสดงเฉพาะ High Noble เพราะ Monarch
+              redirect มาจาก High Noble เท่านั้น */}
+          {selected === 'high_noble' && monarchDecoyActive && (
+            <View style={{
+              ...glassPanel,
+              padding: 16, alignItems: 'center', marginBottom: 12,
+            }}>
+              <Text style={{ color: COLOR.goldPrimary, fontSize: 14, fontWeight: '800', marginBottom: 10 }}>
+                🔍 Finding players...
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
+                {[0, 1, 2, 3].map(i => {
+                  const seat = monarchDecoySeats[i];
+                  const filled = seat && seat.type !== 'empty';
+                  const isAI = seat?.type === 'ai';
+                  return (
+                    <View key={i} style={{
+                      width: 40, height: 40, borderRadius: 20,
+                      backgroundColor: filled ? (isAI ? 'rgba(255,215,106,0.2)' : 'rgba(141,255,181,0.2)') : 'rgba(255,255,255,0.05)',
+                      borderWidth: 1.5, borderColor: filled ? (isAI ? COLOR.goldPrimary : COLOR.greenHighlight) : COLOR.borderPrimary,
+                      alignItems: 'center', justifyContent: 'center',
+                    }}>
+                      <Text style={{ fontSize: 16 }}>{filled ? (isAI ? '🤖' : '👤') : '⬜'}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+              <TouchableOpacity onPress={handleCancelMonarchDecoy}
                 style={{ borderWidth: 1, borderColor: COLOR.red, borderRadius: 8, paddingHorizontal: 20, paddingVertical: 8 }}>
                 <Text style={{ color: COLOR.red, fontSize: 12, fontWeight: '700' }}>Cancel</Text>
               </TouchableOpacity>

@@ -3,6 +3,12 @@
 // ล็อคบุคลิกตาม Hand Strength ทันทีที่แจกไพ่เสร็จ (Round 1 เท่านั้น) แล้วคงไว้ทั้งแมตช์
 // ไม่มี logic การตัดสินใจเอง — delegate ทุกอย่าง (arrangement/auction/grand finale) ไปยัง
 // personality logic ของจตุรเทพที่มีอยู่แล้วใน aiEngine.ts ผ่าน AIPersonality ปกติ
+//
+// ⚠️ Batch 1.5 Task 2 (quarantine, 2026-07-30): ทั้งไฟล์ deprecated จริง — Monarch ระบบจริงย้ายไป
+// monarchEngine.ts (โต๊ะ 1v1 แยกต่างหาก) ตั้งแต่ Batch 1 แล้ว เส้นทางเดียวที่เคยเรียกไฟล์นี้
+// (highNobleMultiEngine.ts's boss.isMonarch branch) ตายแล้วจริง (rollHighNobleBoss ไม่คืน
+// isMonarch:true อีกต่อไป) — ไม่ลบไฟล์นี้ทิ้งเพราะ tests/game/monarchAI.test.ts ยังเรียก export
+// ตรงๆ ด้วย input มือ (ไม่ผ่าน chain จริง) ห้ามใส่ throw ในฟังก์ชันเหล่านี้เอง
 // The Sage Unicorn Studio Co., Ltd.
 // ============================================================
 
@@ -17,6 +23,9 @@ import { gameConfig } from '../config/gameConfig'
 const PROBE_CONFIG: AIConfig = { id: 'MONARCH_PROBE', name: 'Monarch', emoji: '👑', personality: 'cortex' }
 
 // ประเมินความแข็งของไพ่ Monarch เป็นค่า 0-1 จากผลรวม rankIndex (0-9 ต่อกอง) ของ 3 กอง หาร 27
+/** @deprecated Batch 1.5 (2026-07-30) — ไม่มี caller จริงแล้ว (เส้นทางเดียวที่เคยเรียกใน
+ * highNobleMultiEngine.ts ตายไปแล้วตั้งแต่ Batch 1) เหลือไว้เพราะ monarchAI.test.ts ยังเทสตรงๆ
+ * อยู่ ห้ามใส่ runtime throw ในฟังก์ชันนี้ (เทสเรียกด้วย input มือใน NODE_ENV=test) */
 export function evaluateMonarchHandStrength(cards: Card[], community: CommunityCards): number {
   const arr = aiDecideArrangement(PROBE_CONFIG, cards, community, 1, 'highNoble', 0)
   const h1 = evaluateHand([...arr.pile1, ...community.row1])
@@ -27,6 +36,9 @@ export function evaluateMonarchHandStrength(cards: Card[], community: CommunityC
 
 // ล็อคบุคลิกของ Monarch ตาม hand strength — เรียกครั้งเดียวตอน Round 1 แจกไพ่เสร็จเท่านั้น
 // แข็งมาก → cortex | แข็งปานกลาง → reaper | ปานกลางค่อนอ่อน → crag | อ่อน → cipher
+/** @deprecated Batch 1.5 (2026-07-30) — ไม่มี caller จริงแล้ว (highNobleMultiEngine.ts's
+ * boss.isMonarch branch ที่เคยเรียกตายไปแล้วตั้งแต่ Batch 1, มี guard ป้องกันไว้แล้ว) เหลือไว้
+ * เพราะ monarchAI.test.ts ยังเทสตรงๆ อยู่ ห้ามใส่ runtime throw ในฟังก์ชันนี้ */
 export function lockMonarchPersonality(cards: Card[], community: CommunityCards): AIPersonality {
   const strength = evaluateMonarchHandStrength(cards, community)
   const q = gameConfig.monarchConfig.handStrengthQuartile

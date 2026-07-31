@@ -23,6 +23,7 @@ import {
   StyleSheet,
   Modal,
   Platform,
+  TextInput,
 } from 'react-native'
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated'
 import { useFocusEffect } from 'expo-router'
@@ -30,6 +31,8 @@ import { useAuthStore } from '../../store/authStore'
 import { ThemedBackground } from '../ui/ThemedBackground'
 import { glassPanel, glassPanelDense, textOnGlass } from '../../ui/glassStyles'
 import { TIER_CONFIG } from '../../config/tierConfig'
+
+const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
 // ─── ธีมสีหลัก (Website Theme Spec v1.0 — เหมือน profile.tsx เป๊ะ) ─────────
 const C = {
@@ -54,7 +57,7 @@ const C = {
 
 const fmt = (n: number) => n.toLocaleString('en-US')
 
-type TabKey = 'items' | 'fun' | 'vip' | 'packs' | 'cosmetics'
+type TabKey = 'items' | 'fun' | 'vip' | 'packs' | 'cosmetics' | 'vault'
 
 // Tier progression lock — Competitive Items ปลดล็อคทีละ Tier (มติลุงเยาะ 2026-07-26)
 // ceiling model เดียวกับ profile.tsx (TIER_ORDER local const): 'D' = ยังไม่เคยปลด Tier ไหนเลย
@@ -73,7 +76,51 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'vip',        label: 'VIP' },
   { key: 'packs',      label: 'TOKEN PACKS' },
   { key: 'cosmetics',  label: 'COSMETICS' },
+  { key: 'vault',      label: 'CROWN VAULT' },
 ]
+
+// The Crown Vault — response shape ของ GET /crown-vault/status (server/src/routes/crownVault.ts)
+interface AscendantStatusData {
+  status: 'none' | 'active' | 'passed' | 'failed'
+  startedAt: string | null
+  expiresAt: string | null
+}
+interface CrownVaultData {
+  tokenBalance: number
+  crownBalance: number
+  crownPackageBalance: number
+  arenaUnlocked: boolean
+  ascendantStatus: AscendantStatusData
+  ascendantEligible: boolean
+  ascendantEligibilityReason: string
+  arenaPassEligible: boolean
+  config: { tokenToCrownRate: number; ascendantPassPriceCrown: number; arenaPassPriceCrown: number }
+}
+
+function ascendantStatusLabel(status?: AscendantStatusData): string {
+  if (!status) return ''
+  switch (status.status) {
+    case 'active': {
+      const daysLeft = status.expiresAt
+        ? Math.max(0, Math.ceil((new Date(status.expiresAt).getTime() - Date.now()) / 86_400_000))
+        : 0
+      return `⏳ Window open — ${daysLeft} day${daysLeft === 1 ? '' : 's'} left`
+    }
+    case 'passed': return '✅ Passed — proceed to Arena Pass'
+    case 'failed': return '❌ Window closed — one-time chance used'
+    default: return ''
+  }
+}
+
+function ascendantLockLabel(reason?: string): string {
+  switch (reason) {
+    case 'TOKEN_BELOW_MIN':  return '🔒 Need 600,000 Token'
+    case 'MONARCH_REQUIRED': return '🔒 Defeat the Monarch first'
+    case 'TIER_REQUIRED':    return '🔒 Reach Tier A+ first'
+    case 'ALREADY_USED':     return '🔒 Already used'
+    default:                 return '🔒 Not Eligible Yet'
+  }
+}
 
 // ─── Canon Catalog ──────────────────────────────────────────────────────
 // key ภายในตรงกับ CompetitiveItemKey ฝั่ง server (server/src/items/itemPhaseController.ts)
@@ -452,6 +499,96 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
     handleComingSoon(pack.name)
   }
 
+  // ─── The Crown Vault — ต่อ backend จริง (routes/crownVault.ts) ต่างจาก tab อื่นที่ยังเป็น
+  // Coming Soon shell เพราะ Ascendant/Arena Pass เป็นฟีเจอร์ใหม่ที่ implement backend เสร็จแล้ว ─
+  const session = useAuthStore(s => s.session)
+  const [vault, setVault] = useState<CrownVaultData | null>(null)
+  const [vaultBusy, setVaultBusy] = useState(false)
+  const [exchangeInput, setExchangeInput] = useState('')
+  const [confirmAction, setConfirmAction] = useState<'exchange' | 'ascendant' | 'arena' | null>(null)
+
+  const vaultAuthHeaders = () => ({
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${session?.access_token ?? ''}`,
+  })
+
+  const fetchVaultStatus = useCallback(async () => {
+    if (!session?.access_token) return
+    try {
+      const res = await fetch(`${SERVER_URL}/crown-vault/status`, { headers: vaultAuthHeaders() })
+      const data = await res.json()
+      if (data.success) setVault(data)
+    } catch (e) {
+      console.error('[ShopScreen] fetchVaultStatus failed:', e)
+    }
+  }, [session?.access_token])
+
+  useEffect(() => {
+    if (activeTab === 'vault') fetchVaultStatus()
+  }, [activeTab, fetchVaultStatus])
+
+  const handleConfirmExchange = async () => {
+    const crownAmount = parseInt(exchangeInput, 10)
+    if (!crownAmount || crownAmount <= 0) { setConfirmAction(null); return }
+    setVaultBusy(true)
+    try {
+      const res = await fetch(`${SERVER_URL}/crown-vault/exchange`, {
+        method: 'POST', headers: vaultAuthHeaders(), body: JSON.stringify({ crownAmount }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setToastMsg(`Exchanged ${fmt(crownAmount)} Crown`)
+        setExchangeInput('')
+        await Promise.all([fetchVaultStatus(), refreshProfile()])
+      } else {
+        setToastMsg(data.error === 'TIER_REQUIRED' ? 'Reach Tier A+ to unlock Crown Exchange' : 'Not enough Token')
+      }
+    } catch (e) {
+      setToastMsg('Exchange failed — try again')
+    } finally {
+      setVaultBusy(false)
+      setConfirmAction(null)
+    }
+  }
+
+  const handleConfirmBuyAscendantPass = async () => {
+    setVaultBusy(true)
+    try {
+      const res = await fetch(`${SERVER_URL}/crown-vault/buy-ascendant-pass`, { method: 'POST', headers: vaultAuthHeaders() })
+      const data = await res.json()
+      if (data.success) {
+        setToastMsg(data.status?.status === 'passed' ? 'Instant Pass! Welcome, Ascendant.' : 'Ascendant window opened — 30 days on the clock')
+        await Promise.all([fetchVaultStatus(), refreshProfile()])
+      } else {
+        setToastMsg(data.error === 'INSUFFICIENT_CROWN' ? 'Not enough Crown' : 'Not eligible yet')
+      }
+    } catch (e) {
+      setToastMsg('Purchase failed — try again')
+    } finally {
+      setVaultBusy(false)
+      setConfirmAction(null)
+    }
+  }
+
+  const handleConfirmBuyArenaPass = async () => {
+    setVaultBusy(true)
+    try {
+      const res = await fetch(`${SERVER_URL}/crown-vault/buy-arena-pass`, { method: 'POST', headers: vaultAuthHeaders() })
+      const data = await res.json()
+      if (data.success) {
+        setToastMsg('The Arena awaits.')
+        await Promise.all([fetchVaultStatus(), refreshProfile()])
+      } else {
+        setToastMsg(data.error === 'INSUFFICIENT_CROWN' ? 'Not enough Crown' : data.error === 'ALREADY_UNLOCKED' ? 'Already unlocked' : 'Not eligible yet')
+      }
+    } catch (e) {
+      setToastMsg('Purchase failed — try again')
+    } finally {
+      setVaultBusy(false)
+      setConfirmAction(null)
+    }
+  }
+
   return (
     <ThemedBackground isVip={isVip}>
       <View style={s.root}>
@@ -660,6 +797,91 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
             </>
           )}
 
+          {/* ── THE CROWN VAULT (Ascendant Pass / Arena Pass / Token→Crown Exchange) ── */}
+          {activeTab === 'vault' && (
+            <View style={{ gap: 14 }}>
+              <SectionNote text="Bridge to The Arena — trade Token for Crown, then ascend." />
+
+              {/* Token → Crown Exchange */}
+              <GlassCard style={s.vaultCard}>
+                <Text style={s.vaultCardTitle}>💱 Token → Crown Exchange</Text>
+                <Text style={s.vaultCardDesc}>
+                  1 Crown = {fmt(vault?.config.tokenToCrownRate ?? 5000)} Token · one-way, cannot be reversed
+                </Text>
+                {!tierMet('highNoble') ? (
+                  <Text style={s.vaultLockedTxt}>🔒 Unlocks at Tier A+ (High Noble)</Text>
+                ) : (
+                  <>
+                    <View style={s.vaultExchangeRow}>
+                      <TextInput
+                        style={s.vaultInput}
+                        placeholder="Crown amount"
+                        placeholderTextColor={C.textDim}
+                        keyboardType="number-pad"
+                        value={exchangeInput}
+                        onChangeText={setExchangeInput}
+                      />
+                      <Text style={s.vaultExchangeCost}>
+                        = {fmt((parseInt(exchangeInput, 10) || 0) * (vault?.config.tokenToCrownRate ?? 5000))} 🪙
+                      </Text>
+                    </View>
+                    <PressScale onPress={() => setConfirmAction('exchange')} disabled={vaultBusy || !exchangeInput}>
+                      <View style={[s.vaultBuyBtn, (!exchangeInput || vaultBusy) && s.vaultBuyBtnDisabled]}>
+                        <Text style={s.vaultBuyBtnTxt}>EXCHANGE</Text>
+                      </View>
+                    </PressScale>
+                  </>
+                )}
+                <Text style={s.vaultCrownBalance}>Earned Crown: 👑 {fmt(vault?.crownBalance ?? 0)}</Text>
+              </GlassCard>
+
+              {/* Ascendant Pass */}
+              <GlassCard style={s.vaultCard}>
+                <Text style={s.vaultCardTitle}>⚡ Ascendant Pass</Text>
+                <Text style={s.vaultCardDesc}>
+                  Open a 30-day window to reach 1,000,000 Token. Already there? Instant Pass. One-time only per account.
+                </Text>
+                {vault && vault.ascendantStatus.status !== 'none' && (
+                  <Text style={s.vaultStatusTxt}>{ascendantStatusLabel(vault.ascendantStatus)}</Text>
+                )}
+                {vault?.ascendantStatus.status === 'none' && (
+                  <PressScale onPress={() => setConfirmAction('ascendant')} disabled={!vault.ascendantEligible || vaultBusy}>
+                    <View style={[s.vaultBuyBtn, (!vault.ascendantEligible || vaultBusy) && s.vaultBuyBtnDisabled]}>
+                      <Text style={s.vaultBuyBtnTxt}>
+                        {vault.ascendantEligible
+                          ? `BUY — 👑 ${vault.config.ascendantPassPriceCrown}`
+                          : ascendantLockLabel(vault.ascendantEligibilityReason)}
+                      </Text>
+                    </View>
+                  </PressScale>
+                )}
+              </GlassCard>
+
+              {/* Arena Pass */}
+              <GlassCard style={s.vaultCard}>
+                <Text style={s.vaultCardTitle}>🏛️ Arena Pass</Text>
+                <Text style={s.vaultCardDesc}>
+                  Final gate into Tier S / The Arena — required whether you Ascend or climb the long way (1M Token + 180 days).
+                </Text>
+                {vault?.arenaUnlocked ? (
+                  <Text style={s.vaultStatusTxt}>✅ Unlocked</Text>
+                ) : (
+                  <PressScale onPress={() => setConfirmAction('arena')} disabled={!vault?.arenaPassEligible || vaultBusy}>
+                    <View style={[s.vaultBuyBtn, (!vault?.arenaPassEligible || vaultBusy) && s.vaultBuyBtnDisabled]}>
+                      <Text style={s.vaultBuyBtnTxt}>
+                        {vault?.arenaPassEligible ? `BUY — 👑 ${vault.config.arenaPassPriceCrown}` : '🔒 Not Eligible Yet'}
+                      </Text>
+                    </View>
+                  </PressScale>
+                )}
+              </GlassCard>
+
+              <Text style={s.iapDisclaimer}>
+                Crown and Token cannot be exchanged for real money. Only Earned Crown works here — Crown Package (paid) cannot be used for Match Stake or Passes.
+              </Text>
+            </View>
+          )}
+
           <View style={{ height: 24 }} />
         </ScrollView>
 
@@ -673,6 +895,35 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
         {/* ── Loot Box Odds Modal ── */}
         <LootBoxOddsModal box={oddsBox} onClose={() => setOddsBox(null)} onConfirm={handleConfirmLootBox} />
 
+        {/* ── Crown Vault Confirm Modal — Opt-in ตัวจริงของ Ascendant Pass / Arena Pass / Exchange ── */}
+        <VaultConfirmModal
+          visible={confirmAction !== null}
+          title={
+            confirmAction === 'exchange' ? 'Confirm Exchange'
+            : confirmAction === 'ascendant' ? 'Begin Your Ascension'
+            : 'Confirm Arena Pass'
+          }
+          message={
+            confirmAction === 'exchange'
+              ? `Exchange ${fmt(parseInt(exchangeInput, 10) || 0)} Crown for ${fmt((parseInt(exchangeInput, 10) || 0) * (vault?.config.tokenToCrownRate ?? 5000))} Token. This cannot be reversed — Token spent here no longer counts toward Buy-in.`
+              : confirmAction === 'ascendant'
+              ? 'One-time only. You will have 30 days to reach 1,000,000 Token — miss it and this chance is gone for good.'
+              : 'This permanently unlocks Tier S / The Arena for this account.'
+          }
+          priceLabel={
+            confirmAction === 'ascendant' ? `👑 ${vault?.config.ascendantPassPriceCrown ?? 20} Crown`
+            : confirmAction === 'arena' ? `👑 ${vault?.config.arenaPassPriceCrown ?? 20} Crown`
+            : undefined
+          }
+          busy={vaultBusy}
+          onCancel={() => setConfirmAction(null)}
+          onConfirm={
+            confirmAction === 'exchange' ? handleConfirmExchange
+            : confirmAction === 'ascendant' ? handleConfirmBuyAscendantPass
+            : handleConfirmBuyArenaPass
+          }
+        />
+
       </View>
     </ThemedBackground>
   )
@@ -683,6 +934,40 @@ function SectionTitle({ title }: { title: string }) {
 }
 function SectionNote({ text }: { text: string }) {
   return <Text style={s.sectionNote}>{text}</Text>
+}
+
+// Confirm dialog ที่ Crown Vault ทุก action ต้องผ่านก่อนซื้อจริง (Opt-in ตามมติลุงเยาะ —
+// การกด Confirm ที่นี่คือจุดเริ่ม Ascendant window จริงๆ ไม่มีปุ่ม "Begin" แยกอีกแล้ว)
+function VaultConfirmModal({
+  visible, title, message, priceLabel, busy, onConfirm, onCancel,
+}: {
+  visible: boolean
+  title: string
+  message: string
+  priceLabel?: string
+  busy: boolean
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <View style={s.vaultModalOverlay}>
+        <GlassCard style={s.vaultModalBox}>
+          <Text style={s.vaultModalTitle}>{title}</Text>
+          <Text style={s.vaultModalMsg}>{message}</Text>
+          {priceLabel && <Text style={s.vaultModalPrice}>{priceLabel}</Text>}
+          <View style={s.vaultModalBtns}>
+            <PressScale onPress={onCancel} style={{ flex: 1 }}>
+              <View style={s.vaultModalCancelBtn}><Text style={s.vaultModalCancelTxt}>Cancel</Text></View>
+            </PressScale>
+            <PressScale onPress={onConfirm} disabled={busy} style={{ flex: 1 }}>
+              <View style={s.vaultModalConfirmBtn}><Text style={s.vaultModalConfirmTxt}>{busy ? '…' : 'Confirm'}</Text></View>
+            </PressScale>
+          </View>
+        </GlassCard>
+      </View>
+    </Modal>
+  )
 }
 
 // ─── Styles ──────────────────────────────────────────────────────────
@@ -863,4 +1148,50 @@ const s = StyleSheet.create({
     paddingVertical: 10, paddingHorizontal: 16,
   },
   toastText: { color: C.textPrimary, fontSize: 12, fontWeight: '700', textAlign: 'center' },
+
+  // The Crown Vault
+  vaultCard: { padding: 16, gap: 8 },
+  vaultCardTitle: { color: C.gold, fontFamily: 'Cinzel_700Bold', fontSize: 14, letterSpacing: 0.5 },
+  vaultCardDesc: { color: C.textSec, fontSize: 11, lineHeight: 16 },
+  vaultLockedTxt: { color: C.textDim, fontSize: 12, fontWeight: '700', marginTop: 4 },
+  vaultStatusTxt: { color: C.textPrimary, fontSize: 12, fontWeight: '700', marginTop: 2 },
+  vaultCrownBalance: { color: C.textDim, fontSize: 11, marginTop: 4 },
+  vaultExchangeRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4 },
+  vaultInput: {
+    ...glassPanelDense,
+    flex: 1,
+    color: C.textPrimary,
+    fontSize: 13,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  vaultExchangeCost: { fontFamily: 'JetBrainsMono_600SemiBold', color: C.gold, fontSize: 13 },
+  vaultBuyBtn: {
+    backgroundColor: C.gold,
+    borderRadius: 10,
+    paddingVertical: 11,
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  vaultBuyBtnDisabled: { backgroundColor: C.border },
+  vaultBuyBtnTxt: { color: C.bg, fontSize: 12, fontWeight: '900', letterSpacing: 0.5 },
+
+  // Vault confirm modal
+  vaultModalOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.75)',
+    justifyContent: 'center', alignItems: 'center', padding: 28,
+  },
+  vaultModalBox: { width: '100%', padding: 22, gap: 10 },
+  vaultModalTitle: { color: C.gold, fontFamily: 'Cinzel_700Bold', fontSize: 16, textAlign: 'center' },
+  vaultModalMsg: { color: C.textSec, fontSize: 12, lineHeight: 18, textAlign: 'center' },
+  vaultModalPrice: { color: C.gold, fontSize: 18, fontWeight: '900', textAlign: 'center', marginTop: 4 },
+  vaultModalBtns: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  vaultModalCancelBtn: {
+    borderWidth: 1, borderColor: C.border, borderRadius: 10,
+    paddingVertical: 12, alignItems: 'center',
+  },
+  vaultModalCancelTxt: { color: C.textSec, fontSize: 13, fontWeight: '700' },
+  vaultModalConfirmBtn: { backgroundColor: C.gold, borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
+  vaultModalConfirmTxt: { color: C.bg, fontSize: 13, fontWeight: '900' },
 })

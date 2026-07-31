@@ -15,6 +15,7 @@ import { gameConfig, getAutoSortFee } from '../config/gameConfig'
 import { supabaseAdmin } from '../config/supabase'
 import { recordMatchStats, BestHandCandidate, StatsTier } from './matchStatsService'
 import { checkTierUnlock } from './tierUnlockService'
+import { getAscendantStatus } from './crownVaultService'
 // Token Flow Panel (Spec v1.1) — ใช้ใน Initiate / Adept / Mastermind (ดู usesTokenFlow())
 // High Noble / Last Boss ยังใช้ calcDeltas() เดิม
 import {
@@ -22,6 +23,7 @@ import {
   chargeAuctionBid, chargeGrandFinaleCall, settleMastermindRound,
 } from './tokenFlow'
 import { getRoom } from './roomRegistry'
+import { recordMatchWin } from './matchWinsService'
 
 // ── Types ────────────────────────────────────────────────────
 export interface RoundResult {
@@ -258,60 +260,24 @@ export async function escrowBuyIn(
     // กู้คืน escrow เก่าที่ค้างเกิน 60 นาทีก่อนเสมอ — กันเคส escrow ค้างจาก session ก่อนหน้าบัง single-active-escrow ด้านล่างอยู่ทั้งที่จริงๆ จบไปนานแล้ว
     await recoverStaleEscrow(userId)
 
-    // Single active escrow — กันหักซ้ำระหว่างมีแมตช์ค้างอยู่จริง (escrow ที่ยังไม่ stale = กำลังเล่นอยู่จริงหรืออีกเครื่อง)
-    const { data: activeEscrow, error: activeCheckError } = await supabaseAdmin
-      .from('match_escrow')
-      .select('escrow_id')
-      .eq('user_id', userId)
-      .eq('status', 'in_match')
-      .limit(1)
-      .maybeSingle()
-    if (activeCheckError) {
-      console.error('[ESCROW]', Date.now(), 'Failed to check active escrow for', userId, activeCheckError)
-      return { ok: false, reason: 'SERVER_ERROR' }
-    }
-    if (activeEscrow) {
-      console.warn('[ESCROW]', Date.now(), 'Active match already exists for', userId, '| escrow', activeEscrow.escrow_id)
-      return { ok: false, reason: 'ACTIVE_MATCH_EXISTS' }
-    }
-
-    const { data: userData, error: userFetchError } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
-    if (userFetchError) {
-      console.error('[ESCROW]', Date.now(), 'Failed to read token_balance for', userId, userFetchError)
-      return { ok: false, reason: 'SERVER_ERROR' }
-    }
-    const currentBalance = userData?.token_balance ?? 0
-    if (currentBalance < buyInAmount) {
-      console.warn('[ESCROW]', Date.now(), 'Insufficient tokens for', userId, '| have', currentBalance, '| need', buyInAmount)
-      return { ok: false, reason: 'INSUFFICIENT_TOKENS' }
-    }
-
-    // Insert escrow ก่อน — ยังไม่แตะ token_balance เลย ณ จุดนี้
-    const { data: escrowRow, error: insertError } = await supabaseAdmin
-      .from('match_escrow')
-      .insert({ user_id: userId, room_id: roomId, tier: validTier, buyin_amount: buyInAmount, status: 'in_match' })
-      .select('escrow_id')
-      .single()
-
-    if (insertError || !escrowRow) {
-      console.error('[ESCROW]', Date.now(), 'Failed to insert match_escrow for', userId, '| room', roomId, '| tier', validTier, insertError)
+    // P0: หัก wallet + สร้าง escrow ใน transaction เดียว ปิด race จากสอง client และไม่มีเงินหายครึ่งทาง
+    const { data, error } = await supabaseAdmin.rpc('begin_match_escrow', {
+      p_user_id: userId,
+      p_room_id: roomId,
+      p_tier: validTier,
+      p_buyin_amount: buyInAmount,
+    })
+    if (error || !data?.[0]?.escrow_id) {
+      const message = error?.message ?? ''
+      if (message.includes('INSUFFICIENT_TOKENS')) return { ok: false, reason: 'INSUFFICIENT_TOKENS' }
+      if (message.includes('ACTIVE_MATCH_EXISTS')) return { ok: false, reason: 'ACTIVE_MATCH_EXISTS' }
+      console.error('[ESCROW]', Date.now(), 'begin_match_escrow failed for', userId, error)
       return { ok: false, reason: 'SERVER_ERROR' }
     }
 
-    const newBalance = currentBalance - buyInAmount
-    const { error: deductError } = await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
-
-    if (deductError) {
-      // escrow insert สำเร็จแต่หัก token ไม่ได้ — ยังไม่มีเงินถูกหักไปจริง จึงแค่ mark escrow นี้เป็น
-      // 'refunded' (เทียบเท่า "voided" — status enum มีแค่ 3 ค่า ไม่มี column ให้เพิ่ม 'failed' แยก)
-      // กัน escrow ค้างสถานะ in_match ทั้งที่ไม่เคยมีเงินถูกหักไปเลย
-      await supabaseAdmin.from('match_escrow').update({ status: 'refunded', settled_at: new Date().toISOString() }).eq('escrow_id', escrowRow.escrow_id)
-      console.error('[ESCROW]', Date.now(), 'Failed to deduct token_balance for', userId, '| escrow', escrowRow.escrow_id, 'voided (no deduction occurred)', deductError)
-      return { ok: false, reason: 'SERVER_ERROR' }
-    }
-
-    console.log('[ESCROW]', Date.now(), 'Buy-in', buyInAmount, 'deducted from', userId, '| escrow', escrowRow.escrow_id, '| New balance:', newBalance)
-    return { ok: true, escrowId: escrowRow.escrow_id, buyInAmount }
+    const row = data[0]
+    console.log('[ESCROW]', Date.now(), 'Buy-in', buyInAmount, 'deducted from', userId, '| escrow', row.escrow_id, '| New balance:', row.new_token_balance)
+    return { ok: true, escrowId: row.escrow_id, buyInAmount }
   } catch (err) {
     console.error('[ESCROW]', Date.now(), 'Error in escrowBuyIn for', userId, err)
     return { ok: false, reason: 'SERVER_ERROR' }
@@ -324,27 +290,21 @@ export async function escrowBuyIn(
 // ให้ client แทน ห้าม client คำนวณเองจาก buyin/stack (bug: Profile ค้างยอดเก่าเพราะ client ไม่เคยรู้ยอดจริงหลัง settle)
 export async function settleEscrow(userId: string, escrowId: string, finalStack: number): Promise<number | null> {
   try {
-    // Claim-first: เคลม escrow ก่อนจ่าย token — WHERE status='in_match' เป็น atomic ใน Postgres
-    // ถ้าได้ 0 rows แปลว่ามีคน settle ไปแล้ว ต้องออกทันที ห้ามบวก token ซ้ำ (บั๊ก Double Settle)
-    const { data: claimed, error: claimErr } = await supabaseAdmin.from('match_escrow')
-      .update({ status: 'settled', final_stack: finalStack, settled_at: new Date().toISOString() })
-      .eq('escrow_id', escrowId)
-      .eq('status', 'in_match')
-      .select('escrow_id')
-    if (claimErr) {
-      console.error('[ESCROW]', Date.now(), 'Claim failed for', escrowId, claimErr)
+    // P0: mark escrow + credit wallet ใน transaction เดียว ปิดเคส escrow settled แต่ wallet ไม่ได้เงิน
+    const { data, error } = await supabaseAdmin.rpc('settle_match_escrow', {
+      p_user_id: userId,
+      p_escrow_id: escrowId,
+      p_final_stack: finalStack,
+    })
+    if (error || data == null) {
+      if (error?.message?.includes('ESCROW_NOT_ACTIVE')) {
+        console.warn('[ESCROW]', Date.now(), 'Already settled/refunded, skip:', escrowId, '| userId:', userId)
+      } else {
+        console.error('[ESCROW]', Date.now(), 'settle_match_escrow failed for', escrowId, error)
+      }
       return null
     }
-    if (!claimed || claimed.length === 0) {
-      console.warn('[ESCROW]', Date.now(), 'Already settled, skip:', escrowId, '| userId:', userId)
-      return null
-    }
-    const { data: userData } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
-    const newBalance = (userData?.token_balance ?? 0) + finalStack
-    const { error: balanceUpdateError } = await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
-    if (balanceUpdateError) {
-      console.error('[ESCROW]', Date.now(), 'Error updating token_balance for', userId, balanceUpdateError)
-    }
+    const newBalance = Number(data)
     console.log('[ESCROW]', Date.now(), 'Settled', userId, '| finalStack', finalStack, '| New balance:', newBalance)
 
     // Tier Unlock Check (Ceiling Model) — ห่อ try/catch แยกต่างหาก ห้ามทำให้ settleEscrow throw
@@ -352,6 +312,14 @@ export async function settleEscrow(userId: string, escrowId: string, finalStack:
       await checkTierUnlock(userId, newBalance)
     } catch (err) {
       console.error('[TIER_UNLOCK] Unexpected error calling checkTierUnlock:', err, '| userId:', userId)
+    }
+
+    // Ascendant window on-demand check (Ascendant_Spec_v1_1 §7.2 "เช็คตอน token settle") —
+    // ห่อ try/catch แยกต่างหากเช่นกัน ห้ามทำให้ settleEscrow throw
+    try {
+      await getAscendantStatus(userId)
+    } catch (err) {
+      console.error('[CROWN-VAULT] Unexpected error calling getAscendantStatus:', err, '| userId:', userId)
     }
 
     return newBalance
@@ -364,24 +332,19 @@ export async function settleEscrow(userId: string, escrowId: string, finalStack:
 // Refund เต็มจำนวน — ใช้เฉพาะตอน escrow บาง seat ในกลุ่ม join พร้อมกันล้มเหลว (rollback seat ที่หักไปแล้วก่อนหน้า)
 export async function refundEscrow(userId: string, escrowId: string, buyInAmount: number): Promise<void> {
   try {
-    // Claim-first เช่นเดียวกับ settleEscrow — กัน refund ซ้ำ
-    const { data: claimed, error: claimErr } = await supabaseAdmin.from('match_escrow')
-      .update({ status: 'refunded', settled_at: new Date().toISOString() })
-      .eq('escrow_id', escrowId)
-      .eq('status', 'in_match')
-      .select('escrow_id')
-    if (claimErr) {
-      console.error('[ESCROW]', Date.now(), 'Refund claim failed for', escrowId, claimErr)
+    const { data, error } = await supabaseAdmin.rpc('refund_match_escrow', {
+      p_user_id: userId,
+      p_escrow_id: escrowId,
+    })
+    if (error || data == null) {
+      if (error?.message?.includes('ESCROW_NOT_ACTIVE')) {
+        console.warn('[ESCROW]', Date.now(), 'Already settled/refunded, skip refund:', escrowId)
+      } else {
+        console.error('[ESCROW]', Date.now(), 'refund_match_escrow failed for', escrowId, error)
+      }
       return
     }
-    if (!claimed || claimed.length === 0) {
-      console.warn('[ESCROW]', Date.now(), 'Already settled/refunded, skip refund:', escrowId)
-      return
-    }
-    const { data: userData } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
-    const newBalance = (userData?.token_balance ?? 0) + buyInAmount
-    await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
-    console.log('[ESCROW]', Date.now(), 'Refunded', buyInAmount, 'to', userId, '(join rollback)')
+    console.log('[ESCROW]', Date.now(), 'Refunded', buyInAmount, 'to', userId, '| New balance:', Number(data), '(join rollback)')
   } catch (err) {
     console.error('[ESCROW]', Date.now(), 'Error refunding escrow for', userId, err)
   }
@@ -757,6 +720,19 @@ export async function submitArrangement(
       isTripleSweep: initiateTripleSweep,
       bestHandThisMatch: initiateBestHand,
     }])
+
+    // Match Win History (มติลุงเยาะ 2026-07-26) — เก็บเฉพาะตอน human ชนะอันดับ 1 เท่านั้น
+    if (finalWinner === state.humanPlayerId) {
+      await recordMatchWin({
+        userId: state.humanPlayerId,
+        tier: 'initiate',
+        mode: 'solo',
+        tokensWon: (state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount) - state.buyInAmount,
+        isTripleSweep: initiateTripleSweep,
+        bestHand: initiateBestHand,
+        opponents: AI_CONFIGS.map(ai => ({ name: getEffectiveAIConfig(state, ai).name, isHuman: false })),
+      })
+    }
 
     // ── Token Flow Panel §5: จบเกม -> Fee & Rake burn จริง (ออกจากระบบ) ──
     // Tier C เท่านั้น — ไม่มี DB write เพราะเงินก้อนนี้ไม่เคยเข้า users.token_balance ของใคร
@@ -2046,6 +2022,19 @@ function finalizeGrandFinale(
         bestHandThisMatch: state.bestHandThisMatch ?? null,
       }])
 
+      // Match Win History (มติลุงเยาะ 2026-07-26) — เฉพาะ Mastermind (ไม่ปนกับ lastBoss) และ human ชนะเท่านั้น
+      if (state.tier === 'mastermind' && finalWinner === state.humanPlayerId) {
+        await recordMatchWin({
+          userId: state.humanPlayerId,
+          tier: 'mastermind',
+          mode: 'solo',
+          tokensWon: (state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount) - state.buyInAmount,
+          isTripleSweep: state.tripleSweepThisMatch ?? false,
+          bestHand: state.bestHandThisMatch ?? null,
+          opponents: AI_CONFIGS.map(ai => ({ name: getEffectiveAIConfig(state, ai).name, isHuman: false })),
+        })
+      }
+
       // Patch Mastermind Conquest: ผู้เล่นได้อันดับ 1 → บันทึก conquered_sentinels (กันซ้ำ)
       let sentinelConquered = false
       let allSentinelsConquered = false
@@ -2192,6 +2181,7 @@ interface MultiSeatInfo {
   avatarUrl?: string     // เฉพาะ Human ที่ส่งมา — AI ไม่มี
   isHuman: boolean
   emoji?: string         // เฉพาะ AI (จาก AI_CONFIGS) — client ใช้ avatarUrl ก่อนถ้ามี ไม่งั้น fallback emoji
+  isVip?: boolean        // เฉพาะ Human (มติลุงเยาะ 2026-07-26) — Gold Radiance frame ทุกที่นั่ง ไม่ใช่แค่ P1
 }
 
 // A5: Grace Period 60s — เก็บว่า userId ไหนกำลัง "หลุดชั่วคราว" อยู่ (ยังไม่ถูกไล่ออกจาก humanPlayerIds
@@ -2282,10 +2272,22 @@ export async function startMultiplayerMatch(
   }
   aiPlayerIds.forEach(id => tokenBalance[id] = buyInAmount)
 
+  // Query VIP status ของ human ทุกคนในห้องครั้งเดียว (มติลุงเยาะ 2026-07-26) — Gold Radiance frame
+  // ต้องเช็ค VIP จริงทุกที่นั่ง ไม่ใช่แค่ P1 เหมือนเดิม (ก่อนหน้านี้ seatOrder ไม่เคยมี vip_status เลย)
+  const vipStatusByUserId: Record<string, string> = {}
+  try {
+    const { data: vipRows, error: vipErr } = await supabaseAdmin.from('users').select('user_id, vip_status').in('user_id', humanPlayerIds)
+    if (vipErr) console.error('[ADEPT] Failed to read vip_status for seatOrder:', vipErr)
+    ;(vipRows ?? []).forEach(r => { vipStatusByUserId[r.user_id] = r.vip_status ?? 'none' })
+  } catch (err) {
+    console.error('[ADEPT] Unexpected error reading vip_status for seatOrder:', err)
+  }
+
   // Bug B/C: seatOrder เก็บ snapshot ที่นั่งทั้ง 4 ตามลำดับจริงในห้อง — คงที่ตลอดแมตช์ ไม่เปลี่ยนตาม AFK/AI takeover
   const seatOrder: MultiSeatInfo[] = seats.map((s, i) => {
     if (s.type === 'human' && s.userId) {
-      return { seat: i, userId: s.userId, displayName: s.name, avatarUrl: s.avatarUrl, isHuman: true }
+      const isVip = (vipStatusByUserId[s.userId] ?? 'none') !== 'none'
+      return { seat: i, userId: s.userId, displayName: s.name, avatarUrl: s.avatarUrl, isHuman: true, isVip }
     }
     const aiConfig = AI_CONFIGS.find(a => a.id === s.aiConfigId) ?? AI_CONFIGS[0]
     return { seat: i, userId: aiConfig.id, displayName: aiConfig.name, isHuman: false, emoji: aiConfig.emoji }
@@ -2392,7 +2394,8 @@ async function startMultiRound(io: Server, roomId: string): Promise<void> {
  * รองรับทั้ง 2 โครงสร้างโต๊ะ: multiplayer (Adept) และ single-player (Mastermind)
  * ค่าธรรมเนียมอ่านจาก config ตาม tier จริงเสมอ ห้าม hardcode
  *
- * มติลุงเยาะ 2026-07-25: ไม่มี free rounds แล้ว เสีย fee ทุกครั้งที่กด (Adept 30 / Mastermind 190)
+ * มติลุงเยาะ 2026-07-25: ไม่มี free rounds แล้ว เสีย fee ทุกครั้งที่กด — อ่านจาก gameConfig.autoSortFee
+ * (getAutoSortFee()) เสมอ ห้าม hardcode ตัวเลขในนี้อีก
  */
 export function requestAutoSort(
   io: Server, roomId: string, userId: string,
@@ -2589,6 +2592,23 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
         bestHandThisMatch: bestHand,
       }
     }))
+
+    // Match Win History (มติลุงเยาะ 2026-07-26) — finalWinner อาจเป็น AI ก็ได้ (playerIds รวม AI 2 ตัว) เช็ค isHuman ก่อนเสมอ
+    const winnerSeatInfo = state.seatOrder.find(s => s.userId === finalWinner)
+    if (winnerSeatInfo?.isHuman) {
+      const { bestHand: winnerBestHand, tripleSweep: winnerTripleSweep } = deriveBestHandFromResults(state.results, finalWinner)
+      await recordMatchWin({
+        userId: finalWinner,
+        tier: 'adept',
+        mode: 'multiplayer',
+        tokensWon: (state.tokenBalance[finalWinner] ?? state.buyInAmount) - state.buyInAmount,
+        isTripleSweep: winnerTripleSweep,
+        bestHand: winnerBestHand,
+        opponents: state.seatOrder
+          .filter(s => s.userId !== finalWinner)
+          .map(s => ({ name: s.displayName, isHuman: s.isHuman })),
+      })
+    }
 
     // Token Flow Panel §5: จบเกม -> Fee & Rake burn จริง (ไม่มี DB write — เงินก้อนนี้ไม่เคยเข้า
     // token_balance ของใคร เพราะ escrow settle ใช้ stack ที่หัก rake ไปแล้วตั้งแต่ settleRound)

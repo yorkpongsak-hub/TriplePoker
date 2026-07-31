@@ -11,6 +11,8 @@
 let tokenBalances: Record<string, number> = {}
 let escrowIdCounter = 0
 let escrowStatuses: Record<string, string> = {}
+let escrowOwners: Record<string, string> = {}
+let escrowBuyIns: Record<string, number> = {}
 
 function makeSupabaseAdminMock() {
   const from = jest.fn((table: string) => {
@@ -23,6 +25,7 @@ function makeSupabaseAdminMock() {
     builder.eq = jest.fn((col: string, val: any) => { lastEqValues.push([col, val]); return builder })
     builder.limit = jest.fn(() => builder)
     builder.lt = jest.fn(() => builder)
+    builder.in = jest.fn(() => builder)
     builder.insert = jest.fn(() => { isInsert = true; return builder })
     builder.update = jest.fn((payload: any) => { pendingUpdate = payload; return builder })
 
@@ -70,7 +73,38 @@ function makeSupabaseAdminMock() {
     }
     return builder
   })
-  return { from }
+  const rpc = jest.fn(async (name: string, args: any) => {
+    if (name === 'begin_match_escrow') {
+      if ((tokenBalances[args.p_user_id] ?? 0) < args.p_buyin_amount) {
+        return { data: null, error: { message: 'INSUFFICIENT_TOKENS' } }
+      }
+      escrowIdCounter++
+      const id = `escrow-${escrowIdCounter}`
+      escrowStatuses[id] = 'in_match'
+      escrowOwners[id] = args.p_user_id
+      escrowBuyIns[id] = args.p_buyin_amount
+      tokenBalances[args.p_user_id] -= args.p_buyin_amount
+      return { data: [{ escrow_id: id, new_token_balance: tokenBalances[args.p_user_id] }], error: null }
+    }
+    if (name === 'settle_match_escrow') {
+      if (escrowStatuses[args.p_escrow_id] !== 'in_match' || escrowOwners[args.p_escrow_id] !== args.p_user_id) {
+        return { data: null, error: { message: 'ESCROW_NOT_ACTIVE' } }
+      }
+      escrowStatuses[args.p_escrow_id] = 'settled'
+      tokenBalances[args.p_user_id] += args.p_final_stack
+      return { data: tokenBalances[args.p_user_id], error: null }
+    }
+    if (name === 'refund_match_escrow') {
+      if (escrowStatuses[args.p_escrow_id] !== 'in_match' || escrowOwners[args.p_escrow_id] !== args.p_user_id) {
+        return { data: null, error: { message: 'ESCROW_NOT_ACTIVE' } }
+      }
+      escrowStatuses[args.p_escrow_id] = 'refunded'
+      tokenBalances[args.p_user_id] += escrowBuyIns[args.p_escrow_id]
+      return { data: tokenBalances[args.p_user_id], error: null }
+    }
+    return { data: null, error: { message: 'UNKNOWN_RPC' } }
+  })
+  return { from, rpc }
 }
 
 jest.mock('../../src/config/supabase', () => ({
@@ -109,6 +143,8 @@ beforeEach(() => {
   tokenBalances = { [USER_A]: 100_000, [USER_B]: 100_000 }
   escrowIdCounter = 0
   escrowStatuses = {}
+  escrowOwners = {}
+  escrowBuyIns = {}
   jest.useFakeTimers()
 })
 

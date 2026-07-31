@@ -7,6 +7,10 @@
 - คำนวณ worst case ใหม่ทุก Tier ด้วย Ante/Call จริงจาก `gameConfig.ts` (แทนเลขเก่าจาก CoreRules v1.2) — เพิ่มคอลัมน์ Safety Margin ให้เห็นชัดว่าแต่ละ Tier ปลอดภัยแค่ไหน
 - Tier อื่น (Initiate/Mastermind/High Noble/Last Boss) **ไม่เปลี่ยน Buy-in** — worst case จริงยังต่ำกว่า Buy-in เดิมอยู่แล้ว
 
+> **MVP Freeze Addendum — 31 กรกฎาคม 2026:** `gameConfig.ts` เป็น Canon สำหรับ Beta:
+> Initiate 500 · Adept 2,000 · Mastermind 15,000 · High Noble 30,000 · Last Boss 60,000
+> ชุดนี้แทนตาราง v1.1 เดิมเฉพาะค่า Buy-in จนกว่าจะจบ Beta economy tuning
+
 ---
 
 ## 1. หลักการ: Escrow Model
@@ -27,15 +31,16 @@
 > ที่มา: worst case ต่อแมตช์ 5 rounds = (Ante รวม + Call สูงสุด 2 rounds) × 5 โดยไม่ได้ Pot คืนเลย
 > Ante รวม/คน และ Call max อ้างอิงจาก CoreRules v1.3 (Section 2.1 / 3) — sync กับ `gameConfig.ts` จริง
 
-| Tier | Ante/hand | Call max/hand | Worst case ×5 | **Buy-in** | Safety Margin |
-|------|-----------|---------------|----------------|------------|---------------|
-| Initiate | 70 | — | 350 | **500** | +150 |
-| Adept | 300 | — | 1,500 | **2,000** | +500 |
-| Mastermind | 1,000 | 600 | 8,000 | **9,000** | +1,000 |
-| High Noble | 3,000 | 2,000 | 25,000 | **30,000** | +5,000 |
-| The Last Boss *(Arena Phase 3 — reserve ค่าไว้)* | 6,000 | 4,000 | 50,000 | **60,000** | +10,000 |
+| Tier | Ante/hand | Max optional/hand | Maximum ×5 | **Buy-in** | หมายเหตุ |
+|------|-----------|-------------------|------------|------------|----------|
+| Initiate | 70 | — | 350 | **500** | ครอบคลุมทั้งหมด |
+| Adept | 300 | Auto Sort 35 | 1,675 | **2,000** | ครอบคลุมทั้งหมด |
+| Mastermind | 1,000 | Auto Sort 165 + Auction 150 + Call 300×2 | 9,575 | **15,000** | ครอบคลุมทั้งหมด |
+| High Noble | 3,000 | Auto Sort 750 + Auction 500 + Call 1,000×2 | 31,250 | **30,000** | ครอบคลุม Ante; optional action ต้อง disable เมื่อ Stack ไม่พอ |
+| The Last Boss *(Arena Phase 3 — reserve ค่าไว้)* | 6,000 | Auction 1,000 + Call 2,000×2 | 55,000 | **60,000** | Arena ห้าม Auto Sort |
 
-**คุณสมบัติสำคัญ:** Buy-in ≥ worst case ⟹ **หมด stack กลางเกมเป็นไปไม่ได้**
+**คุณสมบัติสำคัญสำหรับ MVP:** Buy-in ครอบคลุม Ante บังคับครบ 5 รอบทุก Tier
+ส่วน action ที่เลือกจ่ายเองต้องตรวจ Stack ฝั่ง server และ disable/reject เมื่อเงินไม่พอ โดยเฉพาะ High Noble
 Debt Recovery Flow (CoreRules หมวด 4) คงไว้เป็น safety net — ไม่ถูกเรียกใช้ในกรณีปกติ
 > v1.1: ทุก Tier ผ่านเงื่อนไขนี้แล้ว (Adept เดิมไม่ผ่าน — แก้แล้วในรอบนี้)
 
@@ -92,7 +97,7 @@ escrow_id | user_id | tier | buyin_amount | status (in_match/settled/refunded)
 buyIn: {
   initiate:   500,
   adept:      2000,  // v1.1: แก้จาก 1000 — worst case จริง 1,500 สูงกว่า buy-in เดิม (บั๊ก game balance)
-  mastermind: 9000,
+  mastermind: 15000,
   highNoble:  30000,
   lastBoss:   60000,  // reserve — Arena Phase 3
 },

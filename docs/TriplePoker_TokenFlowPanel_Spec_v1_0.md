@@ -98,7 +98,7 @@ Panel แสดง 6 แถวเสมอทุก Tier แต่ **เหต�
 | เหตุการณ์การไหล | Initiate | Adept | Mastermind | High Noble (A+) |
 |-----------------|:--------:|:-----:|:----------:|:---------------:|
 | Ante → Pot | ✅ | ✅ | ✅ | ✅ |
-| Auto Sort Fee → Fee & Rake | — (ฟรี) | ✅ (-30) | ✅ (-190) | ✅ (-880) |
+| Auto Sort Fee → Fee & Rake | — (ฟรี) | ✅ (-35) | ✅ (-165) | ✅ (-750) |
 | Auction → Fee & Rake | ❌ | ❌ | ✅ | ✅ |
 | Call → Pot G3 | ❌ | ❌ | ✅ | ✅ |
 | Rake / AI-win / Foul → Fee & Rake | ✅ | ✅ | ✅ | ✅ |

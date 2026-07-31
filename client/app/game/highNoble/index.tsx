@@ -21,6 +21,7 @@ import BossVictoryVFX, { VictoryTier } from '../../../src/components/vfx/BossVic
 import { useUserStore } from '../../../src/store/userStore'
 import { autoSort } from '../../../src/utils/autoSort'
 import { getReduceMotion } from '../../../src/utils/reduceMotion'
+import { clearPendingMatch, markPendingMatch } from '../../../src/utils/pendingMatch'
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
 import MonarchConquestBanner from '../../../src/components/game/MonarchConquestBanner'
 import { MINION_AVATAR } from '../../../src/constants/minionAvatars'
@@ -32,8 +33,20 @@ import GFHandView from '../../../src/components/game/GFHandView'
 import BossHandRow from '../../../src/components/game/BossHandRow'
 import GameTopBar from '../../../src/components/game/GameTopBar'
 import MatchEndOverlay from '../../../src/components/game/MatchEndOverlay'
+import { TierInfoModal } from '../../../src/components/game/TierInfoModal'
+import type { TierInfoLabel } from '../../../src/config/tierInfoData'
 // Gold Radiance: กรอบทองเฉพาะโต๊ะที่มี buy-in (Adept ขึ้นไป) และเฉพาะที่นั่งของผู้เล่นเอง
 import AvatarFrame from '../../../src/components/game/AvatarFrame'
+import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/game/FlyingCoins'
+
+// ตำแหน่งที่นั่งเดียวกับ targets ใน startDealAnimation (Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย)
+const SEAT_TARGETS = {
+  boss:   { x: -50,  y: -240 },
+  p4:     { x: 90,   y: -10  },
+  user:   { x: -50,  y: 200  },
+  p2:     { x: -190, y: -10  },
+  center: { x: 0,    y: 0    },
+} as const
 
 // Feedback C5 — Showdown result ครอบด้วยพื้นหลังชุดเดียวกับ Profile/Lobby (bg free/vip ตาม isVip)
 const SHOWDOWN_BG_FREE = require('../../../assets/backgrounds/bg_main_free.png')
@@ -71,13 +84,9 @@ const BOSS_INTRO: Record<string, { image: any; quotes: string[] }> = {
       "There is no pattern to crack. There is only luck — and how well you bear it.",
     ],
   },
-  // Monarch Spec v1.3: บอสลับ — ผู้เล่นเห็นแค่ชื่อ "Monarch" ไม่รู้ว่าสวมบุคลิกจตุรเทพใด (ล็อคไว้ฝั่ง server)
-  'Monarch': {
-    image: require('../../../assets/bosses/boss_Monarch.png'),
-    quotes: [
-      "My mask is the hand I am dealt.",
-    ],
-  },
+  // Batch 1 Task 2 (Monarch v2.2 cleanup): เอา 'Monarch' ออกจาก map นี้แล้ว — โต๊ะ High Noble ปกติ
+  // ไม่มีทางสุ่มเจอ Monarch อีกต่อไป (ดู monarchSpawn.ts's rollHighNobleBoss()) Monarch มีแค่ context
+  // เดียวคือ client/app/game/monarch/index.tsx เท่านั้น
 }
 // Patch High Noble: รูป Avatar จตุรเทพ (square crop หน้าชิด ใช้กับ AvatarBubble ของ P3 เท่านั้น)
 const BOSS_AVATAR: Record<string, any> = {
@@ -85,7 +94,6 @@ const BOSS_AVATAR: Record<string, any> = {
   'The Crag': require('../../../assets/bosses/boss_crag_avatar.png'),
   'Cortex':   require('../../../assets/bosses/boss_cortex_avatar.png'),
   'Cipher':   require('../../../assets/bosses/boss_cipher_avatar.png'),
-  'Monarch':  require('../../../assets/bosses/boss_Monarch_avatar.png'),
 }
 const cardBackImg = CARD_BACK_IMG // ใช้หลังไพ่จากไฟล์กลาง cardAssets.ts (คง alias เดิมกันแก้ทุกจุดที่อ้างถึง)
 const tableImg    = require('../../../assets/images/table_default.png')
@@ -303,7 +311,27 @@ const GameTableLive: React.FC = () => {
   const timerValRef = useRef({ val: 90, max: 90 })
   const continueValRef = useRef(0)
   const aiListRef = useRef<AIInfo[]>([])
+  const flyingCoinsRef = useRef<FlyingCoinsHandle>(null)
+  // Coin Flying VFX (มติลุงเยาะ 2026-07-26) — แปลง playerId -> ตำแหน่งที่นั่งจริง อ่าน aiListRef.current สด
+  const seatTargetFor = (playerId: string): Point => {
+    if (playerId === PLAYER_ID) return SEAT_TARGETS.user
+    const opp = aiListRef.current
+    if (opp[0]?.id === playerId) return SEAT_TARGETS.boss
+    if (opp[1]?.id === playerId) return SEAT_TARGETS.p2
+    if (opp[2]?.id === playerId) return SEAT_TARGETS.p4
+    return SEAT_TARGETS.center
+  }
   const timerRef    = useRef<any>(null)
+
+  // ── Full Reconnect System Step 2C — connection lifecycle state (เดิมไม่มีเลย เพราะ
+  // reconnection:false มาตลอด) pattern เดียวกับ adept/index.tsx:291-295
+  const [isReconnecting, setIsReconnecting] = useState(false)
+  const [connectionError, setConnectionError] = useState<string | null>(null)
+  const [afkNotice, setAfkNotice] = useState<string | null>(null)
+  const afkNoticeTimeoutRef = useRef<any>(null)
+  // ownSubmitted จาก game_state_snapshot — ใช้ตัดสินใจตอน hydrate ว่าจะโชว์หน้าจัดไพ่ (ยังไม่ submit)
+  // หรือหน้ารอผลจากคนอื่น (submit ไปแล้วก่อนหลุด) กันโดนบังคับจัดไพ่ซ้ำหลัง reconnect
+  const [myOwnSubmitted, setMyOwnSubmitted] = useState<{ arrangement: boolean; auctionBid: boolean; discard: boolean }>({ arrangement: false, auctionBid: false, discard: false })
 
   // ── Game state
   const [phase, setPhase]             = useState<'dealing'|'arrangement'|'arrangement_2'|'countdown'|'showdown'|'fog_of_war'|'blind_auction'|'auction_done'|'discard'|'discard_done'|'grand_finale'|'grand_finale_done'|'result'|'end'>('dealing')
@@ -586,15 +614,53 @@ const GameTableLive: React.FC = () => {
       return
     }
 
-    const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: false })
+    // Full Reconnect System Step 2C — เปิด reconnection จริง (เดิม false — เน็ตสะดุดแป๊บเดียวก็ค้างจอ
+    // ถาวร ไม่มีทางกลับมาเองเลย) ค่า attempts/delay ตรงกับ adept/index.tsx:497-499
+    const socket = io(SERVER_URL, {
+      transports: ['websocket'], reconnection: true, reconnectionAttempts: 5, reconnectionDelay: 1000,
+    })
     socketRef.current = socket
 
-    let matchStarted = false
+    // 'connect' ยิงทั้งตอน connect ครั้งแรกและตอน reconnect สำเร็จ (คนละ event ต่อการเชื่อมต่อจริงแต่ละครั้ง)
+    // — ต้อง emit game_join ทุกครั้งไม่มีข้อยกเว้น เพื่อให้ server ยิง game_state_snapshot กลับมา คืนที่นั่ง
+    // ให้จริง (เดิมมี matchStarted guard กันยิงซ้ำ ซึ่งจะบล็อก game_join ตอน reconnect ไปด้วยโดยไม่ตั้งใจ
+    // จึงต้องลบทิ้ง — ตอนนี้ reconnection:true แล้ว connect ที่ยิงซ้ำคือสัญญาณว่าต้อง join ใหม่จริงๆ)
     socket.on('connect', () => {
-      if (matchStarted) return
-      matchStarted = true
-      // Patch Multiplayer: ห้องเริ่มแมตช์ไปแล้วตั้งแต่ room_ready (lobby.tsx) — หน้านี้แค่ join กลับเข้าไปรับไพ่ของตัวเอง
+      setIsReconnecting(false)
+      setConnectionError(null)
       socket.emit('game_join', { roomId: ROOM_ID, userId: PLAYER_ID, tier: 'highNoble' })
+    })
+
+    socket.on('connect_error', (err: any) => {
+      setConnectionError(err?.message || 'Cannot reach the game server.')
+    })
+
+    // Full Reconnect System Step 2C — เน็ตหลุดกลางเกม โชว์ "Reconnecting..." ระหว่างรอ socket.io ต่อเอง
+    // อัตโนมัติ (reconnection:true ด้านบน) ยกเว้นตอนที่เราเป็นคน disconnect เอง (unmount/ออกจากหน้านี้)
+    socket.on('disconnect', (reason: string) => {
+      if (reason === 'io client disconnect') return
+      setIsReconnecting(true)
+    })
+
+    // Full Reconnect System Step 2C — อีกคน (P4/P1/P2) หลุด/กลับมา — field จริงจาก markHNPlayerAFK/
+    // finalizeHNAFKReplacement คือ {userId, temporary, graceSeconds?, replacementName?} (ไม่ใช่
+    // disconnectedUserId/displayName แบบ Adept — payload คนละ shape ห้าม copy handler ของ Adept ตรงๆ)
+    socket.on('player_disconnected_replaced', (data: { roomId: string; userId: string; temporary: boolean; graceSeconds?: number; replacementName?: string }) => {
+      if (data.userId === PLAYER_ID) return // ตัวเองไม่ต้องเห็น notice ของตัวเอง
+      const name = data.replacementName ?? 'A player'
+      if (afkNoticeTimeoutRef.current) clearTimeout(afkNoticeTimeoutRef.current)
+      setAfkNotice(data.temporary ? `${name} disconnected — reconnecting...` : `${name} was replaced by AI`)
+      afkNoticeTimeoutRef.current = setTimeout(() => setAfkNotice(null), 4000)
+    })
+
+    // Full Reconnect System Step 2C — reconnect มาถึงหลัง match จบไปแล้ว (state ถูกลบแล้วฝั่ง server)
+    // ต้องเด้งกลับ lobby แทนค้างจอรอ event ที่ไม่มีวันมาถึง (pattern เดียวกับ match_error ด้านล่าง)
+    socket.on('match_not_found', (_data: { roomId: string }) => {
+      Alert.alert(
+        'Match Ended',
+        'This match has already ended.',
+        [{ text: 'OK', onPress: () => router.replace('/(home)/lobby') }]
+      )
     })
 
     // Buy-in Spec §4 safety net — server ปฏิเสธเข้าโต๊ะเพราะ token ไม่พอ (ปกติ Lobby เช็คไว้ก่อนแล้ว)
@@ -649,6 +715,11 @@ const GameTableLive: React.FC = () => {
       aiNames.forEach((a: any) => { init[a.id] = 'Arranging' })
       setAiStatus(init)
 
+      // Coin Flying VFX — Ante: ทุกที่นั่งส่งเหรียญเข้ากองกลางตอนเริ่มรอบ (มติลุงเยาะ 2026-07-26)
+      ;[SEAT_TARGETS.boss, SEAT_TARGETS.p4, SEAT_TARGETS.user, SEAT_TARGETS.p2].forEach(from => {
+        flyingCoinsRef.current?.fire('ante', from, SEAT_TARGETS.center)
+      })
+
       setComm({
         p1: data.communityCards.pile1,
         p2: data.communityCards.pile2,
@@ -696,6 +767,7 @@ const GameTableLive: React.FC = () => {
     processRoundStartRef.current = processRoundStart
 
     socket.on('round_start', (data: any) => {
+      if (typeof data.buyInAmount === 'number') void markPendingMatch('highNoble')
       // Patch High Noble: Round แรกของ Match — โชว์ Boss Intro Popup ก่อน แล้วค่อยแจกไพ่ตอนปิด popup
       if (data.roundNumber === 1) {
         const bossName = (data.seats ?? []).find((s: any) => s.role === 'boss')?.name
@@ -756,6 +828,14 @@ const GameTableLive: React.FC = () => {
       setFoulReasons(data.foulReasons ?? {})
       setTokenDeltas(data.tokenDeltas ?? {})
       setPhase('showdown')
+
+      // Coin Flying VFX — High Noble = Sequential Showdown: showdown_result มีแค่ Pile1/2
+      // (Pile3/Grand Finale แยกไปยิงที่ grand_finale_result ด้านล่าง)
+      const pileCoinVariant = { 1: 'pile1', 2: 'pile2', 3: 'pile3' } as const
+      ;([1, 2] as const).forEach(pNum => {
+        const winnerId = newWinners[pNum]
+        if (winnerId) flyingCoinsRef.current?.fire(pileCoinVariant[pNum], SEAT_TARGETS.center, seatTargetFor(winnerId))
+      })
     })
 
     // pile_reveal — Pro+ sequential (ยังคงไว้สำหรับ Mastermind+)
@@ -844,14 +924,15 @@ const GameTableLive: React.FC = () => {
       setTokenBalance(data.tokenBalance ?? {})
       setPhase('auction_done')
     })
-    // Patch High Noble: Arrangement รอบ2 — จัดไพ่ใหม่รวมไพ่ที่ประมูลได้ (สูงสุด 12 ใบ)
-    socket.on('arrangement_2_start', (data: any) => {
+    // Full Reconnect System Step 2C — แยก logic จริงของ arrangement_2_start ออกมาเป็นฟังก์ชัน (เดิม inline
+    // อยู่ในตัว listener อย่างเดียว) เพื่อให้ game_state_snapshot hydration (ด้านล่าง) เรียกซ้ำได้โดยไม่
+    // copy โค้ด — พฤติกรรมของ listener เดิมไม่เปลี่ยนแม้แต่บรรทัดเดียว แค่ห่อเป็นฟังก์ชัน
+    const applyArr2 = (cards: string[], timer: number) => {
       setPhase('arrangement_2')
       setIsReady(false); setSortDone(false); setSelected(null)
-      const myCards: string[] = data.cards ?? []
-      const cardObjs = myCards.map((k: string, i: number) => ({ id: `c2_${i}`, key: k }))
+      const cardObjs = cards.map((k: string, i: number) => ({ id: `c2_${i}`, key: k }))
       setPiles([cardObjs.slice(0, 3), cardObjs.slice(3, 6), cardObjs.slice(6)])
-      const t = data.timer ?? 20
+      const t = timer
       timerValRef.current = { val: t, max: t }
       if (timerRef.current) clearInterval(timerRef.current)
       timerRef.current = setInterval(() => {
@@ -872,7 +953,162 @@ const GameTableLive: React.FC = () => {
           })
         }
       }, 1000)
+    }
+    // Patch High Noble: Arrangement รอบ2 — จัดไพ่ใหม่รวมไพ่ที่ประมูลได้ (สูงสุด 12 ใบ)
+    socket.on('arrangement_2_start', (data: any) => {
+      applyArr2(data.cards ?? [], data.timer ?? 20)
     })
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Full Reconnect System Step 2C — hydrate state ทั้งก้อนจาก game_state_snapshot (Step 2A)
+    // ครอบทุก phase (round_start/arrangement_2_start เดิมครอบแค่ arrangement/arrangement_2 เท่านั้น)
+    // เจตนา: "resume ที่ค้างอยู่" ไม่ใช่ "เริ่มรอบใหม่" จึงไม่ replay ante VFX / buy-in popup / deal
+    // animation ซ้ำ (ต่างจาก processRoundStart ที่ทำครบสำหรับรอบใหม่จริงๆ — เจตนาไม่ reuse ตรงๆ ตรงนี้
+    // เพราะจะเล่น ceremony รอบใหม่ซ้ำให้คนที่แค่หลุดเน็ตแป๊บเดียวเห็นโดยไม่ควร)
+    // ⚠️ timer: design ล็อกให้ "เริ่มนับเต็มใหม่" เสมอ (ไม่อ่าน timeRemainingMs ซึ่งเป็น null อยู่แล้ว
+    // ตอนนี้) ใช้ค่า default เดียวกับที่แต่ละ handler เดิมใช้เป็น fallback (35/20 ฯลฯ)
+    // ⚠️ decorative animation loop (auction glow, GF health-bar/blink) ไม่ replay ตอน hydrate — จะกลับมา
+    // เล่นเองตอน event ปกติถัดไปมาถึง ตัวเลข countdown ถูกต้องตาม design ล็อกอยู่แล้วโดยไม่ต้องมี animation
+    // ─────────────────────────────────────────────────────────────────────
+    const applySnapshot = (data: any) => {
+      const mappedPhase = data.phase === 'match_end' ? 'end' : data.phase
+      setPhase(mappedPhase)
+
+      // ── Common ทุก phase ──
+      if (data.community) {
+        setComm({ p1: data.community.pile1, p2: data.community.pile2, p3: data.community.pile3 })
+      }
+      if (data.blindAuctionCards) setBlind(data.blindAuctionCards)
+      if (data.seats) {
+        const bossSeat = data.seats.find((s: any) => s.role === 'boss')
+        const otherSeats = data.seats.filter((s: any) => s.id !== PLAYER_ID && s.role !== 'boss')
+        const aiNames = [bossSeat, ...otherSeats].filter(Boolean)
+        setAiList(aiNames)
+        aiListRef.current = aiNames
+      }
+      if (data.tokenBalance) setTokenBalance(data.tokenBalance)
+      if (data.ownSubmitted) setMyOwnSubmitted(data.ownSubmitted)
+
+      const toCardObjs = (keys: string[], prefix: string) => keys.map((k: string, i: number) => ({ id: `${prefix}${i}`, key: k }))
+      const submittedArrangement = !!data.ownSubmitted?.arrangement
+      const submittedDiscard = !!data.ownSubmitted?.discard
+
+      // ── มือตัวเอง ต่อ phase (Q9: submit แล้ว → myArrangement ที่จัดแล้ว, ยังไม่ submit → myCards ดิบ) ──
+      if (mappedPhase === 'arrangement') {
+        if (submittedArrangement && data.myArrangement) {
+          setPiles([toCardObjs(data.myArrangement.pile1, 'sp1_'), toCardObjs(data.myArrangement.pile2, 'sp2_'), toCardObjs(data.myArrangement.pile3, 'sp3_')])
+        } else if (data.myCards) {
+          const cardObjs = toCardObjs(data.myCards, 'sc')
+          setPiles([cardObjs.slice(0, 3), cardObjs.slice(3, 6), cardObjs.slice(6, 11)])
+          setIsReady(false); setSortDone(false); setSelected(null)
+          const t = 35
+          timerValRef.current = { val: t, max: t }
+          if (timerRef.current) clearInterval(timerRef.current)
+          timerRef.current = setInterval(() => {
+            const next = Math.max(0, timerValRef.current.val - 1)
+            timerValRef.current = { ...timerValRef.current, val: next }
+            if (next <= 0) {
+              clearInterval(timerRef.current)
+              setPiles(cur => {
+                socket.emit('hn_player_ready', {
+                  roomId: ROOM_ID, userId: PLAYER_ID,
+                  arrangement: { pile1: cur[0].map((c: CardData) => c.key), pile2: cur[1].map((c: CardData) => c.key), pile3: cur[2].map((c: CardData) => c.key) },
+                })
+                return cur
+              })
+            }
+          }, 1000)
+        }
+      } else if (mappedPhase === 'arrangement_2') {
+        if (submittedArrangement && data.myArrangement) {
+          setPiles([toCardObjs(data.myArrangement.pile1, 'sp1_'), toCardObjs(data.myArrangement.pile2, 'sp2_'), toCardObjs(data.myArrangement.pile3, 'sp3_')])
+        } else if (data.myCards) {
+          applyArr2(data.myCards, 20)
+        }
+      } else if (data.myArrangement) {
+        // discard/discard_done/fog_of_war/grand_finale/grand_finale_done/end — arrangement ล็อกไปแล้ว
+        // เสมอตั้งแต่ arrangement_2 จบ (ไม่ว่า ownSubmitted.discard จะ true/false ก็ตาม)
+        setPiles([toCardObjs(data.myArrangement.pile1, 'sp1_'), toCardObjs(data.myArrangement.pile2, 'sp2_'), toCardObjs(data.myArrangement.pile3, 'sp3_')])
+      }
+      if (data.myFinalPile3) {
+        // discard_done เป็นต้นไป — pile3 คือมือสุดท้าย 3 ใบ (ทับ index 2 เหมือนที่ discard_phase_result ทำ)
+        setPiles(prev => [prev[0], prev[1], toCardObjs(data.myFinalPile3, 'gf-c')] as any)
+      }
+
+      // ── Pile reveals (D2 — 1:1 ไม่แปลง shape, null ของผู้แพ้ = การ์ดหลังอัตโนมัติผ่าน ?? [] ที่จุด render) ──
+      if (data.pileReveals) {
+        const next: Record<string, Record<number, string[]>> = {}
+        const assign = (pileNum: 1 | 2, record: Record<string, string[] | null>) => {
+          Object.entries(record ?? {}).forEach(([pid, cards]) => {
+            if (!next[pid]) next[pid] = {}
+            next[pid][pileNum] = cards as any
+          })
+        }
+        assign(1, data.pileReveals.pile1)
+        assign(2, data.pileReveals.pile2)
+        setAllCards(next)
+        const findWinner = (record: Record<string, string[] | null>) => Object.entries(record ?? {}).find(([, c]) => c !== null)?.[0]
+        const w1 = findWinner(data.pileReveals.pile1)
+        const w2 = findWinner(data.pileReveals.pile2)
+        setPileWinners({ ...(w1 ? { 1: w1 } : {}), ...(w2 ? { 2: w2 } : {}) })
+      }
+      if (data.foulMap) setHasFoul(data.foulMap)
+      if (data.foulReasons) setFoulReasons(data.foulReasons)
+
+      // ── Auction (D1 — level/amount ไม่มีใน snapshot ยอมรับ gap ตามมติลุงเยาะ ใส่ null แล้ว guard ที่ UI) ──
+      if (data.auctionWonCards && data.blindAuctionCards) {
+        const results = Object.entries(data.auctionWonCards).map(([winnerId, cardKey]) => ({
+          cardIndex: data.blindAuctionCards[0] === cardKey ? 0 : 1,
+          winnerId, cardKey, level: null as number | null, amount: null as number | null,
+        }))
+        setAuctionResult(results)
+      }
+
+      // ── Grand Finale (ชื่อ field ตรงเกือบหมด, turnPlayerId derive จาก turnOrder[currentTurnIdx]) ──
+      if (data.grandFinale) {
+        const gf = data.grandFinale
+        setGfPile3Pot(gf.pile3Pot ?? 0)
+        setGfFoulPlayers(gf.foulPlayers ?? [])
+        setGfFoldedPlayers(gf.foldedPlayers ?? [])
+        setGfRevealedCards(gf.revealedCards ?? {})
+        setGfRoundNumber(gf.roundNumber ?? 1)
+        const currentTurnId: string | null = gf.turnOrder?.[gf.currentTurnIdx] ?? null
+        setGfTurnPlayerId(currentTurnId)
+        if (currentTurnId) setGfTimeLeft(10) // เต็มใหม่ตาม design ล็อก (ค่า default เดียวกับ useState เดิม)
+      }
+
+      // ── Discard-in-progress (D3): ยังไม่ submit discard → derive discardNeed จาก myArrangement เอง
+      // (สูตรเดียวกับที่ server ใช้คำนวณ needDiscard: pileN.length - 3) ไม่ต้องรอ field ใหม่จาก server ──
+      if (mappedPhase === 'discard' && !submittedDiscard && data.myArrangement) {
+        const arr = data.myArrangement
+        setDiscardPiles({ pile1: arr.pile1, pile2: arr.pile2, pile3: arr.pile3 })
+        const need = {
+          pile1: Math.max(0, arr.pile1.length - 3),
+          pile2: Math.max(0, arr.pile2.length - 3),
+          pile3: Math.max(0, arr.pile3.length - 3),
+        }
+        setDiscardNeed(need)
+        const lastIdx = (len: number, n: number) => Array.from({ length: n }, (_, i) => len - n + i)
+        setDiscardSelByPile({
+          pile1: lastIdx(arr.pile1.length, need.pile1),
+          pile2: lastIdx(arr.pile2.length, need.pile2),
+          pile3: lastIdx(arr.pile3.length, need.pile3),
+        })
+        setIsHNDiscard(true)
+        setShowDiscard(true)
+        const totalSec = 20 // เต็มใหม่ตาม design ล็อก (ค่าเดียวกับ discardTimer.highNoble default)
+        setDiscardTimeLeft(totalSec)
+        if (discardTimerRef.current) clearInterval(discardTimerRef.current)
+        let left = totalSec
+        discardTimerRef.current = setInterval(() => {
+          left -= 1
+          setDiscardTimeLeft(Math.max(0, left))
+          if (left <= 0) clearInterval(discardTimerRef.current)
+        }, 1000)
+      }
+    }
+    socket.on('game_state_snapshot', applySnapshot)
+
     // Patch Discard Phase: เริ่มเลือกทิ้งไพ่
     socket.on('discard_phase_start', (data: any) => {
       const hand: string[] = data.hand ?? []
@@ -1042,6 +1278,9 @@ const GameTableLive: React.FC = () => {
       setGfResultStage(1)
       // หลัง 5 วิ ไป stage 2 (Round Summary)
       setTimeout(() => setGfResultStage(2), 5000)
+
+      // Coin Flying VFX — Pile3 (Grand Finale) รู้ผลแยกจาก Pile1/2 (winnerId ว่างได้ถ้า all-foul)
+      if (data.winnerId) flyingCoinsRef.current?.fire('pile3', SEAT_TARGETS.center, seatTargetFor(data.winnerId))
     })
     socket.on('grand_finale_all_foul', (_data: any) => {
       // emit ก่อน grand_finale_result — ไม่ต้องทำอะไรเพิ่ม รอ grand_finale_result มา
@@ -1057,6 +1296,7 @@ const GameTableLive: React.FC = () => {
     })
 
     socket.on('match_end', (data: any) => {
+      void clearPendingMatch()
       setPhase('end')
       setMatchResult(data)
       setTokenBalance(data.tokenBalance ?? {})
@@ -1066,8 +1306,11 @@ const GameTableLive: React.FC = () => {
         useUserStore.getState().updateTokenBalance(myNewBalance)
       }
       if (data.finalWinner === PLAYER_ID) {
-        // Patch 2026-07-18: VFX ชัยชนะ — Monarch ระดับตำนาน / Four Gods ระดับเทพ
-        setVictoryVfx(bossIntroName === 'Monarch' ? 'monarch' : 'god')
+        // Batch 1.5 Task 3 (quarantine cleanup, 2026-07-30): เดิมเช็ค bossIntroName==='Monarch' เพื่อ
+        // เลือก VFX ระดับตำนาน — เส้นทางนั้นตายแล้วตั้งแต่ Batch 1 (ลบ BOSS_INTRO['Monarch'] ออกไปแล้ว
+        // bossIntroName จึงไม่มีทางเป็น 'Monarch' อีกต่อไปในไฟล์นี้ — Monarch มีแค่โต๊ะแยกของตัวเองที่
+        // monarch/index.tsx เท่านั้น) เหลือ 'god' ตรงๆ ไม่ต้องเช็คเงื่อนไขที่ไม่มีทางเป็นจริงอีก
+        setVictoryVfx('god')
         // Patch 2026-07-18: หยุด loop/composite ค้างจากรอบก่อน (ถ้ามี) ก่อนเริ่มใหม่เสมอ +
         // useNativeDriver:false ทุกจุด (pattern Adept) กัน native "already attached to a view"
         stopMatchEndAnimations()
@@ -1737,6 +1980,24 @@ const GameTableLive: React.FC = () => {
           <PreGameCountdown visible={showPreGameCountdown} onComplete={() => setShowPreGameCountdown(false)} />
           <MonarchConquestBanner winnerName={monarchWinner} onHidden={() => setMonarchWinner(null)} />
 
+          {/* ── Full Reconnect System Step 2C — connection overlay, sibling ลอยทับทุก phase (ไม่ผูก
+              เงื่อนไข phase ใดๆ) ตำแหน่งเดียวกับ pattern ของ adept/index.tsx:1332-1348 ── */}
+          {connectionError && (
+            <View style={{ position: 'absolute', top: 12, alignSelf: 'center', zIndex: 999, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: 'rgba(255,107,107,0.15)', borderWidth: 1, borderColor: 'rgba(255,107,107,0.4)', borderRadius: 10 }}>
+              <Text style={{ color: '#FF6B6B', fontSize: 11, textAlign: 'center' }}>Connection failed. Please check your network and try again.</Text>
+            </View>
+          )}
+          {isReconnecting && (
+            <View style={{ position: 'absolute', top: 12, alignSelf: 'center', zIndex: 999, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: 'rgba(255,199,87,0.15)', borderWidth: 1, borderColor: 'rgba(255,199,87,0.5)', borderRadius: 10 }}>
+              <Text style={{ color: '#FFC857', fontSize: 12, fontWeight: '700', textAlign: 'center' }}>Reconnecting...</Text>
+            </View>
+          )}
+          {afkNotice && (
+            <View style={{ position: 'absolute', top: 12, alignSelf: 'center', zIndex: 999, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: 'rgba(15,36,24,0.85)', borderWidth: 1, borderColor: 'rgba(255,215,106,0.5)', borderRadius: 10 }}>
+              <Text style={{ color: '#F5F2E8', fontSize: 12, fontWeight: '600', textAlign: 'center' }}>{afkNotice}</Text>
+            </View>
+          )}
+
           <View style={StyleSheet.absoluteFill as any} pointerEvents="none"><Image source={tableImg} style={{ width: '100%', height: '100%' }} resizeMode="cover" /></View>
           <View style={[StyleSheet.absoluteFill as any, s.logoWatermark]} pointerEvents="none">
             <Image source={tripleSpade} style={{ width: 120, height: 120, opacity: 0.07 }} resizeMode="contain" />
@@ -1781,6 +2042,11 @@ const GameTableLive: React.FC = () => {
                 ))
               })}
             </View>
+
+          {/* ── COIN FLYING VFX (มติลุงเยาะ 2026-07-26) ── */}
+          <View style={[StyleSheet.absoluteFill as any, { alignItems: 'center', justifyContent: 'center', zIndex: 55 }]} pointerEvents="none">
+            <FlyingCoins ref={flyingCoinsRef} />
+          </View>
 
           {/* ── BLIND AUCTION OVERLAY ── */}
           {(phase === 'blind_auction' || phase === 'auction_done') && (
@@ -1847,7 +2113,11 @@ const GameTableLive: React.FC = () => {
                               <Text style={{ fontSize: 11, color: isWinner ? '#8DFFB5' : '#FF6B6B', fontWeight: '700' }}>
                                 {isWinner ? '🏆 You win!' : `${winAI?.emoji ?? '🤖'} ${winAI?.name ?? 'AI'} wins`}
                               </Text>
-                              <Text style={{ fontSize: 10, color: '#a89060' }}>-{result.amount} tokens</Text>
+                              {/* Full Reconnect System Step 2C (D1) — amount ไม่มีใน game_state_snapshot
+                                  (server ไม่เก็บ level/amount ไว้หลัง resolve) ซ่อนบรรทัดนี้แทนโชว์ "-null tokens" */}
+                              {result.amount != null && (
+                                <Text style={{ fontSize: 10, color: '#a89060' }}>-{result.amount} tokens</Text>
+                              )}
                             </>
                           ) : (
                             <Text style={{ fontSize: 11, color: '#a89060' }}>No one bid</Text>
@@ -2180,7 +2450,10 @@ const GameTableLive: React.FC = () => {
           <View style={{ position: 'absolute', top: 8, left: 10, zIndex: 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }} pointerEvents="none">
             <Image source={studioLogo} style={{ width: 28, height: 28, opacity: 0.9 }} resizeMode="contain" />
           </View>
-          <View style={{ position: 'absolute', top: 8, left: 0, right: 0, alignItems: 'center', zIndex: 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }} pointerEvents="box-none">
+          {/* Hand Ranking (?) — ย้ายจากกลางบนจอ (ชนกล้องหน้ามือถือ กดไม่ได้) ไปอยู่ใต้ปุ่ม i ใน
+              leftSlot ของ GameTopBar แทน (มติลุงเยาะ 2026-07-26) — top ใช้สูตรเดียวกับ paddingTop
+              ของ topBar เอง (isWeb?22:insets.top+14) บวกความสูงแถว i/Timer อีก ~30 */}
+          <View style={{ position: 'absolute', top: (isWeb ? 22 : insets.top + 14) + 30, left: 14, zIndex: 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }} pointerEvents="box-none">
             <TouchableOpacity onPress={() => setShowRankTable(true)}
               style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(201,168,76,0.2)', borderWidth: 1, borderColor: 'rgba(201,168,76,0.5)', alignItems: 'center', justifyContent: 'center' }}>
               <Text style={{ fontSize: 11, color: '#c9a84c', fontWeight: '800' }}>?</Text>
@@ -2188,136 +2461,17 @@ const GameTableLive: React.FC = () => {
           </View>
 
           {/* ── TIER INFO OVERLAY ── */}
-{showTierInfo && (
-  <View style={[s.overlay, { justifyContent: 'flex-start', paddingTop: 20, backgroundColor: 'rgba(15,36,24,0.97)' }]}>
-    <Text style={[s.showdownTitle, { marginBottom: 12 }]}>Tier Information</Text>
-
-    {/* แท็บ */}
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginBottom: 12, justifyContent: 'center' }}>
-      {['INITIATE','ADEPT','MASTERMIND','HIGH NOBLE','LAST BOSS'].map(t => (
-        <TouchableOpacity key={t} onPress={() => setActiveTierTab(t)}
-          style={{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1,
-            borderColor: activeTierTab === t ? '#c9a84c' : 'rgba(201,168,76,0.5)',
-            backgroundColor: activeTierTab === t ? 'rgba(201,168,76,0.2)' : 'transparent' }}>
-          <Text style={{ fontSize: 9, color: activeTierTab === t ? '#c9a84c' : '#a89060', fontWeight: '800' }}>{t}</Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-
-    {/* เนื้อหาแต่ละ Tier */}
-    <ScrollView style={{ width: '100%' }} showsVerticalScrollIndicator={false}>
-    {(() => {
-      const TIERS: Record<string, any> = {
-        'INITIATE': {
-          name: 'Initiate', tagline: 'The First Step',
-          tokenRange: '100 – 49,999',
-          table: 'Bot × 3',
-          ante: { pile1: 10, pile2: 20, pile3: 40, call: '-' },
-          pot:  { pile1: 40, pile2: 80, pile3: 160 },
-          jackpot: { payout: 504, penalty: 90 },
-          features: ['Simultaneous Showdown', 'No Fog of War', 'No Blind Auction', 'No Grand Finale Betting', 'Learn the basics (~6 days to advance)'],
-        },
-        'ADEPT': {
-          name: 'Adept', tagline: 'The Rising Player',
-          tokenRange: '50,000 – 149,999',
-          table: 'Real Player × 1 + Bot × 2',
-          ante: { pile1: 60, pile2: 100, pile3: 140, call: '-' },
-          pot:  { pile1: 230, pile2: 380, pile3: 530 },
-          jackpot: { payout: 2052, penalty: 380 },
-          features: ['Simultaneous Showdown', 'No Fog of War', 'No Blind Auction', 'No Grand Finale Betting', 'First real opponents (~12 days to advance)'],
-        },
-        'MASTERMIND': {
-          name: 'Mastermind', tagline: 'The Auction Begins',
-          tokenRange: '150,000 – 399,999',
-          table: 'Real Player × 2 + Minion AI × 1',
-          ante: { pile1: 200, pile2: 300, pile3: 500, call: 1000 },
-          pot:  { pile1: 760, pile2: 1140, pile3: 1900 },
-          jackpot: { payout: 6840, penalty: 1260 },
-          features: ['Sequential Showdown', 'Fog of War ✅', 'Blind Auction ✅', 'Grand Finale Betting ✅', 'Discard Phase ✅ (~31 days to advance)'],
-        },
-        'HIGH NOBLE': {
-          name: 'High Noble', tagline: 'Audience with the Four Gods',
-          tokenRange: '400,000+',
-          table: 'Real Player × 2 + Four Gods AI × 1',
-          ante: { pile1: 500, pile2: 1000, pile3: 1500, call: 3000 },
-          pot:  { pile1: 1900, pile2: 3800, pile3: 5700 },
-          jackpot: { payout: 20520, penalty: 3800 },
-          features: ['Sequential Showdown', 'Fog of War ✅', 'Blind Auction ✅', 'Grand Finale Betting ✅', 'Full Competitive Experience'],
-        },
-        'LAST BOSS': {
-          name: 'The Last Boss', tagline: 'Beyond the Four Gods',
-          tokenRange: 'Special Condition',
-          table: 'Special Condition',
-          ante: { pile1: 1000, pile2: 2000, pile3: 3000, call: 6000 },
-          pot:  { pile1: 3800, pile2: 7600, pile3: 11400 },
-          jackpot: { payout: 41040, penalty: 7600 },
-          features: ['Sequential Showdown', 'Fog of War ✅', 'Blind Auction ✅', 'Grand Finale Betting ✅', 'Final Challenge'],
-        },
-      }
-      const t = TIERS[activeTierTab]
-      if (!t) return null
-      const Row = ({ label, value, valueColor = '#e8dfc0' }: { label: string; value: string; valueColor?: string }) => (
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: 'rgba(201,168,76,0.2)' }}>
-          <Text style={{ fontSize: 10, color: '#a89060', flex: 1 }}>{label}</Text>
-          <Text style={{ fontSize: 10, color: valueColor, fontWeight: '700', flex: 2, textAlign: 'right' }}>{value}</Text>
-        </View>
-      )
-      return (
-        <View>
-          {/* Header */}
-          <View style={{ alignItems: 'center', marginBottom: 12, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(201,168,76,0.2)' }}>
-            <Text style={{ fontSize: 16, color: '#c9a84c', fontWeight: '900', letterSpacing: 2 }}>{t.name}</Text>
-            <Text style={{ fontSize: 10, color: '#c9a84c', marginTop: 2, fontStyle: 'italic' }}>"{t.tagline}"</Text>
-          </View>
-
-          {/* General */}
-          <Text style={{ fontSize: 9, color: '#38bdf8', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 4 }}>GENERAL</Text>
-          <Row label="Token Range" value={t.tokenRange} valueColor="#4ade80" />
-          <Row label="Table" value={t.table} />
-
-          {/* Ante */}
-          <Text style={{ fontSize: 9, color: '#38bdf8', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>ANTE PER HAND</Text>
-          <Row label="Pile 1" value={`${t.ante.pile1} tokens`} />
-          <Row label="Pile 2" value={`${t.ante.pile2} tokens`} />
-          <Row label="Pile 3" value={`${t.ante.pile3} tokens`} />
-          <Row label="Grand Finale Call" value={t.ante.call === '-' ? 'N/A' : `${t.ante.call} tokens/round`} valueColor={t.ante.call === '-' ? '#555' : '#e8dfc0'} />
-
-          {/* Pot */}
-          <Text style={{ fontSize: 14, color: '#8DFFB5', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>POT PAYOUT (Rake 5%)</Text>
-          <Row label="Win Pile 1" value={`${t.pot.pile1} tokens`} valueColor="#8DFFB5" />
-          <Row label="Win Pile 2" value={`${t.pot.pile2} tokens`} valueColor="#8DFFB5" />
-          <Row label="Win Pile 3" value={`${t.pot.pile3} tokens`} valueColor="#8DFFB5" />
-
-          {/* Triple Sweep */}
-          <Text style={{ fontSize: 14, color: '#FFB74D', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>⚡ TRIPLE SWEEP JACKPOT</Text>
-          <Row label="Winner Payout" value={`${t.jackpot.payout} tokens`} valueColor="#FFD76A" />
-          <Row label="Loser Penalty" value={`${t.jackpot.penalty} tokens each`} valueColor="#FFB74D" />
-          <Row label="Rake" value="5% (burn)" valueColor="#FFB74D" />
-
-          {/* Features */}
-          <Text style={{ fontSize: 14, color: '#8DFFB5', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>FEATURES</Text>
-          {t.features.map((f: string, i: number) => (
-            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 4 }}>
-              <Text style={{ fontSize: 14, color: '#FFD76A', marginRight: 8 }}>•</Text>
-              <Text style={{ fontSize: 16, color: '#F5F2E8' }}>{f}</Text>
-            </View>
-          ))}
-          <View style={{ height: 20 }} />
-        </View>
-      )
-    })()}
-    </ScrollView>
-
-    <TouchableOpacity style={[s.continueBtn, { marginTop: 12, backgroundColor: '#102218', borderColor: '#FFD76A' }]} onPress={() => setShowTierInfo(false)}>
-      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>Close</Text>
-    </TouchableOpacity>
-  </View>
-)}
+          <TierInfoModal
+            visible={showTierInfo}
+            activeTab={activeTierTab as TierInfoLabel}
+            onTabChange={setActiveTierTab}
+            onClose={() => setShowTierInfo(false)}
+          />
 
           {/* ── RANK TABLE OVERLAY ── */}
 {showRankTable && (
   <View style={[s.overlay, { justifyContent: 'flex-start', paddingTop: 40, backgroundColor: 'rgba(11,21,16,0.92)' }]}>
-    <Text style={[s.showdownTitle, { marginBottom: 12, fontSize: 24, color: '#FFD76A' }]}>Hand Rankings</Text>
+    <Text style={[s.showdownTitle, { marginBottom: 12, fontSize: 18, color: '#FFD76A' }]}>Hand Rankings</Text>
     <ScrollView style={{ width: '100%' }} showsVerticalScrollIndicator={false}>
     {[
       { rank: 9, name: 'Royal Flush',     desc: '5 same-suit cards in sequence',        low: 'A♠ K♠ Q♠ J♠ 10♠',  high: 'A♥ K♥ Q♥ J♥ 10♥' },
@@ -2331,16 +2485,16 @@ const GameTableLive: React.FC = () => {
       { rank: 1, name: 'One Pair',        desc: '2 cards of the same value',            low: '2♠ 2♥ 3♦ 4♣ 5♠',   high: 'A♠ A♥ K♦ Q♣ J♠' },
       { rank: 0, name: 'High Card',       desc: 'No combination — highest card wins',   low: '2♠ 3♥ 5♦ 7♣ 9♠',   high: 'A♠ K♥ Q♦ J♣ 9♠' },
     ].map((h, i) => (
-      <View key={i} style={{ flexDirection: 'row', alignItems: 'center', width: '100%', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#2A4A34' }}>
-        <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: 'rgba(255,215,106,0.15)', borderWidth: 1, borderColor: '#FFD76A', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
-          <Text style={{ fontSize: 13, color: '#FFD76A', fontWeight: '900' }}>{h.rank}</Text>
+      <View key={i} style={{ flexDirection: 'row', alignItems: 'center', width: '100%', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#2A4A34' }}>
+        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(255,215,106,0.15)', borderWidth: 1, borderColor: '#FFD76A', alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
+          <Text style={{ fontSize: 10, color: '#FFD76A', fontWeight: '900' }}>{h.rank}</Text>
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: 18, color: '#F5F2E8', fontWeight: '700' }}>{h.name}</Text>
-          <Text style={{ fontSize: 14, color: '#c9b87a', marginTop: 2 }}>{h.desc}</Text>
-          <View style={{ flexDirection: 'row', gap: 12, marginTop: 3 }}>
-            <Text style={{ fontSize: 14, color: '#8DFFB5' }}>Low: {h.low}</Text>
-            <Text style={{ fontSize: 14, color: '#FFC857' }}>High: {h.high}</Text>
+          <Text style={{ fontSize: 13, color: '#F5F2E8', fontWeight: '700' }}>{h.name}</Text>
+          <Text style={{ fontSize: 10, color: '#c9b87a', marginTop: 1 }}>{h.desc}</Text>
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 2 }}>
+            <Text style={{ fontSize: 10, color: '#8DFFB5' }}>Low: {h.low}</Text>
+            <Text style={{ fontSize: 10, color: '#FFC857' }}>High: {h.high}</Text>
           </View>
         </View>
       </View>
@@ -2348,7 +2502,7 @@ const GameTableLive: React.FC = () => {
     <View style={{ height: 16 }} />
     </ScrollView>
     <TouchableOpacity style={[s.continueBtn, { marginTop: 12, backgroundColor: '#102218', borderColor: '#FFD76A' }]} onPress={() => setShowRankTable(false)}>
-      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>Close</Text>
+      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 14 }]}>Close</Text>
     </TouchableOpacity>
   </View>
 )}
@@ -2362,9 +2516,10 @@ const GameTableLive: React.FC = () => {
                 <View style={{ width: '100%', maxWidth: 340, alignItems: 'center' }}>
                   <Image source={intro.image} style={{ width: 220, height: 275, borderRadius: 14, borderWidth: 2.5, borderColor: '#FFD76A' }} resizeMode="cover" />
                   <Text style={{ fontSize: 20, color: '#FFD76A', fontWeight: '900', letterSpacing: 2, marginTop: 14 }}>{bossIntroName.toUpperCase()}</Text>
-                  {bossIntroName === 'Monarch' && (
-                    <Text style={{ fontSize: 12, color: '#C8C4B0', letterSpacing: 1.5, marginTop: 2 }}>THE FACELESS KING</Text>
-                  )}
+                  {/* Batch 1.5 Task 3 (quarantine cleanup, 2026-07-30): เดิมเช็ค bossIntroName==='Monarch'
+                      เพื่อโชว์ subtitle "THE FACELESS KING" ใต้ชื่อบอส — เส้นทางนี้ตายแล้วตั้งแต่ Batch 1
+                      (ลบ BOSS_INTRO['Monarch'] ออกไปแล้ว bossIntroName จึงไม่มีทางเป็น 'Monarch' ในไฟล์นี้
+                      อีกต่อไป — Monarch มีแค่โต๊ะแยกของตัวเองที่ monarch/index.tsx เท่านั้น) ลบ block ทิ้ง */}
                   <Text style={{ fontSize: 13, color: '#F5F2E8', lineHeight: 20, textAlign: 'center', marginTop: 16, minHeight: 110 }}>
                     {typedText}
                   </Text>
@@ -2774,13 +2929,19 @@ const GameTableLive: React.FC = () => {
                     <AvatarBubble emoji={emoji} size={32} image={image} glow={isTurnSeat} />
                     <Text style={{ color: '#FFD76A', fontSize: 11, fontWeight: '700', letterSpacing: 1 }}>{name}</Text>
                   </View>
+                  {/* Stack ปัจจุบัน (มติลุงเยาะ 2026-07-26) — ต้องเห็นก่อนตัดสินใจ Call/Fold รอบท้ายๆ */}
+                  <Text style={{ fontFamily: 'JetBrainsMono_600SemiBold', color: '#C8C4B0', fontSize: 9 }}>
+                    🪙 {(tokenBalance[pid] ?? 0).toLocaleString('en-US')}
+                  </Text>
                   <GFStatusBadge playerId={pid} />
                   <GFHealthBar playerId={pid} />
                 </View>
               )
             }
             return (
-              <View style={{ position: 'absolute', top: 60, left: 0, right: 0, bottom: 0, zIndex: 40, paddingHorizontal: 10 }} pointerEvents="box-none">
+              // top 60->78 (มติลุงเยาะ 2026-07-26): GameTopBar สูงขึ้นหลังย้ายดาวลงมาอยู่ใต้ชื่อ Tier
+              // (แก้ก่อนหน้านี้) เดิม P3 (Boss) ไปทับแถวดาว ต้องเลื่อนลงให้พ้น
+              <View style={{ position: 'absolute', top: 78, left: 0, right: 0, bottom: 0, zIndex: 40, paddingHorizontal: 10 }} pointerEvents="box-none">
                 {/* ═══ P3 (Boss) บนสุด ═══ */}
                 {bossAI && (
                   <View style={{ alignItems: 'center', marginTop: 4, gap: 4 }}>
