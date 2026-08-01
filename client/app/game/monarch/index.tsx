@@ -5,7 +5,7 @@
  * Arrangement (Sprint 6 -> Batch 1 Task 6): reuse PlayerHandView ไฟล์กลางเดียวกับทุก Tier — tap
  * เลือกใบ + tap อีกใบเพื่อสลับตำแหน่ง แล้วกด Confirm Arrangement เท่านั้น (ไม่มีปุ่มช่วยจัดไพ่ใดๆ
  * ในโต๊ะนี้ตาม canon — เอาปุ่ม Auto Arrange ออกแล้ว) ส่ง arrangement เองเสมอ — ถ้า foul server จะ
- * ยอมรับ submit ปกติแล้วปล่อยให้แพ้ตามกติกา Foul (ไม่ตีกลับให้แก้ใหม่แบบเดิมอีกต่อไป) หมดเวลา 40s
+ * ยอมรับ submit ปกติแล้วปล่อยให้แพ้ตามกติกา Foul (ไม่ตีกลับให้แก้ใหม่แบบเดิมอีกต่อไป) หมดเวลา 60s
  * แล้วยังไม่ submit server จะ auto-seal ให้ตามลำดับไพ่ที่แจกจริง (ยังไม่มี UI countdown ในบัตช์นี้)
  * G1/G2 เป็น reveal ธรรมดา, G3 มี Grand Finale Call/Fold จริง (Minion auto-fold ทันที เหลือ
  * Human↔Boss เท่านั้นที่ตัดสินใจ) จบแมตช์ทันทีหลัง G3 (Monarch เป็นแมตช์รอบเดียว)
@@ -18,7 +18,7 @@
 
 import React, { useEffect, useRef, useState } from 'react'
 import {
-  ActivityIndicator, Animated, Image, Modal, Platform, ScrollView, StyleSheet, Text,
+  ActivityIndicator, Animated, Image, ImageBackground, Modal, Platform, StyleSheet, Text,
   TouchableOpacity, View,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -44,6 +44,7 @@ import * as sfxLayerService from '../../../src/services/sfxLayerService'
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
 const bossAvatarImg = require('../../../assets/bosses/boss_Monarch_avatar.png')
+const MONARCH_TABLE_SKIN = require('../../../assets/tables/boss_monarch_skin_table.png')
 
 // Boss Intro Popup — เนื้อหาเดียวกับ BOSS_INTRO['Monarch'] เดิมใน highNoble/index.tsx:85-90
 // (รูปมาสเตอร์ + quote เดียวกันเป๊ะ) แต่ Monarch มีบอสแค่ตัวเดียวเสมอ ไม่ต้องทำ lookup map ตามชื่อ
@@ -112,7 +113,7 @@ const DEAL_TARGETS = [
 ]
 const DEAL_COUNT = 44 // 11 ใบ x 4 ที่นั่ง
 
-type Seat = { id: string; role: 'human' | 'minion1' | 'minion2' | 'boss'; isHuman: boolean; name: string; emoji: string }
+type Seat = { id: string; role: 'human' | 'minion1' | 'minion2' | 'boss'; isHuman: boolean; name: string; emoji: string; avatarUrl?: string }
 
 type RoundSnapshot = {
   roomId: string
@@ -134,9 +135,9 @@ type RoundSnapshot = {
 }
 
 // ── Batch 2 (Monarch v2.2 §7) — Arrangement Pressure ────────────────────────
-// รวม 40 ต้องตรงกับ gameConfig.monarchConfig.arrangementDeadlineMs ฝั่ง server (Batch 1) — เป็นค่า
+// รวม 60 ต้องตรงกับ gameConfig.monarchConfig.arrangementDeadlineMs ฝั่ง server — เป็นค่า
 // canon ล็อกแล้ว (v2.2 §1 ข้อ 6) ไม่ใช่ config ที่ client ต้องรู้แบบไดนามิก จึง hardcode คู่กันได้ตรงนี้
-const ARRANGEMENT_TOTAL_SEC = 40
+const ARRANGEMENT_TOTAL_SEC = 60
 
 type PressurePhase = 'calm' | 'tension' | 'critical' | 'final'
 
@@ -204,11 +205,23 @@ type GrandFinaleStart = {
   pot: number
   callAmount: number
   turn: 'human' | 'boss'
+  round: 1 | 2
+  revealedCount: 0 | 3 | 4
+  reveals?: Array<{ id: string; g3Cards: string[] }>
 }
 
 type GrandFinaleActionUpdate = {
   playerId: string
   action: 'call' | 'fold'
+  pot: number
+  tokenBalance: Record<string, number>
+  round: 1 | 2
+}
+
+type GrandFinaleRoundComplete = {
+  round: 1 | 2
+  revealedCount: 3 | 4
+  reveals: Array<{ id: string; g3Cards: string[] }>
   pot: number
   tokenBalance: Record<string, number>
 }
@@ -234,6 +247,7 @@ type MonarchRelicResult = {
 type MatchEnd = {
   finalStack: number
   tokenBalance: number | null
+  isVictory?: boolean
   // Batch 3C-2 Task 1 — field อ่านอย่างเดียว (server เพิ่มเข้า payload เดิม ไม่กระทบ settlement)
   foulReasons?: Record<string, string>
   // Batch 3D-1 Task 5 — field อ่านอย่างเดียวเช่นกัน (server ไม่แตะ settlement เลย)
@@ -244,18 +258,105 @@ type MatchEnd = {
 // สำหรับกองที่จัดเอง จุดนี้เสริมส่วนที่เหลือซึ่งเดิมเป็นตัวอักษรล้วน)
 // Batch 3C-2 Task 3 — เพิ่ม revealCount (optional, undefined = โชว์ครบเหมือนเดิมทุกจุดที่ใช้อยู่แล้ว)
 // ให้บังคับปิดไพ่บางใบเป็น card-back ได้จากชั้น UI ล้วนๆ โดยไม่ต้องเปลี่ยน keys ที่รับมาจาก server เลย
-function CardImageRow({ keys, size = 34, revealCount }: { keys: string[]; size?: number; revealCount?: number }) {
-  const h = Math.round(size * 1.4)
+function CardImageRow({
+  keys,
+  size = 34,
+  height,
+  revealCount,
+  cardStep,
+}: {
+  keys: string[]
+  size?: number
+  height?: number
+  revealCount?: number
+  cardStep?: number
+}) {
+  const h = height ?? Math.round(size * 1.4)
+  const overlapMargin = cardStep === undefined
+    ? -Math.round(size * 0.35)
+    : -(size - Math.min(cardStep, 10))
   return (
     <View style={{ flexDirection: 'row' }}>
       {keys.map((k, i) => (
         <Image
           key={`${k}-${i}`}
           source={revealCount !== undefined && i >= revealCount ? CARD_BACK_IMG : (CARD_IMG[k] ?? CARD_BACK_IMG)}
-          style={{ width: size, height: h, borderRadius: 3, marginLeft: i === 0 ? 0 : -Math.round(size * 0.35) }}
+          style={{ width: size, height: h, borderRadius: 3, marginLeft: i === 0 ? 0 : overlapMargin }}
           resizeMode="cover"
         />
       ))}
+    </View>
+  )
+}
+
+// Grand Finale keeps a stable five-card row. Called/revealed cards separate vertically instead
+// of disappearing from the hand: Boss moves down, Human moves up (Mastermind presentation).
+function MonarchGFHandRow({
+  cards,
+  movedCount,
+  direction,
+  showAllFaces = false,
+  selectedKeys = [],
+  onToggleSelect,
+  movedKeys,
+}: {
+  cards: string[]
+  movedCount: number
+  direction: 'up' | 'down'
+  showAllFaces?: boolean
+  selectedKeys?: string[]
+  onToggleSelect?: (key: string) => void
+  movedKeys?: string[]
+}) {
+  const width = direction === 'up' ? 54 : 48
+  const height = direction === 'up' ? 78 : 69
+  const slots = Array.from({ length: 5 }, (_, i) => cards[i])
+  return (
+    <View style={{ flexDirection: 'row', height: height + 44, alignItems: direction === 'up' ? 'flex-end' : 'flex-start' }}>
+      {slots.map((code, i) => {
+        const movedIndex = movedKeys && code ? movedKeys.indexOf(code) : i
+        const moved = movedKeys ? movedIndex >= 0 : i < movedCount
+        const isSelected = !!code && selectedKeys.includes(code)
+        const faceUp = showAllFaces || (moved && !!code)
+        const isFirstCallFan = moved && movedIndex < 3
+        const fanAngles = [-12, 0, 12]
+        const fanX = [-6, 0, 6]
+        const fanArc = [5, 0, 5]
+        const baseY = moved ? (direction === 'down' ? 40 : -40) : 0
+        return (
+          <TouchableOpacity
+            key={`gf-${direction}-${i}-${code ?? 'sealed'}`}
+            style={{
+              width,
+              height,
+              marginLeft: i === 0 ? 0 : -Math.round(width * 0.42),
+              borderRadius: 4,
+              overflow: 'hidden',
+              borderWidth: isSelected ? 3 : 1.5,
+              borderColor: isSelected ? '#62E58A' : moved ? '#FFD76A' : 'rgba(201,168,76,0.55)',
+              transform: [
+                { translateX: isFirstCallFan ? fanX[movedIndex] : 0 },
+                { translateY: baseY + (isFirstCallFan ? (direction === 'down' ? fanArc[movedIndex] : -fanArc[movedIndex]) : 0) },
+                { rotate: isFirstCallFan ? `${fanAngles[movedIndex]}deg` : '0deg' },
+              ],
+              zIndex: moved ? 10 + i : i,
+            }}
+            disabled={!code || moved || !onToggleSelect}
+            onPress={() => code && onToggleSelect?.(code)}
+          >
+            <Image
+              source={faceUp && code && CARD_IMG[code] ? CARD_IMG[code] : CARD_BACK_IMG}
+              style={{ width, height }}
+              resizeMode="cover"
+            />
+            {isSelected && (
+              <View style={{ position: 'absolute', top: 3, right: 3, width: 22, height: 22, borderRadius: 11, backgroundColor: '#2DBE64', alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ color: '#08150D', fontWeight: '900', fontSize: 15 }}>✓</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        )
+      })}
     </View>
   )
 }
@@ -264,7 +365,7 @@ function CardImageRow({ keys, size = 34, revealCount }: { keys: string[]; size?:
 // Timer rule (CLAUDE.md known bug class): ค่าที่เปลี่ยนทุกวินาที (remaining) ต้องอยู่ใน component ลูก
 // ที่ตั้ง useState/setInterval "ของตัวเอง" ห้ามยกขึ้นไปเป็น useState ที่ parent (MonarchScreen ครอบ
 // PlayerHandView ซึ่งหนักด้วยรูปไพ่) — parent ได้รับรู้แค่ "phase เปลี่ยน" ผ่าน onPhaseChange
-// (เรียกแค่ ~3 ครั้งตลอด 40s ตอน phase transition จริง ไม่ใช่ทุกวินาที) ส่วน onTick ยิงทุกวินาทีแต่
+// (เรียกแค่ ~3 ครั้งตลอด 60s ตอน phase transition จริง ไม่ใช่ทุกวินาที) ส่วน onTick ยิงทุกวินาทีแต่
 // เป็นแค่ callback เปล่าที่ parent ใช้ทำ side-effect แบบ ref เท่านั้น (ไม่ setState ทุก tick)
 // source of truth = arrangementDeadlineAt (epoch ms จาก server) คำนวณ remaining จาก Date.now() สด
 // ทุก tick ห้ามนับถอยหลังสะสมเอง (กัน drift + กัน background/foreground)
@@ -405,36 +506,6 @@ const monarchDialogueStyles = StyleSheet.create({
   text: {
     color: '#C8C4B0', fontFamily: 'Cinzel_400Regular', fontSize: 14, textAlign: 'center', lineHeight: 20,
   },
-})
-
-// ── Batch 2 Task 7 — Seal stamp (ตรา Monarch ประทับลงบนโต๊ะตอนกด SEAL THE HAND) ─────────────
-function SealStamp({ triggerKey }: { triggerKey: number }) {
-  const scale = useSharedValue(1.6)
-  const opacity = useSharedValue(0)
-  useEffect(() => {
-    if (triggerKey === 0) return // ค่าเริ่มต้น ยังไม่เคย seal — ไม่ต้องเล่น animation
-    scale.value = 1.6
-    opacity.value = 0
-    scale.value = withTiming(1, { duration: 350 })
-    opacity.value = withTiming(1, { duration: 350 })
-  }, [triggerKey])
-  const style = useAnimatedStyle(() => ({ opacity: opacity.value, transform: [{ scale: scale.value }] }))
-  if (triggerKey === 0) return null
-  return (
-    <Reanimated.View style={[sealStampStyles.wrap, style]} pointerEvents="none">
-      <Text style={sealStampStyles.crown}>👑</Text>
-      <Text style={sealStampStyles.text}>SEALED</Text>
-    </Reanimated.View>
-  )
-}
-
-const sealStampStyles = StyleSheet.create({
-  wrap: {
-    position: 'absolute', top: '40%', alignSelf: 'center', zIndex: 600,
-    alignItems: 'center',
-  },
-  crown: { fontSize: 48 },
-  text: { color: '#FFD76A', fontFamily: 'Cinzel_700Bold', fontSize: 18, letterSpacing: 3, marginTop: 4 },
 })
 
 // ── Batch 2 Task 3 — wrapper เรืองแสงรอบมือผู้เล่น (border/shadow แบบ static ตรงนี้ ส่วน opacity
@@ -722,9 +793,15 @@ export default function MonarchScreen() {
   const [g2Result, setG2Result] = useState<G2Result | null>(null)
   const [gf, setGf] = useState<GrandFinaleStart | null>(null)
   const [gfLog, setGfLog] = useState<GrandFinaleActionUpdate[]>([])
+  const [gfPartialReveals, setGfPartialReveals] = useState<Record<string, string[]>>({})
   const [gfSubmitted, setGfSubmitted] = useState(false)
+  const [gfSelectedRevealKeys, setGfSelectedRevealKeys] = useState<string[]>([])
+  const [showPreGfShowdown, setShowPreGfShowdown] = useState(false)
+  const [preGfShowdownTab, setPreGfShowdownTab] = useState<1 | 2>(1)
   const [g3Result, setG3Result] = useState<G3Result | null>(null)
   const [matchEnd, setMatchEnd] = useState<MatchEnd | null>(null)
+  const [endPresentation, setEndPresentation] = useState<'none' | 'outcome' | 'summary' | 'lore'>('none')
+  const [showdownCountdown, setShowdownCountdown] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   // ── Batch 3C-1 Task 4 — Weighted Crown reveal gate: ควบคุมว่า "อนุญาตให้โชว์" ผลกองไหนแล้ว
@@ -763,7 +840,7 @@ export default function MonarchScreen() {
   const handleLeaveMatch = () => {
     setShowLeaveConfirm(false)
     socketRef.current?.disconnect()
-    router.replace('/(home)/lobby')
+    router.replace('/lobby')
   }
   const [uiPhase, setUiPhase] = useState<'dealing' | 'table'>('dealing')
   const [showVictoryVFX, setShowVictoryVFX] = useState(false)
@@ -782,6 +859,7 @@ export default function MonarchScreen() {
   const [typedText, setTypedText] = useState('')
   const typewriterRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const pendingRoundDataRef = useRef<RoundSnapshot | null>(null)
+  const buyInAmountRef = useRef(0)
 
   // ── Batch 3B — Arrival sequence (fake Four Gods -> สะดุด -> จอมืด -> crown -> Monarch reveal) ──
   // typeText ใช้ร่วมกันทั้ง fake intro (quote เดียว) และ Monarch reveal (4 บรรทัดไล่ทีละบรรทัด) เพราะ
@@ -992,7 +1070,6 @@ export default function MonarchScreen() {
   useEffect(() => () => { if (dialogueTimerRef.current) clearTimeout(dialogueTimerRef.current) }, [])
 
   // Task 7 — SEAL THE HAND stamp: เพิ่มค่าทุกครั้งที่กด seal เพื่อ retrigger animation (0 = ยังไม่เคย seal)
-  const [sealStampKey, setSealStampKey] = useState(0)
 
   const handlePhaseChange = (phase: PressurePhase) => {
     pressurePhaseRef.current = phase
@@ -1108,6 +1185,7 @@ export default function MonarchScreen() {
 
   // แยกออกมาจาก socket handler เพราะตอนนี้ round_start ต้องรอปิด Boss Intro Popup ก่อนถึงจะ process จริง
   const processRoundStart = (data: RoundSnapshot) => {
+    buyInAmountRef.current = data.buyInAmount
     setRound(data)
     setSubmitted(data.phase !== 'arrangement')
     // เริ่มต้น 3-3-5 ตามลำดับที่แจกมา — ผู้เล่นสลับเองผ่าน tap-swap ก่อนกด Confirm
@@ -1140,7 +1218,6 @@ export default function MonarchScreen() {
     // Task 6: remaining สุ่มตรงๆ 6-10s (อยู่ใน critical band 10-4 พอดี)
     silenceTargetRef.current = 6 + Math.floor(Math.random() * 5)
     silenceLineRef.current = ROYAL_SILENCE_LINES[Math.floor(Math.random() * ROYAL_SILENCE_LINES.length)]
-    setSealStampKey(0)
 
     startDealAnimation()
   }
@@ -1149,6 +1226,7 @@ export default function MonarchScreen() {
   // animation ทั้งหมด (เคยเห็นไปแล้วรอบแรกในเซสชันนี้) hydrate ตรงเข้า phase จริงทันทีจาก snapshot เต็ม
   // (Task 3) แทนที่จะ reset ทุกอย่างเหมือน processRoundStart ซึ่งออกแบบไว้สำหรับ "เริ่มรอบใหม่" เท่านั้น
   const hydrateFromReconnect = (data: RoundSnapshot) => {
+    buyInAmountRef.current = data.buyInAmount
     setRound(data)
     setSubmitted(data.phase !== 'arrangement')
     setPiles([
@@ -1166,6 +1244,7 @@ export default function MonarchScreen() {
     if (data.grandFinale) {
       setGf(data.grandFinale)
       setGfLog([])
+      setGfPartialReveals(Object.fromEntries((data.grandFinale.reveals ?? []).map(r => [r.id, r.g3Cards])))
       // turn !== 'human' แปลว่า commit ไปแล้ว (กด Call ก่อนหลุด) — disable ปุ่มไม่ให้กดซ้ำ
       setGfSubmitted(data.grandFinale.turn !== 'human')
     }
@@ -1216,11 +1295,18 @@ export default function MonarchScreen() {
       setSubmitted(true)
       setArrangePending(false)
       setArrangeError(null)
+      setShowdownCountdown(3)
+      scheduleJudgment(() => setShowdownCountdown(2), 1000)
+      scheduleJudgment(() => setShowdownCountdown(1), 2000)
+      scheduleJudgment(() => setShowdownCountdown(null), 3000)
     })
 
     socket.on('monarch_g1_result', (data: G1Result) => {
       setG1Result(data)
       setRevealGate('g1') // เผยทันที (กองแรก ไม่มีอะไรให้ pause รอ)
+      // Seal -> Showdown Result immediately. G2 will populate the second tab when ready.
+      setPreGfShowdownTab(1)
+      setShowPreGfShowdown(true)
     })
 
     socket.on('monarch_g2_result', (data: G2Result) => {
@@ -1233,11 +1319,25 @@ export default function MonarchScreen() {
     socket.on('monarch_grand_finale_start', (data: GrandFinaleStart) => {
       setGf(data)
       setGfLog([])
+      setGfPartialReveals({})
       setGfSubmitted(false)
+      setGfSelectedRevealKeys([])
     })
-
     socket.on('monarch_grand_finale_action', (data: GrandFinaleActionUpdate) => {
       setGfLog(prev => [...prev, data])
+    })
+
+    socket.on('monarch_grand_finale_round_complete', (data: GrandFinaleRoundComplete) => {
+      setGfPartialReveals(Object.fromEntries(data.reveals.map(r => [r.id, r.g3Cards])))
+      setGf(prev => prev ? { ...prev, pot: data.pot, revealedCount: data.revealedCount } : prev)
+    })
+
+    socket.on('monarch_grand_finale_round_start', (data: {
+      round: 2; revealedCount: 3; pot: number; callAmount: number; turn: 'human'
+    }) => {
+      setGf(prev => prev ? { ...prev, ...data } : prev)
+      setGfSubmitted(false)
+      setGfSelectedRevealKeys([])
     })
 
     socket.on('monarch_g3_result', (data: G3Result) => {
@@ -1256,12 +1356,17 @@ export default function MonarchScreen() {
 
     socket.on('monarch_match_end', (data: MatchEnd) => {
       setMatchEnd(data)
+      // Mastermind-style result cadence: reveal table -> outcome -> summary -> Monarch lore/relic.
+      scheduleJudgment(() => setEndPresentation('outcome'), 2500)
+      scheduleJudgment(() => setEndPresentation('summary'), 6500)
+      scheduleJudgment(() => setEndPresentation('lore'), 11000)
       // Batch 3C-1 Task 1 — เกณฑ์ชนะเดียวกับ server เป๊ะ (settleMonarchMatch: netDelta > 0):
       // finalStack = buyInAmount + payout, payout > 0 ก็ต่อเมื่อ netDelta > 0 เท่านั้น (ถ้า netDelta<=0
       // payout=netDelta เดิม ทำให้ finalStack <= buyInAmount เสมอ) จึง finalStack > buyInAmount
       // เทียบเท่า netDelta > 0 ทุกกรณีทางคณิตศาสตร์ — ไม่ต้องพึ่ง g3Winner อีกต่อไป (ไม่แตะ server เลย)
-      const buyIn = round?.buyInAmount ?? pendingRoundDataRef.current?.buyInAmount ?? 0
-      const isVictory = data.finalStack > buyIn
+      // Socket handlers close over the initial render, so `round` here can still be null.
+      // Prefer the authoritative server result; retain the live ref only for old-server fallback.
+      const isVictory = data.isVictory ?? data.finalStack > buyInAmountRef.current
       if (isVictory) {
         // Batch 3C-2 Task 4 — ชนะ: หน่วงฉลองแทนที่จะยิง VFX ทันที (breakdown/lore ด้านล่างยังโชว์ทันที
         // ปกติ เพราะ matchEnd ถูก set ไปแล้วข้างบน — หน่วงเฉพาะ "โมเมนต์ฉลอง" เท่านั้น)
@@ -1269,11 +1374,11 @@ export default function MonarchScreen() {
         // ผ่าน showDialogueLine เดิมของ Batch 2 ซึ่งมี fade+cleanup timer ของตัวเองอยู่แล้ว) -> แสงทอง
         scheduleJudgment(() => {
           showDialogueLine('So... you are the one.')
-        }, 1500)
+        }, 11000)
         scheduleJudgment(() => {
           setShowVictoryVFX(true)
           showToast('You are ready for a battlefield beyond these rules.')
-        }, 1500 + 3500)
+        }, 14500)
       } else {
         showToast('When you no longer depend on what the table gives you — return to me.')
       }
@@ -1287,10 +1392,9 @@ export default function MonarchScreen() {
       // ถ้ากำลังรอผล submit arrangement อยู่ (เช่น FOUL) ให้ปลดล็อกกลับมาแก้ไขต่อได้ — ไม่ค้าง pending
       setArrangePending(false)
       setArrangeError(data.message)
+      setGfSubmitted(false)
       // Batch 3A Task 2 — SEAL stamp เป็น optimistic (Batch 2: เล่น animation ทันทีตอนกด ไม่รอ server
       // ack) ถ้า server reject จริง (เช่น ROOM_NOT_FOUND/FOUL) ต้องถอนตราที่ประทับไปแล้วผิดๆ ทิ้ง —
-      // triggerKey=0 คือค่าเริ่มต้นที่ SealStamp ไม่ render อะไรเลย (ดู SealStamp component)
-      setSealStampKey(0)
     })
 
     return () => {
@@ -1328,17 +1432,26 @@ export default function MonarchScreen() {
         g3: piles[2].map(c => c.key),
       },
     })
-    // Batch 2 Task 7 — SEAL THE HAND: stamp + haptic หนัก ทันทีที่กด (feedback การกด ไม่ใช่ผลลัพธ์จริง
-    // — ผลจริงมาจาก monarch_arrangement_ok/room_error เหมือนเดิมทุกประการ ไม่แตะ logic การ submit เลย)
-    setSealStampKey(k => k + 1)
+    // Keep sound + haptic as immediate feedback; the persistent SEALED overlay was removed.
     onMonarchCue('seal_stamp')
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {})
   }
 
   const handleGrandFinaleAction = (action: 'call' | 'fold') => {
     if (!socketRef.current || gfSubmitted) return
+    if (action === 'call' && gf?.round === 1 && gfSelectedRevealKeys.length !== 3) return
     setGfSubmitted(true)
-    socketRef.current.emit('submit_monarch_grand_finale_action', { roomId, userId, action })
+    socketRef.current.emit('submit_monarch_grand_finale_action', {
+      roomId, userId, action,
+      revealedCardKeys: action === 'call' && gf?.round === 1 ? gfSelectedRevealKeys : undefined,
+    })
+  }
+
+  const toggleGFRevealCard = (key: string) => {
+    if (gfSubmitted || gf?.round !== 1) return
+    setGfSelectedRevealKeys(prev => prev.includes(key)
+      ? prev.filter(selectedKey => selectedKey !== key)
+      : prev.length < 3 ? [...prev, key] : prev)
   }
 
   const seatByRole = (role: Seat['role']) => round?.seats.find(s => s.role === role)
@@ -1347,7 +1460,7 @@ export default function MonarchScreen() {
   const minion2 = seatByRole('minion2')
 
   return (
-    <View style={styles.root}>
+    <ImageBackground source={MONARCH_TABLE_SKIN} resizeMode="cover" style={styles.root}>
       {/* Sprint 6-7 §8.2 — Background overlay ทับพื้นหลังเดิมทั้งจอ ไม่ต้องสร้าง asset ใหม่ */}
       <View style={styles.bgOverlay} pointerEvents="none" />
 
@@ -1466,7 +1579,26 @@ export default function MonarchScreen() {
                 if (pendingRoundDataRef.current) {
                   const pending = pendingRoundDataRef.current
                   pendingRoundDataRef.current = null
-                  processRoundStart(pending)
+                  let processed = false
+                  const processOnce = (deadlineAt: number) => {
+                    if (processed) return
+                    processed = true
+                    processRoundStart({ ...pending, arrangementDeadlineAt: deadlineAt })
+                  }
+                  const ackFallback = setTimeout(
+                    () => processOnce(Date.now() + ARRANGEMENT_TOTAL_SEC * 1000),
+                    1500,
+                  )
+                  socketRef.current?.emit(
+                    'monarch_arrangement_ready',
+                    { roomId, userId },
+                    (result: { ok: boolean; deadlineAt?: number }) => {
+                      if (result.ok && result.deadlineAt) {
+                        clearTimeout(ackFallback)
+                        processOnce(result.deadlineAt)
+                      }
+                    },
+                  )
                 }
                 showToast('The final pile will receive nothing from the table.')
               }}
@@ -1491,36 +1623,35 @@ export default function MonarchScreen() {
       {/* Batch 2 Task 5/6 — Sealed Signal / Royal Silence ใกล้ Portrait */}
       <MonarchDialogueLine text={dialogueLine} animValue={dialogueAnim} />
 
-      {/* Batch 2 Task 7 — Seal stamp ตอนกด SEAL THE HAND */}
-      <SealStamp triggerKey={sealStampKey} />
-
-      <GameTopBar
-        tierName="MONARCH"
-        tierStars={5}
-        round={1}
-        totalRounds={1}
-        hideRound
-        isWeb={isWeb}
-        insetsTop={insets.top}
-        opacity={1}
-        leftSlot={
-          <TouchableOpacity
-            onPress={() => setShowTierInfo(true)}
-            style={styles.infoBtn}
-          >
-            <Text style={styles.infoBtnText}>i</Text>
-          </TouchableOpacity>
-        }
-        rightSlot={
-          // Batch 3E Task 5 — Leave button (rightSlot ว่างอยู่ ไม่กระทบ leftSlot/Tier badge เดิมเลย)
-          <TouchableOpacity
-            onPress={() => setShowLeaveConfirm(true)}
-            style={styles.leaveBtn}
-          >
-            <Text style={styles.leaveBtnText}>Leave</Text>
-          </TouchableOpacity>
-        }
-      />
+      {/* Keep navigation above table/result overlays; arrival/intro overlays (zIndex 998+) still block it. */}
+      <View style={{ zIndex: 100 }} pointerEvents="box-none">
+        <GameTopBar
+          tierName="MONARCH"
+          tierStars={5}
+          round={1}
+          totalRounds={1}
+          hideRound
+          isWeb={isWeb}
+          insetsTop={insets.top}
+          opacity={1}
+          leftSlot={
+            <TouchableOpacity
+              onPress={() => setShowTierInfo(true)}
+              style={styles.infoBtn}
+            >
+              <Text style={styles.infoBtnText}>i</Text>
+            </TouchableOpacity>
+          }
+          rightSlot={
+            <TouchableOpacity
+              onPress={() => setShowLeaveConfirm(true)}
+              style={styles.leaveBtn}
+            >
+              <Text style={styles.leaveBtnText}>Leave</Text>
+            </TouchableOpacity>
+          }
+        />
+      </View>
 
       {/* Batch 3C-1 Task 5 — Crown Ledger HUD: absolute overlay ใต้ GameTopBar แยกจาก slot system
           เดิมทั้งหมด (ไม่ชนกับ leftSlot/MonarchTimer) sync กับ revealGate เดียวกับ Task 4 */}
@@ -1573,8 +1704,10 @@ export default function MonarchScreen() {
         </View>
       </Modal>
 
-      <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.subtitle}>Room: {roomId || '—'}</Text>
+      {/* After the 2-2-0 acknowledgement the game uses one fixed, full-screen table shell.
+          Keeping this as a View (not an opaque ScrollView) lets the Monarch skin remain visible
+          and matches the non-scrolling Mastermind table presentation. */}
+      <View style={styles.container}>
 
         {connStatus === 'connecting' && <ActivityIndicator color={COLOR.gold} style={{ marginTop: 24 }} />}
         {!!error && <Text style={styles.error}>{error}</Text>}
@@ -1602,7 +1735,12 @@ export default function MonarchScreen() {
                 </View>
               )}
 
-              <Animated.View style={{ opacity: fadeTable, width: '100%', alignItems: 'center' }}>
+              <Animated.View style={{
+                opacity: fadeTable,
+                width: '100%',
+                alignItems: 'center',
+                display: g1Result ? 'none' : 'flex',
+              }}>
                 {/* Batch 2 Task 2 — MonarchTimer: แสดงเฉพาะช่วงจัดไพ่ ซ่อนทันทีหลัง seal (Task 7) */}
                 {round.phase === 'arrangement' && (
                   <MonarchTimer
@@ -1628,9 +1766,9 @@ export default function MonarchScreen() {
                   />
                   <View style={styles.community}>
                     <Text style={styles.communityLabel}>G1 Community</Text>
-                    <CardImageRow keys={round.commA} />
+                    <CardImageRow keys={round.commA} size={50} height={72} />
                     <Text style={styles.communityLabel}>G2 Community</Text>
-                    <CardImageRow keys={round.commB} />
+                    <CardImageRow keys={round.commB} size={50} height={72} />
                     {/* Sprint 6-7 §8.3 — G3 ไม่มี community card ตาม canon 2-2-0 จริง (ไม่ใช่บั๊ก) กล่อง
                         เส้นประนี้ตั้งใจให้เห็นชัดว่าเป็นกติกา ไม่ใช่ข้อมูลหาย */}
                     <Text style={styles.communityLabel}>G3 Community</Text>
@@ -1648,8 +1786,25 @@ export default function MonarchScreen() {
               </Animated.View>
             </View>
 
-            <Animated.View style={{ opacity: fadeTable, width: '100%', alignItems: 'center' }}>
+            <Animated.View style={{ opacity: fadeTable, width: '100%', alignItems: 'center', display: g1Result ? 'none' : 'flex' }}>
               <View style={styles.humanPanel}>
+                <View style={styles.humanIdentityRow}>
+                  {round.seats.find(seat => seat.role === 'human')?.avatarUrl ? (
+                    <Image
+                      source={{ uri: round.seats.find(seat => seat.role === 'human')!.avatarUrl }}
+                      style={styles.humanAvatar}
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <View style={[styles.humanAvatar, styles.humanAvatarFallback]}>
+                      <Text style={styles.humanAvatarEmoji}>🧑</Text>
+                    </View>
+                  )}
+                  <View>
+                    <Text style={styles.humanIdentityName}>{round.seats.find(seat => seat.role === 'human')?.name ?? 'Player'}</Text>
+                    <Text style={styles.humanIdentitySub}>YOU</Text>
+                  </View>
+                </View>
                 <Text style={styles.communityLabel}>G1 / G2 / G3</Text>
                 {/* Batch 2 Task 3 — wrapper เรืองแสงรอบมือผู้เล่น (ไม่แตะ PlayerHandView เลย) */}
                 <Reanimated.View style={[monarchHandGlowStyles.wrap, handGlowStyle]}>
@@ -1657,7 +1812,7 @@ export default function MonarchScreen() {
                     piles={piles}
                     selected={selected}
                     onCardPress={handleCardPress}
-                    isVip={false}
+                    isVip
                   />
                 </Reanimated.View>
                 {/* Batch 3C-1 Task 2 — ซ่อน Balance ระหว่างเกม (spec §3: "ซ่อน net token จนจบแมตช์")
@@ -1751,8 +1906,8 @@ export default function MonarchScreen() {
                   {!g3Result && (
                     <View style={styles.gfBtnRow}>
                       <TouchableOpacity
-                        style={[styles.submitBtn, styles.gfBtn, gfSubmitted && styles.submitBtnDisabled]}
-                        disabled={gfSubmitted}
+                        style={[styles.submitBtn, styles.gfBtn, (gfSubmitted || (gf.round === 1 && gfSelectedRevealKeys.length !== 3)) && styles.submitBtnDisabled]}
+                        disabled={gfSubmitted || (gf.round === 1 && gfSelectedRevealKeys.length !== 3)}
                         onPress={() => handleGrandFinaleAction('call')}
                       >
                         <Text style={styles.submitBtnText}>CALL</Text>
@@ -1783,7 +1938,7 @@ export default function MonarchScreen() {
                 // (เกือบเสมอมาถึงแล้วตอนนี้ เพราะ server ยิง monarch_g3_result/monarch_match_end
                 // ต่อกันทันที ส่วน gate 'g3' กว่าจะเปิดจริงต้องรอ pause ของ client เอง) ถ้ายังไม่มา
                 // ให้ default ไม่ปิดไพ่ไว้ก่อน (fail-safe กันไพ่ปิดแวบแล้วเปิดเองทีหลัง)
-                const isVictory = matchEnd ? matchEnd.finalStack > (round?.buyInAmount ?? 0) : true
+                const isVictory = matchEnd ? (matchEnd.isVictory ?? matchEnd.finalStack > (round?.buyInAmount ?? 0)) : true
                 return (
                   <View style={styles.resultPanel}>
                     <Text style={styles.resultTitle}>
@@ -1822,7 +1977,7 @@ export default function MonarchScreen() {
                   finalStack > buyInAmount สูตรเดียวกับ handler เป๊ะ (เทียบเท่า netDelta>0 ของ server) */}
               {!!matchEnd && (() => {
                 const buyIn = round?.buyInAmount ?? 0
-                const isVictory = matchEnd.finalStack > buyIn
+                const isVictory = matchEnd.isVictory ?? matchEnd.finalStack > buyIn
                 return (
                   <View style={styles.loreBox}>
                     {isVictory ? (
@@ -1856,7 +2011,7 @@ export default function MonarchScreen() {
                 // ไม่มีผลต่อ isVictory/breakdown ข้างบนเลย) กัน sudden-death งงว่าโดนโกงตอนแพ้จริงๆ
                 // (isVictory คำนวณแยกจาก loreBox IIFE ด้านบน เพราะคนละ closure — สูตรเดียวกันเป๊ะ)
                 const buyIn = round?.buyInAmount ?? 0
-                const isVictory = matchEnd.finalStack > buyIn
+                const isVictory = matchEnd.isVictory ?? matchEnd.finalStack > buyIn
                 const foulReason = !isVictory ? matchEnd.foulReasons?.[userId] : undefined
                 return (
                   <View style={styles.matchEndPanel}>
@@ -1886,7 +2041,336 @@ export default function MonarchScreen() {
             </Animated.View>
           </>
         )}
-      </ScrollView>
+      </View>
+
+      {/* Mastermind presentation shell; Monarch rules/events remain authoritative and unchanged. */}
+      {!!round && !!g1Result && (() => {
+        const activeResult: any = gateAtLeast('g3') && g3Result
+          ? g3Result
+          : gateAtLeast('g2') && g2Result
+            ? g2Result
+            : g1Result
+        const activePile = gateAtLeast('g3') && g3Result ? 'G3' : gateAtLeast('g2') && g2Result ? 'G2' : 'G1'
+        const winnerId = activePile === 'G3' ? g3Result?.g3Winner : activePile === 'G2' ? g2Result?.g2Winner : g1Result.g1Winner
+        const humanFouled = !!g1Result.foulMap[userId]
+        const humanCallCount = gfLog.filter(log => log.playerId === userId && log.action === 'call').length
+        const humanMovedCount = humanCallCount === 0 ? 0 : humanCallCount === 1 ? 3 : 4
+        const revealFor = (pid: string): string[] => {
+          if (gf && !g3Result) return gfPartialReveals[pid] ?? []
+          const reveal = activeResult?.reveals?.find((r: any) => r.id === pid)
+          // Monarch GF keeps the fifth G3 card sealed even after server evaluates all five.
+          if (reveal?.g3Cards) return reveal.g3Cards.slice(0, 4)
+          return reveal?.g2Cards ?? reveal?.g1Cards ?? []
+        }
+        const seatStyle = (role: Seat['role']) =>
+          role === 'boss' ? styles.battleBoss
+            : role === 'minion1' ? styles.battleLeft
+              : role === 'minion2' ? styles.battleRight
+                : styles.battleHuman
+
+        return (
+          <View style={styles.battleOverlay} pointerEvents="box-none">
+            <Text style={styles.battlePhaseTitle}>
+              {gf && !g3Result ? `GRAND FINALE — ROUND ${gf.round}` : `${activePile} SHOWDOWN`}
+            </Text>
+            <Text style={styles.battleRuleText}>MONARCH'S TRIAL · SPECIAL RULE 2–2–0</Text>
+
+            {round.seats.map(seat => {
+              const folded = gf?.foldedPlayers.includes(seat.id) || g3Result?.foldedPlayers.includes(seat.id)
+              const cards = revealFor(seat.id)
+              const foldedMinion = !!folded && (seat.role === 'minion1' || seat.role === 'minion2')
+              const displayedCards = foldedMinion
+                ? Array.from({ length: 5 }, (_, i) => `folded-${seat.id}-${i}`)
+                : cards
+              const isWinner = winnerId === seat.id
+              const maskMonarch = activePile === 'G3' && !!matchEnd
+                && !(matchEnd.isVictory ?? matchEnd.finalStack > (round.buyInAmount ?? 0)) && seat.role === 'boss'
+              const gfHumanCards = piles[2].map(card => card.key)
+              const gfBossCards = gfPartialReveals[seat.id] ?? (g3Result?.reveals.find(r => r.id === seat.id)?.g3Cards ?? [])
+              const bossMovedCount = Math.min(4, gfBossCards.length)
+              return (
+                <View key={seat.id} style={[styles.battleSeat, seatStyle(seat.role), folded && styles.battleSeatFolded]}>
+                  {seat.role === 'human' && (
+                    seat.avatarUrl ? (
+                      <Image source={{ uri: seat.avatarUrl }} style={styles.battleHumanAvatar} resizeMode="cover" />
+                    ) : (
+                      <View style={[styles.battleHumanAvatar, styles.humanAvatarFallback]}>
+                        <Text style={styles.battleHumanAvatarEmoji}>🧑</Text>
+                      </View>
+                    )
+                  )}
+                  <Text style={[styles.battleSeatName, isWinner && styles.battleWinner]}>
+                    {seat.emoji} {seat.name}{folded ? ' · FOLD' : ''}
+                  </Text>
+                  {!!gf && seat.role === 'human' ? (
+                    <MonarchGFHandRow
+                      cards={gfHumanCards}
+                      movedCount={humanMovedCount}
+                      direction="up"
+                      showAllFaces
+                      selectedKeys={gf.round === 1 ? gfSelectedRevealKeys : []}
+                      onToggleSelect={gf.round === 1 ? toggleGFRevealCard : undefined}
+                      movedKeys={gfPartialReveals[userId] ?? []}
+                    />
+                  ) : !!gf && seat.role === 'boss' ? (
+                    <MonarchGFHandRow
+                      cards={gfBossCards}
+                      movedCount={maskMonarch ? Math.min(1, bossMovedCount) : bossMovedCount}
+                      direction="down"
+                    />
+                  ) : (
+                    <CardImageRow
+                      keys={displayedCards}
+                      size={seat.role === 'human' ? 62 : seat.role === 'boss' ? 50 : 42}
+                      revealCount={foldedMinion ? 0 : maskMonarch ? 1 : undefined}
+                      cardStep={foldedMinion ? 10 : undefined}
+                    />
+                  )}
+                  {isWinner && <Text style={styles.battleWinnerTag}>WINNER</Text>}
+                </View>
+              )
+            })}
+
+            <View style={styles.battleCenter} pointerEvents="none">
+              {gf && !g3Result ? (
+                <>
+                  <Text style={styles.battlePot}>POT {gf.pot}</Text>
+                  {humanFouled ? (
+                    <Text style={[styles.battleCall, { color: '#FF6B6B', fontWeight: '900' }]}>FOUL · FOLD REQUIRED</Text>
+                  ) : (
+                    <>
+                      <Text style={styles.battleCall}>CALL {gf.callAmount}</Text>
+                       <Text style={styles.battleCall}>
+                         {gf.revealedCount === 0
+                           ? `SELECT 3 CARDS TO REVEAL · ${gfSelectedRevealKeys.length}/3`
+                           : 'CALL TO REVEAL 1 MORE CARD'}
+                       </Text>
+                    </>
+                  )}
+                </>
+              ) : (
+                <Text style={styles.battleCenterResult}>
+                  {winnerId ? `${round.seats.find(s => s.id === winnerId)?.name ?? '—'} WINS ${activePile}` : `${activePile} DRAW`}
+                </Text>
+              )}
+            </View>
+
+            {gf && !g3Result && (
+              <View style={styles.battleActionBar}>
+                {!humanFouled && (
+                  <TouchableOpacity
+                    style={[styles.submitBtn, styles.battleActionBtn, (gfSubmitted || (gf.round === 1 && gfSelectedRevealKeys.length !== 3)) && styles.submitBtnDisabled]}
+                    disabled={gfSubmitted || (gf.round === 1 && gfSelectedRevealKeys.length !== 3)}
+                    onPress={() => handleGrandFinaleAction('call')}
+                  >
+                    <Text style={styles.submitBtnText}>CALL</Text>
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity
+                  style={[styles.foldBtn, styles.battleActionBtn, humanFouled && { flex: 0, width: 180 }, gfSubmitted && styles.submitBtnDisabled]}
+                  disabled={gfSubmitted}
+                  onPress={() => handleGrandFinaleAction('fold')}
+                >
+                  <Text style={styles.submitBtnText}>FOLD</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        )
+      })()}
+
+      {/* Opens as soon as G1 arrives after Seal; G2 fills its tab while this result screen remains open. */}
+      {showPreGfShowdown && !!round && !!g1Result && (() => {
+        const tab: 1 | 2 = preGfShowdownTab === 2 && g2Result ? 2 : 1
+        const result = tab === 1 ? g1Result : g2Result!
+        const winnerId = tab === 1 ? g1Result.g1Winner : g2Result!.g2Winner
+        const community = tab === 1 ? round.commA : round.commB
+        const baseline = round.tokenBalance[userId] ?? round.buyInAmount
+        const afterG1 = g1Result.tokenBalance[userId] ?? baseline
+        const afterG2 = g2Result?.tokenBalance[userId] ?? afterG1
+        const pileDelta = tab === 1 ? afterG1 - baseline : afterG2 - afterG1
+        const cardsFor = (playerId: string) => {
+          const reveal = result.reveals.find(r => r.id === playerId)
+          return tab === 1
+            // Server returns the evaluated five-card hand as [3 arranged cards, 2 community].
+            // Community is already shown once above, so each player row keeps only its own cards.
+            ? ('g1Cards' in (reveal ?? {}) ? (reveal as { g1Cards: string[] }).g1Cards.slice(0, 3) : [])
+            : ('g2Cards' in (reveal ?? {}) ? (reveal as { g2Cards: string[] }).g2Cards.slice(0, 3) : [])
+        }
+
+        return (
+          <View style={styles.preGfShade}>
+            <View style={styles.preGfCard}>
+              <Text style={styles.preGfTitle}>SHOWDOWN</Text>
+              <Text style={styles.preGfSubtitle}>G1 / G2 RESULTS · GRAND FINALE NEXT</Text>
+
+              <View style={styles.preGfTabs}>
+                {([1, 2] as const).map(pile => {
+                  const pileReady = pile === 1 || !!g2Result
+                  const pileWinner = pile === 1 ? g1Result.g1Winner : g2Result?.g2Winner
+                  const selected = pile === tab
+                  return (
+                    <TouchableOpacity
+                      key={pile}
+                      disabled={!pileReady}
+                      onPress={() => setPreGfShowdownTab(pile)}
+                      style={[styles.preGfTab, selected && styles.preGfTabActive, !pileReady && { opacity: 0.4 }]}
+                    >
+                      <Text style={[styles.preGfTabText, selected && styles.preGfTabTextActive]}>PILE {pile}</Text>
+                      {pileWinner === userId && <Text style={styles.preGfYouWin}>🏆 YOU</Text>}
+                      {!pileReady && <Text style={styles.preGfWaiting}>RESOLVING…</Text>}
+                    </TouchableOpacity>
+                  )
+                })}
+              </View>
+
+              <View style={styles.preGfSummaryRow}>
+                <View style={styles.preGfCommunity}>
+                  <Text style={styles.preGfSectionLabel}>COMMUNITY</Text>
+                  <CardImageRow keys={community} size={38} height={55} />
+                </View>
+                <View style={styles.preGfDeltaBox}>
+                  <Text style={styles.preGfSectionLabel}>PILE {tab}</Text>
+                  <Text style={[styles.preGfDelta, { color: pileDelta >= 0 ? '#8DFFB5' : '#FF6B6B' }]}>
+                    {pileDelta >= 0 ? '+' : ''}{pileDelta}
+                  </Text>
+                  <Text style={styles.preGfTokenLabel}>tokens</Text>
+                </View>
+              </View>
+
+              <View style={styles.preGfPlayers}>
+                {round.seats.map(seat => {
+                  const winner = winnerId === seat.id
+                  const fouled = result.foulMap[seat.id]
+                  return (
+                    <View key={seat.id} style={[styles.preGfPlayer, winner && styles.preGfPlayerWinner]}>
+                      <View style={styles.preGfPlayerLabel}>
+                        {seat.role === 'human' && seat.avatarUrl ? (
+                          <Image source={{ uri: seat.avatarUrl }} style={styles.resultAvatar} resizeMode="cover" />
+                        ) : seat.role === 'boss' ? (
+                          <Image source={bossAvatarImg} style={styles.resultAvatar} resizeMode="cover" />
+                        ) : (seat.role === 'minion1' || seat.role === 'minion2') && MINION_AVATAR[seat.name] ? (
+                          <Image source={MINION_AVATAR[seat.name]} style={styles.resultAvatar} resizeMode="cover" />
+                        ) : (
+                          <Text style={styles.resultAvatarEmoji}>{seat.emoji}</Text>
+                        )}
+                        <Text numberOfLines={1} style={[styles.preGfPlayerName, seat.id === userId && styles.preGfPlayerSelf]}>
+                          {seat.name}
+                        </Text>
+                        {winner && <Text style={styles.preGfWinnerText}>🏆 WIN</Text>}
+                        {fouled && <Text style={styles.preGfFoulText}>FOUL</Text>}
+                      </View>
+                      <CardImageRow keys={cardsFor(seat.id)} size={36} height={52} />
+                    </View>
+                  )
+                })}
+              </View>
+
+              <TouchableOpacity
+                disabled={!gf}
+                style={[styles.preGfContinue, !gf && { opacity: 0.45 }]}
+                onPress={() => setShowPreGfShowdown(false)}
+              >
+                <Text style={styles.preGfContinueText}>{gf ? 'CONTINUE TO GRAND FINALE' : 'PREPARING GRAND FINALE…'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )
+      })()}
+
+      {revealGate === 'g3_dark' && (
+        <View style={styles.decidingPileOverlay} pointerEvents="none">
+          <Text style={styles.decidingPileText}>THE DECIDING PILE</Text>
+        </View>
+      )}
+
+      {showdownCountdown !== null && (
+        <View style={styles.showdownCountdownOverlay} pointerEvents="none">
+          <Text style={styles.showdownCountdownLabel}>SHOWDOWN</Text>
+          <Text style={styles.showdownCountdownNumber}>{showdownCountdown}</Text>
+          <Text style={styles.showdownCountdownSub}>The Monarch judges every pile</Text>
+        </View>
+      )}
+
+      {!!matchEnd && endPresentation === 'outcome' && (() => {
+        const victory = matchEnd.isVictory ?? matchEnd.finalStack > (round?.buyInAmount ?? 0)
+        return (
+          <View style={styles.presentationShade} pointerEvents="none">
+            <View style={styles.outcomeCard}>
+              <Text style={[styles.outcomeTitle, { color: victory ? '#8DFFB5' : '#f87171' }]}>
+                {victory ? 'YOU DEFEATED THE MONARCH' : 'THE MONARCH PREVAILS'}
+              </Text>
+              <Text style={styles.outcomeSub}>Final Stack · {matchEnd.finalStack.toLocaleString('en-US')}</Text>
+            </View>
+          </View>
+        )
+      })()}
+
+      {!!matchEnd && endPresentation === 'summary' && (() => {
+        const baseline = round?.tokenBalance?.[userId] ?? round?.buyInAmount ?? 0
+        const afterG1 = g1Result?.tokenBalance?.[userId] ?? baseline
+        const afterG2 = g2Result?.tokenBalance?.[userId] ?? afterG1
+        const afterG3 = g3Result?.tokenBalance?.[userId] ?? afterG2
+        const rows = [
+          ['G1', afterG1 - baseline],
+          ['G2', afterG2 - afterG1],
+          ['G3', afterG3 - afterG2],
+          ['ROYAL BONUS', matchEnd.finalStack - afterG3],
+        ] as const
+        return (
+          <View style={styles.presentationShade} pointerEvents="none">
+            <View style={styles.summaryCard}>
+              <Text style={styles.summaryTitle}>MATCH SUMMARY</Text>
+              {(() => {
+                const humanSeat = round?.seats.find(seat => seat.role === 'human')
+                const victory = matchEnd.isVictory ?? matchEnd.finalStack > (round?.buyInAmount ?? 0)
+                return (
+                  <View style={styles.summaryIdentity}>
+                    {humanSeat?.avatarUrl ? (
+                      <Image source={{ uri: humanSeat.avatarUrl }} style={styles.summaryAvatar} resizeMode="cover" />
+                    ) : (
+                      <View style={[styles.summaryAvatar, styles.humanAvatarFallback]}>
+                        <Text style={styles.summaryAvatarEmoji}>🧑</Text>
+                      </View>
+                    )}
+                    <View>
+                      <Text style={styles.summaryPlayerName}>{humanSeat?.name ?? 'Player'}</Text>
+                      <Text style={[styles.summaryPlayerResult, { color: victory ? '#8DFFB5' : '#FF6B6B' }]}>
+                        {victory ? 'MONARCH DEFEATED' : 'DEFEATED BY MONARCH'}
+                      </Text>
+                    </View>
+                  </View>
+                )
+              })()}
+              {rows.map(([label, value]) => (
+                <View key={label} style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>{label}</Text>
+                  <Text style={[styles.summaryValue, { color: value >= 0 ? '#8DFFB5' : '#f87171' }]}>
+                    {value >= 0 ? '+' : ''}{value}
+                  </Text>
+                </View>
+              ))}
+              <View style={styles.summaryTotalRow}>
+                <Text style={styles.summaryLabel}>FINAL STACK</Text>
+                <Text style={styles.summaryTotal}>{matchEnd.finalStack.toLocaleString('en-US')}</Text>
+              </View>
+            </View>
+          </View>
+        )
+      })()}
+
+      {!!matchEnd && endPresentation === 'lore' && (
+        <View style={styles.lorePresentation} pointerEvents="none">
+          <Text style={styles.loreHeader}>
+            {(matchEnd.isVictory ?? matchEnd.finalStack > (round?.buyInAmount ?? 0)) ? 'LORE DISCOVERED' : 'LORE FRAGMENT LOCKED'}
+          </Text>
+          <Text style={styles.loreBody}>
+            {(matchEnd.isVictory ?? matchEnd.finalStack > (round?.buyInAmount ?? 0))
+              ? 'The Arena is not the final battlefield.'
+              : 'Defeat Monarch to uncover the message.'}
+          </Text>
+        </View>
+      )}
 
       {showVictoryVFX && (
         <BossVictoryVFX
@@ -1903,7 +2387,7 @@ export default function MonarchScreen() {
       {relicReveal && (
         <RoyalRelicReveal result={relicReveal} onClose={() => setRelicReveal(null)} />
       )}
-    </View>
+    </ImageBackground>
   )
 }
 
@@ -1955,6 +2439,107 @@ function SeatCard({ label, sub, small, avatarSource, avatarBorderColor, stillnes
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: COLOR.bg },
+  battleOverlay: {
+    ...StyleSheet.absoluteFillObject, top: 48, zIndex: 40,
+    backgroundColor: 'transparent', paddingHorizontal: 12,
+  },
+  showdownCountdownOverlay: {
+    ...StyleSheet.absoluteFillObject, zIndex: 58, backgroundColor: 'rgba(0,0,0,0.82)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  showdownCountdownLabel: { color: COLOR.gold, fontSize: 13, fontWeight: '800', letterSpacing: 4, marginBottom: 10 },
+  showdownCountdownNumber: { color: '#FFFFFF', fontSize: 88, fontWeight: '900' },
+  showdownCountdownSub: { color: COLOR.textSecondary, fontSize: 11, letterSpacing: 1.5, marginTop: 10 },
+  battlePhaseTitle: {
+    marginTop: 8, color: COLOR.gold, fontFamily: 'Cinzel_700Bold', fontSize: 17,
+    letterSpacing: 2, textAlign: 'center',
+  },
+  battleRuleText: { color: COLOR.textSecondary, fontSize: 9, letterSpacing: 1.2, textAlign: 'center', marginTop: 3 },
+  battleSeat: { position: 'absolute', alignItems: 'center', minWidth: 110 },
+  battleBoss: { top: 84, left: 0, right: 0 },
+  battleLeft: { top: 230, left: 4, alignItems: 'flex-start' },
+  battleRight: { top: 230, right: 4, alignItems: 'flex-end' },
+  battleHuman: { bottom: 110, left: 0, right: 0 },
+  battleSeatFolded: { opacity: 0.42 },
+  battleSeatName: { color: COLOR.text, fontSize: 11, fontWeight: '800', marginBottom: 5 },
+  battleWinner: { color: '#FFD76A' },
+  battleWinnerTag: { color: '#8DFFB5', fontSize: 9, fontWeight: '900', letterSpacing: 1.5, marginTop: 4 },
+  battleCenter: { position: 'absolute', top: '45%', left: 0, right: 0, alignItems: 'center' },
+  battleCenterResult: { color: '#FFD76A', fontSize: 14, fontWeight: '900', letterSpacing: 1.5 },
+  battlePot: { color: '#FFD76A', fontSize: 18, fontWeight: '900', letterSpacing: 2 },
+  battleCall: { color: COLOR.textSecondary, fontSize: 11, marginTop: 4 },
+  battleActionBar: {
+    position: 'absolute', left: 20, right: 20, bottom: 14, flexDirection: 'row',
+    justifyContent: 'center', gap: 12,
+  },
+  battleActionBtn: { flex: 1, maxWidth: 150 },
+  preGfShade: {
+    ...StyleSheet.absoluteFillObject, top: 48, zIndex: 75, backgroundColor: 'rgba(0,0,0,0.78)',
+    alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 18,
+  },
+  preGfCard: {
+    width: '100%', maxWidth: 390, maxHeight: '100%', padding: 12, borderRadius: 14,
+    backgroundColor: 'rgba(9,24,15,0.98)', borderWidth: 1.5, borderColor: '#FFD76A',
+  },
+  preGfTitle: { color: '#FFD76A', fontSize: 18, fontWeight: '900', letterSpacing: 2 },
+  preGfSubtitle: { color: '#A89060', fontSize: 8, fontWeight: '800', letterSpacing: 1, marginTop: 2, marginBottom: 9 },
+  preGfTabs: { flexDirection: 'row', gap: 6, marginBottom: 9 },
+  preGfTab: { flex: 1, minHeight: 42, paddingVertical: 6, borderRadius: 8, borderWidth: 1.5, borderColor: '#2A4A34', backgroundColor: 'rgba(0,0,0,0.3)', alignItems: 'center', justifyContent: 'center' },
+  preGfTabActive: { borderColor: '#FFD76A', backgroundColor: 'rgba(255,215,106,0.15)' },
+  preGfTabText: { color: '#A89060', fontSize: 12, fontWeight: '800' },
+  preGfTabTextActive: { color: '#FFD76A' },
+  preGfYouWin: { color: '#8DFFB5', fontSize: 8, fontWeight: '900', marginTop: 1 },
+  preGfWaiting: { color: '#A89060', fontSize: 7, fontWeight: '800', marginTop: 1 },
+  preGfSummaryRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  preGfCommunity: { alignItems: 'center', minWidth: 100 },
+  preGfSectionLabel: { color: '#38BDF8', fontSize: 9, fontWeight: '800', letterSpacing: 1.5, marginBottom: 4 },
+  preGfDeltaBox: { flex: 1, alignItems: 'center', paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#2A4A34', backgroundColor: 'rgba(0,0,0,0.3)' },
+  preGfDelta: { fontSize: 16, fontWeight: '900' },
+  preGfTokenLabel: { color: '#A89060', fontSize: 8 },
+  preGfPlayers: { gap: 3 },
+  preGfPlayer: { minHeight: 64, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, paddingVertical: 3, borderRadius: 8, borderWidth: 1, borderColor: '#2A4A34', backgroundColor: 'rgba(0,0,0,0.3)' },
+  preGfPlayerWinner: { borderColor: '#8DFFB5', backgroundColor: 'rgba(141,255,181,0.08)' },
+  preGfPlayerLabel: { width: 76, alignItems: 'center', marginRight: 6 },
+  preGfPlayerName: { color: '#F5F2E8', fontSize: 9, fontWeight: '800', maxWidth: 72 },
+  preGfPlayerSelf: { color: '#FFD76A' },
+  resultAvatar: { width: 26, height: 26, borderRadius: 13, borderWidth: 1, borderColor: '#FFD76A', marginBottom: 2 },
+  resultAvatarEmoji: { fontSize: 20, marginBottom: 2 },
+  preGfWinnerText: { color: '#8DFFB5', fontSize: 8, fontWeight: '900' },
+  preGfFoulText: { color: '#FF6B6B', fontSize: 8, fontWeight: '900' },
+  preGfContinue: { marginTop: 9, paddingVertical: 11, borderRadius: 10, borderWidth: 1.5, borderColor: '#FFD76A', backgroundColor: '#102218', alignItems: 'center' },
+  preGfContinueText: { color: '#FFD76A', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
+  presentationShade: {
+    ...StyleSheet.absoluteFillObject, zIndex: 70, backgroundColor: 'rgba(0,0,0,0.65)',
+    alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20,
+  },
+  outcomeCard: {
+    width: '100%', maxWidth: 330, padding: 24, borderRadius: 16, alignItems: 'center',
+    backgroundColor: 'rgba(15,36,24,0.98)', borderWidth: 1.5, borderColor: '#FFD76A',
+    transform: [{ translateY: 100 }],
+  },
+  outcomeTitle: { fontFamily: 'Cinzel_700Bold', fontSize: 20, fontWeight: '900', textAlign: 'center', letterSpacing: 1.5 },
+  outcomeSub: { color: COLOR.textSecondary, fontSize: 12, marginTop: 10 },
+  summaryCard: {
+    width: '100%', maxWidth: 330, padding: 20, borderRadius: 16,
+    backgroundColor: 'rgba(15,36,24,0.98)', borderWidth: 1.5, borderColor: '#FFD76A',
+    transform: [{ translateY: 100 }],
+  },
+  summaryTitle: { color: '#FFD76A', fontSize: 18, fontWeight: '900', letterSpacing: 2, textAlign: 'center', marginBottom: 14 },
+  summaryIdentity: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 8, marginBottom: 10, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,215,106,0.35)', backgroundColor: 'rgba(0,0,0,0.28)' },
+  summaryAvatar: { width: 44, height: 44, borderRadius: 22, borderWidth: 1.5, borderColor: '#FFD76A' },
+  summaryAvatarEmoji: { fontSize: 22 },
+  summaryPlayerName: { color: '#F5F2E8', fontSize: 13, fontWeight: '900' },
+  summaryPlayerResult: { fontSize: 8, fontWeight: '800', letterSpacing: 1, marginTop: 2 },
+  summaryRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 7, borderBottomWidth: 0.5, borderBottomColor: 'rgba(201,168,76,0.22)' },
+  summaryTotalRow: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: 12, marginTop: 4 },
+  summaryLabel: { color: '#C8C4B0', fontSize: 12, fontWeight: '700' },
+  summaryValue: { fontSize: 13, fontWeight: '900' },
+  summaryTotal: { color: '#FFD76A', fontSize: 15, fontWeight: '900' },
+  lorePresentation: {
+    position: 'absolute', zIndex: 65, left: 20, right: 20, bottom: 36,
+    borderWidth: 1, borderColor: 'rgba(255,215,106,0.55)', borderRadius: 12,
+    backgroundColor: 'rgba(15,36,24,0.97)', padding: 14, alignItems: 'center',
+  },
   // Sprint 6-7 §8.2 — Background overlay เต็มจอ ทับพื้นหลังเดิม (ไม่ต้องสร้าง asset ใหม่)
   bgOverlay: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: MONARCH_ACCENT.overlay,
@@ -2030,10 +2615,10 @@ const styles = StyleSheet.create({
   modalText: { color: COLOR.text, fontSize: 14, lineHeight: 20 },
   modalCloseBtn: { backgroundColor: COLOR.gold, borderRadius: 10, paddingVertical: 10, marginTop: 16, alignItems: 'center' },
   modalCloseBtnText: { color: COLOR.bg, fontSize: 15, fontWeight: '700' },
-  container: { flexGrow: 1, backgroundColor: COLOR.bg, alignItems: 'center', padding: 24 },
+  container: { flex: 1, backgroundColor: 'transparent', alignItems: 'center', paddingHorizontal: 8, paddingBottom: 4 },
   subtitle: { color: COLOR.textSecondary, fontSize: 14, marginBottom: 16 },
   error: { color: COLOR.red, fontSize: 14, marginBottom: 12 },
-  tableArea: { width: '100%', position: 'relative', alignItems: 'center', minHeight: 260, justifyContent: 'center' },
+  tableArea: { flex: 1, width: '100%', position: 'relative', alignItems: 'center', justifyContent: 'center' },
   dealCard: { position: 'absolute', left: '50%', top: '50%', marginLeft: -17, marginTop: -24 },
   dealCardImg: { width: 34, height: 48, borderRadius: 4 },
   midRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginVertical: 12 },
@@ -2054,9 +2639,17 @@ const styles = StyleSheet.create({
   g3EmptyText: { color: MONARCH_ACCENT.dashedBorder, fontSize: 6.5, lineHeight: 8, textAlign: 'center', paddingHorizontal: 2 },
   cards: { color: COLOR.text, fontSize: 15, fontWeight: '600', letterSpacing: 1 },
   humanPanel: {
-    width: '100%', backgroundColor: COLOR.bgPanel, borderColor: COLOR.border, borderWidth: 1,
-    borderRadius: 12, padding: 16, marginTop: 16, alignItems: 'center',
+    width: '100%', backgroundColor: 'rgba(5,14,10,0.72)', borderColor: 'rgba(201,168,76,0.28)', borderWidth: 1,
+    borderRadius: 12, paddingVertical: 6, paddingHorizontal: 8, marginTop: 2, alignItems: 'center',
   },
+  humanIdentityRow: { position: 'absolute', left: 8, top: 6, flexDirection: 'row', alignItems: 'center', gap: 6, zIndex: 5 },
+  humanAvatar: { width: 38, height: 38, borderRadius: 19, borderWidth: 1.5, borderColor: '#FFD76A' },
+  humanAvatarFallback: { backgroundColor: '#132019', alignItems: 'center', justifyContent: 'center' },
+  humanAvatarEmoji: { fontSize: 20 },
+  humanIdentityName: { color: '#FFD76A', fontSize: 9, fontWeight: '900', maxWidth: 82 },
+  humanIdentitySub: { color: '#A89060', fontSize: 7, fontWeight: '800', letterSpacing: 1 },
+  battleHumanAvatar: { width: 36, height: 36, borderRadius: 18, borderWidth: 1.5, borderColor: '#FFD76A', marginBottom: 4 },
+  battleHumanAvatarEmoji: { fontSize: 18 },
   buyIn: { color: COLOR.gold, fontSize: 14, marginTop: 10, fontWeight: '600' },
   submitBtn: { backgroundColor: COLOR.gold, borderRadius: 10, paddingVertical: 12, paddingHorizontal: 24, marginTop: 14 },
   submitBtnDisabled: { backgroundColor: COLOR.border },

@@ -62,7 +62,7 @@ type TabKey = 'items' | 'fun' | 'vip' | 'packs' | 'cosmetics' | 'vault'
 // Tier progression lock — Competitive Items ปลดล็อคทีละ Tier (มติลุงเยาะ 2026-07-26)
 // ceiling model เดียวกับ profile.tsx (TIER_ORDER local const): 'D' = ยังไม่เคยปลด Tier ไหนเลย
 type TierKeyLocal = 'initiate' | 'adept' | 'mastermind' | 'highNoble'
-const CEILING_ORDER = ['D', 'initiate', 'adept', 'mastermind', 'highNoble'] as const
+const CEILING_ORDER = ['D', 'initiate', 'adept', 'mastermind', 'highNoble', 'grandmaster'] as const
 const TIER_LETTER: Record<TierKeyLocal, string> = {
   initiate:   TIER_CONFIG.initiate.letter,
   adept:      TIER_CONFIG.adept.letter,
@@ -851,25 +851,6 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
                         {vault.ascendantEligible
                           ? `BUY — 👑 ${vault.config.ascendantPassPriceCrown}`
                           : ascendantLockLabel(vault.ascendantEligibilityReason)}
-                      </Text>
-                    </View>
-                  </PressScale>
-                )}
-              </GlassCard>
-
-              {/* Arena Pass */}
-              <GlassCard style={s.vaultCard}>
-                <Text style={s.vaultCardTitle}>🏛️ Arena Pass</Text>
-                <Text style={s.vaultCardDesc}>
-                  Final gate into Tier S / The Arena — required whether you Ascend or climb the long way (1M Token + 180 days).
-                </Text>
-                {vault?.arenaUnlocked ? (
-                  <Text style={s.vaultStatusTxt}>✅ Unlocked</Text>
-                ) : (
-                  <PressScale onPress={() => setConfirmAction('arena')} disabled={!vault?.arenaPassEligible || vaultBusy}>
-                    <View style={[s.vaultBuyBtn, (!vault?.arenaPassEligible || vaultBusy) && s.vaultBuyBtnDisabled]}>
-                      <Text style={s.vaultBuyBtnTxt}>
-                        {vault?.arenaPassEligible ? `BUY — 👑 ${vault.config.arenaPassPriceCrown}` : '🔒 Not Eligible Yet'}
                       </Text>
                     </View>
                   </PressScale>

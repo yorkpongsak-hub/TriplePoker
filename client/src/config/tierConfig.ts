@@ -16,7 +16,7 @@
 // 'demo' ถูกลบออกจากที่นี่แล้ว (เคยเป็น tier placeholder implemented:false ไม่เคยเล่นได้จริง) —
 // ตำแหน่งเดิมในล็อบบี้ถูกแทนที่ด้วยปุ่ม "How to Play" (เปิด Onboarding ตรงๆ ไม่ผ่าน Tier system นี้แล้ว)
 
-export type Tier = 'initiate' | 'adept' | 'mastermind' | 'high_noble' | 'last_boss'
+export type Tier = 'initiate' | 'adept' | 'mastermind' | 'high_noble' | 'grandmaster' | 'last_boss'
 
 // Threshold ชุดนี้ต้องตรงกับ server/src/config/gameConfig.ts (tierRanges + progressionGate) เสมอ —
 // Canon: TriplePoker_EconomyProgression_Spec_v2_0.md §5 (2026-07-30, แทนที่ชุดเดิม 10k/40k/100k)
@@ -30,24 +30,32 @@ export const TIER_CONFIG: Record<Tier, { label: string; letter: string; minToken
   mastermind:  { label: 'Mastermind',    letter: 'A',  minToken: 20_000,  implemented: true,  badgeColor: '#FFD76A' },
   // letter เดิมเป็น 'S' — แก้เป็น 'A+' ตาม canon ล่าสุด (profile.tsx TIER_INFO) High Noble = A+, สงวน S ไว้ให้ Ascendant
   high_noble:  { label: 'High Noble',    letter: 'A+', minToken: 100_000, implemented: true,  badgeColor: '#FF6B6B' },
+  grandmaster: { label: 'Grandmaster',   letter: 'S',  minToken: 1_000_001, implemented: true, badgeColor: '#E9C96B' },
   last_boss:   { label: 'The Last Boss', letter: 'S+', minToken: 0,       implemented: false, badgeColor: '#FFC857' },
 }
 
 export function meetsLastBossCondition(_token: number): boolean { return false }
 
-export function isEligible(tier: Tier, token: number): boolean {
+export function isEligible(tier: Tier, token: number, tierUnlockedMax?: string | null): boolean {
   if (tier === 'last_boss') return meetsLastBossCondition(token)
+  if (tier === 'grandmaster' && tierUnlockedMax === 'grandmaster') return true
   return token >= TIER_CONFIG[tier].minToken
 }
 
 // ─── Canon 4-tier ที่คำนวณจาก token_balance ได้จริง (TriplePoker_MasterPlan_v10_0) ───
-export type TierKey = 'initiate' | 'adept' | 'mastermind' | 'highNoble'
+export type TierKey = 'initiate' | 'adept' | 'mastermind' | 'highNoble' | 'grandmaster'
 
 // คำนวณ tier สดจาก token_balance — ใช้แทนการอ่าน users.tier ตรงๆ (คอลัมน์นั้นไม่มี pipeline ไหนอัปเดตจริง)
 // อ้างอิง threshold จาก TIER_CONFIG ด้านบนตัวเดียว กันเลข drift ระหว่าง 2 ค่า
 export function getTierFromToken(tokenBalance: number): TierKey {
+  if (tokenBalance >= TIER_CONFIG.grandmaster.minToken) return 'grandmaster'
   if (tokenBalance >= TIER_CONFIG.high_noble.minToken) return 'highNoble'
   if (tokenBalance >= TIER_CONFIG.mastermind.minToken) return 'mastermind'
   if (tokenBalance >= TIER_CONFIG.adept.minToken) return 'adept'
   return 'initiate'
+}
+
+export function getAuthoritativeDisplayTier(tokenBalance: number, tierUnlockedMax?: string | null): TierKey {
+  if (tierUnlockedMax === 'grandmaster') return 'grandmaster'
+  return getTierFromToken(tokenBalance)
 }

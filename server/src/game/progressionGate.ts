@@ -13,12 +13,12 @@ import { gameConfig } from '../config/gameConfig'
 // ลำดับ Tier จากต่ำไปสูง — 'D' คือค่าเริ่มต้นก่อนปลดล็อคอะไรเลย (DB default ของ tier_unlocked_max)
 // ย้ายมาจาก tierUnlockService.ts เดิม (single source ของลำดับ Tier — ทั้ง gameSocket.ts และ
 // tierUnlockService.ts ต้อง import จากที่นี่ ห้ามประกาศ array ซ้ำที่อื่นอีก)
-export const TIER_ORDER = ['D', 'initiate', 'adept', 'mastermind', 'highNoble'] as const
+export const TIER_ORDER = ['D', 'initiate', 'adept', 'mastermind', 'highNoble', 'grandmaster'] as const
 export type TierOrderKey = typeof TIER_ORDER[number]
 
 // Tier ที่มี Progression Gate จริง (initiate ไม่มี gate เพราะเป็น Tier แรกที่ทุกคนเข้าได้ฟรี)
-// เพิ่ม 'ascendant' — รวม Skill Gate เดิมที่เคยแยกอยู่ 2 ที่ (tierUnlockService.ts เช็ค Nine Sentinels /
-// ascendantGate.ts เช็ค Monarch Slayer) เข้าเป็นระบบเดียวที่นี่
+// 'ascendant' ยังอยู่ใน type เพื่อ compatibility กับ progression config เดิม แต่ Ascendant shortcut
+// ไม่เรียก Skill Gate/Monarch Slayer แล้วตาม Arena Tier S+ Canon Addendum v1.0
 // เพิ่ม 'arena' (2026-07-30) — เส้นทางสำรองเข้า Tier S แบบไม่ผ่าน Ascendant (token >= 1M + 180 วัน)
 // ใช้จริงครั้งแรกใน crownVaultService.ts's checkArenaPassEligibility — ก่อนหน้านี้มีแค่ config
 // ไว้เฉยๆ ("ยังไม่ถูก wire เข้า flow จริง") ยังไม่เคยเรียก canUnlockTier('arena', ...) เลย

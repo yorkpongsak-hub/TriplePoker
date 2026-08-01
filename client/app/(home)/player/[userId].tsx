@@ -32,6 +32,7 @@ const TIER_LABEL: Record<string, string> = {
   adept: 'Adept (B)',
   mastermind: 'Mastermind (A)',
   highNoble: 'High Noble (A+)',
+  grandmaster: 'Grandmaster (S)',
 }
 
 interface PlayerStats {

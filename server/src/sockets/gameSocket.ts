@@ -20,7 +20,7 @@ import {
 import {
   rollMonarchEntry, startMonarchMatch, startMonarchRound, getMonarchMatchState,
   buildMonarchRoundSnapshot, submitMonarchArrangement, submitMonarchGrandFinaleAction,
-  settleAndEndMonarchMatch, clearMonarchDisconnectState,
+  settleAndEndMonarchMatch, clearMonarchDisconnectState, startMonarchArrangementTimer,
 } from "../game/monarchEngine";
 import { supabaseAdmin } from "../config/supabase";
 import { TIER_ORDER } from "../game/progressionGate";
@@ -592,7 +592,7 @@ export function registerGameSocket(io: Server): void {
         // High Noble ปกติเลย — pity ผูกกับ userId ของคนนี้เอง (Batch 1 Task 3)
         if (tier === 'highNoble' && await rollMonarchEntry(userId)) {
           const monarchRoomId = `monarch_${userId}_${Date.now()}`;
-          const state = await startMonarchMatch(io, monarchRoomId, userId, userName);
+          const state = await startMonarchMatch(io, monarchRoomId, userId, userName, avatarUrl);
           if (state) {
             startMonarchRound(io, monarchRoomId);
             // ไม่ join ห้อง/emit round data จาก socket นี้ (matchmaking socket เดิม กำลังจะ
@@ -656,6 +656,14 @@ export function registerGameSocket(io: Server): void {
       socket.emit("monarch_round_start", buildMonarchRoundSnapshot(state));
     });
 
+    socket.on("monarch_arrangement_ready", (
+      data: { roomId: string; userId: string },
+      ack?: (result: { ok: boolean; deadlineAt?: number; reason?: string }) => void,
+    ) => {
+      const result = startMonarchArrangementTimer(io, data.roomId, data.userId);
+      ack?.(result.ok ? { ok: true, deadlineAt: result.deadlineAt } : result);
+    });
+
     // Sprint 3: Auto Arrange (arrangement omitted → server auto-arrange, logic เดียวกับ Minion)
     // Sprint 6: ส่ง arrangement ที่จัดเองมาด้วยได้ (tap-swap UI ผ่าน PlayerHandView) — foul คืน
     // reason:'FOUL' ให้แก้ไขต่อได้ ไม่ mark submitted (ต่างจาก error อื่นที่เป็น dead-end)
@@ -671,8 +679,8 @@ export function registerGameSocket(io: Server): void {
     });
 
     // Sprint 5: Grand Finale Call/Fold (G3 เท่านั้น — G1/G2 เป็นแค่ reveal ธรรมดา)
-    socket.on("submit_monarch_grand_finale_action", (data: { roomId: string; userId: string; action: 'call' | 'fold' }) => {
-      const result = submitMonarchGrandFinaleAction(io, data.roomId, data.userId, data.action);
+    socket.on("submit_monarch_grand_finale_action", (data: { roomId: string; userId: string; action: 'call' | 'fold'; revealedCardKeys?: string[] }) => {
+      const result = submitMonarchGrandFinaleAction(io, data.roomId, data.userId, data.action, data.revealedCardKeys);
       if (!result.ok) {
         socket.emit("room_error", { message: result.reason ?? "Could not submit. Please try again." });
       }

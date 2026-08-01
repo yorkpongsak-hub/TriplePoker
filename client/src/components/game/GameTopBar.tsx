@@ -37,11 +37,13 @@ export interface GameTopBarProps {
   // Monarch (มติลุงเยาะ): ซ่อน "R1/1" — บอกผู้เล่นตรงๆ ว่าเล่นแค่รอบเดียวจะเสียเซอร์ไพรส์
   // opt-in ล้วน (default false = ของเดิมทุก Tier ไม่เปลี่ยน)
   hideRound?: boolean
+  // Optional for special encounters that should not display a table/tier name.
+  hideTierName?: boolean
 }
 
 const GameTopBar: React.FC<GameTopBarProps> = ({
   tierName, tierStars, round, totalRounds = 5, isWeb, insetsTop, opacity,
-  stackAmount, stackDelta, children, rightSlot, leftSlot, hideRound = false,
+  stackAmount, stackDelta, children, rightSlot, leftSlot, hideRound = false, hideTierName = false,
 }) => {
   const showStack = stackAmount !== undefined
 
@@ -56,7 +58,7 @@ const GameTopBar: React.FC<GameTopBarProps> = ({
             แก้ที่ไฟล์กลางจุดเดียว ทุก Tier จึงได้ลำดับเดียวกันหมดตามกติกา "Initiate = ต้นแบบทุก Tier" */}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: leftSlot ? 6 : 50 }}>
           <View style={{ alignItems: 'center', gap: 2 }}>
-            <View style={s.tierBadge}><Text style={s.tierText}>{tierName}</Text></View>
+            {!hideTierName && <View style={s.tierBadge}><Text style={s.tierText}>{tierName}</Text></View>}
             <Text style={s.starsText}>{'★'.repeat(tierStars)}</Text>
           </View>
           {!hideRound && <Text style={s.roundText}>R{round}/{totalRounds}</Text>}

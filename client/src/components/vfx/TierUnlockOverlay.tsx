@@ -31,6 +31,7 @@ const C = {
 
 // Tier key (camelCase) -> ชื่อแสดงผลบนการ์ด (UI text ภาษาอังกฤษทั้งหมด)
 const TIER_LABELS: Record<string, string> = {
+  grandmaster: 'GRANDMASTER • TIER S',
   initiate: 'INITIATE',
   adept: 'ADEPT',
   mastermind: 'MASTERMIND',

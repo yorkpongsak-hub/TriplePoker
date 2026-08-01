@@ -195,4 +195,24 @@ export default async function statsRoutes(fastify: FastifyInstance) {
       return reply.send({ success: true, history: data ?? [] })
     }
   )
+
+  // Boss records are deliberately separate from match_wins/History.
+  fastify.get<{ Params: { userId: string } }>(
+    '/stats/player/:userId/bosses',
+    async (request: FastifyRequest<{ Params: { userId: string } }>, reply: FastifyReply) => {
+      const { userId } = request.params
+      const { data, error } = await supabaseAdmin
+        .from('player_boss_stats')
+        .select('boss_id, encounters, victories, first_defeated_at, last_encountered_at, last_defeated_at, best_hand')
+        .eq('user_id', userId)
+        .order('last_encountered_at', { ascending: false })
+
+      if (error) {
+        console.error('[STATS] Error querying Boss stats for', userId, error)
+        return reply.send({ success: true, bosses: [], note: 'Boss stats unavailable — run migration 013_boss_stats.sql.' })
+      }
+
+      return reply.send({ success: true, bosses: data ?? [] })
+    }
+  )
 }

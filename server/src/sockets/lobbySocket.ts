@@ -15,6 +15,7 @@ import { getOpenTablesByTier, GameTable, Tier } from '../game/tableRegistry';
 import { canUnlockTier, PROGRESSION_TIERS, TIER_ORDER } from '../game/progressionGate';
 import { gameConfig } from '../config/gameConfig';
 import { supabaseAdmin } from '../config/supabase';
+import { canAccessGrandmaster } from '../game/tierAuthority';
 
 const TIER_ROOM = (tier: Tier) => `lobby:${tier}`;
 
@@ -55,14 +56,15 @@ async function buildTierEligibility(userId: string): Promise<Record<string, Tier
 
   for (const gateTier of PROGRESSION_TIERS) {
     const result = canUnlockTier(gateTier, eligibleToken, data.created_at, { conqueredSentinels, monarchVictories });
+    const grandmasterAccess = gateTier === 'arena' ? canAccessGrandmaster(data.token_balance ?? 0, data.tier_unlocked_max) : false
     const entry: TierEligibilityEntry = {
-      tokenOk: !result.missing.includes('TOKEN'),
-      daysOk: !result.missing.includes('DAYS'),
-      skillOk: !result.missing.includes('SKILL'),
+      tokenOk: gateTier === 'arena' ? grandmasterAccess : !result.missing.includes('TOKEN'),
+      daysOk: gateTier === 'arena' ? true : !result.missing.includes('DAYS'),
+      skillOk: gateTier === 'arena' ? true : !result.missing.includes('SKILL'),
       // ascendant/arena ไม่อยู่ใน TIER_ORDER/ceiling model (tier_unlocked_max ไม่รองรับ 2 ค่านี้) —
       // ใช้ผลเช็คสดแทน ceiling ตรงๆ ไปเลย ต่างจาก adept/mastermind/highNoble ที่ปลดแล้วปลดเลยตาม
       // tier_unlocked_max (TIER_ORDER.indexOf คืน -1 ให้ 2 ตัวนี้ ห้ามเอาไปเทียบ ceiling เด็ดขาด)
-      unlocked: (gateTier === 'ascendant' || gateTier === 'arena') ? result.passed : TIER_ORDER.indexOf(gateTier) <= currentMaxIdx,
+      unlocked: gateTier === 'arena' ? grandmasterAccess : gateTier === 'ascendant' ? result.passed : TIER_ORDER.indexOf(gateTier) <= currentMaxIdx,
     };
     const minDays = gameConfig.progressionGate[gateTier].minDays;
     if (minDays != null) {

@@ -36,7 +36,7 @@ export const gameConfig = {
     mastermind: { minToken: 20_000,     minDays: 10,   skill: 'pass' as const },
     highNoble:  { minToken: 100_000,    minDays: 90,   skill: 'nineSentinels' as const },
     ascendant:  { minToken: 600_000,    minDays: null as number | null, skill: 'monarchSlayer' as const },
-    arena:      { minToken: 1_000_000,  minDays: 180,  skill: 'pass' as const },
+    arena:      { minToken: 1_000_001,  minDays: null as number | null, skill: 'pass' as const },
   },
 
   // ─── Token Economy (Daily) ──────────────────────────────────
@@ -383,7 +383,7 @@ export const gameConfig = {
     // Batch 1 Task 6 — เวลาจัดไพ่ก่อนหมดเวลา auto-seal (ห้ามช่วยจัด ดู forceSealMonarchArrangement
     // ใน monarchEngine.ts) ยังไม่มี UI countdown ในบัตช์นี้ (client ได้ค่านี้ผ่าน monarch_round_start's
     // arrangementDeadlineAt แล้ว เตรียมไว้ให้ Batch 2 ใช้ต่อ)
-    arrangementDeadlineMs: 40_000,
+    arrangementDeadlineMs: 60_000,
     // Personality Lock ของ Monarch — แบ่ง Total Hand Strength (bestArrangement) เป็น 4 ช่วงด้วย quartile threshold
     // (Spec v1.3 ให้แค่คำบรรยายเชิงคุณภาพ "แข็งมาก/ปานกลาง/ปานกลางค่อนอ่อน/อ่อน" — ตัวเลขนี้เป็นค่าเริ่มต้นที่ปรับจูนได้หลัง playtest จริง)
     handStrengthQuartile: { veryStrong: 0.75, medium: 0.5, mediumWeak: 0.25 },

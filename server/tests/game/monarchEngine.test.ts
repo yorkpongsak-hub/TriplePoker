@@ -19,6 +19,19 @@ const mockRecordMonarchEncounter = jest.fn(async (..._args: any[]) => undefined)
 jest.mock('../../src/game/monarchSpawn', () => ({
   recordMonarchVictory: (...args: any[]) => mockRecordMonarchVictory(...args),
   recordMonarchEncounter: (...args: any[]) => mockRecordMonarchEncounter(...args),
+  rollAndRecordMonarchRelic: async () => null,
+}))
+
+const mockRecordMatchStats = jest.fn(async (..._args: any[]) => undefined)
+const mockRecordBossResult = jest.fn(async (input: any) => {
+  await mockRecordMonarchEncounter(input.userId)
+  if (input.won) await mockRecordMonarchVictory(input.userId)
+})
+jest.mock('../../src/game/matchStatsService', () => ({
+  recordMatchStats: (...args: any[]) => mockRecordMatchStats(...args),
+}))
+jest.mock('../../src/game/bossStatsService', () => ({
+  recordBossResult: (input: any) => mockRecordBossResult(input),
 }))
 
 import { Card } from '../../src/game/deck'
@@ -78,6 +91,8 @@ describe('settleMonarchMatch — netDelta > 0 ตัดสิน badge + Pot×2 
     mockSettleEscrow.mockClear()
     mockRecordMonarchVictory.mockClear()
     mockRecordMonarchEncounter.mockClear()
+    mockRecordMatchStats.mockClear()
+    mockRecordBossResult.mockClear()
   })
 
   test('net +1 → badge + Pot×2 (potMultiplier=2.0 จาก gameConfig จริง)', async () => {
@@ -87,6 +102,8 @@ describe('settleMonarchMatch — netDelta > 0 ตัดสิน badge + Pot×2 
 
     expect(mockRecordMonarchVictory).toHaveBeenCalledWith(HUMAN)
     expect(mockRecordMonarchEncounter).toHaveBeenCalledWith(HUMAN)
+    expect(mockRecordMatchStats).toHaveBeenCalledWith([expect.objectContaining({ userId: HUMAN, won: true })])
+    expect(mockRecordBossResult).toHaveBeenCalledWith(expect.objectContaining({ userId: HUMAN, bossId: 'monarch', won: true }))
     // payout = netDelta(1) * potMultiplier(2.0) = 2 → finalStack = buyIn + 2
     expect(mockSettleEscrow).toHaveBeenCalledWith(HUMAN, 'escrow_1', BUY_IN + 2)
   })
@@ -98,6 +115,8 @@ describe('settleMonarchMatch — netDelta > 0 ตัดสิน badge + Pot×2 
 
     expect(mockRecordMonarchVictory).not.toHaveBeenCalled()
     expect(mockRecordMonarchEncounter).toHaveBeenCalledWith(HUMAN) // encounter นับทุกกรณี
+    expect(mockRecordMatchStats).toHaveBeenCalledWith([expect.objectContaining({ userId: HUMAN, won: false })])
+    expect(mockRecordBossResult).toHaveBeenCalledWith(expect.objectContaining({ userId: HUMAN, bossId: 'monarch', won: false }))
     expect(mockSettleEscrow).toHaveBeenCalledWith(HUMAN, 'escrow_1', BUY_IN) // payout = 0
   })
 
@@ -312,14 +331,14 @@ describe('settleAndEndMonarchMatch — disconnect resolution (มติ commit-b
     await jest.advanceTimersByTimeAsync(4_000 + 4_000) // g1_reveal → g2_reveal → grand_finale (turn=human)
 
     expect(getMonarchMatchState(roomId)!.phase).toBe('grand_finale')
-    const callResult = submitMonarchGrandFinaleAction(io, roomId, humanUserId, 'call')
+    const callResult = submitMonarchGrandFinaleAction(io, roomId, humanUserId, 'call', keys.slice(6, 9))
     expect(callResult.ok).toBe(true)
     expect(getMonarchMatchState(roomId)!.grandFinale!.turn).toBe('boss') // commit ไปแล้ว (มติ commit-based)
 
     await settleAndEndMonarchMatch(io, roomId) // disconnect หลังกด Call
     expect(mockSettleEscrow).not.toHaveBeenCalled() // ยังไม่จบ รอ boss's 2.5s decision timer เดิม
 
-    await jest.advanceTimersByTimeAsync(2_500) // boss ตัดสินใจจริงตามไพ่ผนึก (ไม่ใช่ auto-fold)
+    await jest.advanceTimersByTimeAsync(5_000) // ครอบคลุม boss decision + delayed showdown กรณี Call
     expect(mockSettleEscrow).toHaveBeenCalledTimes(1) // จบจริงแล้ว ไม่ freeze
   })
 
@@ -364,7 +383,42 @@ describe('settleAndEndMonarchMatch — disconnect resolution (มติ commit-b
     await jest.advanceTimersByTimeAsync(20_000) // เวลาผ่านไปเกิน 20s เดิมแล้ว แต่ timer ถูกยกเลิกไปแล้ว
     expect(mockSettleEscrow).not.toHaveBeenCalled() // ไม่ถูก auto-fold ทั้งที่กลับมาแล้ว
 
-    const callResult = submitMonarchGrandFinaleAction(io, roomId, humanUserId, 'call') // เล่นต่อได้จริง
+    const callResult = submitMonarchGrandFinaleAction(io, roomId, humanUserId, 'call', keys.slice(6, 9)) // เล่นต่อได้จริง
     expect(callResult.ok).toBe(true)
+  })
+
+  test('Grand Finale two rounds: R1 reveals 3; R2 reveals 4 then settles', async () => {
+    const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0)
+    const { roomId, humanUserId, io, emitted } = await startMatch()
+    const state = getMonarchMatchState(roomId)!
+    const keys = toKeys(state.cardsMap![humanUserId])
+    submitMonarchArrangement(io, roomId, humanUserId, {
+      g1: keys.slice(0, 3), g2: keys.slice(3, 6), g3: keys.slice(6, 11),
+    })
+    await jest.advanceTimersByTimeAsync(8_000)
+    const live = getMonarchMatchState(roomId)!
+    live.foulMap![humanUserId] = false
+    live.seats.find(s => s.role === 'boss')!.personality = 'reaper'
+
+    expect(submitMonarchGrandFinaleAction(io, roomId, humanUserId, 'call').ok).toBe(false)
+    const selectedRevealKeys = [keys[10], keys[8], keys[6]]
+    expect(submitMonarchGrandFinaleAction(io, roomId, humanUserId, 'call', selectedRevealKeys).ok).toBe(true)
+    await jest.advanceTimersByTimeAsync(2_500)
+    expect(live.grandFinale!.round).toBe(2)
+    expect(live.grandFinale!.revealedCount).toBe(3)
+    expect(live.grandFinale!.turn).toBe('human')
+    const round1 = emitted.filter(e => e.event === 'monarch_grand_finale_round_complete').at(-1)
+    expect(round1?.data.round).toBe(1)
+    expect(round1?.data.reveals.every((r: any) => r.g3Cards.length === 3)).toBe(true)
+    expect(round1?.data.reveals.find((r: any) => r.id === humanUserId)?.g3Cards).toEqual(selectedRevealKeys)
+
+    expect(submitMonarchGrandFinaleAction(io, roomId, humanUserId, 'call').ok).toBe(true)
+    await jest.advanceTimersByTimeAsync(2_500)
+    const round2 = emitted.filter(e => e.event === 'monarch_grand_finale_round_complete').at(-1)
+    expect(round2?.data.round).toBe(2)
+    expect(round2?.data.reveals.every((r: any) => r.g3Cards.length === 4)).toBe(true)
+    await jest.advanceTimersByTimeAsync(1_500)
+    expect(mockSettleEscrow).toHaveBeenCalledTimes(1)
+    randomSpy.mockRestore()
   })
 })

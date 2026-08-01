@@ -5,8 +5,11 @@
 // The Sage Unicorn Studio Co., Ltd.
 
 import React, { useEffect, useState } from 'react'
-import { Modal, View, Text, TouchableOpacity, StyleSheet } from 'react-native'
+import { Image, Modal, ScrollView, View, Text, TouchableOpacity, StyleSheet } from 'react-native'
 import { getReduceMotion, setReduceMotion } from '../../utils/reduceMotion'
+import { TABLE_SKINS, TABLE_SKIN_META } from '../../config/tableSkins'
+import { useTableSkins } from '../../hooks/useTableSkins'
+import { useAuthStore } from '../../store/authStore'
 
 const C = {
   bg:      '#0F2418',
@@ -25,6 +28,8 @@ interface Props {
 
 export default function SettingsModal({ visible, onClose }: Props) {
   const [reduceMotion, setReduceMotionState] = useState(false)
+  const isVip = useAuthStore(s => (s.profile?.vip_status ?? 'none') !== 'none')
+  const { unlockedSkins, activeSkin, loading: skinsLoading, selectSkin } = useTableSkins()
 
   // โหลดค่าปัจจุบันทุกครั้งที่เปิด modal (กันเคส toggle ถูกแก้จากที่อื่นระหว่างที่ modal ปิดอยู่)
   useEffect(() => {
@@ -41,7 +46,7 @@ export default function SettingsModal({ visible, onClose }: Props) {
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.overlay}>
-        <View style={styles.card}>
+        <ScrollView style={styles.card} contentContainerStyle={styles.cardContent}>
           <Text style={styles.title}>Settings</Text>
 
           <TouchableOpacity style={styles.row} onPress={handleToggle} activeOpacity={0.8}>
@@ -54,10 +59,37 @@ export default function SettingsModal({ visible, onClose }: Props) {
             </View>
           </TouchableOpacity>
 
+          <View style={styles.skinSection}>
+            <Text style={styles.sectionTitle}>Table Skin</Text>
+            <Text style={styles.sectionSub}>
+              {isVip ? 'VIP rewards unlock as you advance through the tables.' : 'Table skins are rewards for VIP members.'}
+            </Text>
+            <View style={styles.skinGrid}>
+              {TABLE_SKIN_META.map(skin => {
+                const unlocked = unlockedSkins.includes(skin.id)
+                const active = activeSkin === skin.id
+                return (
+                  <TouchableOpacity
+                    key={skin.id}
+                    disabled={!unlocked || skinsLoading}
+                    onPress={() => { void selectSkin(skin.id) }}
+                    style={[styles.skinCard, active && styles.skinCardActive, !unlocked && styles.skinCardLocked]}
+                  >
+                    <Image source={TABLE_SKINS[skin.id]} style={styles.skinImage} resizeMode="cover" />
+                    {!unlocked && <View style={styles.skinLock}><Text style={styles.skinLockText}>🔒</Text></View>}
+                    {active && <Text style={styles.activeBadge}>ACTIVE</Text>}
+                    <Text style={styles.skinName} numberOfLines={1}>{skin.name}</Text>
+                    <Text style={styles.skinUnlock}>{unlocked ? 'Unlocked' : skin.unlock}</Text>
+                  </TouchableOpacity>
+                )
+              })}
+            </View>
+          </View>
+
           <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
             <Text style={styles.closeBtnText}>Close</Text>
           </TouchableOpacity>
-        </View>
+        </ScrollView>
       </View>
     </Modal>
   )
@@ -78,8 +110,9 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: C.gold,
     borderRadius: 16,
-    padding: 20,
+    maxHeight: '88%',
   },
+  cardContent: { padding: 20 },
   title: {
     color: C.gold,
     fontSize: 18,
@@ -114,6 +147,19 @@ const styles = StyleSheet.create({
     backgroundColor: C.text,
   },
   toggleThumbOn: { transform: [{ translateX: 20 }] },
+  skinSection: { marginTop: 18 },
+  sectionTitle: { color: C.gold, fontSize: 14, fontWeight: '900' },
+  sectionSub: { color: C.textSec, fontSize: 10, marginTop: 3, marginBottom: 10 },
+  skinGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  skinCard: { width: '48%', borderRadius: 10, overflow: 'hidden', borderWidth: 1, borderColor: C.border, backgroundColor: '#081C12', paddingBottom: 7 },
+  skinCardActive: { borderColor: C.green, borderWidth: 2 },
+  skinCardLocked: { opacity: 0.48 },
+  skinImage: { width: '100%', height: 112 },
+  skinLock: { ...StyleSheet.absoluteFillObject, bottom: 37, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.48)' },
+  skinLockText: { fontSize: 23 },
+  activeBadge: { position: 'absolute', top: 5, right: 5, color: '#081C12', backgroundColor: C.green, borderRadius: 5, paddingHorizontal: 5, paddingVertical: 2, fontSize: 8, fontWeight: '900' },
+  skinName: { color: C.text, fontSize: 10, fontWeight: '800', paddingHorizontal: 7, marginTop: 5 },
+  skinUnlock: { color: C.textSec, fontSize: 8, paddingHorizontal: 7, marginTop: 2 },
   closeBtn: {
     marginTop: 18,
     alignItems: 'center',

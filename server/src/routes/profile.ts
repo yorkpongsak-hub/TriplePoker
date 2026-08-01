@@ -4,13 +4,44 @@ import { recoverStaleEscrow } from '../game/gameLoop'
 import { assertVip, assertVipPro, VipStatus } from '../middleware/vipGuard'
 import { getAvatarPreset, isAvatarKeyAllowed, DEFAULT_AVATAR_KEY } from '../constants/avatarPresets'
 import { getAscendantStatus } from '../game/crownVaultService'
+import { getTableSkinState, selectTableSkin } from '../game/tableSkinService'
 
 // camelCase ตาม tier_unlocked_max ceiling model (TIER_ORDER ฝั่ง tierUnlockService.ts) -
 // ไม่รวม 'D' (ค่าเริ่มต้นก่อนปลดล็อค ไม่มีอะไรให้ฉลอง) และไม่รวม last_boss (Last Boss อยู่ใน The Arena
 // แอปแยก ตาม Architecture Rule ห้ามเอา logic มาปนใน Main App)
-const VALID_TIERS = ['initiate', 'adept', 'mastermind', 'highNoble'] as const
+const VALID_TIERS = ['initiate', 'adept', 'mastermind', 'highNoble', 'grandmaster'] as const
 
 export async function profileRoutes(app: FastifyInstance) {
+
+  app.get('/profile/table-skins', async (request, reply) => {
+    const token = request.headers.authorization?.replace('Bearer ', '')
+    if (!token) return reply.status(401).send({ error: 'Unauthorized' })
+    const { data: authData, error: authError } = await supabase.auth.getUser(token)
+    if (authError || !authData.user) return reply.status(401).send({ error: 'Invalid token' })
+    try {
+      return reply.send({ success: true, ...(await getTableSkinState(authData.user.id)) })
+    } catch (err: any) {
+      return reply.status(err?.message === 'USER_NOT_FOUND' ? 404 : 500).send({ error: err?.message ?? 'DB_ERROR' })
+    }
+  })
+
+  app.post<{ Body: { skinId?: number } }>('/profile/table-skins/select', async (request, reply) => {
+    const token = request.headers.authorization?.replace('Bearer ', '')
+    if (!token) return reply.status(401).send({ error: 'Unauthorized' })
+    const { data: authData, error: authError } = await supabase.auth.getUser(token)
+    if (authError || !authData.user) return reply.status(401).send({ error: 'Invalid token' })
+    const skinId = request.body?.skinId
+    if (!Number.isInteger(skinId) || skinId! < 1 || skinId! > 4) {
+      return reply.status(400).send({ error: 'INVALID_SKIN' })
+    }
+    try {
+      return reply.send({ success: true, ...(await selectTableSkin(authData.user.id, skinId!)) })
+    } catch (err: any) {
+      if (err?.message === 'VIP_REQUIRED') return reply.status(403).send({ error: 'VIP_REQUIRED' })
+      if (err?.message === 'SKIN_LOCKED') return reply.status(403).send({ error: 'SKIN_LOCKED' })
+      return reply.status(500).send({ error: 'DB_ERROR' })
+    }
+  })
 
   // หลัง app กลับจาก background/crash: คืนข้อมูล escrow ล่าสุดให้ client ใช้แจ้งยอดที่คืนจริง
   // endpoint นี้ไม่ settle เองและไม่คำนวณเงิน — อ่านผลที่ atomic RPC เขียนสำเร็จแล้วเท่านั้น

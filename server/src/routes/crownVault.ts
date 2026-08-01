@@ -63,11 +63,11 @@ export default async function crownVaultRoutes(fastify: FastifyInstance) {
         tokenBalance: data.token_balance,
         crownBalance: data.crown_balance,
         crownPackageBalance: data.crown_package_balance,
-        arenaUnlocked: data.arena_unlocked,
+        arenaUnlocked: false,
         ascendantStatus,
         ascendantEligible: ascendantEligibility.eligible,
         ascendantEligibilityReason: ascendantEligibility.reason,
-        arenaPassEligible: arenaPassEligibility.eligible,
+        arenaPassEligible: false,
         config: {
           tokenToCrownRate: gameConfig.crownVaultConfig.tokenToCrownRate,
           ascendantPassPriceCrown: gameConfig.crownVaultConfig.ascendantPassPriceCrown,

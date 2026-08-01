@@ -15,6 +15,7 @@
 import { supabaseAdmin } from '../config/supabase'
 import { gameConfig } from '../config/gameConfig'
 import { TIER_ORDER, TierOrderKey, GateTier, canUnlockTier } from './progressionGate'
+import { qualifiesForGrandmasterUnlock } from './tierAuthority'
 
 // ลำดับ Tier จากสูงไปต่ำ สำหรับเดินหา Tier แรกที่ผ่าน Progression Gate ครบ (Token+Days+Skill)
 const DESCEND_ORDER: TierOrderKey[] = ['highNoble', 'mastermind', 'adept', 'initiate', 'D']
@@ -76,7 +77,11 @@ export async function checkTierUnlock(userId: string, newTokenBalance: number): 
     const uniqueConquered = new Set(conquered).size
 
     const eligibleToken = Math.max(0, newTokenBalance - iapTokenTotal)
-    const newTier = computeTierFromEligibleToken(eligibleToken, data.created_at, uniqueConquered)
+    // Gate 10.7 canon: Grandmaster uses the real current Token balance only, has no time/skill gate,
+    // and becomes a permanent ceiling after crossing the exclusive 1,000,000 threshold.
+    const newTier: TierOrderKey = qualifiesForGrandmasterUnlock(newTokenBalance)
+      ? 'grandmaster'
+      : computeTierFromEligibleToken(eligibleToken, data.created_at, uniqueConquered)
 
     // ค่าที่ไม่รู้จัก (NULL/snake_case หลุดมา/ค่าเพี้ยน) → return null ไม่เขียนอะไรเลย
     // ห้าม fallback เป็น 'D' เพราะจะเขียนทับ ceiling ของผู้เล่นให้ต่ำลงถาวร (bug class เดียวกับ psEngine)

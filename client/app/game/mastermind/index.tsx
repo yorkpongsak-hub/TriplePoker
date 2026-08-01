@@ -16,6 +16,8 @@ import * as Haptics from 'expo-haptics'
 import { useAuthStore } from '../../../src/store/authStore'
 // Patch 2026-07-18: resolve avatar preset key → emoji/รูปภาพ (แก้ VIP preset ไม่โชว์ที่โต๊ะ)
 import { PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
+import { useTableSkins } from '../../../src/hooks/useTableSkins'
+import { TABLE_SKINS } from '../../../src/config/tableSkins'
 import BossVictoryVFX, { VictoryTier } from '../../../src/components/vfx/BossVictoryVFX'
 import { useUserStore } from '../../../src/store/userStore'
 import { autoSort } from '../../../src/utils/autoSort'
@@ -279,6 +281,8 @@ const GameTableLive: React.FC = () => {
   const myAvatarImage = myPreset?.image
   const myDisplayName = useAuthStore(s => s.profile?.display_name) || 'You'
   const isVip = useAuthStore(s => (s.profile?.vip_status ?? 'none') !== 'none') // Feedback C5 — ใช้ vip_status เดิม ไม่สร้าง state ใหม่
+  const { activeSkin } = useTableSkins()
+  const selectedTableImg = TABLE_SKINS[activeSkin] ?? tableImg
 
   // ── Timer ref (ไม่ trigger re-render)
   const timerValRef = useRef({ val: 90, max: 90 })
@@ -1886,7 +1890,7 @@ const GameTableLive: React.FC = () => {
           <PreGameCountdown visible={showPreGameCountdown} onComplete={() => setShowPreGameCountdown(false)} />
           <MonarchConquestBanner winnerName={monarchWinner} onHidden={() => setMonarchWinner(null)} />
 
-          <View style={StyleSheet.absoluteFill as any} pointerEvents="none"><Image source={tableImg} style={{ width: '100%', height: '100%' }} resizeMode="cover" /></View>
+          <View style={StyleSheet.absoluteFill as any} pointerEvents="none"><Image source={selectedTableImg} style={{ width: '100%', height: '100%' }} resizeMode="cover" /></View>
           <View style={[StyleSheet.absoluteFill as any, s.logoWatermark]} pointerEvents="none">
             <Image source={tripleSpade} style={{ width: 120, height: 120, opacity: 0.07 }} resizeMode="contain" />
           </View>
@@ -2062,7 +2066,7 @@ const GameTableLive: React.FC = () => {
             if (gfResultStage === 1) {
               return (
                 <View style={[StyleSheet.absoluteFill as any, { alignItems: 'center', justifyContent: 'center', zIndex: 60, backgroundColor: 'rgba(0,0,0,0.55)' }]} pointerEvents="none">
-                  <View style={{ backgroundColor: 'rgba(15,36,24,0.97)', padding: 24, borderRadius: 16, alignItems: 'center', borderWidth: 1.5, borderColor: '#FFD76A', minWidth: 280 }}>
+                  <View style={{ backgroundColor: 'rgba(15,36,24,0.97)', padding: 24, borderRadius: 16, alignItems: 'center', borderWidth: 1.5, borderColor: '#FFD76A', minWidth: 280, transform: [{ translateY: 100 }] }}>
                     {gfFinalResult.burned ? (
                       <>
                         <Text style={{ fontSize: 24, color: '#f87171', fontWeight: '900', letterSpacing: 2 }}>🔥 POT BURNED</Text>
@@ -2098,7 +2102,7 @@ const GameTableLive: React.FC = () => {
             // STAGE 2: Round Summary (5 วินาที)
             // Patch: ใช้ paddingTop เลื่อน popup ลงให้เห็นไพ่ P2/P4 ด้านบนชัดขึ้น (ไม่ center จอ)
             return (
-              <View style={[StyleSheet.absoluteFill as any, { alignItems: 'center', justifyContent: 'flex-start', paddingTop: 320, zIndex: 60, backgroundColor: 'rgba(0,0,0,0.65)' }]} pointerEvents="none">
+              <View style={[StyleSheet.absoluteFill as any, { alignItems: 'center', justifyContent: 'flex-start', paddingTop: 420, zIndex: 60, backgroundColor: 'rgba(0,0,0,0.65)' }]} pointerEvents="none">
                 <View style={{ backgroundColor: 'rgba(15,36,24,0.98)', padding: 20, borderRadius: 16, alignItems: 'stretch', borderWidth: 1.5, borderColor: '#FFD76A', minWidth: 300 }}>
                   <Text style={{ fontSize: 18, color: '#FFD76A', fontWeight: '900', letterSpacing: 2, textAlign: 'center', marginBottom: 14 }}>
                     📊 ROUND SUMMARY
@@ -2709,34 +2713,34 @@ const GameTableLive: React.FC = () => {
                     <GFPile3Row playerId={bossAI.id} />
                   </View>
                 )}
-                {/* ═══ Middle row: [P2 | P4] (Community ย้ายไปแถวล่างถัดไป) ═══ */}
+                {/* ═══ Middle row: [P2 | Pile 3 Community | P4] ═══ */}
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginTop: 14, paddingHorizontal: 4 }}>
                   {p2AI && (
-                    <View style={{ alignItems: 'flex-start', gap: 4 }}>
+                    <View style={{ alignItems: 'flex-start', gap: 4, transform: [{ translateX: -10 }] }}>
                       <SeatHeader pid={p2AI.id} emoji={p2AI.emoji} name={p2AI.name} image={MINION_AVATAR[p2AI.name]} />
                       <GFPile3Row playerId={p2AI.id} />
                     </View>
                   )}
+                  {/* ตำแหน่ง Pile 3 Community ตาม visual tuning */}
+                  <View style={{ alignItems: 'center', marginTop: 0 }}>
+                    <Text style={[s.pileLabel, { marginBottom: 4 }]}>PILE 3 COMMUNITY</Text>
+                    <View style={{ flexDirection: 'row', gap: 4 }}>
+                      {comm.p3.map((k, i) => (
+                        <View key={i} style={{
+                          width: 50, height: 72, borderRadius: 4, overflow: 'hidden',
+                          borderWidth: 1.5, borderColor: '#38bdf8',
+                        }}>
+                          {CARD_IMG[k] && <Image source={CARD_IMG[k]} style={{ width: 50, height: 72 }} resizeMode="cover" />}
+                        </View>
+                      ))}
+                    </View>
+                  </View>
                   {p4AI && (
-                    <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                    <View style={{ alignItems: 'flex-end', gap: 4, transform: [{ translateX: 10 }] }}>
                       <SeatHeader pid={p4AI.id} emoji={p4AI.emoji} name={p4AI.name} image={MINION_AVATAR[p4AI.name]} />
                       <GFPile3Row playerId={p4AI.id} />
                     </View>
                   )}
-                </View>
-                {/* ═══ Pile 3 Community — ย้ายมาแถวล่างของ P2/P4 (พื้นที่ว่างใกล้โลโก้) ═══ */}
-                <View style={{ alignItems: 'center', marginTop: 2 }}>
-                  <Text style={[s.pileLabel, { marginBottom: 4 }]}>PILE 3 COMMUNITY</Text>
-                  <View style={{ flexDirection: 'row', gap: 4 }}>
-                    {comm.p3.map((k, i) => (
-                      <View key={i} style={{
-                        width: 50, height: 72, borderRadius: 4, overflow: 'hidden',
-                        borderWidth: 1.5, borderColor: '#38bdf8',
-                      }}>
-                        {CARD_IMG[k] && <Image source={CARD_IMG[k]} style={{ width: 50, height: 72 }} resizeMode="cover" />}
-                      </View>
-                    ))}
-                  </View>
                 </View>
                 {/* ═══ Center: ตัวอักษร YOUR TURN กลาง — render ผ่าน GRAND FINALE BIG TEXT เดิม ═══ */}
                 {/* ═══ P1 (Human) ล่าง ═══ */}

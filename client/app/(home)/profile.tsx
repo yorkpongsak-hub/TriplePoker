@@ -15,19 +15,20 @@ import { ActionButton } from '../../src/components/ui/ActionButton'
 import { MenuButton } from '../../src/components/ui/MenuButton'
 import { ThemedBackground } from '../../src/components/ui/ThemedBackground'
 import { glassPanel, glassPanelDense } from '../../src/ui/glassStyles'
-import { getTierFromToken, TierKey } from '../../src/config/tierConfig'
+import { getAuthoritativeDisplayTier, TierKey } from '../../src/config/tierConfig'
 import { supabase } from '../../src/services/supabaseService'
 import ProfilePicturePicker from '../../src/components/profile/ProfilePicturePicker'
 import SettingsModal from '../../src/components/profile/SettingsModal'
 import { AvatarDisplay, PRESET_AVATARS, AvatarConfig } from '../../src/components/profile/AvatarPicker'
 import { TierUnlockOverlay } from '../../src/components/vfx/TierUnlockOverlay'
 import MatchHistoryList from '../../src/components/profile/MatchHistoryList'
+import BossStatsPanel from '../../src/components/profile/BossStatsPanel'
 import AvatarFrame from '../../src/components/game/AvatarFrame'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
 // Tier Unlock Ceiling Model - ต้องตรงกับ TIER_ORDER ใน server/src/game/tierUnlockService.ts เป๊ะ (camelCase)
-const TIER_ORDER = ['D', 'initiate', 'adept', 'mastermind', 'highNoble'] as const
+const TIER_ORDER = ['D', 'initiate', 'adept', 'mastermind', 'highNoble', 'grandmaster'] as const
 
 // ─── ธีมสีหลัก (Website Theme Spec v1.0) ─────────────────────
 const C = {
@@ -63,8 +64,8 @@ const TIER_INFO: Record<string, { label: string; color: string }> = {
   B:  { label: 'ADEPT',       color: C.blue    },
   A:  { label: 'MASTERMIND',  color: C.purple  },
   'A+': { label: 'HIGH NOBLE', color: C.gold    },
-  S:  { label: 'ASCENDANT',   color: C.gold    },
-  'S+': { label: 'LAST BOSS',  color: C.goldDark },
+  S:  { label: 'GRANDMASTER', color: C.gold    },
+  'S+': { label: 'SOVEREIGN', color: C.goldDark },
 }
 
 // Map TierKey (คำนวณสดจาก token_balance ใน tierConfig.ts) -> letter grade ของ TIER_INFO ด้านบน
@@ -74,6 +75,7 @@ const TIER_KEY_LETTER: Record<TierKey, string> = {
   adept:      'B',
   mastermind: 'A',
   highNoble:  'A+',
+  grandmaster: 'S',
 }
 
 const VIP_INFO: Record<string, { label: string; color: string } | null> = {
@@ -125,14 +127,14 @@ export default function ProfileScreen() {
   // Tier คำนวณสดจาก token เสมอ — เลิกอ่าน profile.tier ตรงๆ เพราะคอลัมน์นั้นไม่มี pipeline ไหนอัปเดตจริง
   // (ดูปัญหาเดิม: Top Bar ไม่ตรงกับ Tiers Unlocked) getTierFromToken คืนแค่ 4 tier หลัก ไม่มี crash เพราะ token
   // เป็นตัวเลขเสมอ (fallback 0 ถ้า profile ยังโหลดไม่เสร็จ — ห้ามใช้ค่าปลอมที่ดูสมจริง)
-  const liveTier  = getTierFromToken(token)
+  const liveTier  = getAuthoritativeDisplayTier(token, profile?.tier_unlocked_max)
   const tierLetter = TIER_KEY_LETTER[liveTier]
 
   // Monarch_Spec_v1_3 §4/§5 — ต้องรัน supabase/migrations/006_monarch_spawn_reward.sql ก่อน คอลัมน์นี้ถึงจะมีค่าจริง
   const careerPS = profile?.performance_score ?? 0   // Career PS — lifetime, ห้ามรีเซ็ต
   const seasonPS = profile?.ps_season ?? 0            // Season PS — เกณฑ์แข่งขัน/Ascendant Star, รีเซ็ตตาม tournament
   const monarchVictories = profile?.monarch_victories ?? 0
-  const isPSUnlocked     = liveTier === 'highNoble' // Ascendant/Last Boss ยัง stub — ยังคำนวณสดไม่ได้ (ดู tierConfig.ts)
+  const isPSUnlocked     = liveTier === 'highNoble' || liveTier === 'grandmaster'
   const isMonarchSlayer  = monarchVictories >= 1
   const showAscendantHint = isPSUnlocked && !isMonarchSlayer && token >= ASCENDANT_TOKEN_MIN && token <= ASCENDANT_TOKEN_MAX
 
@@ -391,7 +393,7 @@ export default function ProfileScreen() {
 
         {activeTab === 'stats' && <StatsPanel streakDays={streakDays} gamesPlayed={profile?.games_played ?? 0} gamesWon={profile?.games_won ?? 0} bestHands={profile?.best_hands ?? null} />}
         {activeTab === 'bosses' && (
-          <ComingSoonPanel icon="🗿" title="HALL OF BOSSES" sub="The Nine Sentinels are coming in a future update" />
+          <BossStatsPanel userId={profile?.user_id ?? authUser?.id ?? ''} />
         )}
         {activeTab === 'history' && (
           <MatchHistoryList userId={profile?.user_id ?? authUser?.id ?? ''} />

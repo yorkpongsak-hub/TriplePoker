@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // ascendantGate.test.ts — Unit Tests สำหรับ Ascendant Tier Entry Gate
-// (Ascendant_Spec_v1_1 §2 + มติลุงเยาะ 2026-07-30 — token>=600k + monarch_victories>=1 +
-// เคยปลด highNoble + ยังไม่เคยซื้อ Pass มาก่อน, ไม่มี Account Age Gate ที่นี่)
+// (Arena Tier S+ Canon Addendum v1.0 — token>=600k + เคยปลด highNoble + ยังไม่เคยซื้อ
+// Pass มาก่อน; ไม่บังคับ Monarch Slayer และไม่มี Account Age Gate ที่นี่)
 // ใช้ gameConfig/progressionGate จริง (ไม่ mock) เพราะเป็น pure config เดียวกับที่ deploy จริง
 // TriplePoker | The Sage Unicorn Studio Co., Ltd.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -83,7 +83,7 @@ describe('ascendantGate.checkAscendantEligibility', () => {
     expect(result).toEqual({ eligible: false, reason: 'TOKEN_BELOW_MIN' })
   })
 
-  test('MONARCH_REQUIRED: ยังไม่เคยชนะ Monarch', async () => {
+  test('ไม่บังคับ Monarch Slayer ตาม Canon ทางลัด 30 วัน', async () => {
     responseQueue = [{
       data: {
         token_balance: 700_000,
@@ -95,7 +95,7 @@ describe('ascendantGate.checkAscendantEligibility', () => {
       error: null,
     }]
     const result = await checkAscendantEligibility('u1')
-    expect(result).toEqual({ eligible: false, reason: 'MONARCH_REQUIRED' })
+    expect(result).toEqual({ eligible: true, reason: 'OK' })
   })
 
   test('TIER_REQUIRED: ยังไม่เคยปลด highNoble (ceiling ต่ำกว่า)', async () => {

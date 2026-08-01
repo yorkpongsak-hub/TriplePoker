@@ -11,7 +11,7 @@
 
 import { supabase, supabaseAdmin } from '../config/supabase'
 import { gameConfig } from '../config/gameConfig'
-import { canUnlockTier, TIER_ORDER, TierOrderKey } from './progressionGate'
+import { TIER_ORDER, TierOrderKey } from './progressionGate'
 import { checkAscendantEligibility, AscendantStatusRecord, AscendantStatusValue } from './ascendantGate'
 import { deductCrown } from '../items/shopAPI'
 
@@ -129,20 +129,10 @@ export interface ArenaPassEligibilityResult {
 //   1. ผ่าน Ascendant สำเร็จ (ascendant_status.status === 'passed')
 //   2. เส้นทางสำรอง — ไต่ Tier S ปกติ (token >= 1M + account age >= 180 วัน, progressionGate.arena เดิม)
 export async function checkArenaPassEligibility(userId: string): Promise<ArenaPassEligibilityResult> {
-  const { data, error } = await supabase
-    .from('users')
-    .select('token_balance, created_at, ascendant_status')
-    .eq('user_id', userId)
-    .single()
-
-  if (error || !data?.created_at) return { eligible: false, viaAscendant: false }
-
-  const status = (data.ascendant_status as AscendantStatusRecord | null)?.status ?? 'none'
-  if (status === 'passed') return { eligible: true, viaAscendant: true }
-
-  const token = data.token_balance ?? 0
-  const viaNormalPath = canUnlockTier('arena', token, data.created_at).passed
-  return { eligible: viaNormalPath, viaAscendant: false }
+  void userId
+  // Gate 10.7: legacy 20-Crown Arena Pass is retired. Grandmaster unlocks permanently
+  // after Token > 1,000,000; Ascendant remains a separate temporary shortcut.
+  return { eligible: false, viaAscendant: false }
 }
 
 export type BuyArenaPassError =
@@ -160,35 +150,8 @@ export interface BuyArenaPassResult {
 // ซื้อ Arena Pass (20 Crown) — ปลดล็อก arena_unlocked ถาวร (entitlement flag เท่านั้น game logic
 // จริงของ Arena อยู่ในแอปแยกตาม Architecture Rule #5)
 export async function buyArenaPass(userId: string): Promise<BuyArenaPassResult> {
-  const { data, error } = await supabaseAdmin
-    .from('users')
-    .select('arena_unlocked')
-    .eq('user_id', userId)
-    .single()
-
-  if (error || !data) return { success: false, error: 'USER_NOT_FOUND' }
-  if (data.arena_unlocked) return { success: false, error: 'ALREADY_UNLOCKED' }
-
-  const eligibility = await checkArenaPassEligibility(userId)
-  if (!eligibility.eligible) return { success: false, error: 'NOT_ELIGIBLE' }
-
-  try {
-    await deductCrown(userId, gameConfig.crownVaultConfig.arenaPassPriceCrown)
-  } catch (err: any) {
-    return { success: false, error: 'INSUFFICIENT_CROWN', errorDetail: err.message }
-  }
-
-  const { error: updateError } = await supabaseAdmin
-    .from('users')
-    .update({ arena_unlocked: true })
-    .eq('user_id', userId)
-
-  if (updateError) {
-    console.error('[CROWN-VAULT] Error setting arena_unlocked for', userId, updateError)
-    return { success: false, error: 'USER_NOT_FOUND', errorDetail: updateError.message }
-  }
-
-  return { success: true }
+  void userId
+  return { success: false, error: 'NOT_ELIGIBLE' }
 }
 
 export type ExchangeError = 'TIER_REQUIRED' | 'INSUFFICIENT_TOKENS' | 'USER_NOT_FOUND'

@@ -204,7 +204,8 @@ function toEscrowTier(tier: string): EscrowTier {
   return (['initiate', 'adept', 'mastermind', 'highNoble', 'lastBoss'].includes(tier) ? tier : 'initiate') as EscrowTier
 }
 
-const STALE_ESCROW_MS = 60 * 60 * 1000 // 60 นาที — เกินนี้ถือว่า client หลุด/crash กลางแมตช์ (Buy-in Spec §4 fail-safe)
+// Reconnect grace is 60 seconds. This also recovers after a server restart loses in-memory timers.
+const STALE_ESCROW_MS = 60 * 1000
 
 // กู้คืน escrow ที่ค้างสถานะ 'in_match' เกิน 60 นาที (client force-close/crash กลางแมตช์ ไม่เคย settle)
 // คืน token เต็มจำนวน + status='refunded' — เรียกซ้ำ/พร้อมกันได้ปลอดภัย (idempotent)
@@ -214,24 +215,39 @@ export async function recoverStaleEscrow(userId: string): Promise<{ recovered: b
   try {
     const { data: staleRows, error } = await supabaseAdmin
       .from('match_escrow')
-      .update({ status: 'refunded', settled_at: new Date().toISOString() })
+      .select('escrow_id, buyin_amount')
       .eq('user_id', userId)
       .eq('status', 'in_match')
       .lt('created_at', staleThresholdISO)
-      .select('escrow_id, buyin_amount')
 
     if (error) {
-      console.error('[ESCROW]', Date.now(), 'recoverStaleEscrow update error for', userId, error)
+      console.error('[ESCROW]', Date.now(), 'recoverStaleEscrow query error for', userId, error)
       return { recovered: false, totalRefunded: 0 }
     }
     if (!staleRows || staleRows.length === 0) return { recovered: false, totalRefunded: 0 }
 
-    const totalRefunded = staleRows.reduce((sum, r: any) => sum + r.buyin_amount, 0)
-    const { data: userData } = await supabaseAdmin.from('users').select('token_balance').eq('user_id', userId).single()
-    const newBalance = (userData?.token_balance ?? 0) + totalRefunded
-    await supabaseAdmin.from('users').update({ token_balance: newBalance }).eq('user_id', userId)
+    let totalRefunded = 0
+    let newBalance: number | null = null
+    const refundedIds: string[] = []
+    for (const row of staleRows) {
+      const { data, error: refundError } = await supabaseAdmin.rpc('refund_match_escrow', {
+        p_user_id: userId,
+        p_escrow_id: row.escrow_id,
+      })
+      if (refundError) {
+        // A concurrent normal settlement may win; the RPC status guard prevents double credit.
+        if (!refundError.message?.includes('ESCROW_NOT_ACTIVE')) {
+          console.error('[ESCROW]', Date.now(), 'stale escrow refund failed for', row.escrow_id, refundError)
+        }
+        continue
+      }
+      totalRefunded += row.buyin_amount
+      newBalance = Number(data)
+      refundedIds.push(row.escrow_id)
+    }
+    if (refundedIds.length === 0) return { recovered: false, totalRefunded: 0 }
 
-    console.log('[ESCROW]', Date.now(), 'Recovered stale escrow(s) for', userId, '| escrow_ids:', staleRows.map((r: any) => r.escrow_id), '| refunded:', totalRefunded, '| New balance:', newBalance)
+    console.log('[ESCROW]', Date.now(), 'Recovered stale escrow(s) for', userId, '| escrow_ids:', refundedIds, '| refunded:', totalRefunded, '| New balance:', newBalance)
     return { recovered: true, totalRefunded }
   } catch (err) {
     console.error('[ESCROW]', Date.now(), 'Error in recoverStaleEscrow for', userId, err)

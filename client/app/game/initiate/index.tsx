@@ -22,6 +22,8 @@ import { clearPendingMatch, markPendingMatch } from '../../../src/utils/pendingM
 import { useAuthStore } from '../../../src/store/authStore'
 // Patch 2026-07-18: resolve avatar preset key → emoji/รูปภาพ (แก้ VIP preset ไม่โชว์ที่โต๊ะ)
 import { PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
+import { useTableSkins } from '../../../src/hooks/useTableSkins'
+import { TABLE_SKINS } from '../../../src/config/tableSkins'
 import { useUserStore } from '../../../src/store/userStore'
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
 import MonarchConquestBanner from '../../../src/components/game/MonarchConquestBanner'
@@ -261,6 +263,8 @@ const GameTableLive: React.FC = () => {
   const myAvatarImage = myPreset?.image
   const myDisplayName = useAuthStore(s => s.profile?.display_name) || 'You'
   const isVip = useAuthStore(s => (s.profile?.vip_status ?? 'none') !== 'none') // Feedback C5 — ใช้ vip_status เดิม ไม่สร้าง state ใหม่
+  const { activeSkin } = useTableSkins()
+  const selectedTableImg = TABLE_SKINS[activeSkin] ?? tableImg
 
   // ── Timer ref (ไม่ trigger re-render)
   const timerValRef = useRef({ val: 90, max: 90 })
@@ -1218,7 +1222,7 @@ const GameTableLive: React.FC = () => {
           <PreGameCountdown visible={showPreGameCountdown} onComplete={() => setShowPreGameCountdown(false)} />
           <MonarchConquestBanner winnerName={monarchWinner} onHidden={() => setMonarchWinner(null)} />
 
-          <View style={StyleSheet.absoluteFill as any} pointerEvents="none"><Image source={tableImg} style={{ width: '100%', height: '100%' }} resizeMode="cover" /></View>
+          <View style={StyleSheet.absoluteFill as any} pointerEvents="none"><Image source={selectedTableImg} style={{ width: '100%', height: '100%' }} resizeMode="cover" /></View>
           <View style={[StyleSheet.absoluteFill as any, s.logoWatermark]} pointerEvents="none">
             <Image source={tripleSpade} style={{ width: 120, height: 120, opacity: 0.07 }} resizeMode="contain" />
           </View>

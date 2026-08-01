@@ -5,7 +5,10 @@ import { authRoutes } from './routes/auth'
 import { profileRoutes } from './routes/profile'
 import statsRoutes from './routes/stats'
 import crownVaultRoutes from './routes/crownVault'
+import sovereignRoutes from './routes/sovereign'
+import { startSovereignLifecycleRuntime } from './arena/sovereign/sovereignLifecycleRuntime'
 import { registerGameSocket } from './sockets/gameSocket'
+import { registerArenaSocket } from './arena/realtime/arenaSocket'
 import { validateGameConfig } from './config/gameConfig'
 import * as dotenv from 'dotenv'
 
@@ -26,6 +29,7 @@ app.register(authRoutes)
 app.register(profileRoutes)
 app.register(statsRoutes)
 app.register(crownVaultRoutes)
+app.register(sovereignRoutes)
 
 // Health check
 app.get('/health', async () => ({
@@ -45,6 +49,8 @@ const start = async () => {
       cors: { origin: '*' }
     })
     registerGameSocket(io)
+    registerArenaSocket(io)
+    startSovereignLifecycleRuntime()
 
     console.log(`TriplePoker Server running on port ${port}`)
   } catch (err) {

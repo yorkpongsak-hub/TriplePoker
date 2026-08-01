@@ -46,6 +46,7 @@ const TIER_TO_BUYIN_KEY: Partial<Record<Tier, BuyInTier>> = {
 
 const TIER_ROWS: Tier[][] = [
   ['last_boss'],
+  ['grandmaster'],
   ['high_noble', 'mastermind'],
   ['adept', 'initiate'],
 ];
@@ -182,6 +183,8 @@ export default function LobbyScreen() {
 
   const handleEnterInitiate = () => { fadeOutBgm(); router.push('/game/initiate'); };
   const handleEnterMastermind = () => { fadeOutBgm(); router.push('/game/mastermind/select'); };
+  const handleEnterGrandmaster = () => { fadeOutBgm(); router.push('/game/grandmaster'); };
+  const handleEnterSovereign = () => { fadeOutBgm(); router.push('/game/sovereign'); };
 
   // ─── Menu Bar (UI Button System) — ปุ่มที่ระบบหลังบ้านยังไม่มี โชว์ Toast "Coming Soon" แทนการซ่อน ───
   const [comingSoonMsg, setComingSoonMsg] = useState<string | null>(null);
@@ -398,7 +401,7 @@ export default function LobbyScreen() {
 
   const renderTierButton = (tier: Tier, fullWidth: boolean) => {
     const cfg = TIER_CONFIG[tier];
-    const locked = !isEligible(tier, tokenBalance);
+    const locked = !isEligible(tier, tokenBalance, profile?.tier_unlocked_max);
     const isSelected = selected === tier;
     const buyInKey = TIER_TO_BUYIN_KEY[tier];
     return (
@@ -548,6 +551,17 @@ export default function LobbyScreen() {
             <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('mastermind', handleEnterMastermind)}>
               <Text style={s.enterBtnTxt}>▶ Play (Conquest Mode: 9 Sentinels)</Text>
             </TouchableOpacity>
+          )}
+
+          {selected === 'grandmaster' && (
+            <View style={{ gap: 8 }}>
+              <TouchableOpacity style={s.enterBtn} onPress={handleEnterGrandmaster}>
+                <Text style={s.enterBtnTxt}>▶ Play (Arena Auto-Match)</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.enterBtn} onPress={handleEnterSovereign}>
+                <Text style={s.enterBtnTxt}>♛ Sovereign Monthly Event</Text>
+              </TouchableOpacity>
+            </View>
           )}
 
           {selected === 'high_noble' && mmStatus === 'idle' && (

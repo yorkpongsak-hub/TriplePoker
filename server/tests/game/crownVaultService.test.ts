@@ -133,13 +133,14 @@ describe('buyAscendantPass', () => {
 })
 
 describe('checkArenaPassEligibility', () => {
+  // Gate 10.7 retires every legacy eligibility path; retained cases prove none can charge/unlock.
   test('ascendant_status passed → eligible ผ่านทาง Ascendant', async () => {
     responseQueue = [{
       data: { token_balance: 900_000, created_at: daysAgo(10), ascendant_status: { status: 'passed', startedAt: null, expiresAt: null } },
       error: null,
     }]
     const result = await checkArenaPassEligibility('u1')
-    expect(result).toEqual({ eligible: true, viaAscendant: true })
+    expect(result).toEqual({ eligible: false, viaAscendant: false })
   })
 
   test('เส้นทางสำรอง: token >= 1M + account age >= 180 วัน → eligible', async () => {
@@ -148,7 +149,7 @@ describe('checkArenaPassEligibility', () => {
       error: null,
     }]
     const result = await checkArenaPassEligibility('u1')
-    expect(result).toEqual({ eligible: true, viaAscendant: false })
+    expect(result).toEqual({ eligible: false, viaAscendant: false })
   })
 
   test('token >= 1M แต่ account อายุยังไม่ถึง 180 วัน → ไม่ eligible', async () => {
@@ -165,7 +166,7 @@ describe('buyArenaPass', () => {
   test('ปลดล็อกไปแล้ว → ALREADY_UNLOCKED', async () => {
     responseQueue = [{ data: { arena_unlocked: true }, error: null }]
     const result = await buyArenaPass('u1')
-    expect(result).toEqual({ success: false, error: 'ALREADY_UNLOCKED' })
+    expect(result).toEqual({ success: false, error: 'NOT_ELIGIBLE' })
   })
 
   test('ไม่ eligible → NOT_ELIGIBLE', async () => {
@@ -184,7 +185,7 @@ describe('buyArenaPass', () => {
     ]
     mockDeductCrown.mockRejectedValue(new Error('Insufficient crown'))
     const result = await buyArenaPass('u1')
-    expect(result).toEqual({ success: false, error: 'INSUFFICIENT_CROWN', errorDetail: 'Insufficient crown' })
+    expect(result).toEqual({ success: false, error: 'NOT_ELIGIBLE' })
   })
 
   test('eligible + Crown พอ → สำเร็จ ตั้ง arena_unlocked = true', async () => {
@@ -195,7 +196,8 @@ describe('buyArenaPass', () => {
     ]
     mockDeductCrown.mockResolvedValue(0)
     const result = await buyArenaPass('u1')
-    expect(result).toEqual({ success: true })
+    expect(result).toEqual({ success: false, error: 'NOT_ELIGIBLE' })
+    expect(mockDeductCrown).not.toHaveBeenCalled()
   })
 })
 
