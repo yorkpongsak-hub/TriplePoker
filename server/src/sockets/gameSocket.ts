@@ -19,7 +19,7 @@ import {
 } from "../game/highNobleMultiEngine";
 import {
   rollMonarchEntry, startMonarchMatch, startMonarchRound, getMonarchMatchState,
-  buildMonarchRoundSnapshot, submitMonarchArrangement, submitMonarchGrandFinaleAction,
+  buildMonarchRoundSnapshot, submitMonarchArrangement, updateMonarchArrangementDraft, submitMonarchGrandFinaleAction,
   settleAndEndMonarchMatch, clearMonarchDisconnectState, startMonarchArrangementTimer,
 } from "../game/monarchEngine";
 import { supabaseAdmin } from "../config/supabase";
@@ -676,6 +676,12 @@ export function registerGameSocket(io: Server): void {
       } else {
         socket.emit("monarch_arrangement_ok", { roomId: data.roomId });
       }
+    });
+
+    socket.on("update_monarch_arrangement_draft", (data: {
+      roomId: string; userId: string; arrangement?: { g1: string[]; g2: string[]; g3: string[] };
+    }) => {
+      updateMonarchArrangementDraft(data.roomId, data.userId, data.arrangement);
     });
 
     // Sprint 5: Grand Finale Call/Fold (G3 เท่านั้น — G1/G2 เป็นแค่ reveal ธรรมดา)

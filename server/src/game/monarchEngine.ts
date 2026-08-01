@@ -69,6 +69,9 @@ export interface MonarchMatchState {
   foulMap?: Record<string, boolean>
   foulReasons?: Record<string, string>
   submittedArrangement: Set<string>
+  // Latest arrangement mirrored from the client while the clock is running.
+  // Auto-seal must use what the player currently sees, not the original deal order.
+  humanArrangementDraft?: PlayerArrangement
   g1Winner?: string
   g2Winner?: string
   g3Winner?: string
@@ -347,6 +350,11 @@ export function startMonarchRound(io: Server, roomId: string): void {
   state.foulMap = {}
   state.foulReasons = {}
   state.submittedArrangement = new Set()
+  state.humanArrangementDraft = {
+    pile1: cardsMap[state.humanUserId].slice(0, 3),
+    pile2: cardsMap[state.humanUserId].slice(3, 6),
+    pile3: cardsMap[state.humanUserId].slice(6, 11),
+  }
   state.g1Winner = undefined
   state.g2Winner = undefined
   state.g3Winner = undefined
@@ -482,6 +490,11 @@ export function buildMonarchRoundSnapshot(state: MonarchMatchState): Record<stri
     phase: state.phase,
     seats: state.seats.map(s => ({ id: s.id, role: s.role, isHuman: s.isHuman, name: s.name, emoji: s.emoji, avatarUrl: s.avatarUrl })),
     yourCards: humanCards.map(cardKey),
+    yourArrangement: state.humanArrangementDraft ? {
+      g1: state.humanArrangementDraft.pile1.map(cardKey),
+      g2: state.humanArrangementDraft.pile2.map(cardKey),
+      g3: state.humanArrangementDraft.pile3.map(cardKey),
+    } : null,
     commA: commA.map(cardKey),
     commB: commB.map(cardKey),
     tokenBalance: state.tokenBalance,
@@ -560,11 +573,26 @@ export function submitMonarchArrangement(
   return { ok: true }
 }
 
+export function updateMonarchArrangementDraft(
+  roomId: string, userId: string,
+  arrangementKeys?: { g1: string[]; g2: string[]; g3: string[] },
+): { ok: boolean; reason?: string } {
+  const state = monarchMatchStates.get(roomId)
+  if (!state) return { ok: false, reason: 'ROOM_NOT_FOUND' }
+  if (state.phase !== 'arrangement') return { ok: false, reason: 'WRONG_PHASE' }
+  if (userId !== state.humanUserId) return { ok: false, reason: 'NOT_YOUR_SEAT' }
+  if (state.submittedArrangement.has(userId)) return { ok: false, reason: 'ALREADY_SUBMITTED' }
+  if (!state.cardsMap || !arrangementKeys) return { ok: false, reason: 'INVALID_ARRANGEMENT' }
+  const resolved = resolveArrangementFromKeys(state.cardsMap[userId], arrangementKeys)
+  if (!resolved) return { ok: false, reason: 'INVALID_ARRANGEMENT' }
+  state.humanArrangementDraft = resolved
+  return { ok: true }
+}
+
 // ── Batch 1 Task 6 — หมดเวลาจัดไพ่ (gameConfig.monarchConfig.arrangementDeadlineMs) แล้ว human
-// ยังไม่ submit → auto-seal ด้วยไพ่ตามลำดับที่แจกจริงเป๊ะ (cardsMap ดิบ ตัด 3/3/5) ห้ามใช้
+// ยังไม่ submit → auto-seal ด้วย draft ล่าสุดที่ sync มาจากหน้าจอ ห้ามใช้
 // monarchFirstValidArrangement/monarchBestArrangement ช่วยจัดโดยเด็ดขาด (canon: ไม่มีปุ่มช่วยจัดไพ่
-// ใดๆ ในโต๊ะนี้ — auto-seal ต้อง "ไม่ช่วย" ด้วยเช่นกัน) ผลลัพธ์มีโอกาสสูงที่จะ foul เพราะไม่ได้จัดตาม
-// กติกา G1<G2<G3 เลย ซึ่งจะแพ้ทันทีตามกติกา Foul ปกติ — ยังไม่มี UI countdown ในบัตช์นี้
+// ตัวช่วยจัดไพ่ใดๆ ในโต๊ะนี้ — draft เป็นเพียงลำดับที่ผู้เล่นจัดเองล่าสุดเท่านั้น
 function forceSealMonarchArrangement(io: Server, roomId: string): void {
   const state = monarchMatchStates.get(roomId)
   if (!state || state.matchEnded) return
@@ -572,11 +600,14 @@ function forceSealMonarchArrangement(io: Server, roomId: string): void {
   if (state.submittedArrangement.has(state.humanUserId)) return // กันชนกับ submit ที่มาถึงพอดีตอน timer ยิง
 
   const rawHand = state.cardsMap![state.humanUserId]
-  const arr: PlayerArrangement = {
-    pile1: rawHand.slice(0, 3),
-    pile2: rawHand.slice(3, 6),
-    pile3: rawHand.slice(6),
+  const arr = state.humanArrangementDraft ?? {
+    pile1: rawHand.slice(0, 3), pile2: rawHand.slice(3, 6), pile3: rawHand.slice(6),
   }
+  console.info('[MONARCH_AUTO_SEAL]', {
+    roomId, userId: state.humanUserId,
+    source: state.humanArrangementDraft ? 'latest_draft' : 'original_deal_fallback',
+    g1: arr.pile1.map(cardKey), g2: arr.pile2.map(cardKey), g3: arr.pile3.map(cardKey),
+  })
   sealMonarchArrangement(io, state, state.humanUserId, arr)
 }
 
@@ -595,6 +626,15 @@ export async function resolveG1(io: Server, state: MonarchMatchState): Promise<v
     const arr = state.arrangements![seat.id]
     const { g1, g2, g3 } = assembleMonarchHands(arr, commA, commB)
     const foul = monarchCheckFoul(g1, g2, g3)
+    if (seat.id === state.humanUserId) {
+      console.info('[MONARCH_FOUL_CHECK]', {
+        roomId: state.roomId, userId: seat.id,
+        g1: { cards: g1.map(cardKey), rank: monarchResolvePile(g1).rank },
+        g2: { cards: g2.map(cardKey), rank: monarchResolvePile(g2).rank },
+        g3: { cards: g3.map(cardKey), rank: monarchResolvePile(g3).rank },
+        isFoul: foul.isFoul, reason: foul.reason ?? null,
+      })
+    }
     state.foulMap![seat.id] = foul.isFoul
     if (foul.isFoul) state.foulReasons![seat.id] = foul.reason ?? 'Foul'
     g1Hands[seat.id] = monarchResolvePile(g1)

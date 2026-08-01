@@ -40,6 +40,7 @@ import {
   MonarchSeat, MonarchMatchState, settleMonarchMatch, resolveMonarchBossTurn, resolveG1,
   startMonarchMatch, startMonarchRound, submitMonarchArrangement, submitMonarchGrandFinaleAction,
   settleAndEndMonarchMatch, getMonarchMatchState, clearMonarchDisconnectState,
+  startMonarchArrangementTimer, updateMonarchArrangementDraft,
 } from '../../src/game/monarchEngine'
 
 const HUMAN = 'u_human'
@@ -290,6 +291,26 @@ describe('settleAndEndMonarchMatch — disconnect resolution (มติ commit-b
     startMonarchRound(io, roomId)
     return { roomId, humanUserId, io, emitted }
   }
+
+  test('Auto-seal ใช้ arrangement draft ล่าสุดที่ผู้เล่นจัดไว้ ไม่ย้อนกลับไปลำดับแจกเดิม', async () => {
+    const { roomId, humanUserId, io } = await startMatch()
+    const state = getMonarchMatchState(roomId)!
+    const keys = toKeys(state.cardsMap![humanUserId])
+    const latestDraft = {
+      g1: [keys[10], keys[1], keys[2]],
+      g2: [keys[3], keys[9], keys[5]],
+      g3: [keys[6], keys[7], keys[8], keys[4], keys[0]],
+    }
+
+    expect(updateMonarchArrangementDraft(roomId, humanUserId, latestDraft).ok).toBe(true)
+    expect(startMonarchArrangementTimer(io, roomId, humanUserId).ok).toBe(true)
+    await jest.advanceTimersByTimeAsync(60_000)
+
+    const sealed = getMonarchMatchState(roomId)!.arrangements![humanUserId]
+    expect(toKeys(sealed.pile1)).toEqual(latestDraft.g1)
+    expect(toKeys(sealed.pile2)).toEqual(latestDraft.g2)
+    expect(toKeys(sealed.pile3)).toEqual(latestDraft.g3)
+  })
 
   test('ก่อน seal (phase=arrangement) → settle ทันทีด้วย tokenBalance ดิบ ไม่ resolve อะไร ไม่ได้ badge', async () => {
     const { roomId, humanUserId, io } = await startMatch()

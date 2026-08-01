@@ -51,8 +51,8 @@ const MONARCH_TABLE_SKIN = require('../../../assets/tables/boss_monarch_skin_tab
 const MONARCH_INTRO = {
   image: require('../../../assets/bosses/boss_Monarch.png'),
   title: 'MONARCH',
-  subtitle: 'THE FACELESS KING',
-  quote: 'My mask is the hand I am dealt.',
+  subtitle: 'THE WATCHER',
+  quote: 'Power is easy to claim. Restraint is harder to prove.',
 }
 
 // ── Batch 3B Task 1 — Fake Four Gods Intro (ก่อนสะดุด) ─────────────────────
@@ -82,6 +82,11 @@ const MONARCH_REVEAL_LINES = [
 
 // ── Batch 3B Task 5 — Dialogue เปิดโต๊ะครั้งแรก (คงที่เสมอ ไม่มี Fake Memory — ตัดจาก MVP ตามมติ) ──
 const MONARCH_FIRST_MEETING_QUOTE = 'I have waited years for one stronger than me. What I fear... is the day that one truly arrives.'
+
+// Rise lore bridge: keep the first Monarch victory mysterious. The full truth belongs
+// to the later Soren/CAELUM encounters and must not be exposed in this early hook.
+const MONARCH_VICTORY_LORE = 'The known rules are only the first gate. Someone still guards the last.'
+const MONARCH_VICTORY_TOAST = 'You have proven strength. Now prove you can carry what waits beyond the rules.'
 
 const COLOR = {
   bg: '#0F2418',
@@ -120,6 +125,7 @@ type RoundSnapshot = {
   phase: string
   seats: Seat[]
   yourCards: string[]
+  yourArrangement?: { g1: string[]; g2: string[]; g3: string[] } | null
   commA: string[]
   commB: string[]
   tokenBalance: Record<string, number>
@@ -1229,10 +1235,13 @@ export default function MonarchScreen() {
     buyInAmountRef.current = data.buyInAmount
     setRound(data)
     setSubmitted(data.phase !== 'arrangement')
+    const arrangement = data.yourArrangement ?? {
+      g1: data.yourCards.slice(0, 3), g2: data.yourCards.slice(3, 6), g3: data.yourCards.slice(6, 11),
+    }
     setPiles([
-      data.yourCards.slice(0, 3).map((k, i) => ({ id: `g1-${i}-${k}`, key: k })),
-      data.yourCards.slice(3, 6).map((k, i) => ({ id: `g2-${i}-${k}`, key: k })),
-      data.yourCards.slice(6, 11).map((k, i) => ({ id: `g3-${i}-${k}`, key: k })),
+      arrangement.g1.map((k, i) => ({ id: `g1-${i}-${k}`, key: k })),
+      arrangement.g2.map((k, i) => ({ id: `g2-${i}-${k}`, key: k })),
+      arrangement.g3.map((k, i) => ({ id: `g3-${i}-${k}`, key: k })),
     ])
     setSelected(null)
     setArrangePending(false)
@@ -1377,7 +1386,7 @@ export default function MonarchScreen() {
         }, 11000)
         scheduleJudgment(() => {
           setShowVictoryVFX(true)
-          showToast('You are ready for a battlefield beyond these rules.')
+          showToast(MONARCH_VICTORY_TOAST)
         }, 14500)
       } else {
         showToast('When you no longer depend on what the table gives you — return to me.')
@@ -1417,6 +1426,14 @@ export default function MonarchScreen() {
     next[selected.pi][selected.ci] = next[pi][ci]
     next[pi][ci] = tmp
     setPiles(next)
+    socketRef.current?.emit('update_monarch_arrangement_draft', {
+      roomId, userId,
+      arrangement: {
+        g1: next[0].map(card => card.key),
+        g2: next[1].map(card => card.key),
+        g3: next[2].map(card => card.key),
+      },
+    })
     setSelected(null)
   }
 
@@ -1983,7 +2000,7 @@ export default function MonarchScreen() {
                     {isVictory ? (
                       <>
                         <Text style={styles.loreHeader}>Lore Discovered</Text>
-                        <Text style={styles.loreBody}>The Arena is not the final battlefield.</Text>
+                        <Text style={styles.loreBody}>{MONARCH_VICTORY_LORE}</Text>
                       </>
                     ) : (
                       <>
@@ -2366,7 +2383,7 @@ export default function MonarchScreen() {
           </Text>
           <Text style={styles.loreBody}>
             {(matchEnd.isVictory ?? matchEnd.finalStack > (round?.buyInAmount ?? 0))
-              ? 'The Arena is not the final battlefield.'
+              ? MONARCH_VICTORY_LORE
               : 'Defeat Monarch to uncover the message.'}
           </Text>
         </View>
