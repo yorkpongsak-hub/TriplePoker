@@ -568,7 +568,7 @@ export function registerGameSocket(io: Server): void {
         // (client lobby.tsx ยังคง lock icon จาก token อย่างเดียวไว้เป็นแค่ preview ก่อนกดเข้าคิวจริง)
         const { data: userRow, error: userErr } = await supabaseAdmin
           .from('users')
-          .select('tier_unlocked_max')
+          .select('tier_unlocked_max, display_name, avatar_url')
           .eq('user_id', userId)
           .single();
         if (userErr || !userRow) {
@@ -592,7 +592,11 @@ export function registerGameSocket(io: Server): void {
         // High Noble ปกติเลย — pity ผูกกับ userId ของคนนี้เอง (Batch 1 Task 3)
         if (tier === 'highNoble' && await rollMonarchEntry(userId)) {
           const monarchRoomId = `monarch_${userId}_${Date.now()}`;
-          const state = await startMonarchMatch(io, monarchRoomId, userId, userName, avatarUrl);
+          const state = await startMonarchMatch(
+            io, monarchRoomId, userId,
+            userRow.display_name ?? userName,
+            userRow.avatar_url ?? avatarUrl,
+          );
           if (state) {
             startMonarchRound(io, monarchRoomId);
             // ไม่ join ห้อง/emit round data จาก socket นี้ (matchmaking socket เดิม กำลังจะ

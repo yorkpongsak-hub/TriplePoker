@@ -36,6 +36,7 @@ import PlayerHandView, { HandCardData } from '../../../src/components/game/Playe
 import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
 import { MINION_AVATAR } from '../../../src/constants/minionAvatars'
 import GameTopBar from '../../../src/components/game/GameTopBar'
+import { AvatarDisplay, PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
 import BossVictoryVFX from '../../../src/components/vfx/BossVictoryVFX'
 import { getReduceMotion } from '../../../src/utils/reduceMotion'
 // Batch 4 — SFX layer เท่านั้น ห้าม import bgmService (ไม่มี BGM ในโต๊ะเกมทุก Tier ตาม canon)
@@ -45,6 +46,21 @@ const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
 const bossAvatarImg = require('../../../assets/bosses/boss_Monarch_avatar.png')
 const MONARCH_TABLE_SKIN = require('../../../assets/tables/boss_monarch_skin_table.png')
+
+function MonarchPlayerAvatar({ value, size }: { value?: string; size: number }) {
+  const preset = value ? PRESET_AVATARS.find(item => item.key === value) : undefined
+  if (preset) {
+    return <AvatarDisplay config={{ type: 'preset', presetKey: preset.key, frameKey: 'default' }} size={size} showFrame={false} />
+  }
+  if (value && /^(https?:|data:)/i.test(value)) {
+    return <Image source={{ uri: value }} style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 1.5, borderColor: '#FFD76A' }} resizeMode="cover" />
+  }
+  return (
+    <View style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 1.5, borderColor: '#FFD76A', backgroundColor: '#132019', alignItems: 'center', justifyContent: 'center' }}>
+      <Text style={{ fontSize: Math.round(size * 0.52) }}>{value || '🧑'}</Text>
+    </View>
+  )
+}
 
 // Boss Intro Popup — เนื้อหาเดียวกับ BOSS_INTRO['Monarch'] เดิมใน highNoble/index.tsx:85-90
 // (รูปมาสเตอร์ + quote เดียวกันเป๊ะ) แต่ Monarch มีบอสแค่ตัวเดียวเสมอ ไม่ต้องทำ lookup map ตามชื่อ
@@ -1829,17 +1845,7 @@ export default function MonarchScreen() {
             <Animated.View style={{ opacity: fadeTable, width: '100%', alignItems: 'center', display: g1Result ? 'none' : 'flex' }}>
               <View style={styles.humanPanel}>
                 <View style={styles.humanIdentityRow}>
-                  {round.seats.find(seat => seat.role === 'human')?.avatarUrl ? (
-                    <Image
-                      source={{ uri: round.seats.find(seat => seat.role === 'human')!.avatarUrl }}
-                      style={styles.humanAvatar}
-                      resizeMode="cover"
-                    />
-                  ) : (
-                    <View style={[styles.humanAvatar, styles.humanAvatarFallback]}>
-                      <Text style={styles.humanAvatarEmoji}>🧑</Text>
-                    </View>
-                  )}
+                  <MonarchPlayerAvatar value={round.seats.find(seat => seat.role === 'human')?.avatarUrl} size={38} />
                   <View>
                     <Text style={styles.humanIdentityName}>{round.seats.find(seat => seat.role === 'human')?.name ?? 'Player'}</Text>
                     <Text style={styles.humanIdentitySub}>YOU</Text>
@@ -2133,13 +2139,7 @@ export default function MonarchScreen() {
               return (
                 <View key={seat.id} style={[styles.battleSeat, seatStyle(seat.role), folded && styles.battleSeatFolded]}>
                   {seat.role === 'human' && (
-                    seat.avatarUrl ? (
-                      <Image source={{ uri: seat.avatarUrl }} style={styles.battleHumanAvatar} resizeMode="cover" />
-                    ) : (
-                      <View style={[styles.battleHumanAvatar, styles.humanAvatarFallback]}>
-                        <Text style={styles.battleHumanAvatarEmoji}>🧑</Text>
-                      </View>
-                    )
+                    <MonarchPlayerAvatar value={seat.avatarUrl} size={36} />
                   )}
                   <Text style={[styles.battleSeatName, isWinner && styles.battleWinner]}>
                     {seat.emoji} {seat.name}{folded ? ' · FOLD' : ''}
@@ -2287,8 +2287,8 @@ export default function MonarchScreen() {
                   return (
                     <View key={seat.id} style={[styles.preGfPlayer, winner && styles.preGfPlayerWinner]}>
                       <View style={styles.preGfPlayerLabel}>
-                        {seat.role === 'human' && seat.avatarUrl ? (
-                          <Image source={{ uri: seat.avatarUrl }} style={styles.resultAvatar} resizeMode="cover" />
+                        {seat.role === 'human' ? (
+                          <MonarchPlayerAvatar value={seat.avatarUrl} size={30} />
                         ) : seat.role === 'boss' ? (
                           <Image source={bossAvatarImg} style={styles.resultAvatar} resizeMode="cover" />
                         ) : (seat.role === 'minion1' || seat.role === 'minion2') && MINION_AVATAR[seat.name] ? (
@@ -2368,13 +2368,7 @@ export default function MonarchScreen() {
                 const victory = matchEnd.isVictory ?? matchEnd.finalStack > (round?.buyInAmount ?? 0)
                 return (
                   <View style={styles.summaryIdentity}>
-                    {humanSeat?.avatarUrl ? (
-                      <Image source={{ uri: humanSeat.avatarUrl }} style={styles.summaryAvatar} resizeMode="cover" />
-                    ) : (
-                      <View style={[styles.summaryAvatar, styles.humanAvatarFallback]}>
-                        <Text style={styles.summaryAvatarEmoji}>🧑</Text>
-                      </View>
-                    )}
+                    <MonarchPlayerAvatar value={humanSeat?.avatarUrl} size={48} />
                     <View>
                       <Text style={styles.summaryPlayerName}>{humanSeat?.name ?? 'Player'}</Text>
                       <Text style={[styles.summaryPlayerResult, { color: victory ? '#8DFFB5' : '#FF6B6B' }]}>
