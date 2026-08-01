@@ -1746,11 +1746,13 @@ export default function MonarchScreen() {
           <View style={styles.modalBox}>
             <Text style={styles.modalTitle}>Leave the Table?</Text>
             <Text style={styles.modalText}>
-              Leaving now counts as a defeat. The Monarch does not grant second chances.
+              {matchEnd
+                ? 'This match is complete and the result has already been recorded. Return to the Lobby?'
+                : 'Leaving now counts as a defeat. The Monarch does not grant second chances.'}
             </Text>
             <View style={styles.leaveConfirmRow}>
               <TouchableOpacity style={[styles.modalCloseBtn, styles.leaveConfirmStayBtn]} onPress={() => setShowLeaveConfirm(false)}>
-                <Text style={styles.modalCloseBtnText}>Stay</Text>
+                <Text style={styles.modalCloseBtnText}>{matchEnd ? 'Cancel' : 'Stay'}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.modalCloseBtn, styles.leaveConfirmBtn]} onPress={handleLeaveMatch}>
                 <Text style={styles.leaveConfirmBtnText}>Leave</Text>
