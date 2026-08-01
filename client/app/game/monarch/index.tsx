@@ -1042,6 +1042,7 @@ export default function MonarchScreen() {
   // pressurePhase เปลี่ยนแค่ ~3 ครั้งตลอด 40 วินาที (transition จริงเท่านั้น ไม่ใช่ทุกวินาที) —
   // ตัวเลขวินาทีจริงอยู่ใน MonarchTimer เอง ไม่ยกมาไว้ที่ parent (ดู known bug class ใน CLAUDE.md)
   const [pressurePhase, setPressurePhase] = useState<PressurePhase>('calm')
+  const [sealUrgent, setSealUrgent] = useState(false)
   // pressurePhaseRef กัน stale closure ใน handleTimerTick (ฟังก์ชันถูก capture ครั้งเดียวตอน
   // MonarchTimer's useEffect mount ไม่ได้ re-subscribe ทุก render ของ parent)
   const pressurePhaseRef = useRef<PressurePhase>('calm')
@@ -1109,8 +1110,28 @@ export default function MonarchScreen() {
     borderColor: `rgba(255,215,106,${handGlow.value})`,
   }))
 
+  const sealPulse = useSharedValue(1)
+  useEffect(() => {
+    if (sealUrgent && !submitted && !arrangePending && round?.phase === 'arrangement') {
+      sealPulse.value = withRepeat(
+        withSequence(
+          withTiming(0.42, { duration: 280, easing: Easing.inOut(Easing.sin) }),
+          withTiming(1, { duration: 280, easing: Easing.inOut(Easing.sin) }),
+        ),
+        -1, true,
+      )
+    } else {
+      sealPulse.value = withTiming(1, { duration: 120 })
+    }
+  }, [sealUrgent, submitted, arrangePending, round?.phase])
+  const sealPulseStyle = useAnimatedStyle(() => ({
+    opacity: sealPulse.value,
+    transform: [{ scale: 1 + (1 - sealPulse.value) * 0.04 }],
+  }))
+
   // เรียกทุกวินาทีจาก MonarchTimer (ไม่ setState ทุก tick ยกเว้น 2 จุดที่เป็น one-time trigger ด้านล่าง)
   const handleTimerTick = (remainingSec: number) => {
+    if (remainingSec <= 5) setSealUrgent(true)
     if (pressurePhaseRef.current === 'critical' || pressurePhaseRef.current === 'final') {
       onMonarchCue('tick') // tick sound ควรดังเฉพาะ critical ขึ้นไปตาม v2.2 §13 audio table
     }
@@ -1211,6 +1232,7 @@ export default function MonarchScreen() {
     setG3Result(null)
     setMatchEnd(null)
     setShowVictoryVFX(false)
+    setSealUrgent(false)
 
     // Batch 2 — reset pressure state ต่อรอบใหม่ (Monarch เป็นแมตช์รอบเดียว แต่ reset ไว้กันกรณี
     // reconnect ได้ round_start ซ้ำ) สุ่ม target ใหม่ทุกครั้งที่รอบเริ่มจริง
@@ -1440,6 +1462,7 @@ export default function MonarchScreen() {
   const handleConfirmArrangement = () => {
     if (!socketRef.current || submitted || arrangePending) return
     setArrangePending(true)
+    setSealUrgent(false)
     setArrangeError(null)
     socketRef.current.emit('submit_monarch_arrangement', {
       roomId, userId,
@@ -1839,6 +1862,7 @@ export default function MonarchScreen() {
 
                 {round.phase === 'arrangement' && !g1Result && (
                   <View style={styles.gfBtnRow}>
+                    <Reanimated.View style={sealPulseStyle}>
                     <TouchableOpacity
                       style={[styles.sealBtn, styles.gfBtn, (submitted || arrangePending) && styles.submitBtnDisabled]}
                       disabled={submitted || arrangePending}
@@ -1846,6 +1870,7 @@ export default function MonarchScreen() {
                     >
                       <Text style={styles.sealBtnText}>{submitted ? 'Waiting for table…' : 'SEAL THE HAND'}</Text>
                     </TouchableOpacity>
+                    </Reanimated.View>
                   </View>
                 )}
               </View>
