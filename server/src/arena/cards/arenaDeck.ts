@@ -63,6 +63,10 @@ export function dealArenaCards(deck: readonly ArenaCard[]): ArenaDeal {
   return { players, community, auction }
 }
 
+export function arenaCardKey(card: ArenaCard): string {
+  return card.kind === 'JOKER' ? 'JOKER' : `${card.rank.toLowerCase()}${card.suit[0]}`
+}
+
 export function createSeededRandom(seed: number): ArenaRandom {
   let state = seed >>> 0
   return () => {

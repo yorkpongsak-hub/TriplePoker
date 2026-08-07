@@ -38,6 +38,15 @@ export interface ArenaMatchSnapshot {
   completed: boolean
 }
 
+export interface ArenaMatchSnapshotDetail {
+  faceUpWinnerId: string | null
+  jokerOwnerId: string | null
+  jokerDeclaration: JokerDeclaration | null
+  auctionWinnerIds: string[]
+  gfRound: GFRound | null
+  actedActorIds: string[]
+}
+
 type DecisionPhase = keyof typeof arenaPhaseTimeoutMs
 
 const AUTOMATIC_PHASES = new Set<ArenaMatchPhase>([
@@ -105,6 +114,17 @@ export class ArenaMatchEngine {
 
   eventLog(): readonly ArenaMatchEvent[] { return this.events.map(event => ({ ...event, detail: event.detail ? { ...event.detail } : undefined })) }
   currentDeal(): ArenaDeal | null { return this.deal }
+
+  snapshotDetail(): ArenaMatchSnapshotDetail {
+    return {
+      faceUpWinnerId: this.faceUpWinnerId,
+      jokerOwnerId: this.jokerOwnerId,
+      jokerDeclaration: this.jokerDeclaration,
+      auctionWinnerIds: [...this.auctionWinnerIds],
+      gfRound: this.gfRound,
+      actedActorIds: [...this.phaseActions.keys()],
+    }
+  }
 
   submit(action: ArenaMatchAction, now = Date.now()): { accepted: boolean; duplicate: boolean; snapshot: ArenaMatchSnapshot } {
     const fingerprint = JSON.stringify(action)
