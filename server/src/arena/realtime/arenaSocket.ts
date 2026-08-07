@@ -1,7 +1,11 @@
 import { Server, Socket } from 'socket.io'
 import { supabase, supabaseAdmin } from '../../config/supabase'
+import { bestArenaArrangement } from '../arrangement/arenaArrangement'
 import { buildArenaBotAction } from '../connection/arenaBotTakeover'
+import { tierSEconomyConfig } from '../config/tierSConfig'
+import { ArenaCrestLedger } from '../economy/arenaCrestLedger'
 import { ArenaMatchAction } from '../match/arenaMatchEngine'
+import { ArenaSettlementPersistence } from '../settlement/arenaSettlementPersistence'
 import { projectArenaClientSnapshot } from './arenaProjection'
 import { ArenaRuntime, ArenaRuntimeMatch } from './arenaRuntime'
 
@@ -11,6 +15,9 @@ interface ArenaSocketData { identity: ArenaIdentity }
 const runtime = new ArenaRuntime()
 const socketsByPlayer = new Map<string, Socket>()
 const identities = new Map<string, { displayName: string }>()
+const crestLedger = new ArenaCrestLedger()
+const settlementPersistence = new ArenaSettlementPersistence()
+const finalizedMatchIds = new Set<string>()
 
 async function authenticate(token: unknown): Promise<ArenaIdentity> {
   if (typeof token !== 'string' || !token) throw new Error('ARENA_AUTH_REQUIRED')
@@ -24,6 +31,7 @@ async function authenticate(token: unknown): Promise<ArenaIdentity> {
 function roomName(matchId: string): string { return `arena:${matchId}` }
 
 // บอท/AI ที่ pending ต้องตอบสนองทันที ไม่ใช่รอ applyDefaults() จนหมดเวลา phase timeout
+// arrangement คำนวณจริงจากไพ่ที่ actor นั้นถืออยู่ ณ ขณะนั้น (ไม่ใช่ placeholder อีกต่อไป)
 export function driveBots(match: ArenaRuntimeMatch, now: number): void {
   const actorSeat = new Map(match.composition.seats.map((seat, index) => [match.engine.actorIds[index], seat] as const))
   for (let guard = 0; guard < 20; guard++) {
@@ -36,7 +44,11 @@ export function driveBots(match: ArenaRuntimeMatch, now: number): void {
     })
     if (!botActorId) return
     try {
-      const action = buildArenaBotAction(snapshot, botActorId, { latestArrangementHash: 'latest-valid', discardCardId: 'server-default-discard' }, {})
+      const deal = match.engine.currentDeal()
+      const heldIds = [...(match.engine.snapshotDetail().heldCardIds[botActorId] ?? [])]
+      const arrangement = deal ? bestArenaArrangement(match.engine.heldCardsFor(botActorId), deal.community) : { pile1: [], pile2: [], pile3: [] }
+      const discardCardId = heldIds.at(-1)
+      const action = buildArenaBotAction(snapshot, botActorId, { arrangement, discardCardId }, {})
       match.engine.submit(action, now)
       if (actorSeat.get(botActorId)?.controller === 'HUMAN') match.connections.recordBotAction(botActorId, snapshot, action.actionId)
     } catch (error) {
@@ -55,6 +67,29 @@ function emitProjectedSnapshots(match: ArenaRuntimeMatch, now: number): void {
   }
 }
 
+// ยิง SettlementTransaction ที่เพิ่งเกิดขึ้นจริงเข้า Supabase (ทีละรายการ, idempotent ผ่าน commandId)
+// ถ้าแมตช์จบแล้วให้ persist match log ครั้งเดียวแล้วเลิกติดตามใน runtime กัน ticker วนไปเรื่อยๆ ตลอดอายุ process
+async function persistSettlement(match: ArenaRuntimeMatch): Promise<void> {
+  const transactions = match.engine.drainSettlementTransactions()
+  for (const transaction of transactions) {
+    try {
+      await settlementPersistence.persistTransaction(match.engine.matchId, transaction)
+    } catch (error) {
+      console.error('[Arena] settlement persist failed:', error)
+    }
+  }
+  const snapshot = match.engine.snapshot()
+  if (snapshot.completed && !finalizedMatchIds.has(match.engine.matchId)) {
+    finalizedMatchIds.add(match.engine.matchId)
+    try {
+      await settlementPersistence.persistMatchLog(match.engine.matchId, match.engine.eventLog(), { breakdown: match.engine.settlementBreakdown() })
+    } catch (error) {
+      console.error('[Arena] match log persist failed:', error)
+    }
+    runtime.completeMatch(match.engine.matchId)
+  }
+}
+
 export function registerArenaSocket(io: Server): void {
   const arena = io.of('/arena')
   const announceMatch = (composition: ReturnType<ArenaRuntime['tickQueue']>) => {
@@ -70,20 +105,30 @@ export function registerArenaSocket(io: Server): void {
     }
   }
 
+  let tickInFlight = false
   const ticker = setInterval(() => {
-    const now = Date.now()
-    announceMatch(runtime.tickQueue(now))
-    for (const match of runtime.activeMatches()) {
+    if (tickInFlight) return
+    tickInFlight = true
+    void (async () => {
       try {
-        match.connections.observe(now, match.engine.snapshot())
-        const before = match.engine.snapshot().version
-        match.engine.tick(now)
-        driveBots(match, now)
-        if (match.engine.snapshot().version !== before) emitProjectedSnapshots(match, now)
-      } catch (error) {
-        console.error('[Arena] tick failed:', error)
+        const now = Date.now()
+        announceMatch(runtime.tickQueue(now))
+        for (const match of runtime.activeMatches()) {
+          try {
+            match.connections.observe(now, match.engine.snapshot())
+            const before = match.engine.snapshot().version
+            match.engine.tick(now)
+            driveBots(match, now)
+            await persistSettlement(match)
+            if (match.engine.snapshot().version !== before) emitProjectedSnapshots(match, now)
+          } catch (error) {
+            console.error('[Arena] tick failed:', error)
+          }
+        }
+      } finally {
+        tickInFlight = false
       }
-    }
+    })()
   }, 1_000)
   ticker.unref()
   arena.use(async (socket: Socket<any, any, any, ArenaSocketData>, next) => {
@@ -118,12 +163,17 @@ export function registerArenaSocket(io: Server): void {
       if (match) socket.emit('arena:snapshot', projectArenaClientSnapshot(match.engine, match.composition, match.connections, identity.playerId, Date.now(), identities))
     })
 
-    socket.on('arena:action', (action: ArenaMatchAction, acknowledge?: (result: unknown) => void) => {
+    socket.on('arena:action', async (action: ArenaMatchAction, acknowledge?: (result: unknown) => void) => {
       try {
+        if (action.type === 'BUY_IN_RESERVED') {
+          const balance = await crestLedger.getBalance(identity.playerId)
+          if (balance.totalCrest < tierSEconomyConfig.requiredReservationCrest) throw new Error('ARENA_INSUFFICIENT_CREST_FOR_BUY_IN')
+        }
         runtime.submit(identity.playerId, { ...action, actorId: identity.playerId })
         const match = runtime.matchForPlayer(identity.playerId)!
         const now = Date.now()
         driveBots(match, now)
+        await persistSettlement(match)
         emitProjectedSnapshots(match, now)
         acknowledge?.({ ok: true, version: match.engine.snapshot().version })
       } catch (error) {

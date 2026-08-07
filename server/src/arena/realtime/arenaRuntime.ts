@@ -39,6 +39,16 @@ export class ArenaRuntime {
 
   activeMatches(): ArenaRuntimeMatch[] { return [...this.matches.values()] }
 
+  // เรียกหลัง MATCH_RESULT ถูก persist เรียบร้อยแล้ว — เอาออกจากการติดตามไม่ให้ ticker วนไปเรื่อยๆ ตลอดอายุ process
+  completeMatch(matchId: string): void {
+    const match = this.matches.get(matchId)
+    if (!match) return
+    for (const seat of match.composition.seats) {
+      if (seat.controller === 'HUMAN' && this.playerMatch.get(seat.playerId) === matchId) this.playerMatch.delete(seat.playerId)
+    }
+    this.matches.delete(matchId)
+  }
+
   submit(playerId: string, action: ArenaMatchAction, now = Date.now()): ArenaMatchSnapshot {
     const match = this.matchForPlayer(playerId)
     if (!match) throw new Error('ARENA_PLAYER_NOT_IN_MATCH')

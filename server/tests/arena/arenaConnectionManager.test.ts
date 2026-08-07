@@ -1,8 +1,20 @@
 import { ArenaConnectionManager } from '../../src/arena/connection/arenaConnectionManager'
 import { buildArenaBotAction } from '../../src/arena/connection/arenaBotTakeover'
+import { ArenaArrangement, bestArenaArrangement } from '../../src/arena/arrangement/arenaArrangement'
 import { ArenaMatchEngine, ArenaMatchSnapshot } from '../../src/arena/match/arenaMatchEngine'
-import { createSeededRandom } from '../../src/arena/cards/arenaDeck'
+import { arenaCardKey, ArenaCard, createSeededRandom } from '../../src/arena/cards/arenaDeck'
 import { ArenaMatchComposition } from '../../src/arena/matchmaking/arenaMatchmaking'
+
+const dummyArrangement: ArenaArrangement = { pile1: ['as'], pile2: ['ks'], pile3: ['qs', 'js', '10s'] }
+
+function arrangementFor(engine: ArenaMatchEngine, actorId: string): ArenaArrangement {
+  const deal = engine.currentDeal()!
+  const byId = new Map<string, ArenaCard>()
+  ;[...deal.players.flat(), ...deal.community.pile1, ...deal.community.pile2, ...deal.community.pile3, deal.auction.faceUp, ...deal.auction.blind]
+    .forEach(card => byId.set(arenaCardKey(card), card))
+  const heldIds = engine.snapshotDetail().heldCardIds[actorId] ?? []
+  return bestArenaArrangement(heldIds.map(id => byId.get(id)!), deal.community)
+}
 
 const composition: ArenaMatchComposition = {
   queueId: 'q1', kind: 'FOUR_GODS', humanCount: 3, encounterRoll: 0.9, finalizedAt: 0,
@@ -89,13 +101,13 @@ describe('Gate 7 - disconnect lifecycle', () => {
 
 describe('Gate 7 - Bot action bridge', () => {
   test('ใช้ arrangement ล่าสุดและ default Joker Wild Pile 3 / GF Fold', () => {
-    expect(buildArenaBotAction(snapshot(), 'p1', { latestArrangementHash: 'valid-hash' })).toMatchObject({
-      type: 'ARRANGE_1', actorId: 'p1', arrangementHash: 'valid-hash',
+    expect(buildArenaBotAction(snapshot(), 'p1', { arrangement: dummyArrangement })).toMatchObject({
+      type: 'ARRANGE_1', actorId: 'p1', ...dummyArrangement,
     })
-    expect(buildArenaBotAction(snapshot({ phase: 'JOKER_DECLARE' }), 'p1', { latestArrangementHash: 'valid-hash' })).toMatchObject({
+    expect(buildArenaBotAction(snapshot({ phase: 'JOKER_DECLARE' }), 'p1', { arrangement: dummyArrangement })).toMatchObject({
       type: 'JOKER_DECLARE', mode: 'WILD', targetPile: 3,
     })
-    expect(buildArenaBotAction(snapshot({ phase: 'GF_PILE_2' }), 'p1', { latestArrangementHash: 'valid-hash' })).toMatchObject({
+    expect(buildArenaBotAction(snapshot({ phase: 'GF_PILE_2' }), 'p1', { arrangement: dummyArrangement })).toMatchObject({
       type: 'GF_ACTION', decision: 'FOLD',
     })
   })
@@ -109,13 +121,13 @@ describe('Gate 7 - Bot action bridge', () => {
     const before = engine.snapshot()
     manager.disconnect('p1', 100, before)
     manager.observe(8_100, engine.snapshot())
-    const botAction = buildArenaBotAction(engine.snapshot(), 'p1', { latestArrangementHash: 'p1-valid' })
+    const botAction = buildArenaBotAction(engine.snapshot(), 'p1', { arrangement: arrangementFor(engine, 'p1') })
     engine.submit(botAction, 8_101)
     manager.recordBotAction('p1', before, botAction.actionId)
     expect(manager.reconnect('p1', 9_000, before)).toBe('BOT_ACTIVE')
 
     for (const actorId of engine.snapshot().pendingActorIds) {
-      engine.submit({ type: 'ARRANGE_1', actionId: `arrange-${actorId}`, actorId, arrangementHash: `${actorId}-valid` }, 9_001)
+      engine.submit({ type: 'ARRANGE_1', actionId: `arrange-${actorId}`, actorId, ...arrangementFor(engine, actorId) }, 9_001)
     }
     manager.observe(9_002, engine.snapshot())
     expect(engine.snapshot().phase).toBe('AUCTION_FACE_UP')

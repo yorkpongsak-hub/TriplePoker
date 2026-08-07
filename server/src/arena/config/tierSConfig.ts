@@ -23,6 +23,7 @@ export const tierSEconomyConfig = Object.freeze({
   auctionBidOptionsCrest: Object.freeze([0, 3, 6, 9, 12] as const),
   callCostCrest: 3,
   entryFeeCrest: 12,
+  bossFeeCrest: Object.freeze({ aiBoss: 24, humanBoss: 48 }),
   maximumVariableMatchCostCrest: 216,
   requiredReservationCrest: 228,
 })

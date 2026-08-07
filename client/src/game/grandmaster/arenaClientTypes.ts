@@ -60,11 +60,13 @@ export interface ArenaClientSnapshot {
   result: null | { title: string; lines: ArenaResultLine[]; netCrest: number }
 }
 
+export interface ArenaPileArrangement { pile1: string[]; pile2: string[]; pile3: string[] }
+
 export type ArenaClientIntent =
   | { type: 'SELECT_CARD'; cardId: string }
-  | { type: 'SUBMIT_ARRANGEMENT'; stage: 'ARRANGE_1' | 'FINAL_ARRANGE'; arrangementHash: string }
+  | ({ type: 'SUBMIT_ARRANGEMENT'; stage: 'ARRANGE_1' | 'FINAL_ARRANGE' } & ArenaPileArrangement)
   | { type: 'AUCTION_BID'; round: 'FACE_UP' | 'BLIND'; cardIndex: 0 | 1; amountCrest: 0 | 3 | 6 | 9 | 12 }
   | { type: 'JOKER_DECLARE'; mode: 'WILD' | 'ANTE_X2'; targetPile: 1 | 2 | 3; availableCrest: number }
   | { type: 'GF_ACTION'; decision: 'CALL' | 'FOLD' }
   | { type: 'DISCARD'; cardId: string }
-  | { type: 'FINAL_LOCK'; arrangementHash: string }
+  | ({ type: 'FINAL_LOCK' } & ArenaPileArrangement)

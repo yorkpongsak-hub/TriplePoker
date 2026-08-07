@@ -1,20 +1,23 @@
 import { resolveBlindAuction, resolveFaceUpAuction, ArenaBid } from '../auction/arenaAuction'
-import { ArenaCard, ArenaDeal, ArenaRandom, createArenaDeck, dealArenaCards, shuffleArenaDeck } from '../cards/arenaDeck'
-import { arenaPhaseTimeoutMs, tierSConfig } from '../config/tierSConfig'
-import { ArenaMatchPhase, JokerDeclaration } from '../contracts/arenaContracts'
+import { ArenaArrangement, bestArenaArrangement, checkArenaFoul, validateArenaPartition } from '../arrangement/arenaArrangement'
+import { arenaCardKey, ArenaCard, ArenaDeal, ArenaRandom, createArenaDeck, dealArenaCards, shuffleArenaDeck } from '../cards/arenaDeck'
+import { arenaPhaseTimeoutMs, tierSConfig, tierSEconomyConfig } from '../config/tierSConfig'
+import { ArenaMatchPhase, ArenaPile, JokerDeclaration } from '../contracts/arenaContracts'
 import { autoLockJoker, declareJoker } from '../joker/jokerRules'
+import { compareArenaHands, evaluateArenaHand } from '../joker/wildHandEvaluator'
 import { ArenaMatchComposition } from '../matchmaking/arenaMatchmaking'
 import { GFRound, GFPlayer, recordGFAction, soleRemainingPlayer, startPile2GF, startPile3Round1, startPile3Round2 } from '../gf/arenaGFRules'
+import { ArenaSettlementEngine, PlayerResultBreakdown, SettlementAccount, SettlementCommand, SettlementTransaction } from '../settlement/arenaSettlementEngine'
 
 export type ArenaMatchAction =
   | { type: 'BUY_IN_RESERVED'; actionId: string; actorId: string }
-  | { type: 'ARRANGE_1'; actionId: string; actorId: string; arrangementHash: string }
+  | { type: 'ARRANGE_1'; actionId: string; actorId: string; pile1: string[]; pile2: string[]; pile3: string[] }
   | { type: 'FACE_UP_BID'; actionId: string; actorId: string; amountCrest: 0 | 3 | 6 | 9 | 12 }
   | { type: 'BLIND_BID'; actionId: string; actorId: string; amountCrest: 0 | 3 | 6 | 9 | 12; cardIndex: 0 | 1 }
-  | { type: 'FINAL_ARRANGE'; actionId: string; actorId: string; arrangementHash: string }
+  | { type: 'FINAL_ARRANGE'; actionId: string; actorId: string; pile1: string[]; pile2: string[]; pile3: string[] }
   | { type: 'JOKER_DECLARE'; actionId: string; actorId: string; mode: 'WILD' | 'ANTE_X2'; targetPile: 1 | 2 | 3; availableCrest: number }
   | { type: 'DISCARD'; actionId: string; actorId: string; cardId: string }
-  | { type: 'FINAL_LOCK'; actionId: string; actorId: string; arrangementHash: string }
+  | { type: 'FINAL_LOCK'; actionId: string; actorId: string; pile1: string[]; pile2: string[]; pile3: string[] }
   | { type: 'GF_ACTION'; actionId: string; actorId: string; decision: 'CALL' | 'FOLD' }
 
 export interface ArenaMatchEvent {
@@ -45,6 +48,12 @@ export interface ArenaMatchSnapshotDetail {
   auctionWinnerIds: string[]
   gfRound: GFRound | null
   actedActorIds: string[]
+  heldCardIds: Record<string, string[]>
+  lockedArrangements: Record<string, ArenaArrangement>
+  fouled: Record<string, boolean>
+  pile1WinnerId: string | null
+  pile2WinnerId: string | null
+  pile3WinnerId: string | null
 }
 
 type DecisionPhase = keyof typeof arenaPhaseTimeoutMs
@@ -54,6 +63,12 @@ const AUTOMATIC_PHASES = new Set<ArenaMatchPhase>([
   'RESOLVE_PILE_2', 'RESOLVE_PILE_3', 'CHECK_SWEEP_JACKPOT', 'GAME_SETTLEMENT',
   'NEXT_GAME_OR_MATCH_END', 'MATCH_SETTLEMENT', 'BATTLE_REWARDS_SINK_IF_REMAINING',
 ])
+
+type ArrangementAction = Extract<ArenaMatchAction, { type: 'ARRANGE_1' | 'FINAL_ARRANGE' | 'FINAL_LOCK' }>
+
+function isArrangementAction(action: ArenaMatchAction): action is ArrangementAction {
+  return action.type === 'ARRANGE_1' || action.type === 'FINAL_ARRANGE' || action.type === 'FINAL_LOCK'
+}
 
 function seatActor(composition: ArenaMatchComposition, index: number): string {
   const seat = composition.seats[index]
@@ -75,12 +90,22 @@ export class ArenaMatchEngine {
   private processedActionIds = new Map<string, string>()
   private phaseActions = new Map<string, ArenaMatchAction>()
   private deal: ArenaDeal | null = null
+  private dealCardsById = new Map<string, ArenaCard>()
   private faceUpWinnerId: string | null = null
   private jokerOwnerId: string | null = null
   private jokerDeclaration: JokerDeclaration | null = null
   private auctionWinnerIds = new Set<string>()
   private gfRound: GFRound | null = null
-  private finalLockHashes = new Map<string, string>()
+  private heldCardIds = new Map<string, Set<string>>()
+  private lastArrangement = new Map<string, ArenaArrangement>()
+  private lockedArrangements = new Map<string, ArenaArrangement>()
+  private fouled = new Map<string, boolean>()
+  private pile1WinnerId: string | null = null
+  private pile2WinnerId: string | null = null
+  private pile3WinnerId: string | null = null
+  private bossFeeCharged = false
+  private readonly settlement: ArenaSettlementEngine
+  private pendingTransactions: SettlementTransaction[] = []
   readonly actorIds: string[]
   readonly humanActorIds: string[]
 
@@ -89,12 +114,19 @@ export class ArenaMatchEngine {
     readonly composition: ArenaMatchComposition,
     private readonly random: ArenaRandom = Math.random,
     startedAt = Date.now(),
+    startingBalances?: Readonly<Record<string, number | SettlementAccount>>,
   ) {
     if (!matchId.trim()) throw new Error('ARENA_MATCH_ID_REQUIRED')
     this.actorIds = composition.seats.map((_, index) => seatActor(composition, index))
     this.humanActorIds = composition.seats
       .map((seat, index) => seat.controller === 'HUMAN' ? this.actorIds[index] : null)
       .filter((id): id is string => id !== null)
+    const balances: Record<string, number | SettlementAccount> = startingBalances ?? Object.fromEntries(
+      this.actorIds.map(id => [id, this.humanActorIds.includes(id)
+        ? { balanceCrest: tierSEconomyConfig.requiredReservationCrest, persisted: true }
+        : { balanceCrest: 100_000, persisted: false }]),
+    )
+    this.settlement = new ArenaSettlementEngine(balances)
     this.setDeadline(startedAt)
     this.log(startedAt, 'PHASE_CHANGED')
   }
@@ -114,6 +146,8 @@ export class ArenaMatchEngine {
 
   eventLog(): readonly ArenaMatchEvent[] { return this.events.map(event => ({ ...event, detail: event.detail ? { ...event.detail } : undefined })) }
   currentDeal(): ArenaDeal | null { return this.deal }
+  cardById(id: string): ArenaCard | undefined { return this.dealCardsById.get(id) }
+  heldCardsFor(actorId: string): ArenaCard[] { return [...(this.heldCardIds.get(actorId) ?? [])].map(cardId => this.dealCardsById.get(cardId)!) }
 
   snapshotDetail(): ArenaMatchSnapshotDetail {
     return {
@@ -123,7 +157,28 @@ export class ArenaMatchEngine {
       auctionWinnerIds: [...this.auctionWinnerIds],
       gfRound: this.gfRound,
       actedActorIds: [...this.phaseActions.keys()],
+      heldCardIds: Object.fromEntries([...this.heldCardIds.entries()].map(([actorId, ids]) => [actorId, [...ids]])),
+      lockedArrangements: Object.fromEntries(this.lockedArrangements.entries()),
+      fouled: Object.fromEntries(this.fouled.entries()),
+      pile1WinnerId: this.pile1WinnerId,
+      pile2WinnerId: this.pile2WinnerId,
+      pile3WinnerId: this.pile3WinnerId,
     }
+  }
+
+  // ดึง SettlementTransaction ที่เพิ่งเกิดตั้งแต่ครั้งก่อนไปยิง persist ที่ arena/realtime layer (engine เองไม่มี I/O)
+  drainSettlementTransactions(): SettlementTransaction[] {
+    const drained = this.pendingTransactions
+    this.pendingTransactions = []
+    return drained
+  }
+
+  settlementBreakdown(): PlayerResultBreakdown[] { return this.settlement.resultBreakdown() }
+  settlementTotals(): ReturnType<ArenaSettlementEngine['totals']> { return this.settlement.totals() }
+
+  private execSettlement(command: SettlementCommand): void {
+    const { duplicate, transaction } = this.settlement.execute(command)
+    if (!duplicate) this.pendingTransactions.push(transaction)
   }
 
   submit(action: ArenaMatchAction, now = Date.now()): { accepted: boolean; duplicate: boolean; snapshot: ArenaMatchSnapshot } {
@@ -164,12 +219,25 @@ export class ArenaMatchEngine {
     if (expected[action.type] !== this.phase) throw new Error('ARENA_ACTION_WRONG_PHASE')
     if (action.type === 'BUY_IN_RESERVED' && !this.humanActorIds.includes(action.actorId)) throw new Error('ARENA_AI_HAS_NO_BUY_IN')
     if (action.type === 'JOKER_DECLARE' && action.actorId !== this.jokerOwnerId) throw new Error('ARENA_ACTOR_DOES_NOT_OWN_JOKER')
+    if (action.type === 'DISCARD' && !this.heldCardIds.get(action.actorId)?.has(action.cardId)) throw new Error('ARENA_DISCARD_CARD_NOT_HELD')
+    if (isArrangementAction(action)) {
+      const held = this.heldCardIds.get(action.actorId)
+      const check = validateArenaPartition({ pile1: action.pile1, pile2: action.pile2, pile3: action.pile3 }, held ?? new Set())
+      if (!check.ok) throw new Error(check.reason ?? 'ARENA_ARRANGEMENT_INVALID')
+    }
     if (this.phaseActions.has(action.actorId)) throw new Error('ARENA_ACTOR_ALREADY_ACTED')
   }
 
   private applyAction(action: ArenaMatchAction, now: number): void {
     if (action.type === 'GF_ACTION') {
       this.gfRound = recordGFAction(this.gfRound!, action.actorId, action.decision)
+      if (action.decision === 'CALL') {
+        const pile: 2 | 3 = this.phase === 'GF_PILE_2' ? 2 : 3
+        this.execSettlement({
+          type: 'CALL', commandId: action.actionId, game: this.gameNumber as 1 | 2 | 3,
+          pile, playerId: action.actorId, amountCrest: tierSEconomyConfig.callCostCrest,
+        })
+      }
       return
     }
     if (action.type === 'JOKER_DECLARE') {
@@ -177,9 +245,41 @@ export class ArenaMatchEngine {
         mode: action.mode, targetPile: action.targetPile, declaredAt: new Date(now).toISOString(),
         availableCrest: action.availableCrest, requiredMatchedAnteCrest: action.targetPile === 3 ? 6 : 3,
       })
+      // Joker ที่ใช้เป็นตัวคูณ Ante แล้วต้องถูกบังคับทิ้งทันที (ไม่นับรวมในมือแล้ว)
+      if (action.mode === 'ANTE_X2') {
+        this.heldCardIds.get(action.actorId)?.delete('JOKER')
+        // คู่แข่งทุกคนต้อง Match Ante เป็นสองเท่าใน Pile เป้าหมาย (ไม่ใช่แค่คนประกาศ)
+        const extraCrest = tierSEconomyConfig.anteCrest[`pile${action.targetPile}` as 'pile1' | 'pile2' | 'pile3']
+        this.execSettlement({
+          type: 'ANTE', commandId: `${this.matchId}:g${this.gameNumber}:antex2:pile${action.targetPile}`,
+          game: this.gameNumber as 1 | 2 | 3, pile: action.targetPile, playerIds: [...this.actorIds], baseCrest: 0, extraCrest,
+        })
+      }
     }
-    if (action.type === 'FINAL_LOCK') this.finalLockHashes.set(action.actorId, action.arrangementHash)
+    if (action.type === 'DISCARD') {
+      this.heldCardIds.get(action.actorId)?.delete(action.cardId)
+      this.removeFromLastArrangement(action.actorId, action.cardId)
+    }
+    if (isArrangementAction(action)) {
+      const arrangement: ArenaArrangement = { pile1: action.pile1, pile2: action.pile2, pile3: action.pile3 }
+      this.lastArrangement.set(action.actorId, arrangement)
+      if (action.type === 'FINAL_LOCK') {
+        this.lockedArrangements.set(action.actorId, arrangement)
+        const foul = checkArenaFoul(arrangement, this.dealCardsById, this.deal!.community)
+        this.fouled.set(action.actorId, foul.fouled)
+      }
+    }
     this.phaseActions.set(action.actorId, action)
+  }
+
+  private removeFromLastArrangement(actorId: string, cardId: string): void {
+    const arrangement = this.lastArrangement.get(actorId)
+    if (!arrangement) return
+    this.lastArrangement.set(actorId, {
+      pile1: arrangement.pile1.filter(id => id !== cardId),
+      pile2: arrangement.pile2.filter(id => id !== cardId),
+      pile3: arrangement.pile3.filter(id => id !== cardId),
+    })
   }
 
   private progressAfterDecision(now: number): void {
@@ -187,9 +287,9 @@ export class ArenaMatchEngine {
     if (this.phase === 'ARRANGE_1' && this.allActorsActed()) return this.transition('AUCTION_FACE_UP', now)
     if (this.phase === 'AUCTION_FACE_UP' && this.allActorsActed()) {
       const bids = [...this.phaseActions.values()].map(action => ({ playerId: action.actorId, amountCrest: (action as Extract<ArenaMatchAction, { type: 'FACE_UP_BID' }>).amountCrest })) as ArenaBid[]
-      this.faceUpWinnerId = resolveFaceUpAuction(this.deal!.auction.faceUp, bids, this.actorIds, this.random).winnerId
-      if (this.faceUpWinnerId) this.auctionWinnerIds.add(this.faceUpWinnerId)
-      if (this.deal!.auction.faceUp.kind === 'JOKER') this.jokerOwnerId = this.faceUpWinnerId
+      const faceUpResolution = resolveFaceUpAuction(this.deal!.auction.faceUp, bids, this.actorIds, this.random)
+      this.faceUpWinnerId = faceUpResolution.winnerId
+      if (this.faceUpWinnerId) this.awardAuctionCard(this.faceUpWinnerId, this.deal!.auction.faceUp, faceUpResolution.chargedCrest)
       return this.transition('AUCTION_BLIND', now)
     }
     if (this.phase === 'AUCTION_BLIND' && this.pendingActors().length === 0) {
@@ -199,8 +299,7 @@ export class ArenaMatchEngine {
       })
       const results = resolveBlindAuction(this.deal!.auction.blind, bids, this.actorIds, this.faceUpWinnerId, this.random)
       results.forEach((result, index) => {
-        if (result.winnerId) this.auctionWinnerIds.add(result.winnerId)
-        if (this.deal!.auction.blind[index].kind === 'JOKER') this.jokerOwnerId = result.winnerId
+        if (result.winnerId) this.awardAuctionCard(result.winnerId, this.deal!.auction.blind[index], result.chargedCrest)
       })
       return this.transition('REVEAL_PILE3_COMMUNITY_CARD_2', now)
     }
@@ -232,6 +331,18 @@ export class ArenaMatchEngine {
     this.runAutomatic(now)
   }
 
+  private awardAuctionCard(winnerId: string, card: ArenaCard, chargedCrest: number): void {
+    this.auctionWinnerIds.add(winnerId)
+    this.heldCardIds.get(winnerId)?.add(arenaCardKey(card))
+    if (card.kind === 'JOKER') this.jokerOwnerId = winnerId
+    if (chargedCrest > 0) {
+      this.execSettlement({
+        type: 'AUCTION', commandId: `${this.matchId}:g${this.gameNumber}:auction:${card.id}`,
+        game: this.gameNumber as 1 | 2 | 3, winnerId, amountCrest: chargedCrest,
+      })
+    }
+  }
+
   private runAutomatic(now: number): void {
     let guard = 0
     while (AUTOMATIC_PHASES.has(this.phase)) {
@@ -240,22 +351,83 @@ export class ArenaMatchEngine {
         case 'GAME_START': this.startGame(now); break
         case 'DEAL': this.dealGame(now); break
         case 'REVEAL_PILE3_COMMUNITY_CARD_2': this.transition('FINAL_ARRANGE', now); break
-        case 'RESOLVE_PILE_1': this.startGFPile2(now); break
-        case 'RESOLVE_PILE_2': this.startGFPile3Round1(now); break
-        case 'RESOLVE_PILE_3': this.transition('CHECK_SWEEP_JACKPOT', now); break
-        case 'CHECK_SWEEP_JACKPOT': this.transition('GAME_SETTLEMENT', now); break
+        case 'RESOLVE_PILE_1': this.pile1WinnerId = this.resolvePileWinner(1, this.actorIds); this.payoutPile(1, this.pile1WinnerId); this.startGFPile2(now); break
+        case 'RESOLVE_PILE_2': this.pile2WinnerId = this.resolveGfPileWinner(2); this.payoutPile(2, this.pile2WinnerId); this.startGFPile3Round1(now); break
+        case 'RESOLVE_PILE_3': this.pile3WinnerId = this.resolveGfPileWinner(3); this.payoutPile(3, this.pile3WinnerId); this.transition('CHECK_SWEEP_JACKPOT', now); break
+        case 'CHECK_SWEEP_JACKPOT': this.checkSweepJackpot(); this.transition('GAME_SETTLEMENT', now); break
         case 'GAME_SETTLEMENT': this.transition('NEXT_GAME_OR_MATCH_END', now); break
         case 'NEXT_GAME_OR_MATCH_END': this.transition(this.gameNumber < tierSConfig.matchGames ? 'GAME_START' : 'MATCH_SETTLEMENT', now); break
-        case 'MATCH_SETTLEMENT': this.transition('BATTLE_REWARDS_SINK_IF_REMAINING', now); break
+        case 'MATCH_SETTLEMENT': this.execSettlement({ type: 'END_MATCH', commandId: `${this.matchId}:endmatch` }); this.transition('BATTLE_REWARDS_SINK_IF_REMAINING', now); break
         case 'BATTLE_REWARDS_SINK_IF_REMAINING': this.transition('MATCH_RESULT', now); break
       }
     }
   }
 
+  // ไม่มี GF สำหรับ Pile 1 — เปิดไพ่และตัดสินผลตรงจาก arrangement ที่ FINAL_LOCK ของทุกที่นั่ง (ข้ามคนที่ Foul)
+  // Pile 2/3 เรียกผ่าน resolveGfPileWinner: ถ้าเหลือผู้เล่นคนเดียวจาก GF ให้ชนะทันทีไม่ต้องเปิดไพ่ (รักษา Fog of War)
+  private resolvePileWinner(pile: 1 | 2 | 3, eligibleActorIds: readonly string[], ignoreFoul = false): string | null {
+    let bestActorId: string | null = null
+    let best: ReturnType<typeof evaluateArenaHand> | null = null
+    for (const actorId of eligibleActorIds) {
+      if (!ignoreFoul && this.fouled.get(actorId)) continue
+      const arrangement = this.lockedArrangements.get(actorId)
+      if (!arrangement) continue
+      const pileIds = pile === 1 ? arrangement.pile1 : pile === 2 ? arrangement.pile2 : arrangement.pile3
+      const community = pile === 1 ? this.deal!.community.pile1 : pile === 2 ? this.deal!.community.pile2 : this.deal!.community.pile3
+      const cards = pileIds.map(id => this.dealCardsById.get(id)!)
+      const hand = evaluateArenaHand([...cards, ...community])
+      if (!best || compareArenaHands(hand, best) > 0) { best = hand; bestActorId = actorId }
+    }
+    // Edge case หายาก: ทุกคนที่ยังไม่ Fold ในกองนี้ Foul พร้อมกัน — เลี่ยงปล่อย Pot ค้าง (ทำให้ END_MATCH พัง) ด้วยการเทียบมือจริงไม่สนใจ Foul
+    if (!bestActorId && !ignoreFoul) return this.resolvePileWinner(pile, eligibleActorIds, true)
+    return bestActorId
+  }
+
+  private resolveGfPileWinner(pile: 2 | 3): string | null {
+    const round = this.gfRound
+    if (!round) return null
+    const contenders = round.turnOrder.filter(id => !round.foldedPlayerIds.includes(id))
+    if (contenders.length <= 1) return contenders[0] ?? null
+    return this.resolvePileWinner(pile, contenders)
+  }
+
+  // ถ้าไม่มีผู้ชนะ (ทุกคน Foul กองนี้พร้อมกัน) ปล่อย Pot ไว้ก่อน ไม่จ่าย — เคสหายากมาก ไม่ใช่จุดโฟกัสของรอบนี้
+  private payoutPile(pile: ArenaPile, winnerId: string | null): void {
+    if (!winnerId) return
+    this.execSettlement({
+      type: 'PILE_PAYOUT', commandId: `${this.matchId}:g${this.gameNumber}:payout:pile${pile}`,
+      game: this.gameNumber as 1 | 2 | 3, pile, winnerId,
+    })
+  }
+
+  private checkSweepJackpot(): void {
+    const winnerId = this.pile1WinnerId
+    if (!winnerId || winnerId !== this.pile2WinnerId || winnerId !== this.pile3WinnerId) return
+    if (this.settlement.totals().battleRewardsCrest <= 0) return
+    this.execSettlement({
+      type: 'SWEEP_JACKPOT', commandId: `${this.matchId}:g${this.gameNumber}:sweep`,
+      game: this.gameNumber as 1 | 2 | 3, winnerId,
+    })
+  }
+
   private startGame(now: number): void {
     this.gameNumber = (this.gameNumber + 1) as 1 | 2 | 3
-    this.deal = null; this.faceUpWinnerId = null; this.jokerOwnerId = null; this.jokerDeclaration = null; this.gfRound = null; this.finalLockHashes.clear(); this.auctionWinnerIds.clear()
+    this.deal = null; this.dealCardsById.clear(); this.faceUpWinnerId = null; this.jokerOwnerId = null
+    this.jokerDeclaration = null; this.gfRound = null; this.auctionWinnerIds.clear()
+    this.heldCardIds.clear(); this.lastArrangement.clear(); this.lockedArrangements.clear(); this.fouled.clear()
+    this.pile1WinnerId = null; this.pile2WinnerId = null; this.pile3WinnerId = null
+    if (!this.bossFeeCharged) { this.chargeBossFee(); this.bossFeeCharged = true }
     this.transition('DEAL', now)
+  }
+
+  private chargeBossFee(): void {
+    const bossSeat = this.composition.seats.find(seat => seat.seat === 3)
+    if (!bossSeat) return
+    const feeCrest = bossSeat.controller === 'HUMAN' ? tierSEconomyConfig.bossFeeCrest.humanBoss : tierSEconomyConfig.bossFeeCrest.aiBoss
+    const bossActorId = bossSeat.controller === 'HUMAN' ? bossSeat.playerId : `ai:${bossSeat.aiId}:seat${bossSeat.seat}`
+    const payerIds = this.humanActorIds.filter(id => id !== bossActorId)
+    if (!payerIds.length) return
+    this.execSettlement({ type: 'BOSS_FEE', commandId: `${this.matchId}:bossfee`, playerIds: payerIds, feeCrest })
   }
 
   private dealGame(now: number): void {
@@ -266,9 +438,26 @@ export class ArenaMatchEngine {
     }
     if (!dealt) throw new Error('ARENA_COULD_NOT_DEAL_LEGAL_JOKER_LOCATION')
     this.deal = dealt
-    dealt.players.forEach((hand, index) => { if (hand.some(card => card.kind === 'JOKER')) this.jokerOwnerId = this.actorIds[index] })
+    // ใช้ arenaCardKey (short code เดียวกับที่ client เห็น) เป็น canonical id ตลอดทั้ง engine
+    // แทน card.id ดิบ — client ไม่มีทาง reverse-map short code กลับเป็น card.id ได้ จึงต้องให้ทั้งสองฝั่งใช้ key เดียวกัน
+    const allCards = [...dealt.players.flat(), ...dealt.community.pile1, ...dealt.community.pile2, ...dealt.community.pile3, dealt.auction.faceUp, ...dealt.auction.blind]
+    allCards.forEach(card => this.dealCardsById.set(arenaCardKey(card), card))
+    dealt.players.forEach((hand, index) => {
+      this.heldCardIds.set(this.actorIds[index], new Set(hand.map(card => arenaCardKey(card))))
+      if (hand.some(card => card.kind === 'JOKER')) this.jokerOwnerId = this.actorIds[index]
+    })
     this.log(now, 'GAME_DEALT', undefined, undefined, { gameNumber: this.gameNumber })
+    this.chargeAnte(1, tierSEconomyConfig.anteCrest.pile1)
+    this.chargeAnte(2, tierSEconomyConfig.anteCrest.pile2)
+    this.chargeAnte(3, tierSEconomyConfig.anteCrest.pile3)
     this.transition('ARRANGE_1', now)
+  }
+
+  private chargeAnte(pile: ArenaPile, baseCrest: number): void {
+    this.execSettlement({
+      type: 'ANTE', commandId: `${this.matchId}:g${this.gameNumber}:ante:pile${pile}`,
+      game: this.gameNumber as 1 | 2 | 3, pile, playerIds: [...this.actorIds], baseCrest, extraCrest: 0,
+    })
   }
 
   private startGFPile2(now: number): void {
@@ -307,16 +496,34 @@ export class ArenaMatchEngine {
       const actionId = `default:${this.gameNumber}:${this.phase}:${actorId}`
       switch (this.phase) {
         case 'MATCH_BUY_IN_RESERVE': throw new Error('ARENA_BUY_IN_RESERVATION_TIMEOUT')
-        case 'ARRANGE_1': action = { type: 'ARRANGE_1', actionId, actorId, arrangementHash: 'latest-valid' }; break
+        case 'ARRANGE_1': {
+          const arrangement = bestArenaArrangement(this.heldCardsFor(actorId), this.deal!.community)
+          action = { type: 'ARRANGE_1', actionId, actorId, ...arrangement }
+          break
+        }
+        case 'FINAL_ARRANGE': {
+          const arrangement = bestArenaArrangement(this.heldCardsFor(actorId), this.deal!.community)
+          action = { type: 'FINAL_ARRANGE', actionId, actorId, ...arrangement }
+          break
+        }
         case 'AUCTION_FACE_UP': action = { type: 'FACE_UP_BID', actionId, actorId, amountCrest: 0 }; break
         case 'AUCTION_BLIND': action = { type: 'BLIND_BID', actionId, actorId, amountCrest: 0, cardIndex: 0 }; break
-        case 'FINAL_ARRANGE': action = { type: 'FINAL_ARRANGE', actionId, actorId, arrangementHash: 'latest-valid' }; break
         case 'JOKER_DECLARE':
           this.jokerDeclaration = autoLockJoker(new Date(now).toISOString())
           this.log(now, 'DEFAULT_ACTION', actorId, actionId, { type: 'JOKER_AUTO_WILD_PILE_3' })
           break
-        case 'DISCARD': action = { type: 'DISCARD', actionId, actorId, cardId: 'server-default-discard' }; break
-        case 'FINAL_LOCK': action = { type: 'FINAL_LOCK', actionId, actorId, arrangementHash: 'latest-valid' }; break
+        case 'DISCARD': {
+          const heldFallback = [...(this.heldCardIds.get(actorId) ?? [])]
+          const fallback = this.lastArrangement.get(actorId)?.pile3[0] ?? heldFallback[0]
+          if (!fallback) throw new Error('ARENA_DISCARD_DEFAULT_NO_CARD_HELD')
+          action = { type: 'DISCARD', actionId, actorId, cardId: fallback }
+          break
+        }
+        case 'FINAL_LOCK': {
+          const arrangement = this.lastArrangement.get(actorId) ?? bestArenaArrangement(this.heldCardsFor(actorId), this.deal!.community)
+          action = { type: 'FINAL_LOCK', actionId, actorId, ...arrangement }
+          break
+        }
         case 'GF_PILE_2': case 'GF_PILE_3_ROUND_1': case 'GF_PILE_3_ROUND_2': action = { type: 'GF_ACTION', actionId, actorId, decision: 'FOLD' }; break
       }
       if (action) {

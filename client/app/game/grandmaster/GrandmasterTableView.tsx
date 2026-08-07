@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Image, ImageBackground, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { CARD_BACK_IMG, CARD_IMG } from '../../../src/components/game/cardAssets'
+import PlayerHandView, { HandCardData } from '../../../src/components/game/PlayerHandView'
 import ArenaOverlays from './ArenaOverlays'
 import CrownPanel from './CrownPanel'
 import FanHand from './FanHand'
@@ -10,6 +11,9 @@ import { ArenaClientIntent, ArenaClientSnapshot, ArenaSeatView } from '../../../
 const MONARCH_TABLE = require('../../../assets/tables/boss_monarch_skin_table.png')
 
 interface Props { snapshot: ArenaClientSnapshot; onIntent: (intent: ArenaClientIntent) => void; transportStatus?: string }
+
+type ArrangingPhase = 'ARRANGE_1' | 'FINAL_ARRANGE' | 'FINAL_LOCK'
+const ARRANGING_PHASES: ArrangingPhase[] = ['ARRANGE_1', 'FINAL_ARRANGE', 'FINAL_LOCK']
 
 const cardView = (code: string, hidden = false) => (
   <View key={code} style={styles.communityCard}>
@@ -33,6 +37,11 @@ function SeatLabel({ seat }: { seat: ArenaSeatView }) {
   )
 }
 
+function splitIntoPiles(cards: string[]): [HandCardData[], HandCardData[], HandCardData[]] {
+  const objs: HandCardData[] = cards.map(key => ({ id: key, key }))
+  return [objs.slice(0, 3), objs.slice(3, 6), objs.slice(6)]
+}
+
 export default function GrandmasterTableView({ snapshot, onIntent, transportStatus }: Props) {
   const { width, height } = useWindowDimensions()
   const compact = width < 700 || height < 420
@@ -46,11 +55,53 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
   const seconds = snapshot.phaseEndsAt ? Math.max(0, Math.ceil((snapshot.phaseEndsAt - now) / 1000)) : null
   const bySeat = useMemo(() => new Map(snapshot.seats.map(seat => [seat.seat, seat])), [snapshot.seats])
   const local = snapshot.seats.find(seat => seat.isLocal)
+
+  const arrangingPhase: ArrangingPhase | null = local?.isCurrentTurn && ARRANGING_PHASES.includes(snapshot.phase as ArrangingPhase)
+    ? (snapshot.phase as ArrangingPhase)
+    : null
+
+  const [piles, setPiles] = useState<[HandCardData[], HandCardData[], HandCardData[]] | null>(null)
+  const [selectedCard, setSelectedCard] = useState<{ pi: number; ci: number } | null>(null)
+
+  useEffect(() => {
+    if (!arrangingPhase || !local) { setPiles(null); setSelectedCard(null); return }
+    setPiles(splitIntoPiles(local.cards))
+    setSelectedCard(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arrangingPhase, snapshot.gameNumber])
+
+  const [discardTarget, setDiscardTarget] = useState<string | null>(null)
+  useEffect(() => {
+    if (snapshot.phase !== 'DISCARD' || !local?.isCurrentTurn) { setDiscardTarget(null); return }
+    setDiscardTarget(local.cards.length ? local.cards[local.cards.length - 1] : null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot.phase, snapshot.gameNumber])
+
   if (!local) return <View style={styles.fatal}><Text style={styles.fatalText}>LOCAL SEAT NOT FOUND</Text></View>
+
+  const handleArrangeCardPress = (pi: number, ci: number) => {
+    if (!piles) return
+    if (!selectedCard) { setSelectedCard({ pi, ci }); return }
+    if (selectedCard.pi === pi && selectedCard.ci === ci) { setSelectedCard(null); return }
+    const next: [HandCardData[], HandCardData[], HandCardData[]] = [[...piles[0]], [...piles[1]], [...piles[2]]]
+    const swap = next[selectedCard.pi][selectedCard.ci]
+    next[selectedCard.pi][selectedCard.ci] = next[pi][ci]
+    next[pi][ci] = swap
+    setPiles(next)
+    setSelectedCard(null)
+  }
+
+  const confirmArrangement = () => {
+    if (!piles) return
+    const pileKeys = { pile1: piles[0].map(card => card.key), pile2: piles[1].map(card => card.key), pile3: piles[2].map(card => card.key) }
+    if (arrangingPhase === 'FINAL_LOCK') onIntent({ type: 'FINAL_LOCK', ...pileKeys })
+    else if (arrangingPhase) onIntent({ type: 'SUBMIT_ARRANGEMENT', stage: arrangingPhase, ...pileKeys })
+  }
 
   const renderSeat = (number: 1 | 2 | 3 | 4, placement: 'top' | 'left' | 'right' | 'bottom') => {
     const seat = bySeat.get(number)
     if (!seat) return null
+    if (seat.isLocal && arrangingPhase) return <View style={[styles.seat, styles[placement]]}><SeatLabel seat={seat} /></View>
     const side = placement === 'left' || placement === 'right'
     return (
       <View style={[styles.seat, styles[placement]]}>
@@ -116,15 +167,35 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
             </View>
           </View>
 
-          {(snapshot.phase === 'ARRANGE_1' || snapshot.phase === 'FINAL_ARRANGE') && (
-            <Pressable onPress={() => onIntent({ type: 'SUBMIT_ARRANGEMENT', stage: snapshot.phase as 'ARRANGE_1' | 'FINAL_ARRANGE', arrangementHash: `v${snapshot.version}:${local?.cards.join(',') ?? ''}` })} style={styles.primaryAction}>
-              <Text style={styles.primaryActionText}>{snapshot.phase === 'ARRANGE_1' ? 'READY' : 'CONFIRM ARRANGEMENT'}</Text>
-            </Pressable>
+          {arrangingPhase && piles && (
+            <View style={styles.arrangeSheet}>
+              <Text style={styles.arrangeTitle}>
+                {arrangingPhase === 'ARRANGE_1' ? 'ARRANGE YOUR HAND' : arrangingPhase === 'FINAL_ARRANGE' ? 'FINAL ARRANGE' : 'CONFIRM FINAL LOCK'}
+              </Text>
+              <Text style={styles.arrangeSub}>Tap a card, then tap another to swap. Pile 1 must not beat Pile 2; Pile 2 must not beat Pile 3.</Text>
+              <PlayerHandView piles={piles} selected={selectedCard} onCardPress={handleArrangeCardPress} isVip={false} />
+              <Pressable onPress={confirmArrangement} style={styles.primaryAction}>
+                <Text style={styles.primaryActionText}>{arrangingPhase === 'FINAL_LOCK' ? 'FINAL LOCK' : arrangingPhase === 'ARRANGE_1' ? 'READY' : 'CONFIRM ARRANGEMENT'}</Text>
+              </Pressable>
+            </View>
           )}
-          {snapshot.phase === 'FINAL_LOCK' && (
-            <Pressable onPress={() => onIntent({ type: 'FINAL_LOCK', arrangementHash: `v${snapshot.version}:${local?.cards.join(',') ?? ''}` })} style={styles.primaryAction}>
-              <Text style={styles.primaryActionText}>FINAL LOCK</Text>
-            </Pressable>
+
+          {snapshot.phase === 'DISCARD' && local.isCurrentTurn && (
+            <View style={styles.arrangeSheet}>
+              <Text style={styles.arrangeTitle}>DISCARD ONE CARD</Text>
+              <Text style={styles.arrangeSub}>You won an extra card at auction — pick one card to discard.</Text>
+              <View style={styles.discardRow}>
+                {local.cards.map(code => (
+                  <Pressable key={code} onPress={() => setDiscardTarget(code)} style={[styles.discardCard, discardTarget === code && styles.discardCardSelected]}>
+                    <Image source={code === 'JOKER' ? undefined : CARD_IMG[code]} style={styles.discardImage} resizeMode="cover" />
+                    {code === 'JOKER' && <Text style={styles.communityJokerText}>JOKER</Text>}
+                  </Pressable>
+                ))}
+              </View>
+              <Pressable onPress={() => discardTarget && onIntent({ type: 'DISCARD', cardId: discardTarget })} style={styles.primaryAction}>
+                <Text style={styles.primaryActionText}>DISCARD</Text>
+              </Pressable>
+            </View>
           )}
         </View>
       </SafeAreaView>
@@ -177,7 +248,14 @@ const styles = StyleSheet.create({
   battleBadge: { marginTop: 7, paddingHorizontal: 14, paddingVertical: 5, borderRadius: 12, backgroundColor: 'rgba(22,12,30,0.9)', borderWidth: 1, borderColor: '#B982FF', alignItems: 'center' },
   battleLabel: { color: '#C8A1FF', fontSize: 7, fontWeight: '900', letterSpacing: 1 },
   battleValue: { color: '#F5F2E8', fontSize: 10, fontWeight: '900' },
-  primaryAction: { position: 'absolute', right: 12, bottom: 12, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 10, backgroundColor: '#245C39', borderWidth: 1, borderColor: '#8DFFB5', zIndex: 35 },
+  arrangeSheet: { position: 'absolute', bottom: 8, alignSelf: 'center', width: '96%', paddingVertical: 10, borderRadius: 14, backgroundColor: 'rgba(8,20,13,0.97)', borderWidth: 1, borderColor: '#FFD76A', alignItems: 'center', zIndex: 35 },
+  arrangeTitle: { color: '#FFD76A', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
+  arrangeSub: { color: '#C8C4B0', fontSize: 8, marginTop: 2, marginBottom: 4, textAlign: 'center', paddingHorizontal: 12 },
+  discardRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 6, paddingHorizontal: 10, marginBottom: 8 },
+  discardCard: { width: 44, height: 62, borderRadius: 4, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,215,106,0.5)', backgroundColor: '#160C1E', alignItems: 'center', justifyContent: 'center' },
+  discardCardSelected: { borderColor: '#FF6B6B', borderWidth: 2 },
+  discardImage: { width: 44, height: 62 },
+  primaryAction: { marginTop: 6, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 10, backgroundColor: '#245C39', borderWidth: 1, borderColor: '#8DFFB5' },
   primaryActionText: { color: '#F5F2E8', fontSize: 10, fontWeight: '900' },
   fatal: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0F2418' },
   fatalText: { color: '#FF6B6B', fontWeight: '900' },

@@ -32,7 +32,7 @@ export interface ArenaClientSnapshotWire {
   joker: null | { canChoose: boolean; anteX2Enabled: boolean; selectedMode?: 'WILD' | 'ANTE_X2'; selectedPile?: 1 | 2 | 3 }
   gf: null | { pile: 2 | 3; round: 1 | 2; localTurn: boolean; callCostCrest: number }
   bossPresentation: null | { bossId: 'MONARCH' | 'SOREN'; title: string; subtitle: string; dialogue: string }
-  result: null
+  result: null | { title: string; lines: Array<{ label: string; crest: number }>; netCrest: number }
 }
 
 // ลำดับ phase ภายในหนึ่งเกม (ไพ่/deal ถูกล้างทุกครั้งที่ gameNumber เปลี่ยน จึงไม่ต้องกังวลข้าม game)
@@ -70,9 +70,12 @@ export function projectArenaClientSnapshot(
   const deal = engine.currentDeal()
   const viewerPending = snapshot.pendingActorIds.includes(viewerId)
 
+  const breakdownByActor = new Map(engine.settlementBreakdown().map(entry => [entry.playerId, entry]))
+
   const seats: ArenaSeatViewWire[] = composition.seats.map((seatAssignment, index) => {
     const actorId = engine.actorIds[index]
-    const hand = deal?.players[index] ?? []
+    // ใช้ไพ่ที่ actor ถืออยู่ ณ ปัจจุบันจริง (11 ใบตั้งต้น, +1 ถ้าชนะประมูล, -1 หลัง Discard) ไม่ใช่ deal.players ดิบที่ตายตัว 11 ใบเสมอ
+    const hand = deal ? engine.heldCardsFor(actorId) : []
     const isLocal = actorId === viewerId
     const displayName = seatAssignment.controller === 'HUMAN'
       ? identities.get(actorId)?.displayName ?? `Grandmaster ${seatAssignment.seat}`
@@ -82,7 +85,8 @@ export function projectArenaClientSnapshot(
     return {
       seat: seatAssignment.seat, playerId: actorId, displayName, avatar,
       isLocal, isBoss: seatAssignment.seat === 3, isCurrentTurn: snapshot.pendingActorIds.includes(actorId),
-      connection, cards: isLocal ? hand.map(arenaCardKey) : [], cardCount: hand.length, crownCrest: 0,
+      connection, cards: isLocal ? hand.map(arenaCardKey) : [], cardCount: hand.length,
+      crownCrest: breakdownByActor.get(actorId)?.endingCrest ?? 0,
     }
   })
 
@@ -116,13 +120,36 @@ export function projectArenaClientSnapshot(
       ? { bossId: bossAiId, ...BOSS_PRESENTATION[bossAiId] }
       : null
 
+  const totals = engine.settlementTotals()
+  const localBreakdown = breakdownByActor.get(viewerId)
+
+  const result: ArenaClientSnapshotWire['result'] = snapshot.phase === 'MATCH_RESULT' && localBreakdown
+    ? {
+        title: 'MATCH COMPLETE',
+        lines: [
+          { label: 'Ante', crest: -localBreakdown.ante },
+          { label: 'Joker Extra Ante', crest: -localBreakdown.jokerExtraAnte },
+          { label: 'Auction', crest: -localBreakdown.auction },
+          { label: 'Call', crest: -localBreakdown.call },
+          { label: 'Boss Fee', crest: -localBreakdown.bossFee },
+          { label: 'Sweep Jackpot', crest: localBreakdown.sweepJackpot },
+          { label: 'Win / Loss', crest: localBreakdown.winLoss },
+        ],
+        netCrest: localBreakdown.netCrest,
+      }
+    : null
+
   return {
     matchId: snapshot.matchId, version: snapshot.version, phase: snapshot.phase, gameNumber: snapshot.gameNumber,
     phaseEndsAt: snapshot.deadlineAt,
     seats,
-    crown: { pile1PotCrest: 0, pile2PotCrest: 0, pile3PotCrest: 0, battleRewardsCrest: 0, tableTotalCrest: 0, localBalanceCrest: 0 },
+    crown: {
+      pile1PotCrest: totals.pots[1], pile2PotCrest: totals.pots[2], pile3PotCrest: totals.pots[3],
+      battleRewardsCrest: totals.battleRewardsCrest, tableTotalCrest: totals.conservedTotalCrest,
+      localBalanceCrest: localBreakdown?.endingCrest ?? 0,
+    },
     communityCards,
     auction, joker, gf, bossPresentation,
-    result: null,
+    result,
   }
 }

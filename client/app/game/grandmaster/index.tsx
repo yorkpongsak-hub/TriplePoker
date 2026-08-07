@@ -55,13 +55,13 @@ export default function GrandmasterScreen() {
     const value = previewSnapshot(params.preview)
     if (!live) return value
     return {
-      ...value, phase: 'WAITING_FOR_PLAYERS' as const, gameNumber: 0 as const, phaseEndsAt: null,
+      ...value, version: 0, phase: 'WAITING_FOR_PLAYERS' as const, gameNumber: 0 as const, phaseEndsAt: null,
       seats: value.seats.map(seat => ({ ...seat, cards: [], cardCount: 0 })),
       communityCards: { pile1: [], pile2: [], pile3: [] },
       crown: { pile1PotCrest: 0, pile2PotCrest: 0, pile3PotCrest: 0, battleRewardsCrest: 0, tableTotalCrest: 0, localBalanceCrest: 0 },
     }
   }, [params.preview, live])
-  const transport = useArenaTransport(live, initial)
+  const transport = useArenaTransport(live)
 
   useEffect(() => { applyServerSnapshot(initial) }, [initial, applyServerSnapshot])
 

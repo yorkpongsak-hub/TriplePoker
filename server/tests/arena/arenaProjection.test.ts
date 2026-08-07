@@ -1,6 +1,6 @@
-import { arenaCardKey } from '../../src/arena/cards/arenaDeck'
+import { bestArenaArrangement } from '../../src/arena/arrangement/arenaArrangement'
 import { ArenaConnectionManager } from '../../src/arena/connection/arenaConnectionManager'
-import { createSeededRandom } from '../../src/arena/cards/arenaDeck'
+import { arenaCardKey, ArenaCard, createSeededRandom } from '../../src/arena/cards/arenaDeck'
 import { ArenaMatchEngine } from '../../src/arena/match/arenaMatchEngine'
 import { ArenaMatchComposition } from '../../src/arena/matchmaking/arenaMatchmaking'
 import { projectArenaClientSnapshot } from '../../src/arena/realtime/arenaProjection'
@@ -24,6 +24,15 @@ function reserveAll(engine: ArenaMatchEngine, now: number): void {
   for (const actorId of engine.snapshot().pendingActorIds) {
     engine.submit({ type: 'BUY_IN_RESERVED', actionId: `reserve-${++sequence}`, actorId }, now)
   }
+}
+
+function arrangementFor(engine: ArenaMatchEngine, actorId: string) {
+  const deal = engine.currentDeal()!
+  const byId = new Map<string, ArenaCard>()
+  ;[...deal.players.flat(), ...deal.community.pile1, ...deal.community.pile2, ...deal.community.pile3, deal.auction.faceUp, ...deal.auction.blind]
+    .forEach(card => byId.set(arenaCardKey(card), card))
+  const heldIds = engine.snapshotDetail().heldCardIds[actorId] ?? []
+  return bestArenaArrangement(heldIds.map(id => byId.get(id)!), deal.community)
 }
 
 describe('arenaCardKey', () => {
@@ -57,7 +66,7 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
     const engine = new ArenaMatchEngine('m2', composition, createSeededRandom(2), 0)
     reserveAll(engine, 1)
     for (const actorId of engine.snapshot().pendingActorIds) {
-      engine.submit({ type: 'ARRANGE_1', actionId: `arrange-${actorId}`, actorId, arrangementHash: 'h' }, 2)
+      engine.submit({ type: 'ARRANGE_1', actionId: `arrange-${actorId}`, actorId, ...arrangementFor(engine, actorId) }, 2)
     }
     expect(engine.snapshot().phase).toBe('AUCTION_FACE_UP')
     const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])

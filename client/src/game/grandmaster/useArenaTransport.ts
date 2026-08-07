@@ -5,12 +5,11 @@ import { useUserStore } from '../../../src/store/userStore'
 import { ArenaClientIntent, ArenaClientSnapshot } from './arenaClientTypes'
 import { useArenaTableStore } from './useArenaTableStore'
 
-// สนามที่ server ยังไม่คิดเป็นเงินจริง (crown/result) จะ merge จาก fallback แทน จนกว่า settlement engine จะถูกต่อเข้าจริง
-type WireSnapshot = Omit<ArenaClientSnapshot, 'crown' | 'result'>
+type WireSnapshot = ArenaClientSnapshot
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
-export function useArenaTransport(enabled: boolean, fallback: ArenaClientSnapshot) {
+export function useArenaTransport(enabled: boolean) {
   const token = useAuthStore(state => state.session?.access_token ?? null)
   const playerId = useUserStore(state => state.userId)
   const applyServerSnapshot = useArenaTableStore(state => state.applyServerSnapshot)
@@ -31,18 +30,18 @@ export function useArenaTransport(enabled: boolean, fallback: ArenaClientSnapsho
       socket.emit('arena:snapshot:request')
     })
     socket.on('arena:snapshot', (wire: WireSnapshot) => {
-      applyServerSnapshot({ ...wire, crown: fallback.crown, result: fallback.result })
+      applyServerSnapshot(wire)
     })
     socket.on('connect_error', () => setStatus('ERROR'))
     return () => { socket.disconnect(); socketRef.current = null }
-  }, [enabled, token, playerId, applyServerSnapshot, fallback])
+  }, [enabled, token, playerId, applyServerSnapshot])
 
   const sendIntent = useCallback((intent: ArenaClientIntent) => {
     const socket = socketRef.current
     if (!socket || !playerId) return
     const actionId = `${playerId}:${Date.now()}:${actionSequence.current++}`
     const common = { actionId, actorId: playerId }
-    if (intent.type === 'SUBMIT_ARRANGEMENT') socket.emit('arena:action', { ...common, type: intent.stage, arrangementHash: intent.arrangementHash })
+    if (intent.type === 'SUBMIT_ARRANGEMENT') socket.emit('arena:action', { ...common, type: intent.stage, pile1: intent.pile1, pile2: intent.pile2, pile3: intent.pile3 })
     else if (intent.type === 'AUCTION_BID') socket.emit('arena:action', { ...common, type: intent.round === 'FACE_UP' ? 'FACE_UP_BID' : 'BLIND_BID', amountCrest: intent.amountCrest, cardIndex: intent.cardIndex })
     else if (intent.type === 'JOKER_DECLARE') socket.emit('arena:action', { ...common, ...intent, availableCrest: intent.availableCrest })
     else if (intent.type === 'GF_ACTION') socket.emit('arena:action', { ...common, ...intent })
