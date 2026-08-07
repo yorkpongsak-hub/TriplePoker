@@ -32,8 +32,10 @@ export function resolveArenaBotPolicy(
 
   const phase = engine.snapshot().phase
   const gfPile = gfPileForPhase(phase)
-  // คิด winrate เฉพาะจังหวะที่ใช้จริง (GF / JOKER_DECLARE) กันเรียก evaluatePileBest เปล่าๆ ทุก phase อื่น (ARRANGE_1/DISCARD/ฯลฯ)
-  const winrateForGf = gfPile ? estimateWinrateFor(engine, botActorId, gfPile) : 0.5
+  // GF ใช้ card counting จริง (engine.estimateOpponentSafeRate) แทนดูแค่ไพ่ตัวเอง — ดูว่าคู่ต่อสู้ที่เหลือ
+  // ชนะเราได้ไหมแม้กรณีเลวร้ายสุด (ดู arenaMatchEngine.ts's estimateOpponentSafeRate) ส่วน Joker ยังใช้ไพ่ตัวเองอย่างเดียว
+  // (ตัดสินใจก่อน pile1/pile2 resolve จึงไม่มี opponent signal ให้ใช้)
+  const winrateForGf = gfPile ? engine.estimateOpponentSafeRate(botActorId, gfPile) : 0.5
   const winrateForJoker = phase === 'JOKER_DECLARE' ? estimateWinrateFor(engine, botActorId, 3) : 0.5
   const availableCrest = engine.settlementBreakdown().find(entry => entry.playerId === botActorId)?.endingCrest ?? 0
   const requiredCrest = tierSEconomyConfig.anteCrest.pile3

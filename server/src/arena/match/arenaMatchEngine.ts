@@ -83,6 +83,11 @@ function legalJokerLocation(deal: ArenaDeal): boolean {
   return deal.community.pile3[1]?.kind === 'JOKER'
 }
 
+// Joker ถือเป็นใบอันตรายสุดเสมอ (wild) — ใช้จัดลำดับ "ไพ่ที่คู่ต่อสู้น่าจะได้กรณีเลวร้ายสุด" ใน estimateOpponentSafeRate
+function dangerValue(card: ArenaCard): number {
+  return card.kind === 'JOKER' ? Infinity : card.value
+}
+
 export class ArenaMatchEngine {
   private phase: ArenaMatchPhase = 'MATCH_BUY_IN_RESERVE'
   private gameNumber: 0 | 1 | 2 | 3 = 0
@@ -105,6 +110,10 @@ export class ArenaMatchEngine {
   private pile1WinnerId: string | null = null
   private pile2WinnerId: string | null = null
   private pile3WinnerId: string | null = null
+  // true เฉพาะตอนผู้ชนะกองนั้นมาจากการเทียบไพ่จริง (ไม่ใช่ชนะเพราะคู่แข่ง Fold จนเหลือคนเดียว) — ใช้เป็น
+  // known lower bound ให้ card counting ของกองถัดไป (pile1 ไม่มี GF จึงเปิดเผยจริงเสมอ ไม่ต้องมี flag แยก)
+  private pile2Revealed = false
+  private pile3Revealed = false
   private bossFeeCharged = false
   private lockedBossPersonality: ArenaPersonality | null = null
   private sorenStats: SorenMatchStats = { humanCalls: 0, humanFolds: 0 }
@@ -411,8 +420,56 @@ export class ArenaMatchEngine {
     const round = this.gfRound
     if (!round) return null
     const contenders = round.turnOrder.filter(id => !round.foldedPlayerIds.includes(id))
+    // เปิดเผยจริงเฉพาะตอนมีคนเทียบไพ่กันจริง (ไม่ใช่ชนะเพราะคู่แข่ง Fold จนเหลือคนเดียว) — ใช้กำหนดว่า
+    // ไพ่ผู้ชนะกองนี้จะกลายเป็น known lower bound ให้กองถัดไปได้หรือไม่ (เคารพกฎ "ไพ่ผู้แพ้ไม่เปิดเผย")
+    const revealed = contenders.length > 1
+    if (pile === 2) this.pile2Revealed = revealed
+    else this.pile3Revealed = revealed
     if (contenders.length <= 1) return contenders[0] ?? null
     return this.resolvePileWinner(pile, contenders)
+  }
+
+  // Card counting สำหรับ GF Pile 2/3: สัดส่วนคู่ต่อสู้ที่ยังไม่ Fold ซึ่ง "ชนะเราไม่ได้แม้กรณีเลวร้ายสุด"
+  // พอร์ตแนวคิดจาก server/src/game/gameLoop.ts:1574-1635 (estimateBossWinrate) — สมมติคู่ต่อสู้ได้ไพ่อันตราย
+  // สุดจาก unseen pool (ไม่ลองทุก combination กันคำนวณหนัก) ต่างจากของเดิม 2 จุด: (1) มี known lower bound จาก
+  // ไพ่กองก่อนหน้าของคู่แข่งคนนั้นเองถ้าเปิดเผยจริง (กฎ pile1<=pile2<=pile3 การันตีว่ากองถัดไปแรงอย่างน้อยเท่านั้น)
+  // (2) เคารพ "ไพ่ผู้แพ้ไม่เปิดเผย" เหมือนผู้เล่นคนอื่น — ใช้ pile2Revealed/pile3Revealed คุมว่านับเป็นข้อมูลรู้แน่ได้ไหม
+  estimateOpponentSafeRate(botActorId: string, pile: 2 | 3): number {
+    if (!this.gfRound || !this.deal) return 0.5
+    const contenders = this.gfRound.turnOrder.filter(id => id !== botActorId && !this.gfRound!.foldedPlayerIds.includes(id))
+    if (contenders.length === 0) return 1
+    const myHand = this.pileHandFor(botActorId, pile)
+    if (!myHand) return 0.5
+
+    const known = new Set<string>()
+    this.heldCardsFor(botActorId).forEach(card => known.add(arenaCardKey(card)))
+    ;[...this.deal.community.pile1, ...this.deal.community.pile2, ...this.deal.community.pile3].forEach(card => known.add(arenaCardKey(card)))
+    known.add(arenaCardKey(this.deal.auction.faceUp))
+    this.deal.auction.blind.forEach(card => known.add(arenaCardKey(card)))
+    if (this.pile1WinnerId) this.lockedArrangements.get(this.pile1WinnerId)?.pile1.forEach(id => known.add(id))
+    if (pile === 3 && this.pile2WinnerId && this.pile2Revealed) this.lockedArrangements.get(this.pile2WinnerId)?.pile2.forEach(id => known.add(id))
+
+    const unseen = [...this.dealCardsById.entries()]
+      .filter(([id]) => !known.has(id))
+      .map(([, card]) => card)
+      .sort((a, b) => dangerValue(b) - dangerValue(a))
+
+    const pileSize = pile === 2 ? 3 : 5
+    const community = pile === 2 ? this.deal.community.pile2 : this.deal.community.pile3
+    const worstCaseHand = unseen.length >= pileSize ? evaluatePileBest(unseen.slice(0, pileSize), community) : null
+
+    let safeCount = 0
+    for (const oppId of contenders) {
+      let threat = worstCaseHand
+      // known lower bound ของคู่แข่งคนนี้เอง (ถ้ากองก่อนหน้าของเขาเปิดเผยจริง) — เอาตัวที่แรงกว่าไปเทียบ
+      const lowerBoundPile: 1 | 2 | null = pile === 2 && oppId === this.pile1WinnerId ? 1 : pile === 3 && oppId === this.pile2WinnerId && this.pile2Revealed ? 2 : null
+      if (lowerBoundPile) {
+        const lowerBound = this.pileHandFor(oppId, lowerBoundPile)
+        if (lowerBound && (!threat || compareArenaHands(lowerBound, threat) > 0)) threat = lowerBound
+      }
+      if (!threat || compareArenaHands(threat, myHand) <= 0) safeCount++
+    }
+    return safeCount / contenders.length
   }
 
   // ถ้าไม่มีผู้ชนะ (ทุกคน Foul กองนี้พร้อมกัน) ปล่อย Pot ไว้ก่อน ไม่จ่าย — เคสหายากมาก ไม่ใช่จุดโฟกัสของรอบนี้
@@ -440,6 +497,7 @@ export class ArenaMatchEngine {
     this.jokerDeclaration = null; this.gfRound = null; this.auctionWinnerIds.clear()
     this.heldCardIds.clear(); this.lastArrangement.clear(); this.lockedArrangements.clear(); this.fouled.clear()
     this.pile1WinnerId = null; this.pile2WinnerId = null; this.pile3WinnerId = null
+    this.pile2Revealed = false; this.pile3Revealed = false
     if (!this.bossFeeCharged) { this.chargeBossFee(); this.bossFeeCharged = true }
     this.transition('DEAL', now)
   }
