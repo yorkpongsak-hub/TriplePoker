@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo } from 'react'
 import { useLocalSearchParams } from 'expo-router'
 import GrandmasterTableView from './GrandmasterTableView'
-import { ArenaClientIntent, ArenaClientPhase, ArenaClientSnapshot } from './arenaClientTypes'
-import { useArenaTableStore } from './useArenaTableStore'
-import { useArenaTransport } from './useArenaTransport'
+import { ArenaClientIntent, ArenaClientPhase, ArenaClientSnapshot } from '../../../src/game/grandmaster/arenaClientTypes'
+import { useArenaTableStore } from '../../../src/game/grandmaster/useArenaTableStore'
+import { useArenaTransport } from '../../../src/game/grandmaster/useArenaTransport'
 
 const cards = ['as', 'kh', 'qd', 'jc', '10s', '9h', '8d', '7c', '6s', '5h', 'JOKER']
 

@@ -1,6 +1,6 @@
 import React from 'react'
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native'
-import { ArenaClientIntent, ArenaClientSnapshot } from './arenaClientTypes'
+import { ArenaClientIntent, ArenaClientSnapshot } from '../../../src/game/grandmaster/arenaClientTypes'
 
 interface Props { snapshot: ArenaClientSnapshot; onIntent: (intent: ArenaClientIntent) => void }
 

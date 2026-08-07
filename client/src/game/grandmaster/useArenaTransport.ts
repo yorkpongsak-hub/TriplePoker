@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { io, Socket } from 'socket.io-client'
-import { useAuthStore } from '../../../src/store/authStore'
+import { useAuthStore } from '../../store/authStore'
 import { useUserStore } from '../../../src/store/userStore'
 import { ArenaClientIntent, ArenaClientSnapshot } from './arenaClientTypes'
 import { useArenaTableStore } from './useArenaTableStore'

@@ -1,12 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Image, ImageBackground, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
-import { router } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { CARD_BACK_IMG, CARD_IMG } from '../../../src/components/game/cardAssets'
 import ArenaOverlays from './ArenaOverlays'
 import CrownPanel from './CrownPanel'
 import FanHand from './FanHand'
-import { ArenaClientIntent, ArenaClientSnapshot, ArenaSeatView } from './arenaClientTypes'
+import { ArenaClientIntent, ArenaClientSnapshot, ArenaSeatView } from '../../../src/game/grandmaster/arenaClientTypes'
 
 const MONARCH_TABLE = require('../../../assets/tables/boss_monarch_skin_table.png')
 
@@ -79,7 +78,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
           <View style={styles.queueBanner}><Text style={styles.queueText}>ARENA {transportStatus}</Text></View>
         )}
         <View style={styles.header}>
-          <Pressable onPress={() => router.back()} style={styles.backButton}><Text style={styles.backText}>{'<'}</Text></Pressable>
+          <View style={styles.backButton} />
           <View style={styles.headerCenter}>
             <Text style={styles.tier}>GRANDMASTER</Text>
             <Text style={styles.phase}>GAME {snapshot.gameNumber}/3  |  {snapshot.phase.replaceAll('_', ' ')}</Text>

@@ -1,6 +1,6 @@
 import React from 'react'
 import { StyleSheet, Text, View } from 'react-native'
-import { ArenaCrownView } from './arenaClientTypes'
+import { ArenaCrownView } from '../../../src/game/grandmaster/arenaClientTypes'
 
 const crownText = (crest: number) => `${Math.floor(crest / 12)} C ${crest % 12} Cr`
 
