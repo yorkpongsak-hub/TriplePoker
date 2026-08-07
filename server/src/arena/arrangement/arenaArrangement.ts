@@ -19,7 +19,8 @@ export function validateArenaPartition(arrangement: ArenaArrangement, heldCardId
 }
 
 // evaluateArenaHand รับ 5-7 ใบเท่านั้น — ถ้า pile3 ยังไม่ Discard (6 ใบ + community 2 = 8) ให้ลอง drop ทีละใบแล้วเลือกที่ดีสุด
-function evaluatePileBest(pileCards: readonly ArenaCard[], communityCards: readonly ArenaCard[]): ArenaHandResult {
+// export ไว้ให้ engine/bot-decision layer เรียกใช้ตรงๆ ได้ (กันเรียก evaluateArenaHand ตรงๆ แล้วพังตอน pile3 ยังไม่ Discard)
+export function evaluatePileBest(pileCards: readonly ArenaCard[], communityCards: readonly ArenaCard[]): ArenaHandResult {
   if (pileCards.length + communityCards.length <= 7) return evaluateArenaHand([...pileCards, ...communityCards])
   let best: ArenaHandResult | null = null
   for (let drop = 0; drop < pileCards.length; drop++) {

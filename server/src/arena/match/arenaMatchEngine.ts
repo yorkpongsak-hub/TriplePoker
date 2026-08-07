@@ -1,10 +1,12 @@
 import { resolveBlindAuction, resolveFaceUpAuction, ArenaBid } from '../auction/arenaAuction'
-import { ArenaArrangement, bestArenaArrangement, checkArenaFoul, validateArenaPartition } from '../arrangement/arenaArrangement'
+import { ArenaArrangement, bestArenaArrangement, checkArenaFoul, evaluatePileBest, validateArenaPartition } from '../arrangement/arenaArrangement'
+import { ArenaPersonality, lockArenaBossPersonality } from '../ai/arenaBotPersonality'
+import { recordHumanGfDecision, SorenMatchStats } from '../ai/arenaSorenPersonality'
 import { arenaCardKey, ArenaCard, ArenaDeal, ArenaRandom, createArenaDeck, dealArenaCards, shuffleArenaDeck } from '../cards/arenaDeck'
 import { arenaPhaseTimeoutMs, tierSConfig, tierSEconomyConfig } from '../config/tierSConfig'
 import { ArenaMatchPhase, ArenaPile, JokerDeclaration } from '../contracts/arenaContracts'
 import { autoLockJoker, declareJoker } from '../joker/jokerRules'
-import { compareArenaHands, evaluateArenaHand } from '../joker/wildHandEvaluator'
+import { ArenaHandResult, compareArenaHands, evaluateArenaHand } from '../joker/wildHandEvaluator'
 import { ArenaMatchComposition } from '../matchmaking/arenaMatchmaking'
 import { GFRound, GFPlayer, recordGFAction, soleRemainingPlayer, startPile2GF, startPile3Round1, startPile3Round2 } from '../gf/arenaGFRules'
 import { ArenaSettlementEngine, PlayerResultBreakdown, SettlementAccount, SettlementCommand, SettlementTransaction } from '../settlement/arenaSettlementEngine'
@@ -104,6 +106,8 @@ export class ArenaMatchEngine {
   private pile2WinnerId: string | null = null
   private pile3WinnerId: string | null = null
   private bossFeeCharged = false
+  private lockedBossPersonality: ArenaPersonality | null = null
+  private sorenStats: SorenMatchStats = { humanCalls: 0, humanFolds: 0 }
   private readonly settlement: ArenaSettlementEngine
   private pendingTransactions: SettlementTransaction[] = []
   readonly actorIds: string[]
@@ -148,6 +152,24 @@ export class ArenaMatchEngine {
   currentDeal(): ArenaDeal | null { return this.deal }
   cardById(id: string): ArenaCard | undefined { return this.dealCardsById.get(id) }
   heldCardsFor(actorId: string): ArenaCard[] { return [...(this.heldCardIds.get(actorId) ?? [])].map(cardId => this.dealCardsById.get(cardId)!) }
+
+  // ล็อกครั้งเดียวตอนแจกไพ่เกม 1 ถ้า Boss คือ Monarch (ดู dealGame()) — คงเดิมตลอด 3 เกมของ Match
+  resolvedBossPersonality(): ArenaPersonality | null { return this.lockedBossPersonality }
+  sorenMatchStats(): SorenMatchStats { return this.sorenStats }
+
+  // ใช้ arrangement ที่ล็อกแล้ว (FINAL_LOCK) ถ้ามี ไม่งั้น fallback ไปที่ arrangement ล่าสุดที่ส่ง (FINAL_ARRANGE)
+  // เพราะ Joker declare เกิดก่อน FINAL_LOCK — ให้บอทประเมิน winrate ของกองเป้าหมายได้ทั้งสองจังหวะ
+  // ใช้ evaluatePileBest (ไม่ใช่ evaluateArenaHand ตรงๆ) เพราะก่อน Discard pile3 อาจมี 6 ใบ + community 2 = 8
+  // เกิน evaluateArenaHand รับได้ (5-7) จะ throw — evaluatePileBest มี fallback ลอง drop ทีละใบให้แล้ว
+  pileHandFor(actorId: string, pile: 1 | 2 | 3): ArenaHandResult | null {
+    const arrangement = this.lockedArrangements.get(actorId) ?? this.lastArrangement.get(actorId)
+    if (!arrangement || !this.deal) return null
+    const pileIds = pile === 1 ? arrangement.pile1 : pile === 2 ? arrangement.pile2 : arrangement.pile3
+    const community = pile === 1 ? this.deal.community.pile1 : pile === 2 ? this.deal.community.pile2 : this.deal.community.pile3
+    const cards = pileIds.map(id => this.dealCardsById.get(id)).filter((card): card is ArenaCard => !!card)
+    if (cards.length !== pileIds.length) return null
+    return evaluatePileBest(cards, community)
+  }
 
   snapshotDetail(): ArenaMatchSnapshotDetail {
     return {
@@ -231,6 +253,8 @@ export class ArenaMatchEngine {
   private applyAction(action: ArenaMatchAction, now: number): void {
     if (action.type === 'GF_ACTION') {
       this.gfRound = recordGFAction(this.gfRound!, action.actorId, action.decision)
+      // เก็บสถิติ Call/Fold ของ Human ไว้ให้ Soren ปรับ bias ข้ามเกมในแมตช์เดียวกัน (ดู arenaSorenPersonality.ts)
+      if (this.humanActorIds.includes(action.actorId)) this.sorenStats = recordHumanGfDecision(this.sorenStats, action.decision)
       if (action.decision === 'CALL') {
         const pile: 2 | 3 = this.phase === 'GF_PILE_2' ? 2 : 3
         this.execSettlement({
@@ -430,6 +454,27 @@ export class ArenaMatchEngine {
     this.execSettlement({ type: 'BOSS_FEE', commandId: `${this.matchId}:bossfee`, playerIds: payerIds, feeCrest })
   }
 
+  // พอร์ตกลไก "ล็อกบุคลิกตามความแข็งไพ่ตอนแจกเกม 1" จาก server/src/game/monarchEngine.ts:307-319, 374-388
+  // ล็อกครั้งเดียว คงเดิมตลอด 3 เกมของ Match (เดียวกับที่ Monarch ทำใน High Noble)
+  private lockBossPersonalityIfMonarch(): void {
+    const bossIndex = this.composition.seats.findIndex(seat => seat.seat === 3)
+    const bossSeat = this.composition.seats[bossIndex]
+    if (bossSeat?.controller !== 'AI' || bossSeat.aiId !== 'MONARCH') return
+    const strength = this.computeHandStrength(this.actorIds[bossIndex])
+    this.lockedBossPersonality = lockArenaBossPersonality(strength)
+  }
+
+  // Probe ด้วย bestArenaArrangement (unweighted greedy) แทน weight เฉพาะของ Cortex ใน monarchEngine.ts เดิม —
+  // ไม่มี weight hook ใน bestArenaArrangement ของ Arena (ดูเหตุผลใน arenaArrangement.ts) ผลลัพธ์ใกล้เคียงพอสำหรับวัด strength หยาบๆ
+  private computeHandStrength(actorId: string): number {
+    const probe = bestArenaArrangement(this.heldCardsFor(actorId), this.deal!.community)
+    const evalPile = (ids: string[], community: ArenaCard[]) => evaluateArenaHand([...ids.map(id => this.dealCardsById.get(id)!), ...community])
+    const h1 = evalPile(probe.pile1, this.deal!.community.pile1)
+    const h2 = evalPile(probe.pile2, this.deal!.community.pile2)
+    const h3 = evalPile(probe.pile3, this.deal!.community.pile3)
+    return (h1.rankIndex + h2.rankIndex + h3.rankIndex) / 27
+  }
+
   private dealGame(now: number): void {
     let dealt: ArenaDeal | null = null
     for (let attempts = 0; attempts < 100 && !dealt; attempts++) {
@@ -446,6 +491,7 @@ export class ArenaMatchEngine {
       this.heldCardIds.set(this.actorIds[index], new Set(hand.map(card => arenaCardKey(card))))
       if (hand.some(card => card.kind === 'JOKER')) this.jokerOwnerId = this.actorIds[index]
     })
+    if (this.gameNumber === 1) this.lockBossPersonalityIfMonarch()
     this.log(now, 'GAME_DEALT', undefined, undefined, { gameNumber: this.gameNumber })
     this.chargeAnte(1, tierSEconomyConfig.anteCrest.pile1)
     this.chargeAnte(2, tierSEconomyConfig.anteCrest.pile2)

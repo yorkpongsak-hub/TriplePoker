@@ -1,5 +1,6 @@
 import { Server, Socket } from 'socket.io'
 import { supabase, supabaseAdmin } from '../../config/supabase'
+import { resolveArenaBotPolicy } from '../ai/resolveArenaBotPolicy'
 import { bestArenaArrangement } from '../arrangement/arenaArrangement'
 import { buildArenaBotAction } from '../connection/arenaBotTakeover'
 import { tierSEconomyConfig } from '../config/tierSConfig'
@@ -48,7 +49,8 @@ export function driveBots(match: ArenaRuntimeMatch, now: number): void {
       const heldIds = [...(match.engine.snapshotDetail().heldCardIds[botActorId] ?? [])]
       const arrangement = deal ? bestArenaArrangement(match.engine.heldCardsFor(botActorId), deal.community) : { pile1: [], pile2: [], pile3: [] }
       const discardCardId = heldIds.at(-1)
-      const action = buildArenaBotAction(snapshot, botActorId, { arrangement, discardCardId }, {})
+      const policy = resolveArenaBotPolicy(match.engine, match.composition, botActorId)
+      const action = buildArenaBotAction(snapshot, botActorId, { arrangement, discardCardId }, policy)
       match.engine.submit(action, now)
       if (actorSeat.get(botActorId)?.controller === 'HUMAN') match.connections.recordBotAction(botActorId, snapshot, action.actionId)
     } catch (error) {

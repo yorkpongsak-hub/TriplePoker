@@ -57,8 +57,8 @@ function actionFor(engine: ArenaMatchEngine, actorId: string, sequence: number):
   }
 }
 
-function playMatch(seed: number): ArenaMatchEngine {
-  const engine = new ArenaMatchEngine('m1', composition, createSeededRandom(seed), 1_000)
+function playMatch(seed: number, matchComposition: ArenaMatchComposition = composition, matchId = 'm1'): ArenaMatchEngine {
+  const engine = new ArenaMatchEngine(matchId, matchComposition, createSeededRandom(seed), 1_000)
   let sequence = 0
   let now = 1_001
   while (!engine.snapshot().completed && sequence < 1_000) {
@@ -139,6 +139,53 @@ describe('Gate 5 - end-to-end Arena match state machine', () => {
     }
     expect(engine.snapshot().phase).toBe('GF_PILE_3_ROUND_1')
     expect(engine.snapshotDetail().pile2WinnerId).toBe(stay)
+  })
+
+  test('Monarch ล็อกบุคลิกตอนแจกไพ่เกม 1 แล้วคงเดิมตลอด 3 เกม', () => {
+    const monarchComposition: ArenaMatchComposition = {
+      queueId: 'q-monarch', kind: 'BOSS_ENCOUNTER',
+      seats: [
+        { seat: 1, controller: 'HUMAN', playerId: 'p1', role: 'CHALLENGER' },
+        { seat: 2, controller: 'HUMAN', playerId: 'p2', role: 'CHALLENGER' },
+        { seat: 3, controller: 'AI', aiId: 'MONARCH', role: 'BOSS' },
+        { seat: 4, controller: 'HUMAN', playerId: 'p3', role: 'CHALLENGER' },
+      ],
+      humanCount: 3, encounterRoll: 0.5, finalizedAt: 0,
+    }
+    const engine = new ArenaMatchEngine('m-monarch', monarchComposition, createSeededRandom(41), 0)
+    let sequence = 0
+    let now = 1
+    let seenAfterGame1: string | null = null
+    while (!engine.snapshot().completed && sequence < 1_000) {
+      const pending = engine.snapshot().pendingActorIds
+      if (pending.length) engine.submit(actionFor(engine, pending[0], ++sequence), now++)
+      else engine.tick(now++)
+      if (engine.snapshot().gameNumber >= 1 && !seenAfterGame1 && engine.resolvedBossPersonality()) {
+        seenAfterGame1 = engine.resolvedBossPersonality()
+      }
+    }
+    expect(engine.snapshot().completed).toBe(true)
+    expect(seenAfterGame1).not.toBeNull()
+    expect(engine.resolvedBossPersonality()).toBe(seenAfterGame1) // ยังล็อกเดิมตอนจบ Match (ผ่านเกม 2-3 มาแล้ว)
+  })
+
+  test('Soren เก็บสถิติ Call/Fold ของ Human สะสมข้ามเกมในแมตช์เดียวกัน', () => {
+    const sorenComposition: ArenaMatchComposition = {
+      queueId: 'q-soren', kind: 'BOSS_ENCOUNTER',
+      seats: [
+        { seat: 1, controller: 'HUMAN', playerId: 'p1', role: 'CHALLENGER' },
+        { seat: 2, controller: 'HUMAN', playerId: 'p2', role: 'CHALLENGER' },
+        { seat: 3, controller: 'AI', aiId: 'SOREN', role: 'BOSS' },
+        { seat: 4, controller: 'HUMAN', playerId: 'p3', role: 'CHALLENGER' },
+      ],
+      humanCount: 3, encounterRoll: 0.5, finalizedAt: 0,
+    }
+    // actionFor ส่ง GF_ACTION เป็น CALL เสมอ (ไม่เคย Fold) — humanFolds ต้องเป็น 0, humanCalls ต้อง > 0 หลังจบ Match จริง
+    const engine = playMatch(43, sorenComposition, 'm-soren')
+    expect(engine.snapshot().completed).toBe(true)
+    const stats = engine.sorenMatchStats()
+    expect(stats.humanCalls).toBeGreaterThan(0)
+    expect(stats.humanFolds).toBe(0)
   })
 
   test('decision deadlines ใช้ default actions จน Match จบได้', () => {
