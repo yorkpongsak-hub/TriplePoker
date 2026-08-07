@@ -187,8 +187,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
               <View style={styles.discardRow}>
                 {local.cards.map(code => (
                   <Pressable key={code} onPress={() => setDiscardTarget(code)} style={[styles.discardCard, discardTarget === code && styles.discardCardSelected]}>
-                    <Image source={code === 'JOKER' ? undefined : CARD_IMG[code]} style={styles.discardImage} resizeMode="cover" />
-                    {code === 'JOKER' && <Text style={styles.communityJokerText}>JOKER</Text>}
+                    <Image source={CARD_IMG[code]} style={styles.discardImage} resizeMode="cover" />
                   </Pressable>
                 ))}
               </View>
