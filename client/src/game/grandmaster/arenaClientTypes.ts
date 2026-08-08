@@ -58,7 +58,8 @@ export interface ArenaClientSnapshot {
     bossId: 'MONARCH' | 'SOREN'
     title: string
     subtitle: string
-    dialogue: string
+    atmosphere: string
+    quote: string
   }
   result: null | { title: string; lines: ArenaResultLine[]; netCrest: number }
   reveal: null | {

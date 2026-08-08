@@ -136,6 +136,39 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
     expect(seatP2.connection).toBe('DISCONNECTED_GRACE')
   })
 
+  test('bossPresentation เป็น null เสมอสำหรับ Four Gods (ผู้เล่นเจอมาแล้วตั้งแต่ High Noble ไม่ต้องมี Intro)', () => {
+    const engine = new ArenaMatchEngine('m-boss-four-gods', composition, createSeededRandom(1), 0)
+    reserveAll(engine, 1)
+    expect(engine.snapshot().phase).toBe('ARRANGE_1')
+    expect(engine.snapshot().gameNumber).toBe(1)
+    const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
+    const view = projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, new Map())
+    expect(view.bossPresentation).toBeNull()
+  })
+
+  test('bossPresentation โผล่มาจริงตอนเจอ Monarch/Soren เกม 1 ช่วง ARRANGE_1 เท่านั้น พร้อมข้อมูลครบ', () => {
+    const monarchComposition: ArenaMatchComposition = {
+      queueId: 'q-monarch', kind: 'BOSS_ENCOUNTER',
+      seats: [
+        { seat: 1, controller: 'HUMAN', playerId: 'p1', role: 'CHALLENGER' },
+        { seat: 2, controller: 'HUMAN', playerId: 'p2', role: 'CHALLENGER' },
+        { seat: 3, controller: 'AI', aiId: 'MONARCH', role: 'BOSS' },
+        { seat: 4, controller: 'HUMAN', playerId: 'p3', role: 'CHALLENGER' },
+      ],
+      humanCount: 3, encounterRoll: 0.1, finalizedAt: 0,
+    }
+    const engine = new ArenaMatchEngine('m-boss-monarch', monarchComposition, createSeededRandom(1), 0)
+    reserveAll(engine, 1)
+    expect(engine.snapshot().phase).toBe('ARRANGE_1')
+    const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
+    const view = projectArenaClientSnapshot(engine, monarchComposition, connections, 'p1', 10, new Map())
+    expect(view.bossPresentation).toMatchObject({
+      bossId: 'MONARCH', title: 'MONARCH', subtitle: 'THE WATCHER',
+      atmosphere: 'A shadow falls over the table...',
+      quote: 'Power is easy to claim. Restraint is harder to prove.',
+    })
+  })
+
   test('reveal เป็น null นอกช่วง REVEAL_PILE_X', () => {
     const engine = new ArenaMatchEngine('m4', composition, createSeededRandom(4), 0)
     reserveAll(engine, 1)

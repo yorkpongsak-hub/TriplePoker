@@ -1,11 +1,64 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native'
 import { useRouter } from 'expo-router'
-import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated'
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated'
 import { ArenaClientIntent, ArenaClientSnapshot } from '../../../src/game/grandmaster/arenaClientTypes'
 import { CARD_BACK_IMG, CARD_IMG } from '../../../src/components/game/cardAssets'
 
 interface Props { snapshot: ArenaClientSnapshot; onIntent: (intent: ArenaClientIntent) => void }
+
+// รูปพอร์เทรตของ Monarch/Soren เท่านั้น (Four Gods ผู้เล่นเจอมาแล้วตั้งแต่ High Noble ไม่มี Intro นี้)
+const BOSS_PORTRAIT: Record<'MONARCH' | 'SOREN', any> = {
+  MONARCH: require('../../../assets/bosses/boss_Monarch.png'),
+  SOREN: require('../../../assets/bosses/boss_soren.png'),
+}
+
+// พอร์ตแนวคิดจาก client/app/game/monarch/index.tsx's showBossIntro overlay (glow portrait + reveal lines +
+// ปุ่มกดเข้าเกม บล็อกการเล่นจนกว่าจะกด) มาใช้ Reanimated แทน classic Animated ให้ตรงกับ convention ไฟล์นี้
+// (เดียวกับ PileRevealOverlay ด้านบน) — จังหวะ fade เรียง portrait -> title/subtitle -> atmosphere -> quote
+// เหมือน mastermind/story.tsx's portrait->name->motto sequence
+function BossIntroOverlay({ presentation, onDismiss }: { presentation: NonNullable<ArenaClientSnapshot['bossPresentation']>; onDismiss: () => void }) {
+  const portraitOpacity = useSharedValue(0)
+  const glowPulse = useSharedValue(0.35)
+  const titleOpacity = useSharedValue(0)
+  const atmosphereOpacity = useSharedValue(0)
+  const quoteOpacity = useSharedValue(0)
+
+  useEffect(() => {
+    portraitOpacity.value = withTiming(1, { duration: 500 })
+    titleOpacity.value = withDelay(400, withTiming(1, { duration: 450 }))
+    atmosphereOpacity.value = withDelay(850, withTiming(1, { duration: 450 }))
+    quoteOpacity.value = withDelay(1300, withTiming(1, { duration: 450 }))
+    glowPulse.value = withRepeat(withSequence(withTiming(0.85, { duration: 1200 }), withTiming(0.35, { duration: 1200 })), -1, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presentation.bossId])
+
+  const portraitStyle = useAnimatedStyle(() => ({ opacity: portraitOpacity.value }))
+  const glowStyle = useAnimatedStyle(() => ({ opacity: glowPulse.value }))
+  const titleStyle = useAnimatedStyle(() => ({ opacity: titleOpacity.value }))
+  const atmosphereStyle = useAnimatedStyle(() => ({ opacity: atmosphereOpacity.value }))
+  const quoteStyle = useAnimatedStyle(() => ({ opacity: quoteOpacity.value }))
+
+  return (
+    <View style={styles.introOverlay}>
+      <View style={styles.introPortraitWrap}>
+        <Animated.View style={[styles.introGlow, glowStyle]} />
+        <Animated.View style={portraitStyle}>
+          <Image source={BOSS_PORTRAIT[presentation.bossId]} style={styles.introPortrait} resizeMode="cover" />
+        </Animated.View>
+      </View>
+      <Animated.View style={titleStyle}>
+        <Text style={styles.introTitle}>{presentation.title}</Text>
+        <Text style={styles.introSubtitle}>{presentation.subtitle}</Text>
+      </Animated.View>
+      <Animated.Text style={[styles.introAtmosphere, atmosphereStyle]}>{presentation.atmosphere}</Animated.Text>
+      <Animated.Text style={[styles.introQuote, quoteStyle]}>"{presentation.quote}"</Animated.Text>
+      <Pressable onPress={onDismiss} hitSlop={10} style={({ pressed }) => [styles.introEnterBtn, pressed && styles.pressed]}>
+        <Text style={styles.introEnterBtnText}>FACE {presentation.title.toUpperCase()}</Text>
+      </Pressable>
+    </View>
+  )
+}
 
 // ports VIP Plus's BlinkingCard (vipPlus/index.tsx) มาใช้ CARD_IMG lookup ของ Arena แทน parseCard+<Card>
 function RevealCard({ cardKey, blink }: { cardKey: string; blink: boolean }) {
@@ -77,6 +130,11 @@ export default function ArenaOverlays({ snapshot, onIntent }: Props) {
   const connection = local?.connection ?? 'CONNECTED'
   const reconnecting = connection !== 'CONNECTED'
 
+  // bossPresentation ยังคง non-null ต่อไปตลอดช่วง ARRANGE_1 ของเกม 1 (อยู่ได้นาน ~45 วิ) — ต้องมี local
+  // dismiss state แยกต่างหาก ไม่งั้นกดปุ่มแล้ว overlay จะไม่หายจนกว่า phase จะเปลี่ยนเอง
+  const [dismissedBossId, setDismissedBossId] = useState<string | null>(null)
+  const showBossIntro = snapshot.bossPresentation && snapshot.bossPresentation.bossId !== dismissedBossId
+
   return (
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
       {reconnecting && (
@@ -86,12 +144,8 @@ export default function ArenaOverlays({ snapshot, onIntent }: Props) {
         </View>
       )}
 
-      {snapshot.bossPresentation && (
-        <View style={styles.bossBanner}>
-          <Text style={styles.bossEyebrow}>{snapshot.bossPresentation.title}</Text>
-          <Text style={styles.bossName}>{snapshot.bossPresentation.subtitle}</Text>
-          <Text style={styles.bossDialogue}>{snapshot.bossPresentation.dialogue}</Text>
-        </View>
+      {showBossIntro && (
+        <BossIntroOverlay presentation={snapshot.bossPresentation!} onDismiss={() => setDismissedBossId(snapshot.bossPresentation!.bossId)} />
       )}
 
       {snapshot.auction && (
@@ -162,10 +216,25 @@ const styles = StyleSheet.create({
   connectionBanner: { position: 'absolute', top: 44, alignSelf: 'center', paddingHorizontal: 18, paddingVertical: 8, borderRadius: 20, backgroundColor: 'rgba(22,10,10,0.94)', borderWidth: 1, borderColor: '#FF6B6B' },
   connectionTitle: { color: '#FF8A8A', fontSize: 11, fontWeight: '900', textAlign: 'center' },
   connectionSub: { color: '#E3CFCF', fontSize: 8, marginTop: 2 },
-  bossBanner: { position: 'absolute', top: '30%', alignSelf: 'center', width: 300, paddingHorizontal: 18, paddingVertical: 14, borderRadius: 12, backgroundColor: 'rgba(9,17,12,0.96)', borderWidth: 1, borderColor: '#FFD76A' },
-  bossEyebrow: { color: '#C99B35', fontSize: 9, fontWeight: '900', letterSpacing: 2, textAlign: 'center' },
-  bossName: { color: '#FFF0B5', fontSize: 18, fontWeight: '900', letterSpacing: 1, textAlign: 'center', marginTop: 3 },
-  bossDialogue: { color: '#E4D9BC', fontSize: 10, fontStyle: 'italic', textAlign: 'center', marginTop: 8, lineHeight: 15 },
+  // Boss Intro (Monarch/Soren เท่านั้น) — เต็มจอ บล็อกการเล่นจนกว่าจะกด FACE — พอร์ตแนวคิดจาก
+  // client/app/game/monarch/index.tsx's showBossIntro overlay
+  introOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 50,
+    backgroundColor: 'rgba(4,10,7,0.94)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24,
+  },
+  introPortraitWrap: { alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
+  introGlow: {
+    position: 'absolute', width: 196, height: 246, borderRadius: 14,
+    borderWidth: 2, borderColor: '#FFD76A', shadowColor: '#FFD76A',
+    shadowOpacity: 0.9, shadowRadius: 16, shadowOffset: { width: 0, height: 0 }, elevation: 12,
+  },
+  introPortrait: { width: 180, height: 225, borderRadius: 12, borderWidth: 2, borderColor: '#FFD76A' },
+  introTitle: { color: '#FFD76A', fontSize: 24, fontWeight: '900', letterSpacing: 1.5, textAlign: 'center' },
+  introSubtitle: { color: '#FFF0B5', fontSize: 12, fontWeight: '900', letterSpacing: 3, textAlign: 'center', marginTop: 2 },
+  introAtmosphere: { color: '#C8C4B0', fontSize: 11, fontStyle: 'italic', textAlign: 'center', marginTop: 14 },
+  introQuote: { color: '#F5F2E8', fontSize: 13, textAlign: 'center', marginTop: 8, paddingHorizontal: 12, lineHeight: 19 },
+  introEnterBtn: { marginTop: 22, backgroundColor: '#FFD76A', borderRadius: 10, paddingVertical: 14, paddingHorizontal: 32 },
+  introEnterBtnText: { color: '#0F2418', fontSize: 13, fontWeight: '900', letterSpacing: 1 },
   bottomSheet: { position: 'absolute', bottom: 8, alignSelf: 'center', minWidth: 310, maxWidth: '88%', padding: 12, borderRadius: 14, backgroundColor: 'rgba(8,20,13,0.97)', borderWidth: 1, borderColor: '#FFD76A' },
   centerDialog: { position: 'absolute', top: '36%', alignSelf: 'center', minWidth: 290, padding: 14, borderRadius: 14, backgroundColor: 'rgba(16,10,28,0.97)', borderWidth: 1, borderColor: '#B982FF' },
   sheetTitle: { color: '#FFD76A', fontSize: 13, fontWeight: '900', letterSpacing: 1.2, textAlign: 'center' },

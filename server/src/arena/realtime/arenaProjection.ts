@@ -34,7 +34,7 @@ export interface ArenaClientSnapshotWire {
   auction: null | { round: 'FACE_UP' | 'BLIND'; faceUpCard?: string; bidOptionsCrest: number[]; locked: boolean }
   joker: null | { canChoose: boolean; anteX2Enabled: boolean; selectedMode?: 'WILD' | 'ANTE_X2'; selectedPile?: 1 | 2 | 3 }
   gf: null | { pile: 2 | 3; round: 1 | 2; localTurn: boolean; callCostCrest: number }
-  bossPresentation: null | { bossId: 'MONARCH' | 'SOREN'; title: string; subtitle: string; dialogue: string }
+  bossPresentation: null | { bossId: 'MONARCH' | 'SOREN'; title: string; subtitle: string; atmosphere: string; quote: string }
   result: null | { title: string; lines: Array<{ label: string; crest: number }>; netCrest: number }
   reveal: null | {
     pile: 1 | 2 | 3
@@ -63,9 +63,21 @@ function atOrAfter(phase: ArenaMatchPhase, threshold: ArenaMatchPhase): boolean 
   return PHASE_ORDER.indexOf(phase) >= PHASE_ORDER.indexOf(threshold)
 }
 
-const BOSS_PRESENTATION: Record<'MONARCH' | 'SOREN', { title: string; subtitle: string; dialogue: string }> = {
-  MONARCH: { title: 'BOSS ENCOUNTER', subtitle: 'MONARCH | FOUR GODS', dialogue: 'Every crown remembers the hand that earned it.' },
-  SOREN: { title: 'BOSS ENCOUNTER', subtitle: 'SOREN | ARENA SENTINEL', dialogue: 'The Arena does not forgive a careless hand.' },
+// เนื้อหาแนะนำ Monarch/Soren ตอนเจอครั้งแรกของแมตช์ (ดู docs/TriplePoker_Universe_Story_and_Cross_App_Integration_Spec.md
+// §2.1-2.2) — Monarch = THE WATCHER (quote เดิมที่ shipped แล้วใน client/app/game/monarch/index.tsx's
+// MONARCH_INTRO.quote), Soren = THE FIRST EXILE (quote เป็น draft ใหม่จากบุคลิกที่ตั้งไว้ในเอกสาร — ยังไม่มี
+// quote canon จริงเหมือน Monarch รอลุงเยาะแก้ได้) Four Gods ไม่มี intro นี้ (ผู้เล่นเจอมาแล้วตั้งแต่ High Noble)
+const BOSS_PRESENTATION: Record<'MONARCH' | 'SOREN', { title: string; subtitle: string; atmosphere: string; quote: string }> = {
+  MONARCH: {
+    title: 'MONARCH', subtitle: 'THE WATCHER',
+    atmosphere: 'A shadow falls over the table...',
+    quote: 'Power is easy to claim. Restraint is harder to prove.',
+  },
+  SOREN: {
+    title: 'SOREN VEYL', subtitle: 'THE FIRST EXILE',
+    atmosphere: 'A stranger slides into the empty seat...',
+    quote: 'Titles are just stories people agree not to question.',
+  },
 }
 
 const GF_PHASES: ArenaMatchPhase[] = ['GF_PILE_2', 'GF_PILE_3_ROUND_1', 'GF_PILE_3_ROUND_2']

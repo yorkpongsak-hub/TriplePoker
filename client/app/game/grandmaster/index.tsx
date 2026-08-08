@@ -30,9 +30,16 @@ function previewSnapshot(mode?: string): ArenaClientSnapshot {
     gf: phase === 'GF_PILE_3_ROUND_1' ? { pile: 3, round: 1, localTurn: true, callCostCrest: 3 } : null,
     bossPresentation: mode === 'boss' ? {
       bossId: 'MONARCH',
-      title: 'BOSS ENCOUNTER',
-      subtitle: 'MONARCH | FOUR GODS',
-      dialogue: 'Every crown remembers the hand that earned it.',
+      title: 'MONARCH',
+      subtitle: 'THE WATCHER',
+      atmosphere: 'A shadow falls over the table...',
+      quote: 'Power is easy to claim. Restraint is harder to prove.',
+    } : mode === 'soren' ? {
+      bossId: 'SOREN',
+      title: 'SOREN VEYL',
+      subtitle: 'THE FIRST EXILE',
+      atmosphere: 'A stranger slides into the empty seat...',
+      quote: 'Titles are just stories people agree not to question.',
     } : null,
     result: phase === 'MATCH_RESULT' ? {
       title: 'MATCH COMPLETE',
