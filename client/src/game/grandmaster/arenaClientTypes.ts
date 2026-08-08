@@ -15,7 +15,10 @@ export interface ArenaSeatView {
   seat: 1 | 2 | 3 | 4
   playerId: string
   displayName: string
+  // Human: preset avatar key (resolve ผ่าน AvatarDisplay/PRESET_AVATARS) อาจว่างถ้ายังไม่ตั้งค่า
+  // AI (Boss/Sentinel/Minion): สัญลักษณ์ตัวอักษรเดิม ('♛'/'♠')
   avatar: string
+  controller: 'HUMAN' | 'AI'
   isLocal: boolean
   isBoss: boolean
   isCurrentTurn: boolean

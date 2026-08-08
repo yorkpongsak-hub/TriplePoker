@@ -9,7 +9,10 @@ export interface ArenaSeatViewWire {
   seat: 1 | 2 | 3 | 4
   playerId: string
   displayName: string
+  // Human: preset avatar key (จาก PRESET_AVATARS ฝั่ง client, resolve ผ่าน AvatarDisplay) อาจว่างถ้ายังไม่ตั้งค่า
+  // AI (Boss/Sentinel/Minion): สัญลักษณ์ตัวอักษรเดิม ('♛'/'♠') ไม่มี preset จริงให้ resolve
   avatar: string
+  controller: 'HUMAN' | 'AI'
   isLocal: boolean
   isBoss: boolean
   isCurrentTurn: boolean
@@ -74,7 +77,7 @@ export function projectArenaClientSnapshot(
   connections: ArenaConnectionManager,
   viewerId: string,
   now: number,
-  identities: ReadonlyMap<string, { displayName: string }>,
+  identities: ReadonlyMap<string, { displayName: string; avatar: string }>,
 ): ArenaClientSnapshotWire {
   const snapshot = engine.snapshot()
   const detail = engine.snapshotDetail()
@@ -91,10 +94,12 @@ export function projectArenaClientSnapshot(
     const displayName = seatAssignment.controller === 'HUMAN'
       ? identities.get(actorId)?.displayName ?? `Grandmaster ${seatAssignment.seat}`
       : seatAssignment.aiId.split('_').join(' ')
-    const avatar = seatAssignment.controller === 'AI' && seatAssignment.role === 'BOSS' ? '♛' : '♠'
+    const avatar = seatAssignment.controller === 'HUMAN'
+      ? identities.get(actorId)?.avatar ?? ''
+      : seatAssignment.role === 'BOSS' ? '♛' : '♠'
     const connection: ArenaConnectionView = seatAssignment.controller === 'HUMAN' ? connections.view(actorId, now) : 'CONNECTED'
     return {
-      seat: seatAssignment.seat, playerId: actorId, displayName, avatar,
+      seat: seatAssignment.seat, playerId: actorId, displayName, avatar, controller: seatAssignment.controller,
       isLocal, isBoss: seatAssignment.seat === 3, isCurrentTurn: snapshot.pendingActorIds.includes(actorId),
       connection, cards: isLocal ? hand.map(arenaCardKey) : [], cardCount: hand.length,
       crownCrest: breakdownByActor.get(actorId)?.endingCrest ?? 0,

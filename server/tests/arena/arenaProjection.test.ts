@@ -85,7 +85,7 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
     const engine = new ArenaMatchEngine('m1', composition, createSeededRandom(1), 0)
     reserveAll(engine, 1)
     const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
-    const identities = new Map([['p1', { displayName: 'Alice' }], ['p2', { displayName: 'Bob' }], ['p3', { displayName: 'Cara' }]])
+    const identities = new Map([['p1', { displayName: 'Alice', avatar: 'wolf' }], ['p2', { displayName: 'Bob', avatar: '' }], ['p3', { displayName: 'Cara', avatar: '' }]])
     const view = projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, identities)
     expect(view.phase).toBe('ARRANGE_1')
     const local = view.seats.find(seat => seat.playerId === 'p1')!
@@ -96,6 +96,19 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
     expect(other.cardCount).toBe(11)
   })
 
+  test('avatar: Human ใช้ preset key จริงจาก identities (fallback ว่างถ้าไม่มีข้อมูล), AI ใช้สัญลักษณ์ตัวอักษรเดิม', () => {
+    const engine = new ArenaMatchEngine('m1b', composition, createSeededRandom(1), 0)
+    const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
+    const identities = new Map([['p1', { displayName: 'Alice', avatar: 'wolf' }]]) // p2/p3 ไม่มีข้อมูล avatar เลย
+    const view = projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, identities)
+    const p1 = view.seats.find(seat => seat.playerId === 'p1')!
+    const p2 = view.seats.find(seat => seat.playerId === 'p2')!
+    const boss = view.seats.find(seat => seat.seat === 3)!
+    expect(p1).toMatchObject({ controller: 'HUMAN', avatar: 'wolf' })
+    expect(p2).toMatchObject({ controller: 'HUMAN', avatar: '' }) // ไม่มีใน identities -> fallback ว่าง ไม่ใช่สัญลักษณ์เดิม
+    expect(boss).toMatchObject({ controller: 'AI', avatar: '♛' })
+  })
+
   test('auction sheet หายไปทันทีหลัง viewer bid แล้ว แต่ยังโชว์ให้คนที่ยังไม่ bid', () => {
     const engine = new ArenaMatchEngine('m2', composition, createSeededRandom(2), 0)
     reserveAll(engine, 1)
@@ -104,7 +117,7 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
     }
     expect(engine.snapshot().phase).toBe('AUCTION_FACE_UP')
     const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
-    const identities = new Map<string, { displayName: string }>()
+    const identities = new Map<string, { displayName: string; avatar: string }>()
     const beforeBid = projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, identities)
     expect(beforeBid.auction).not.toBeNull()
     engine.submit({ type: 'FACE_UP_BID', actionId: 'bid-p1', actorId: 'p1', amountCrest: 0 }, 3)

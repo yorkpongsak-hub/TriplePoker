@@ -3,6 +3,7 @@ import { Image, ImageBackground, Pressable, StyleSheet, Text, useWindowDimension
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { CARD_BACK_IMG, CARD_IMG } from '../../../src/components/game/cardAssets'
 import PlayerHandView, { HandCardData } from '../../../src/components/game/PlayerHandView'
+import { AvatarDisplay } from '../../../src/components/profile/AvatarPicker'
 import ArenaOverlays from './ArenaOverlays'
 import CrownPanel from './CrownPanel'
 import FanHand from './FanHand'
@@ -29,7 +30,9 @@ function SeatLabel({ seat }: { seat: ArenaSeatView }) {
   const status = seat.connection === 'CONNECTED' ? null : seat.connection.replaceAll('_', ' ')
   return (
     <View style={[styles.seatLabel, seat.isCurrentTurn && styles.seatTurn, seat.isBoss && styles.bossLabel]}>
-      <Text style={styles.avatar}>{seat.avatar}</Text>
+      {seat.controller === 'HUMAN'
+        ? <AvatarDisplay config={{ type: 'preset', presetKey: seat.avatar, initial: seat.displayName, frameKey: 'default' }} size={28} showFrame />
+        : <Text style={styles.avatar}>{seat.avatar}</Text>}
       <View>
         <Text numberOfLines={1} style={styles.seatName}>{seat.displayName}</Text>
         <Text style={styles.seatBalance}>{Math.floor(seat.crownCrest / 12)} C {seat.crownCrest % 12} Cr</Text>

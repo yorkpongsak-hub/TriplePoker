@@ -15,7 +15,7 @@ interface ArenaSocketData { identity: ArenaIdentity }
 
 const runtime = new ArenaRuntime()
 const socketsByPlayer = new Map<string, Socket>()
-const identities = new Map<string, { displayName: string }>()
+const identities = new Map<string, { displayName: string; avatar: string }>()
 const crestLedger = new ArenaCrestLedger()
 const settlementPersistence = new ArenaSettlementPersistence()
 const finalizedMatchIds = new Set<string>()
@@ -144,7 +144,7 @@ export function registerArenaSocket(io: Server): void {
   arena.on('connection', (socket: Socket<any, any, any, ArenaSocketData>) => {
     const identity = socket.data.identity
     socketsByPlayer.set(identity.playerId, socket)
-    identities.set(identity.playerId, { displayName: identity.displayName })
+    identities.set(identity.playerId, { displayName: identity.displayName, avatar: identity.avatar })
 
     const existing = runtime.matchForPlayer(identity.playerId)
     if (existing) {
