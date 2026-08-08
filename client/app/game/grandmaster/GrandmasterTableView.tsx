@@ -79,6 +79,11 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
 
   if (!local) return <View style={styles.fatal}><Text style={styles.fatalText}>LOCAL SEAT NOT FOUND</Text></View>
 
+  // ที่นั่ง 3 คือ Boss เสมอ (AI เท่านั้น ไม่มีทาง isLocal) เลยตรึงไว้ 'top' ได้ตายตัว
+  // ที่นั่งที่เหลือ (1/2/4) ต้องหมุนตาม local.seat จริง ไม่งั้นคนที่ไม่ได้นั่ง seat 1 จะเห็นตัวเองไปโผล่
+  // ที่ตำแหน่งข้าง (compact/หมุน 90deg) แทนที่จะเป็นตำแหน่ง bottom หลักเหมือนกันทุก user
+  const otherChallengerSeats = ([1, 2, 4] as const).filter(seatNumber => seatNumber !== local.seat)
+
   const handleArrangeCardPress = (pi: number, ci: number) => {
     if (!piles) return
     if (!selectedCard) { setSelectedCard({ pi, ci }); return }
@@ -111,8 +116,8 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
             cards={seat.cards}
             cardCount={seat.cardCount}
             faceUp={seat.isLocal}
-            compact={!seat.isLocal || compact}
-            width={seat.isLocal ? Math.min(width * 0.46, 360) : 190}
+            compact={!seat.isLocal}
+            width={seat.isLocal ? Math.min(width * 0.7, 420) : 190}
             disabled={!seat.isLocal}
             onCardPress={cardId => onIntent({ type: 'SELECT_CARD', cardId })}
           />
@@ -143,9 +148,9 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
           <View style={styles.crownPosition}><CrownPanel value={snapshot.crown} /></View>
 
           {renderSeat(3, 'top')}
-          {renderSeat(2, 'left')}
-          {renderSeat(4, 'right')}
-          {renderSeat(1, 'bottom')}
+          {renderSeat(otherChallengerSeats[0], 'left')}
+          {renderSeat(otherChallengerSeats[1], 'right')}
+          {renderSeat(local.seat, 'bottom')}
 
           <View style={styles.centerBoard}>
             <View style={styles.pileRow}>
@@ -174,7 +179,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
               </Text>
               <Text style={styles.arrangeSub}>Tap a card, then tap another to swap. Pile 1 must not beat Pile 2; Pile 2 must not beat Pile 3.</Text>
               <PlayerHandView piles={piles} selected={selectedCard} onCardPress={handleArrangeCardPress} isVip={false} />
-              <Pressable onPress={confirmArrangement} style={styles.primaryAction}>
+              <Pressable onPress={confirmArrangement} hitSlop={10} style={({ pressed }) => [styles.primaryAction, pressed && styles.primaryActionPressed]}>
                 <Text style={styles.primaryActionText}>{arrangingPhase === 'FINAL_LOCK' ? 'FINAL LOCK' : arrangingPhase === 'ARRANGE_1' ? 'READY' : 'CONFIRM ARRANGEMENT'}</Text>
               </Pressable>
             </View>
@@ -186,12 +191,21 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
               <Text style={styles.arrangeSub}>You won an extra card at auction — pick one card to discard.</Text>
               <View style={styles.discardRow}>
                 {local.cards.map(code => (
-                  <Pressable key={code} onPress={() => setDiscardTarget(code)} style={[styles.discardCard, discardTarget === code && styles.discardCardSelected]}>
+                  <Pressable
+                    key={code}
+                    onPress={() => setDiscardTarget(code)}
+                    hitSlop={6}
+                    style={({ pressed }) => [styles.discardCard, discardTarget === code && styles.discardCardSelected, pressed && styles.primaryActionPressed]}
+                  >
                     <Image source={CARD_IMG[code]} style={styles.discardImage} resizeMode="cover" />
                   </Pressable>
                 ))}
               </View>
-              <Pressable onPress={() => discardTarget && onIntent({ type: 'DISCARD', cardId: discardTarget })} style={styles.primaryAction}>
+              <Pressable
+                onPress={() => discardTarget && onIntent({ type: 'DISCARD', cardId: discardTarget })}
+                hitSlop={10}
+                style={({ pressed }) => [styles.primaryAction, pressed && styles.primaryActionPressed]}
+              >
                 <Text style={styles.primaryActionText}>DISCARD</Text>
               </Pressable>
             </View>
@@ -254,8 +268,9 @@ const styles = StyleSheet.create({
   discardCard: { width: 44, height: 62, borderRadius: 4, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,215,106,0.5)', backgroundColor: '#160C1E', alignItems: 'center', justifyContent: 'center' },
   discardCardSelected: { borderColor: '#FF6B6B', borderWidth: 2 },
   discardImage: { width: 44, height: 62 },
-  primaryAction: { marginTop: 6, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 10, backgroundColor: '#245C39', borderWidth: 1, borderColor: '#8DFFB5' },
-  primaryActionText: { color: '#F5F2E8', fontSize: 10, fontWeight: '900' },
+  primaryAction: { marginTop: 6, minHeight: 44, paddingHorizontal: 22, paddingVertical: 12, borderRadius: 10, backgroundColor: '#245C39', borderWidth: 1, borderColor: '#8DFFB5', alignItems: 'center', justifyContent: 'center' },
+  primaryActionPressed: { opacity: 0.65, transform: [{ scale: 0.97 }] },
+  primaryActionText: { color: '#F5F2E8', fontSize: 11, fontWeight: '900' },
   fatal: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0F2418' },
   fatalText: { color: '#FF6B6B', fontWeight: '900' },
 })

@@ -1,16 +1,24 @@
 import React from 'react'
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native'
+import { useRouter } from 'expo-router'
 import { ArenaClientIntent, ArenaClientSnapshot } from '../../../src/game/grandmaster/arenaClientTypes'
 
 interface Props { snapshot: ArenaClientSnapshot; onIntent: (intent: ArenaClientIntent) => void }
 
+// เพิ่ม hitSlop + pressed-state ให้เห็นชัดว่ากดโดน (ของเดิมไม่มี feedback ตอนกด ผู้เล่นจริงบอกว่า "เหมือนกดไม่ได้")
 const Button = ({ label, onPress, danger = false, disabled = false }: { label: string; onPress: () => void; danger?: boolean; disabled?: boolean }) => (
-  <Pressable disabled={disabled} onPress={onPress} style={[styles.button, danger && styles.danger, disabled && styles.disabled]}>
+  <Pressable
+    disabled={disabled}
+    onPress={onPress}
+    hitSlop={8}
+    style={({ pressed }) => [styles.button, danger && styles.danger, disabled && styles.disabled, pressed && !disabled && styles.pressed]}
+  >
     <Text style={styles.buttonText}>{label}</Text>
   </Pressable>
 )
 
 export default function ArenaOverlays({ snapshot, onIntent }: Props) {
+  const router = useRouter()
   const local = snapshot.seats.find(seat => seat.isLocal)
   const connection = local?.connection ?? 'CONNECTED'
   const reconnecting = connection !== 'CONNECTED'
@@ -80,6 +88,13 @@ export default function ArenaOverlays({ snapshot, onIntent }: Props) {
               <Text style={styles.netLabel}>NET CROWN</Text>
               <Text style={styles.netValue}>{snapshot.result && snapshot.result.netCrest >= 0 ? '+' : ''}{snapshot.result?.netCrest} Cr</Text>
             </View>
+            <Pressable
+              onPress={() => router.replace('/(home)/lobby')}
+              hitSlop={8}
+              style={({ pressed }) => [styles.lobbyButton, pressed && styles.pressed]}
+            >
+              <Text style={styles.lobbyButtonText}>BACK TO LOBBY</Text>
+            </Pressable>
           </View>
         </View>
       </Modal>
@@ -99,11 +114,14 @@ const styles = StyleSheet.create({
   centerDialog: { position: 'absolute', top: '36%', alignSelf: 'center', minWidth: 290, padding: 14, borderRadius: 14, backgroundColor: 'rgba(16,10,28,0.97)', borderWidth: 1, borderColor: '#B982FF' },
   sheetTitle: { color: '#FFD76A', fontSize: 13, fontWeight: '900', letterSpacing: 1.2, textAlign: 'center' },
   sheetSub: { color: '#C8C4B0', fontSize: 9, marginTop: 3, textAlign: 'center' },
-  buttonRow: { flexDirection: 'row', justifyContent: 'center', flexWrap: 'wrap', gap: 7, marginTop: 10 },
-  button: { minWidth: 54, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8, backgroundColor: '#245C39', borderWidth: 1, borderColor: '#8DFFB5' },
+  buttonRow: { flexDirection: 'row', justifyContent: 'center', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  button: { minWidth: 60, minHeight: 40, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, backgroundColor: '#245C39', borderWidth: 1, borderColor: '#8DFFB5', alignItems: 'center', justifyContent: 'center' },
   danger: { backgroundColor: '#5A2020', borderColor: '#FF6B6B' },
   disabled: { opacity: 0.35 },
-  buttonText: { color: '#F5F2E8', fontSize: 9, fontWeight: '900', textAlign: 'center' },
+  pressed: { opacity: 0.65, transform: [{ scale: 0.97 }] },
+  buttonText: { color: '#F5F2E8', fontSize: 10, fontWeight: '900', textAlign: 'center' },
+  lobbyButton: { marginTop: 14, paddingVertical: 12, borderRadius: 10, backgroundColor: '#245C39', borderWidth: 1, borderColor: '#8DFFB5', alignItems: 'center' },
+  lobbyButtonText: { color: '#F5F2E8', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
   modalShade: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.75)' },
   resultCard: { width: 310, padding: 18, borderRadius: 16, backgroundColor: '#102719', borderWidth: 1.5, borderColor: '#FFD76A' },
   resultTitle: { color: '#FFD76A', fontSize: 19, fontWeight: '900', textAlign: 'center', marginBottom: 12 },

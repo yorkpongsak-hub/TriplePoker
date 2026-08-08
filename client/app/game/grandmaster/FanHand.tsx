@@ -14,9 +14,12 @@ interface FanHandProps {
 
 export default function FanHand({ cards, cardCount, faceUp, width, compact = false, disabled = false, onCardPress }: FanHandProps) {
   const count = Math.max(cards.length, cardCount)
-  const cardWidth = compact ? 30 : 44
+  // 62px = ขนาดเดียวกับ PlayerHandView's FREE_CW (ไพ่ในมือของ Tier อื่นเช่น Mastermind) — เดิมใช้ 44px
+  // เล็กกว่ามากจนอ่านยากบนมือถือจริง โดยเฉพาะเมื่อ compact ถูกลดขนาดซ้ำเพราะจอแคบ (ตอนนี้ compact ผูกกับ
+  // isLocal เท่านั้น ไม่ผูกกับความกว้างจอแล้ว — ดู GrandmasterTableView.tsx)
+  const cardWidth = compact ? 30 : 62
   const cardHeight = Math.round(cardWidth * 1.44)
-  const spread = Math.min(width - cardWidth, compact ? 94 : 170)
+  const spread = Math.min(width - cardWidth, compact ? 94 : 220)
   const step = count > 1 ? spread / (count - 1) : 0
   const totalWidth = spread + cardWidth
 
