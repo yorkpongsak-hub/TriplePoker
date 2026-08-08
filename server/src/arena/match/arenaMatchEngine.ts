@@ -7,6 +7,7 @@ import { arenaPhaseTimeoutMs, tierSConfig, tierSEconomyConfig } from '../config/
 import { ArenaMatchPhase, ArenaPile, JokerDeclaration } from '../contracts/arenaContracts'
 import { autoLockJoker, declareJoker } from '../joker/jokerRules'
 import { ArenaHandResult, compareArenaHands, evaluateArenaHand } from '../joker/wildHandEvaluator'
+import { HandRank } from '../../game/handEvaluator'
 import { ArenaMatchComposition } from '../matchmaking/arenaMatchmaking'
 import { GFRound, GFPlayer, recordGFAction, soleRemainingPlayer, startPile2GF, startPile3Round1, startPile3Round2 } from '../gf/arenaGFRules'
 import { ArenaSettlementEngine, PlayerResultBreakdown, SettlementAccount, SettlementCommand, SettlementTransaction } from '../settlement/arenaSettlementEngine'
@@ -56,6 +57,20 @@ export interface ArenaMatchSnapshotDetail {
   pile1WinnerId: string | null
   pile2WinnerId: string | null
   pile3WinnerId: string | null
+  pileReveal: ArenaPileRevealDetail | null
+}
+
+// ข้อมูลโชว์ตอนหยุดเกมจริงที่ REVEAL_PILE_X (ports VIP Plus's roundResultOverlay pattern) — cards/highlightedCards
+// ว่างและ handRank เป็น null เมื่อ !revealed (ผู้เล่นคนเดียวเหลือรอดจาก GF โดยไม่มีใครสู้ไพ่จริง ต้องรักษา Fog of War
+// เหมือนกฎเดิมของ pile2Revealed/pile3Revealed — ไม่โชว์ไพ่แม้เป็นของผู้ชนะ)
+export interface ArenaPileRevealDetail {
+  pile: 1 | 2 | 3
+  gameNumber: 1 | 2 | 3
+  winnerId: string | null
+  handRank: HandRank | null
+  cards: string[]
+  highlightedCards: string[]
+  payoutCrest: number
 }
 
 type DecisionPhase = keyof typeof arenaPhaseTimeoutMs
@@ -110,6 +125,7 @@ export class ArenaMatchEngine {
   private pile1WinnerId: string | null = null
   private pile2WinnerId: string | null = null
   private pile3WinnerId: string | null = null
+  private pileReveal: ArenaPileRevealDetail | null = null
   // true เฉพาะตอนผู้ชนะกองนั้นมาจากการเทียบไพ่จริง (ไม่ใช่ชนะเพราะคู่แข่ง Fold จนเหลือคนเดียว) — ใช้เป็น
   // known lower bound ให้ card counting ของกองถัดไป (pile1 ไม่มี GF จึงเปิดเผยจริงเสมอ ไม่ต้องมี flag แยก)
   private pile2Revealed = false
@@ -186,6 +202,33 @@ export class ArenaMatchEngine {
     return evaluatePileBest(cards, community)
   }
 
+  // เรียกตอน RESOLVE_PILE_X ก่อน transition เข้า REVEAL_PILE_X เก็บข้อมูลไว้โชว์ตอนเกมหยุดจริง (ports VIP Plus's
+  // roundResultOverlay pattern) — ใช้ pileHandFor (ไม่ใช่ evaluateArenaHand ตรงๆ) เพราะ lockedArrangements การันตี
+  // แล้วตอนนี้ (หลัง FINAL_LOCK) แต่ยังเรียก path เดียวกับ card-counting เพื่อความสม่ำเสมอ
+  private capturePileReveal(pile: 1 | 2 | 3, winnerId: string | null, revealed: boolean, payoutCrest: number): void {
+    if (!winnerId) { this.pileReveal = null; return }
+    if (!revealed) {
+      this.pileReveal = { pile, gameNumber: this.gameNumber as 1 | 2 | 3, winnerId, handRank: null, cards: [], highlightedCards: [], payoutCrest }
+      return
+    }
+    const hand = this.pileHandFor(winnerId, pile)
+    const arrangement = this.lockedArrangements.get(winnerId)
+    const pileIds = arrangement ? (pile === 1 ? arrangement.pile1 : pile === 2 ? arrangement.pile2 : arrangement.pile3) : []
+    const community = this.deal ? (pile === 1 ? this.deal.community.pile1 : pile === 2 ? this.deal.community.pile2 : this.deal.community.pile3) : []
+    const pileCards = pileIds.map(id => this.dealCardsById.get(id)).filter((card): card is ArenaCard => !!card)
+    const shownCards = [...pileCards, ...community]
+    // ArenaHandResult.selectedCardIds เป็น card.id ดิบ (จาก wildHandEvaluator.ts) ไม่ใช่ arenaCardKey ที่ dealCardsById
+    // ใช้เป็น key — ต้องแปลงผ่าน lookup ท้องถิ่นจากไพ่ที่เกี่ยวข้องเท่านั้น (≤7 ใบ) ก่อนส่งออกไปที่ client
+    const byRawId = new Map(shownCards.map(card => [card.id, card]))
+    this.pileReveal = {
+      pile, gameNumber: this.gameNumber as 1 | 2 | 3, winnerId,
+      handRank: hand?.rank ?? null,
+      cards: shownCards.map(card => arenaCardKey(card)),
+      highlightedCards: hand ? hand.selectedCardIds.map(rawId => byRawId.get(rawId)).filter((card): card is ArenaCard => !!card).map(card => arenaCardKey(card)) : [],
+      payoutCrest,
+    }
+  }
+
   snapshotDetail(): ArenaMatchSnapshotDetail {
     return {
       faceUpWinnerId: this.faceUpWinnerId,
@@ -200,6 +243,7 @@ export class ArenaMatchEngine {
       pile1WinnerId: this.pile1WinnerId,
       pile2WinnerId: this.pile2WinnerId,
       pile3WinnerId: this.pile3WinnerId,
+      pileReveal: this.pileReveal,
     }
   }
 
@@ -353,6 +397,10 @@ export class ArenaMatchEngine {
     if (this.phase === 'JOKER_DECLARE' && this.jokerDeclaration) return this.enterDiscard(now)
     if (this.phase === 'DISCARD' && this.pendingActors().length === 0) return this.transition('FINAL_LOCK', now)
     if (this.phase === 'FINAL_LOCK' && this.allActorsActed()) return this.transition('RESOLVE_PILE_1', now)
+    // ทางออกเดียวของ REVEAL_PILE_X (ไม่มี action ให้กด แค่รอ deadline หมด — ผ่าน tick() -> applyDefaults() -> ที่นี่)
+    if (this.phase === 'REVEAL_PILE_1') return this.startGFPile2(now)
+    if (this.phase === 'REVEAL_PILE_2') return this.startGFPile3Round1(now)
+    if (this.phase === 'REVEAL_PILE_3') return this.transition('CHECK_SWEEP_JACKPOT', now)
     if (this.gfRound) {
       const sole = soleRemainingPlayer(this.gfRound)
       if (sole) {
@@ -390,9 +438,30 @@ export class ArenaMatchEngine {
         case 'GAME_START': this.startGame(now); break
         case 'DEAL': this.dealGame(now); break
         case 'REVEAL_PILE3_COMMUNITY_CARD_2': this.transition('FINAL_ARRANGE', now); break
-        case 'RESOLVE_PILE_1': this.pile1WinnerId = this.resolvePileWinner(1, this.actorIds); this.payoutPile(1, this.pile1WinnerId); this.startGFPile2(now); break
-        case 'RESOLVE_PILE_2': this.pile2WinnerId = this.resolveGfPileWinner(2); this.payoutPile(2, this.pile2WinnerId); this.startGFPile3Round1(now); break
-        case 'RESOLVE_PILE_3': this.pile3WinnerId = this.resolveGfPileWinner(3); this.payoutPile(3, this.pile3WinnerId); this.transition('CHECK_SWEEP_JACKPOT', now); break
+        case 'RESOLVE_PILE_1': {
+          this.pile1WinnerId = this.resolvePileWinner(1, this.actorIds)
+          const potCrest = this.settlement.totals().pots[1]
+          this.payoutPile(1, this.pile1WinnerId)
+          this.capturePileReveal(1, this.pile1WinnerId, true, potCrest)
+          this.transition('REVEAL_PILE_1', now)
+          break
+        }
+        case 'RESOLVE_PILE_2': {
+          this.pile2WinnerId = this.resolveGfPileWinner(2)
+          const potCrest = this.settlement.totals().pots[2]
+          this.payoutPile(2, this.pile2WinnerId)
+          this.capturePileReveal(2, this.pile2WinnerId, this.pile2Revealed, potCrest)
+          this.transition('REVEAL_PILE_2', now)
+          break
+        }
+        case 'RESOLVE_PILE_3': {
+          this.pile3WinnerId = this.resolveGfPileWinner(3)
+          const potCrest = this.settlement.totals().pots[3]
+          this.payoutPile(3, this.pile3WinnerId)
+          this.capturePileReveal(3, this.pile3WinnerId, this.pile3Revealed, potCrest)
+          this.transition('REVEAL_PILE_3', now)
+          break
+        }
         case 'CHECK_SWEEP_JACKPOT': this.checkSweepJackpot(); this.transition('GAME_SETTLEMENT', now); break
         case 'GAME_SETTLEMENT': this.transition('NEXT_GAME_OR_MATCH_END', now); break
         case 'NEXT_GAME_OR_MATCH_END': this.transition(this.gameNumber < tierSConfig.matchGames ? 'GAME_START' : 'MATCH_SETTLEMENT', now); break

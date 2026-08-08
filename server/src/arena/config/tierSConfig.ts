@@ -42,4 +42,9 @@ export const arenaPhaseTimeoutMs = Object.freeze({
   GF_PILE_2: 12_000,
   GF_PILE_3_ROUND_1: 12_000,
   GF_PILE_3_ROUND_2: 12_000,
+  // ช่วงหยุดเกมจริงโชว์ผู้ชนะแต่ละกอง (ports VIP Plus's resultDisplayMs pause pattern — ดู
+  // gameConfig.ts's vipPlus5.resultDisplayMs) ปรับได้หลัง playtest จริง
+  REVEAL_PILE_1: 4_000,
+  REVEAL_PILE_2: 4_000,
+  REVEAL_PILE_3: 4_000,
 })

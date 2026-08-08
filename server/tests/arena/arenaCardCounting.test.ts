@@ -56,8 +56,10 @@ function driveTo(engine: ArenaMatchEngine, targetPhase: string): void {
   let now = 1
   while (engine.snapshot().phase !== targetPhase && !engine.snapshot().completed) {
     const pending = engine.snapshot().pendingActorIds
-    if (pending.length) engine.submit(actionFor(engine, pending[0], ++sequence), now++)
-    else engine.tick(now++)
+    if (pending.length) { engine.submit(actionFor(engine, pending[0], ++sequence), now); now++ }
+    // ไม่มี actor รอ = phase หยุดรอ deadline เฉยๆ (เช่น REVEAL_PILE_X) — กระโดด now ไปที่ deadlineAt ตรงๆ
+    // กัน loop วนนับพันรอบทีละ 1ms ตอน deadline จริงยาว (REVEAL_PILE_X = 4000ms)
+    else { now = Math.max(now + 1, engine.snapshot().deadlineAt ?? now + 1); engine.tick(now) }
   }
 }
 
@@ -87,8 +89,8 @@ describe('ArenaMatchEngine.estimateOpponentSafeRate — card counting กอง 
       let now = 1_001
       while (!engine.snapshot().completed && sequence < 1_000) {
         const pending = engine.snapshot().pendingActorIds
-        if (pending.length) engine.submit(actionFor(engine, pending[0], ++sequence), now++)
-        else engine.tick(now++)
+        if (pending.length) { engine.submit(actionFor(engine, pending[0], ++sequence), now); now++ }
+        else { now = Math.max(now + 1, engine.snapshot().deadlineAt ?? now + 1); engine.tick(now) }
       }
       expect(engine.snapshot().completed).toBe(true)
     }

@@ -13,6 +13,7 @@ function previewSnapshot(mode?: string): ArenaClientSnapshot {
   if (mode === 'joker') phase = 'JOKER_DECLARE'
   if (mode === 'gf') phase = 'GF_PILE_3_ROUND_1'
   if (mode === 'result') phase = 'MATCH_RESULT'
+  if (mode === 'reveal') phase = 'REVEAL_PILE_2'
   return {
     matchId: 'grandmaster-preview', version: 1, phase, gameNumber: 1,
     phaseEndsAt: Date.now() + 30_000,
@@ -42,6 +43,11 @@ function previewSnapshot(mode?: string): ArenaClientSnapshot {
         { label: 'Win / Loss', crest: 66 },
       ],
       netCrest: 21,
+    } : null,
+    reveal: phase === 'REVEAL_PILE_2' ? {
+      pile: 2, winnerSeat: 2, winnerDisplayName: 'Cipher Veil', handName: 'full_house',
+      cards: ['ks', 'kd', 'kc', '9h', '9s'], highlightedCards: ['ks', 'kd', 'kc', '9h', '9s'],
+      payoutCrest: 30,
     } : null,
   }
 }

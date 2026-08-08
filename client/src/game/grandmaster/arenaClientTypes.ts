@@ -2,9 +2,9 @@ export type ArenaClientPhase =
   | 'WAITING_FOR_PLAYERS' | 'CHECK_FAST_THREE_HUMANS' | 'ROLL_BOSS_ENCOUNTER_OR_WAIT_FOURTH_HUMAN'
   | 'MATCH_BUY_IN_RESERVE' | 'GAME_START' | 'DEAL' | 'ARRANGE_1'
   | 'AUCTION_FACE_UP' | 'AUCTION_BLIND' | 'REVEAL_PILE3_COMMUNITY_CARD_2' | 'FINAL_ARRANGE' | 'JOKER_DECLARE'
-  | 'DISCARD' | 'FINAL_LOCK' | 'RESOLVE_PILE_1' | 'GF_PILE_2'
-  | 'RESOLVE_PILE_2' | 'GF_PILE_3_ROUND_1' | 'GF_PILE_3_ROUND_2'
-  | 'RESOLVE_PILE_3' | 'CHECK_SWEEP_JACKPOT' | 'GAME_SETTLEMENT'
+  | 'DISCARD' | 'FINAL_LOCK' | 'RESOLVE_PILE_1' | 'REVEAL_PILE_1' | 'GF_PILE_2'
+  | 'RESOLVE_PILE_2' | 'REVEAL_PILE_2' | 'GF_PILE_3_ROUND_1' | 'GF_PILE_3_ROUND_2'
+  | 'RESOLVE_PILE_3' | 'REVEAL_PILE_3' | 'CHECK_SWEEP_JACKPOT' | 'GAME_SETTLEMENT'
   | 'NEXT_GAME_OR_MATCH_END' | 'MATCH_SETTLEMENT' | 'BATTLE_REWARDS_SINK_IF_REMAINING' | 'MATCH_RESULT'
 
 export type ArenaConnectionView =
@@ -58,6 +58,15 @@ export interface ArenaClientSnapshot {
     dialogue: string
   }
   result: null | { title: string; lines: ArenaResultLine[]; netCrest: number }
+  reveal: null | {
+    pile: 1 | 2 | 3
+    winnerSeat: 1 | 2 | 3 | 4 | null
+    winnerDisplayName: string
+    handName: string | null
+    cards: string[]
+    highlightedCards: string[]
+    payoutCrest: number
+  }
 }
 
 export interface ArenaPileArrangement { pile1: string[]; pile2: string[]; pile3: string[] }

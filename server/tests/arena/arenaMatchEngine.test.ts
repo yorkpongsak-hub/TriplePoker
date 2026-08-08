@@ -66,7 +66,10 @@ function playMatch(seed: number, matchComposition: ArenaMatchComposition = compo
     if (pending.length) {
       engine.submit(actionFor(engine, pending[0], ++sequence), now++)
     } else {
-      engine.tick(now++)
+      // ไม่มี actor รอ = phase หยุดรอ deadline เฉยๆ (เช่น REVEAL_PILE_X) — กระโดด now ไปที่ deadlineAt ตรงๆ
+      // กัน loop วนนับพันรอบทีละ 1ms ตอน deadline จริงยาว (REVEAL_PILE_X = 4000ms)
+      now = Math.max(now + 1, engine.snapshot().deadlineAt ?? now + 1)
+      engine.tick(now)
     }
   }
   if (!engine.snapshot().completed) throw new Error('simulation did not complete')
@@ -128,7 +131,7 @@ describe('Gate 5 - end-to-end Arena match state machine', () => {
     while (engine.snapshot().phase !== 'GF_PILE_2') {
       const pending = engine.snapshot().pendingActorIds
       if (pending.length) engine.submit(actionFor(engine, pending[0], ++sequence), now++)
-      else engine.tick(now++)
+      else { now = Math.max(now + 1, engine.snapshot().deadlineAt ?? now + 1); engine.tick(now) }
     }
     const turnOrder = engine.snapshotDetail().gfRound!.turnOrder
     const stay = turnOrder[turnOrder.length - 1]
@@ -137,8 +140,40 @@ describe('Gate 5 - end-to-end Arena match state machine', () => {
       if (!actorId) break
       engine.submit({ type: 'GF_ACTION', actionId: `fold-${actorId}-${++sequence}`, actorId, decision: actorId === stay ? 'CALL' : 'FOLD' }, now++)
     }
-    expect(engine.snapshot().phase).toBe('GF_PILE_3_ROUND_1')
+    // ชนะแบบไม่มีใครสู้ไพ่จริง -> ต้องหยุดที่ REVEAL_PILE_2 ก่อน (เกมหยุดจริงเหมือนกันทุกกรณี) แต่ pileReveal
+    // ต้องไม่มีไพ่/handName เลย (รักษา Fog of War แม้เป็นไพ่ของผู้ชนะเอง)
+    expect(engine.snapshot().phase).toBe('REVEAL_PILE_2')
     expect(engine.snapshotDetail().pile2WinnerId).toBe(stay)
+    const reveal = engine.snapshotDetail().pileReveal
+    expect(reveal).toMatchObject({ pile: 2, winnerId: stay, handRank: null, cards: [], highlightedCards: [] })
+    now = engine.snapshot().deadlineAt!
+    engine.tick(now)
+    expect(engine.snapshot().phase).toBe('GF_PILE_3_ROUND_1')
+  })
+
+  test('REVEAL_PILE_1 หยุดเกมจริงพร้อมข้อมูลไพ่ผู้ชนะ แล้ว auto-advance ไป GF_PILE_2 เองหลัง deadline หมดโดยไม่ต้องมี action', () => {
+    const engine = new ArenaMatchEngine('m-reveal1', composition, createSeededRandom(12), 0)
+    let sequence = 0
+    let now = 1
+    while (engine.snapshot().phase !== 'REVEAL_PILE_1') {
+      const pending = engine.snapshot().pendingActorIds
+      if (pending.length) engine.submit(actionFor(engine, pending[0], ++sequence), now++)
+      else { now = Math.max(now + 1, engine.snapshot().deadlineAt ?? now + 1); engine.tick(now) }
+    }
+    const deadlineAt = engine.snapshot().deadlineAt
+    expect(deadlineAt).not.toBeNull()
+    const reveal = engine.snapshotDetail().pileReveal
+    expect(reveal?.pile).toBe(1)
+    expect(reveal?.winnerId).toBe(engine.snapshotDetail().pile1WinnerId)
+    expect(reveal?.handRank).not.toBeNull()
+    expect(reveal!.cards.length).toBeGreaterThan(0)
+    expect(reveal!.highlightedCards.length).toBe(5)
+    // ยังไม่ถึง deadline -> ต้องยังค้างอยู่ REVEAL_PILE_1 ไม่ auto-advance ก่อนเวลา
+    engine.tick(now)
+    expect(engine.snapshot().phase).toBe('REVEAL_PILE_1')
+    // ถึง deadline แล้ว -> ไป GF_PILE_2 เองโดยไม่มีใคร submit action ใดๆ เลย
+    engine.tick(deadlineAt!)
+    expect(engine.snapshot().phase).toBe('GF_PILE_2')
   })
 
   test('Monarch ล็อกบุคลิกตอนแจกไพ่เกม 1 แล้วคงเดิมตลอด 3 เกม', () => {
@@ -159,7 +194,7 @@ describe('Gate 5 - end-to-end Arena match state machine', () => {
     while (!engine.snapshot().completed && sequence < 1_000) {
       const pending = engine.snapshot().pendingActorIds
       if (pending.length) engine.submit(actionFor(engine, pending[0], ++sequence), now++)
-      else engine.tick(now++)
+      else { now = Math.max(now + 1, engine.snapshot().deadlineAt ?? now + 1); engine.tick(now) }
       if (engine.snapshot().gameNumber >= 1 && !seenAfterGame1 && engine.resolvedBossPersonality()) {
         seenAfterGame1 = engine.resolvedBossPersonality()
       }

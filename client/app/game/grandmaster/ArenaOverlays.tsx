@@ -1,9 +1,63 @@
-import React from 'react'
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native'
+import React, { useEffect } from 'react'
+import { Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native'
 import { useRouter } from 'expo-router'
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated'
 import { ArenaClientIntent, ArenaClientSnapshot } from '../../../src/game/grandmaster/arenaClientTypes'
+import { CARD_BACK_IMG, CARD_IMG } from '../../../src/components/game/cardAssets'
 
 interface Props { snapshot: ArenaClientSnapshot; onIntent: (intent: ArenaClientIntent) => void }
+
+// ports VIP Plus's BlinkingCard (vipPlus/index.tsx) มาใช้ CARD_IMG lookup ของ Arena แทน parseCard+<Card>
+function RevealCard({ cardKey, blink }: { cardKey: string; blink: boolean }) {
+  const opacity = useSharedValue(1)
+  useEffect(() => {
+    if (!blink) return
+    opacity.value = withRepeat(
+      withSequence(
+        withTiming(0.25, { duration: 450, easing: Easing.inOut(Easing.quad) }),
+        withTiming(1, { duration: 450, easing: Easing.inOut(Easing.quad) }),
+      ), -1, true,
+    )
+  }, [blink])
+  const animStyle = useAnimatedStyle(() => ({ opacity: opacity.value }))
+  return (
+    <Animated.View style={[styles.revealCard, blink && styles.revealCardHighlight, animStyle]}>
+      {cardKey === 'JOKER'
+        ? <View style={styles.revealJoker}><Text style={styles.revealJokerText}>J</Text><Text style={styles.revealJokerStar}>*</Text></View>
+        : <Image source={CARD_IMG[cardKey] ?? CARD_BACK_IMG} style={styles.revealCardImage} resizeMode="cover" />}
+    </Animated.View>
+  )
+}
+
+// ports VIP Plus's FloatingDeltaText rise technique (vipPlus/index.tsx) เป็น entrance ของทั้ง block —
+// นี่คือส่วนที่ทำให้ "ลอยขึ้นมาแสดง" จริงตามที่ขอ ไม่ใช่แค่ pop-up เฉยๆ
+function PileRevealOverlay({ reveal }: { reveal: NonNullable<ArenaClientSnapshot['reveal']> }) {
+  const riseY = useSharedValue(24)
+  const opacity = useSharedValue(0)
+  useEffect(() => {
+    riseY.value = withTiming(0, { duration: 420, easing: Easing.out(Easing.quad) })
+    opacity.value = withTiming(1, { duration: 420 })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reveal.pile, reveal.winnerSeat])
+  const animStyle = useAnimatedStyle(() => ({ opacity: opacity.value, transform: [{ translateY: riseY.value }] }))
+  return (
+    <View style={styles.revealOverlay} pointerEvents="none">
+      <Animated.View style={animStyle}>
+        <Text style={styles.revealPile}>PILE {reveal.pile}</Text>
+        <Text style={styles.revealWinner}>{reveal.winnerDisplayName} WINS</Text>
+        {reveal.handName && <Text style={styles.revealHand}>{reveal.handName.replaceAll('_', ' ').toUpperCase()}</Text>}
+        {reveal.cards.length > 0 && (
+          <View style={styles.revealCardRow}>
+            {reveal.cards.map((key, index) => (
+              <RevealCard key={`${key}-${index}`} cardKey={key} blink={reveal.highlightedCards.includes(key)} />
+            ))}
+          </View>
+        )}
+        <Text style={styles.revealPayout}>+{reveal.payoutCrest} Crest</Text>
+      </Animated.View>
+    </View>
+  )
+}
 
 // เพิ่ม hitSlop + pressed-state ให้เห็นชัดว่ากดโดน (ของเดิมไม่มี feedback ตอนกด ผู้เล่นจริงบอกว่า "เหมือนกดไม่ได้")
 const Button = ({ label, onPress, danger = false, disabled = false }: { label: string; onPress: () => void; danger?: boolean; disabled?: boolean }) => (
@@ -74,6 +128,8 @@ export default function ArenaOverlays({ snapshot, onIntent }: Props) {
         </View>
       )}
 
+      {snapshot.reveal && <PileRevealOverlay reveal={snapshot.reveal} />}
+
       <Modal visible={!!snapshot.result} transparent animationType="fade">
         <View style={styles.modalShade}>
           <View style={styles.resultCard}>
@@ -131,4 +187,22 @@ const styles = StyleSheet.create({
   netRow: { flexDirection: 'row', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: '#3A5A44', marginTop: 8, paddingTop: 10 },
   netLabel: { color: '#FFD76A', fontSize: 12, fontWeight: '900' },
   netValue: { color: '#8DFFB5', fontSize: 13, fontWeight: '900' },
+  revealOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 40,
+    backgroundColor: 'rgba(5,12,8,0.86)', alignItems: 'center', justifyContent: 'center',
+  },
+  revealPile: { color: '#8DFFB5', fontSize: 12, fontWeight: '900', letterSpacing: 3, textAlign: 'center' },
+  revealWinner: { color: '#FFD76A', fontSize: 22, fontWeight: '900', textAlign: 'center', marginTop: 6 },
+  revealHand: { color: '#F5F2E8', fontSize: 14, fontWeight: '800', textAlign: 'center', marginTop: 4 },
+  revealCardRow: { flexDirection: 'row', gap: 8, marginTop: 16, flexWrap: 'wrap', justifyContent: 'center' },
+  revealCard: {
+    width: 50, height: 72, borderRadius: 5, overflow: 'hidden', borderWidth: 1,
+    borderColor: 'rgba(255,215,106,0.5)', backgroundColor: '#091808',
+  },
+  revealCardHighlight: { borderColor: '#FFD76A', borderWidth: 2 },
+  revealCardImage: { width: 50, height: 72 },
+  revealJoker: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#130d1f' },
+  revealJokerText: { color: '#FFD76A', fontWeight: '900', fontSize: 18 },
+  revealJokerStar: { color: '#8DFFB5', fontWeight: '900', fontSize: 12 },
+  revealPayout: { color: '#8DFFB5', fontSize: 15, fontWeight: '900', textAlign: 'center', marginTop: 14 },
 })

@@ -33,6 +33,15 @@ export interface ArenaClientSnapshotWire {
   gf: null | { pile: 2 | 3; round: 1 | 2; localTurn: boolean; callCostCrest: number }
   bossPresentation: null | { bossId: 'MONARCH' | 'SOREN'; title: string; subtitle: string; dialogue: string }
   result: null | { title: string; lines: Array<{ label: string; crest: number }>; netCrest: number }
+  reveal: null | {
+    pile: 1 | 2 | 3
+    winnerSeat: 1 | 2 | 3 | 4 | null
+    winnerDisplayName: string
+    handName: string | null
+    cards: string[]
+    highlightedCards: string[]
+    payoutCrest: number
+  }
 }
 
 // ลำดับ phase ภายในหนึ่งเกม (ไพ่/deal ถูกล้างทุกครั้งที่ gameNumber เปลี่ยน จึงไม่ต้องกังวลข้าม game)
@@ -41,8 +50,9 @@ const PHASE_ORDER: ArenaMatchPhase[] = [
   'MATCH_BUY_IN_RESERVE', 'GAME_START', 'DEAL', 'ARRANGE_1',
   'AUCTION_FACE_UP', 'AUCTION_BLIND', 'REVEAL_PILE3_COMMUNITY_CARD_2',
   'FINAL_ARRANGE', 'JOKER_DECLARE', 'DISCARD', 'FINAL_LOCK',
-  'RESOLVE_PILE_1', 'GF_PILE_2', 'RESOLVE_PILE_2', 'GF_PILE_3_ROUND_1', 'GF_PILE_3_ROUND_2',
-  'RESOLVE_PILE_3', 'CHECK_SWEEP_JACKPOT', 'GAME_SETTLEMENT',
+  'RESOLVE_PILE_1', 'REVEAL_PILE_1', 'GF_PILE_2', 'RESOLVE_PILE_2', 'REVEAL_PILE_2',
+  'GF_PILE_3_ROUND_1', 'GF_PILE_3_ROUND_2',
+  'RESOLVE_PILE_3', 'REVEAL_PILE_3', 'CHECK_SWEEP_JACKPOT', 'GAME_SETTLEMENT',
   'NEXT_GAME_OR_MATCH_END', 'MATCH_SETTLEMENT', 'BATTLE_REWARDS_SINK_IF_REMAINING', 'MATCH_RESULT',
 ]
 
@@ -56,6 +66,7 @@ const BOSS_PRESENTATION: Record<'MONARCH' | 'SOREN', { title: string; subtitle: 
 }
 
 const GF_PHASES: ArenaMatchPhase[] = ['GF_PILE_2', 'GF_PILE_3_ROUND_1', 'GF_PILE_3_ROUND_2']
+const REVEAL_PHASES: ArenaMatchPhase[] = ['REVEAL_PILE_1', 'REVEAL_PILE_2', 'REVEAL_PILE_3']
 
 export function projectArenaClientSnapshot(
   engine: ArenaMatchEngine,
@@ -139,6 +150,19 @@ export function projectArenaClientSnapshot(
       }
     : null
 
+  const reveal: ArenaClientSnapshotWire['reveal'] =
+    REVEAL_PHASES.includes(snapshot.phase) && detail.pileReveal
+      ? {
+          pile: detail.pileReveal.pile,
+          winnerSeat: seats.find(seat => seat.playerId === detail.pileReveal!.winnerId)?.seat ?? null,
+          winnerDisplayName: seats.find(seat => seat.playerId === detail.pileReveal!.winnerId)?.displayName ?? '???',
+          handName: detail.pileReveal.handRank,
+          cards: detail.pileReveal.cards,
+          highlightedCards: detail.pileReveal.highlightedCards,
+          payoutCrest: detail.pileReveal.payoutCrest,
+        }
+      : null
+
   return {
     matchId: snapshot.matchId, version: snapshot.version, phase: snapshot.phase, gameNumber: snapshot.gameNumber,
     phaseEndsAt: snapshot.deadlineAt,
@@ -150,6 +174,6 @@ export function projectArenaClientSnapshot(
     },
     communityCards,
     auction, joker, gf, bossPresentation,
-    result,
+    result, reveal,
   }
 }
