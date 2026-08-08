@@ -6,6 +6,12 @@ import { arenaAuctionBid, arenaGfDecision, arenaJokerDecision, estimateArenaWinr
 import { sorenAuctionBid, sorenGfDecision } from './arenaSorenPersonality'
 
 const FOUR_GODS_PERSONALITY: Partial<Record<string, ArenaPersonality>> = { REAPER: 'reaper', CRAG: 'crag', CORTEX: 'cortex', CIPHER: 'cipher' }
+// Nine Sentinels ที่เข้ามาเติมที่นั่ง FILL (แทน ARENA_MINION ทั่วไป — ดู arenaMatchmaking.ts's SENTINELS)
+// ก็เล่นมีบุคลิกจริงเหมือน Four Gods ไม่ใช่ policy ว่างอีกต่อไป
+const SENTINEL_PERSONALITY: Partial<Record<string, ArenaPersonality>> = {
+  IRON_WALL: 'iron_wall', CHIVALRY: 'chivalry', WAR_LORD: 'war_lord', PHANTOM: 'phantom',
+  DARK_SHARK: 'dark_shark', ORACLE: 'oracle', JESTER: 'jester', PHOENIX: 'phoenix', BLACK_MAGIC: 'black_magic',
+}
 
 function gfPileForPhase(phase: string): 2 | 3 | null {
   if (phase === 'GF_PILE_2') return 2
@@ -18,8 +24,9 @@ function estimateWinrateFor(engine: ArenaMatchEngine, actorId: string, pile: 1 |
   return hand ? estimateArenaWinrate(hand) : 0.5
 }
 
-// เฉพาะที่นั่ง Boss (role==='BOSS') เท่านั้นที่มีบุคลิก — ที่นั่งเติมโต๊ะ (ARENA_MINION/FILL) ยังใช้ policy ว่างเหมือนเดิม
-// (ตัวเติมโต๊ะธรรมดา ไม่ได้ตั้งใจให้เป็นคู่แข่งจริง)
+// ที่นั่ง Boss (role==='BOSS') มีบุคลิกเสมอ · ที่นั่งเติมโต๊ะ (role==='FILL') มีบุคลิกเฉพาะตอนเป็น Nine Sentinel
+// จริง (aiId อยู่ใน SENTINEL_PERSONALITY) — ตัวเติมโต๊ะแบบ ARENA_MINION ทั่วไป (เช่นจาก createHumanBossComposition
+// ที่ยังไม่ได้ใช้งานจริง) ยังใช้ policy ว่างเหมือนเดิม ไม่ได้ตั้งใจให้เป็นคู่แข่งจริง
 export function resolveArenaBotPolicy(
   engine: ArenaMatchEngine,
   composition: ArenaMatchComposition,
@@ -28,7 +35,9 @@ export function resolveArenaBotPolicy(
 ): ArenaBotPolicy {
   const seatIndex = engine.actorIds.indexOf(botActorId)
   const seat = composition.seats[seatIndex]
-  if (!seat || seat.controller !== 'AI' || seat.role !== 'BOSS') return {}
+  if (!seat || seat.controller !== 'AI') return {}
+  const isPersonalityDriven = seat.role === 'BOSS' || SENTINEL_PERSONALITY[seat.aiId] !== undefined
+  if (!isPersonalityDriven) return {}
 
   const phase = engine.snapshot().phase
   const gfPile = gfPileForPhase(phase)
@@ -52,7 +61,9 @@ export function resolveArenaBotPolicy(
     }
   }
 
-  const personality: ArenaPersonality | null = seat.aiId === 'MONARCH' ? engine.resolvedBossPersonality() : FOUR_GODS_PERSONALITY[seat.aiId] ?? null
+  const personality: ArenaPersonality | null = seat.aiId === 'MONARCH'
+    ? engine.resolvedBossPersonality()
+    : FOUR_GODS_PERSONALITY[seat.aiId] ?? SENTINEL_PERSONALITY[seat.aiId] ?? null
   if (!personality) return {}
 
   const joker = arenaJokerDecision(personality, availableCrest, requiredCrest, winrateForJoker, random)

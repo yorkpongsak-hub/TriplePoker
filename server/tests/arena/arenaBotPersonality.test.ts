@@ -85,6 +85,92 @@ describe('arenaJokerDecision', () => {
   })
 })
 
+// Nine Sentinels — พอร์ตจาก gameLoop.ts:896-934 (auction), gameLoop.ts:1669-1691 (GF, "ห้ามแก้ค่า")
+// ใช้เป็นตัวเติมที่นั่ง FILL แทน ARENA_MINION ทั่วไป (ดู arenaMatchmaking.ts's SENTINELS)
+describe('arenaAuctionBid — Nine Sentinels', () => {
+  test('DARK_SHARK ประมูลราคาสูงสุด (12) ทุกครั้งแบบ deterministic ไม่มี randomness เลย', () => {
+    const random = createSeededRandom(31)
+    for (let i = 0; i < 30; i++) expect(arenaAuctionBid('dark_shark', random)).toBe(12)
+  })
+
+  test('ORACLE ประมูลราคาเดียวคงที่ (9) ทุกครั้งแบบ deterministic', () => {
+    const random = createSeededRandom(32)
+    for (let i = 0; i < 30; i++) expect(arenaAuctionBid('oracle', random)).toBe(9)
+  })
+
+  test('WAR_LORD บิดเฉลี่ยสูงกว่า IRON_WALL (บุกไม่หยุด vs ระมัดระวัง)', () => {
+    const mean = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length
+    expect(mean(sampleBids('war_lord', 2000, 33))).toBeGreaterThan(mean(sampleBids('iron_wall', 2000, 34)))
+  })
+
+  test('CHIVALRY กับ PHOENIX บิดที่ level คงที่เสมอเวลาเข้าประมูล (9)', () => {
+    const random1 = createSeededRandom(35)
+    const chivalryBids = Array.from({ length: 300 }, () => arenaAuctionBid('chivalry', random1)).filter(value => value > 0)
+    expect(chivalryBids.every(value => value === 9)).toBe(true)
+    const random2 = createSeededRandom(36)
+    const phoenixBids = Array.from({ length: 300 }, () => arenaAuctionBid('phoenix', random2)).filter(value => value > 0)
+    expect(phoenixBids.every(value => value === 9)).toBe(true)
+  })
+})
+
+describe('arenaGfDecision — Nine Sentinels threshold canon (ห้ามแก้ค่าตาม MasterPlan v1.1)', () => {
+  test('IRON_WALL: Fold ถ้า winrate < 60%', () => {
+    expect(arenaGfDecision('iron_wall', 0.6, Math.random)).toBe('CALL')
+    expect(arenaGfDecision('iron_wall', 0.59, Math.random)).toBe('FOLD')
+  })
+  test('WAR_LORD: Call แม้ winrate ต่ำถึง 35%', () => {
+    expect(arenaGfDecision('war_lord', 0.35, Math.random)).toBe('CALL')
+    expect(arenaGfDecision('war_lord', 0.34, Math.random)).toBe('FOLD')
+  })
+  test('CHIVALRY / DARK_SHARK / ORACLE: threshold 50% ทั้งคู่', () => {
+    for (const personality of ['chivalry', 'dark_shark', 'oracle'] as ArenaPersonality[]) {
+      expect(arenaGfDecision(personality, 0.5, Math.random)).toBe('CALL')
+      expect(arenaGfDecision(personality, 0.49, Math.random)).toBe('FOLD')
+    }
+  })
+  test('BLACK_MAGIC: threshold 47.5%', () => {
+    expect(arenaGfDecision('black_magic', 0.475, Math.random)).toBe('CALL')
+    expect(arenaGfDecision('black_magic', 0.474, Math.random)).toBe('FOLD')
+  })
+  test('PHOENIX: bias +15% เหมือน Reaper แต่เบากว่า', () => {
+    const callRate = (personality: ArenaPersonality, seed: number) => {
+      const random = createSeededRandom(seed)
+      const decisions = Array.from({ length: 1000 }, () => arenaGfDecision(personality, 0.5, random))
+      return decisions.filter(decision => decision === 'CALL').length / decisions.length
+    }
+    // cortex ที่ winrate 0.5 deterministic call เสมอ (rate=1.0) เลยเทียบแค่ reaper vs phoenix ที่เป็น probabilistic ทั้งคู่
+    expect(callRate('reaper', 37)).toBeGreaterThan(callRate('phoenix', 38))
+  })
+  test('PHANTOM มี randomness (40% บลัฟ) ต่างจาก DARK_SHARK ที่ deterministic ล้วน', () => {
+    const random = createSeededRandom(40)
+    const decisions = new Set(Array.from({ length: 200 }, () => arenaGfDecision('phantom', 0.3, random)))
+    expect(decisions.size).toBe(2) // ต้องเห็นทั้ง CALL และ FOLD แม้ winrate ต่ำกว่า threshold ตลอด
+  })
+})
+
+describe('arenaJokerDecision — Nine Sentinels จัดกลุ่มตามบุคลิก (ไม่มี precedent เรื่อง Joker เหมือน Four Gods)', () => {
+  test('บุก/ดุ (war_lord, dark_shark, phoenix) เอียงไป ANTE_X2 เหมือน reaper', () => {
+    const random = createSeededRandom(41)
+    for (const personality of ['war_lord', 'dark_shark', 'phoenix'] as ArenaPersonality[]) {
+      expect(arenaJokerDecision(personality, 10, 6, 0.1, random).mode).toBe('ANTE_X2')
+      expect(arenaJokerDecision(personality, 3, 6, 0.99, random).mode).toBe('WILD')
+    }
+  })
+  test('ระวังตัว (iron_wall, black_magic) เลือก WILD เสมอเหมือน crag', () => {
+    const random = createSeededRandom(42)
+    for (const personality of ['iron_wall', 'black_magic'] as ArenaPersonality[]) {
+      for (let i = 0; i < 10; i++) expect(arenaJokerDecision(personality, 1000, 6, 0.99, random).mode).toBe('WILD')
+    }
+  })
+  test('คำนวณ EV นิ่งๆ (oracle, chivalry) ใช้เกณฑ์เดียวกับ cortex (winrate เป้าหมาย >= 0.6)', () => {
+    const random = createSeededRandom(43)
+    for (const personality of ['oracle', 'chivalry'] as ArenaPersonality[]) {
+      expect(arenaJokerDecision(personality, 10, 6, 0.8, random).mode).toBe('ANTE_X2')
+      expect(arenaJokerDecision(personality, 10, 6, 0.3, random).mode).toBe('WILD')
+    }
+  })
+})
+
 describe('lockArenaBossPersonality', () => {
   test('ขอบเขต quartile map ตรงกับ gameConfig.monarchConfig.handStrengthQuartile', () => {
     expect(lockArenaBossPersonality(0.9)).toBe('cortex')

@@ -7,8 +7,10 @@ export const tierSConfig = Object.freeze({
   tableSeats: 4,
   minimumHumans: 2,
   fastBossRollHumanCount: 3,
-  fastBossRollWindowSeconds: 60,
-  bossEncounterRate: 0.6,
+  // มติลุงเยาะ 2026-08-08: ยืดเวลารอคนที่ 3 จาก 60 วิ เป็น 3 นาที กันโต๊ะหลุดไปเจอ Minion บ่อยเกินไป
+  fastBossRollWindowSeconds: 180,
+  // มติลุงเยาะ 2026-08-08: ลดจาก 0.6 เหลือ 0.2 — ลดโอกาสเจอ Monarch/Soren ลง (Four Gods กลายเป็น 80% แทน)
+  bossEncounterRate: 0.2,
   dualBossRateWithinEncounterMax: 0.1,
   reconnectGraceSeconds: 8,
   quickReconnectWindowSeconds: 30,

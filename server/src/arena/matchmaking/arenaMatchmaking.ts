@@ -3,7 +3,9 @@ import { tierSConfig } from '../config/tierSConfig'
 import { checkTierSEligibility } from '../eligibility/tierSEligibility'
 
 export type FourGodId = 'REAPER' | 'CRAG' | 'CORTEX' | 'CIPHER'
-export type ArenaAIId = FourGodId | 'MONARCH' | 'SOREN' | 'ARENA_MINION'
+// Nine Sentinels (พอร์ตมาจาก Mastermind Conquest) — ใช้เป็นตัวเติมที่นั่ง FILL แทน ARENA_MINION ทั่วไป
+export type SentinelId = 'IRON_WALL' | 'CHIVALRY' | 'WAR_LORD' | 'PHANTOM' | 'DARK_SHARK' | 'ORACLE' | 'JESTER' | 'PHOENIX' | 'BLACK_MAGIC'
+export type ArenaAIId = FourGodId | 'MONARCH' | 'SOREN' | SentinelId | 'ARENA_MINION'
 export type ArenaSeatNumber = 1 | 2 | 3 | 4
 
 export interface ArenaHuman {
@@ -32,6 +34,7 @@ export type JoinArenaQueueResult =
   | { ok: false; reason: 'TOKEN_THRESHOLD_NOT_EXCEEDED' | 'ALREADY_JOINED' | 'QUEUE_FULL' | 'QUEUE_FINALIZED' }
 
 const FOUR_GODS: readonly FourGodId[] = ['REAPER', 'CRAG', 'CORTEX', 'CIPHER']
+const SENTINELS: readonly SentinelId[] = ['IRON_WALL', 'CHIVALRY', 'WAR_LORD', 'PHANTOM', 'DARK_SHARK', 'ORACLE', 'JESTER', 'PHOENIX', 'BLACK_MAGIC']
 
 function randomIndex(length: number, random: ArenaRandom): number {
   const roll = random()
@@ -129,7 +132,7 @@ export class ArenaMatchmakingQueue {
       : {
           queueId: this.queueId,
           kind: 'BOSS_ENCOUNTER',
-          seats: [humanSeat(1, this.humans[0].playerId), humanSeat(2, this.humans[1].playerId), aiSeat(3, boss, 'BOSS'), aiSeat(4, 'ARENA_MINION', 'FILL')],
+          seats: [humanSeat(1, this.humans[0].playerId), humanSeat(2, this.humans[1].playerId), aiSeat(3, boss, 'BOSS'), aiSeat(4, SENTINELS[randomIndex(SENTINELS.length, this.random)], 'FILL')],
           humanCount: 2,
           encounterRoll,
           finalizedAt: now,
@@ -150,7 +153,7 @@ export class ArenaMatchmakingQueue {
       : {
           queueId: this.queueId,
           kind: 'FOUR_GODS',
-          seats: [humanSeat(1, this.humans[0].playerId), humanSeat(2, this.humans[1].playerId), aiSeat(3, boss, 'BOSS'), aiSeat(4, 'ARENA_MINION', 'FILL')],
+          seats: [humanSeat(1, this.humans[0].playerId), humanSeat(2, this.humans[1].playerId), aiSeat(3, boss, 'BOSS'), aiSeat(4, SENTINELS[randomIndex(SENTINELS.length, this.random)], 'FILL')],
           humanCount: 2,
           encounterRoll,
           finalizedAt: now,
