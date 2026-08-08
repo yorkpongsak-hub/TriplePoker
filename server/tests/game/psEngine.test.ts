@@ -42,6 +42,10 @@ jest.mock('../../src/config/gameConfig', () => ({
       notWinNonNegative: 2,
       negative: 0,
       monarchMultiplier: 2,
+      grandmasterWin: 7,
+      grandmasterMonarchWin: 12,
+      grandmasterNotWinNonNegative: 4,
+      grandmasterNegative: 2,
     },
   },
 }))
@@ -129,5 +133,30 @@ describe('psEngine.awardPerformanceScore — Dual-Track (Career + Season)', () =
   test('humanNetDeltas ว่าง — ไม่เรียก supabase เลย', async () => {
     await awardPerformanceScore({ tier: 'highNoble', finalWinnerId: null, isMonarchMatch: false, humanNetDeltas: {} })
     expect(mockFrom).not.toHaveBeenCalled()
+  })
+
+  // Grandmaster (Tier S) — มติลุงเยาะ 2026-08-08: ทุกค่าของ High Noble บวก +2 อิสระต่อกัน (ไม่ใช่ x2)
+  test('Grandmaster: ผู้ชนะปกติ (Four Gods) ได้ +7 ทั้งสอง track', async () => {
+    mockResolvedValue = { data: [{ user_id: 'winner', performance_score: 0, ps_season: 0 }], error: null }
+    await awardPerformanceScore({ tier: 'grandmaster', finalWinnerId: 'winner', isMonarchMatch: false, humanNetDeltas: { winner: 100 } })
+    expect(updatedFieldsFor(currentBuilder, 'winner')).toEqual({ performance_score: 7, ps_season: 7 })
+  })
+
+  test('Grandmaster: ผู้ชนะเจอ Monarch/Soren ได้ +12 (ไม่ใช่ x2 ของ +7)', async () => {
+    mockResolvedValue = { data: [{ user_id: 'winner', performance_score: 0, ps_season: 0 }], error: null }
+    await awardPerformanceScore({ tier: 'grandmaster', finalWinnerId: 'winner', isMonarchMatch: true, humanNetDeltas: { winner: 100 } })
+    expect(updatedFieldsFor(currentBuilder, 'winner')).toEqual({ performance_score: 12, ps_season: 12 })
+  })
+
+  test('Grandmaster: ไม่ชนะแต่ net Crest ไม่ติดลบ ได้ +4', async () => {
+    mockResolvedValue = { data: [{ user_id: 'loser-positive', performance_score: 0, ps_season: 0 }], error: null }
+    await awardPerformanceScore({ tier: 'grandmaster', finalWinnerId: 'winner', isMonarchMatch: false, humanNetDeltas: { 'loser-positive': 0 } })
+    expect(updatedFieldsFor(currentBuilder, 'loser-positive')).toEqual({ performance_score: 4, ps_season: 4 })
+  })
+
+  test('Grandmaster: net Crest ติดลบ ได้ +2 (ต่างจาก Tier อื่นที่ได้ 0)', async () => {
+    mockResolvedValue = { data: [{ user_id: 'loser-negative', performance_score: 0, ps_season: 0 }], error: null }
+    await awardPerformanceScore({ tier: 'grandmaster', finalWinnerId: 'winner', isMonarchMatch: false, humanNetDeltas: { 'loser-negative': -50 } })
+    expect(updatedFieldsFor(currentBuilder, 'loser-negative')).toEqual({ performance_score: 2, ps_season: 2 })
   })
 })

@@ -10,7 +10,7 @@ import { supabaseAdmin } from '../config/supabase'
 import { handRankLabel } from './handEvaluator'
 import { BestHandCandidate } from './matchStatsService'
 
-export type MatchWinTier = 'initiate' | 'adept' | 'mastermind' | 'highNoble'
+export type MatchWinTier = 'initiate' | 'adept' | 'mastermind' | 'highNoble' | 'grandmaster'
 export type MatchWinMode = 'solo' | 'multiplayer'
 
 export interface MatchWinOpponent {

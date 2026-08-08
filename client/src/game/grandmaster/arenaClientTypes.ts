@@ -66,7 +66,7 @@ export interface ArenaClientSnapshot {
     atmosphere: string
     quote: string
   }
-  result: null | { title: string; lines: ArenaResultLine[]; netCrest: number }
+  result: null | { title: string; lines: ArenaResultLine[]; netCrest: number; psGained: number }
   reveal: null | {
     pile: 1 | 2 | 3
     winnerSeat: 1 | 2 | 3 | 4 | null

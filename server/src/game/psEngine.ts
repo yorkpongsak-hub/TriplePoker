@@ -12,7 +12,7 @@ import { supabaseAdmin } from '../config/supabase'
 import { gameConfig } from '../config/gameConfig'
 
 export interface AwardPerformanceScoreInput {
-  tier: 'highNoble' | 'ascendant'
+  tier: 'highNoble' | 'ascendant' | 'grandmaster'
   finalWinnerId: string | null            // userId ของผู้เล่นอันดับ 1 ในโต๊ะ ถ้าเป็น human — null ถ้า Boss ชนะ
   isMonarchMatch: boolean
   humanNetDeltas: Record<string, number>  // userId (human ทุกคนในโต๊ะ) -> net token delta ของทั้งแมตช์ (ก่อนคูณ Monarch)
@@ -24,9 +24,11 @@ export async function awardPerformanceScore(input: AwardPerformanceScoreInput): 
   if (userIds.length === 0) return
 
   const cfg = gameConfig.psConfig
-  const winPoints = input.isMonarchMatch
-    ? (input.tier === 'highNoble' ? cfg.highNobleMonarchWin : cfg.ascendantMonarchWin)
-    : (input.tier === 'highNoble' ? cfg.highNobleWin : cfg.ascendantWin)
+  const winPoints = input.tier === 'grandmaster'
+    ? (input.isMonarchMatch ? cfg.grandmasterMonarchWin : cfg.grandmasterWin)
+    : input.isMonarchMatch
+      ? (input.tier === 'highNoble' ? cfg.highNobleMonarchWin : cfg.ascendantMonarchWin)
+      : (input.tier === 'highNoble' ? cfg.highNobleWin : cfg.ascendantWin)
 
   const currentCareer: Record<string, number> = {}
   const currentSeason: Record<string, number> = {}
@@ -52,9 +54,11 @@ export async function awardPerformanceScore(input: AwardPerformanceScoreInput): 
 
   const rows = userIds.map(userId => {
     const netDelta = input.humanNetDeltas[userId]
+    const notWinNonNegative = input.tier === 'grandmaster' ? cfg.grandmasterNotWinNonNegative : cfg.notWinNonNegative
+    const notWinNegative = input.tier === 'grandmaster' ? cfg.grandmasterNegative : cfg.negative
     const gained = userId === input.finalWinnerId
       ? winPoints
-      : (netDelta >= 0 ? cfg.notWinNonNegative : cfg.negative)
+      : (netDelta >= 0 ? notWinNonNegative : notWinNegative)
     return {
       user_id: userId,
       performance_score: (currentCareer[userId] ?? 0) + gained,

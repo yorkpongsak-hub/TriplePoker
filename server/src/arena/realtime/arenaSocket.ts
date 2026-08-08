@@ -1,5 +1,7 @@
 import { Server, Socket } from 'socket.io'
 import { supabase, supabaseAdmin } from '../../config/supabase'
+import { awardPerformanceScore } from '../../game/psEngine'
+import { recordMatchWin } from '../../game/matchWinsService'
 import { resolveArenaBotPolicy } from '../ai/resolveArenaBotPolicy'
 import { bestArenaArrangement } from '../arrangement/arenaArrangement'
 import { buildArenaBotAction } from '../connection/arenaBotTakeover'
@@ -7,7 +9,7 @@ import { tierSEconomyConfig } from '../config/tierSConfig'
 import { ArenaCrestLedger } from '../economy/arenaCrestLedger'
 import { ArenaMatchAction } from '../match/arenaMatchEngine'
 import { ArenaSettlementPersistence } from '../settlement/arenaSettlementPersistence'
-import { projectArenaClientSnapshot } from './arenaProjection'
+import { projectArenaClientSnapshot, resolveArenaTableWinner } from './arenaProjection'
 import { ArenaRuntime, ArenaRuntimeMatch } from './arenaRuntime'
 
 interface ArenaIdentity { playerId: string; tokenBalance: number; tierUnlockedMax: string | null; displayName: string; avatar: string }
@@ -88,7 +90,49 @@ async function persistSettlement(match: ArenaRuntimeMatch): Promise<void> {
     } catch (error) {
       console.error('[Arena] match log persist failed:', error)
     }
+    await persistMatchEndStats(match)
     runtime.completeMatch(match.engine.matchId)
+  }
+}
+
+// Win history (match_wins) + Performance Score — เรียกครั้งเดียวต่อแมตช์ คู่กับ persistMatchLog ด้านบน
+// resolveArenaTableWinner เทียบ endingCrest ของทุก actor หาผู้ชนะอันดับ 1 จริงของโต๊ะ (human หรือ AI ก็ได้)
+async function persistMatchEndStats(match: ArenaRuntimeMatch): Promise<void> {
+  const { winnerId, isHumanWinner, isRareBoss } = resolveArenaTableWinner(match.engine, match.composition)
+  const breakdown = match.engine.settlementBreakdown()
+  const humanNetDeltas = Object.fromEntries(
+    breakdown.filter(entry => entry.persisted).map(entry => [entry.playerId, entry.netCrest]),
+  )
+
+  if (isHumanWinner) {
+    const winnerBreakdown = breakdown.find(entry => entry.playerId === winnerId)
+    if (winnerBreakdown) {
+      try {
+        await recordMatchWin({
+          userId: winnerId, tier: 'grandmaster', mode: 'multiplayer',
+          tokensWon: winnerBreakdown.netCrest,
+          isTripleSweep: winnerBreakdown.sweepJackpot > 0,
+          bestHand: null,
+          opponents: match.composition.seats
+            .filter((_, index) => match.engine.actorIds[index] !== winnerId)
+            .map(seat => ({
+              name: seat.controller === 'HUMAN' ? (identities.get(seat.playerId)?.displayName ?? 'Grandmaster') : seat.aiId.split('_').join(' '),
+              isHuman: seat.controller === 'HUMAN',
+            })),
+        })
+      } catch (error) {
+        console.error('[Arena] match win record failed:', error)
+      }
+    }
+  }
+
+  try {
+    await awardPerformanceScore({
+      tier: 'grandmaster', finalWinnerId: isHumanWinner ? winnerId : null,
+      isMonarchMatch: isRareBoss, humanNetDeltas,
+    })
+  } catch (error) {
+    console.error('[Arena] PS award failed:', error)
   }
 }
 

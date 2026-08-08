@@ -200,6 +200,10 @@ export default function ArenaOverlays({ snapshot, onIntent }: Props) {
               <Text style={styles.netLabel}>NET CROWN</Text>
               <Text style={styles.netValue}>{snapshot.result && snapshot.result.netCrest >= 0 ? '+' : ''}{snapshot.result?.netCrest} Cr</Text>
             </View>
+            <View style={styles.netRow}>
+              <Text style={styles.netLabel}>PS</Text>
+              <Text style={styles.netValue}>+{snapshot.result?.psGained}</Text>
+            </View>
             <Pressable
               onPress={() => router.replace('/(home)/lobby')}
               hitSlop={8}

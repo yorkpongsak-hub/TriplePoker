@@ -1,3 +1,4 @@
+import { gameConfig } from '../../config/gameConfig'
 import { arenaCardKey } from '../cards/arenaDeck'
 import { ArenaConnectionManager, ArenaConnectionView } from '../connection/arenaConnectionManager'
 import { tierSEconomyConfig } from '../config/tierSConfig'
@@ -40,7 +41,7 @@ export interface ArenaClientSnapshotWire {
   joker: null | { canChoose: boolean; anteX2Enabled: boolean; selectedMode?: 'WILD' | 'ANTE_X2'; selectedPile?: 1 | 2 | 3 }
   gf: null | { pile: 2 | 3; round: 1 | 2; localTurn: boolean; callCostCrest: number }
   bossPresentation: null | { bossId: 'MONARCH' | 'SOREN'; title: string; subtitle: string; atmosphere: string; quote: string }
-  result: null | { title: string; lines: Array<{ label: string; crest: number }>; netCrest: number }
+  result: null | { title: string; lines: Array<{ label: string; crest: number }>; netCrest: number; psGained: number }
   reveal: null | {
     pile: 1 | 2 | 3
     winnerSeat: 1 | 2 | 3 | 4 | null
@@ -87,6 +88,26 @@ const BOSS_PRESENTATION: Record<'MONARCH' | 'SOREN', { title: string; subtitle: 
 
 const GF_PHASES: ArenaMatchPhase[] = ['GF_PILE_2', 'GF_PILE_3_ROUND_1', 'GF_PILE_3_ROUND_2']
 const REVEAL_PHASES: ArenaMatchPhase[] = ['REVEAL_PILE_1', 'REVEAL_PILE_2', 'REVEAL_PILE_3']
+
+// เปรียบเทียบ endingCrest ของทุก actor ในโต๊ะ (human/AI ทั้งหมด) หาผู้ชนะอันดับ 1 จริง — ยังไม่เคยมี concept
+// นี้ใน Arena มาก่อน (ต่างจาก per-pile winner) ใช้ร่วมกันทั้งฝั่ง display (ที่นี่) และฝั่งบันทึก DB (arenaSocket.ts)
+// กันสองจุดตัดสินผู้ชนะไม่ตรงกัน — เหมือน pattern highNobleMultiEngine.ts's finalWinner
+export function resolveArenaTableWinner(
+  engine: ArenaMatchEngine,
+  composition: ArenaMatchComposition,
+): { winnerId: string; isHumanWinner: boolean; isRareBoss: boolean } {
+  const breakdown = engine.settlementBreakdown()
+  const winner = breakdown.reduce((a, b) => (b.endingCrest > a.endingCrest ? b : a))
+  const winnerSeatIndex = composition.seats.findIndex((_, index) => engine.actorIds[index] === winner.playerId)
+  const winnerSeat = winnerSeatIndex >= 0 ? composition.seats[winnerSeatIndex] : undefined
+  const bossSeat = composition.seats.find(seat => seat.seat === 3)
+  const bossAiId = bossSeat?.controller === 'AI' ? bossSeat.aiId : null
+  return {
+    winnerId: winner.playerId,
+    isHumanWinner: winnerSeat?.controller === 'HUMAN',
+    isRareBoss: bossAiId === 'MONARCH' || bossAiId === 'SOREN',
+  }
+}
 
 export function projectArenaClientSnapshot(
   engine: ArenaMatchEngine,
@@ -170,19 +191,27 @@ export function projectArenaClientSnapshot(
   const localBreakdown = breakdownByActor.get(viewerId)
 
   const result: ArenaClientSnapshotWire['result'] = snapshot.phase === 'MATCH_RESULT' && localBreakdown
-    ? {
-        title: 'MATCH COMPLETE',
-        lines: [
-          { label: 'Ante', crest: -localBreakdown.ante },
-          { label: 'Joker Extra Ante', crest: -localBreakdown.jokerExtraAnte },
-          { label: 'Auction', crest: -localBreakdown.auction },
-          { label: 'Call', crest: -localBreakdown.call },
-          { label: 'Boss Fee', crest: -localBreakdown.bossFee },
-          { label: 'Sweep Jackpot', crest: localBreakdown.sweepJackpot },
-          { label: 'Win / Loss', crest: localBreakdown.winLoss },
-        ],
-        netCrest: localBreakdown.netCrest,
-      }
+    ? (() => {
+        const { winnerId, isRareBoss } = resolveArenaTableWinner(engine, composition)
+        const psCfg = gameConfig.psConfig
+        const psGained = viewerId === winnerId
+          ? (isRareBoss ? psCfg.grandmasterMonarchWin : psCfg.grandmasterWin)
+          : (localBreakdown.netCrest >= 0 ? psCfg.grandmasterNotWinNonNegative : psCfg.grandmasterNegative)
+        return {
+          title: 'MATCH COMPLETE',
+          lines: [
+            { label: 'Ante', crest: -localBreakdown.ante },
+            { label: 'Joker Extra Ante', crest: -localBreakdown.jokerExtraAnte },
+            { label: 'Auction', crest: -localBreakdown.auction },
+            { label: 'Call', crest: -localBreakdown.call },
+            { label: 'Boss Fee', crest: -localBreakdown.bossFee },
+            { label: 'Sweep Jackpot', crest: localBreakdown.sweepJackpot },
+            { label: 'Win / Loss', crest: localBreakdown.winLoss },
+          ],
+          netCrest: localBreakdown.netCrest,
+          psGained,
+        }
+      })()
     : null
 
   const reveal: ArenaClientSnapshotWire['reveal'] =

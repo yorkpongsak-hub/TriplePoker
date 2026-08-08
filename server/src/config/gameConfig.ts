@@ -57,6 +57,22 @@ export const gameConfig = {
       free: 200,                // +200 Token เมื่อดูโฆษณาครั้งแรกของวัน
       vip:  300,                // +300 Token อัตโนมัติสำหรับ VIP
     },
+    // ได้เมื่อเล่นจบอย่างน้อย 1 แมตช์ในวันนั้น (Asia/Bangkok), ไม่ใช่แค่เปิดแอป
+    // วันที่ 7 จบรอบและวันถัดไปวนกลับวันที่ 1
+    playStreak: {
+      rewards: [
+        { token: 100, xp: 5 },
+        { token: 150, xp: 5 },
+        { token: 200, xp: 10 },
+        { token: 250, xp: 10 },
+        { token: 300, xp: 15 },
+        { token: 400, xp: 20 },
+        { token: 700, xp: 35 },
+      ],
+      cycleDays: 7,
+      maxShields: 2,
+      day7ShieldBonus: 1,
+    },
   },
 
   // ─── Token Pot ───────────────────────────────────────────────
@@ -269,6 +285,28 @@ export const gameConfig = {
     },
   },
 
+  // ─── VIP Plus 5-Player Economy Overrides ────────────────────
+  // Founder decision 2026-08-03: Initiate/Adept เดิมไม่มี Call จึงกำหนดค่าเฉพาะโหมดนี้
+  // ส่วน Mastermind ต้องอ่านจาก grandFinale.callAmount.mastermind ห้ามคัดลอกเลขมาซ้ำที่นี่
+  vipPlus5: {
+    callAmountOverrides: {
+      initiate: 50,
+      adept: 100,
+    },
+    // Batch 1 (VIP-05 fix) — grace ก่อนปล่อยที่นั่งเมื่อ disconnect ระหว่าง Waiting Chamber เท่านั้น
+    // (C2/C7) — หลังแมตช์เริ่มแล้ว Gate 8 (vipPlusMatchEngine.ts) คุมเองไม่เกี่ยวกับค่านี้
+    waitingSeatGraceMs: 60_000,
+    seatSweepIntervalMs: 10_000,
+    // Feedback ลุงเยาะ (เทสมือถือรอบ 1) — หน่วงก่อนไปกอง/เกมถัดไปหลัง settle ทุกกอง (G1/G2/G3) ให้เห็น
+    // ไพ่ผู้ชนะเต็มๆ ก่อน — server-authoritative จริง (ไม่ใช่ client overlay เฉยๆ) sync ทุก client พร้อมกัน
+    // ปรับ 10 วิ -> 6 วิ (เทสมือถือรอบ 3 — 10 วิรู้สึกนานเกินไป)
+    resultDisplayMs: 6_000,
+    // มติลุงเยาะ (รอบ 11) — ค่าธรรมเนียมท้ายแมตช์ทุกโต๊ะ VIP Plus 10% เก็บเฉพาะ "กำไรสุทธิที่เป็นบวก"
+    // ของแต่ละคน (finalStack - buyIn > 0 เท่านั้น) คนที่เสมอทุน/ขาดทุนไม่โดนหักเพิ่ม — แยกจาก rake ต่อกอง
+    // (tokenPot.rake) เดิม ดู finalizeVipPlusMatch ใน vipPlusMatchEngine.ts
+    matchEndProfitFeeRate: 0.10,
+  },
+
   // ─── Debt Recovery ───────────────────────────────────────────
   // จัดการเมื่อ Token < 0 หลัง Match จบ
   debtRecovery: {
@@ -402,6 +440,12 @@ export const gameConfig = {
     notWinNonNegative:   2,   // ไม่ชนะ แต่ token สุทธิของเกมนั้นไม่ติดลบ
     negative:            0,   // token สุทธิติดลบ — ไม่มี PS ติดลบใน Main App
     monarchMultiplier:   2,   // กฎล็อค: Monarch = x2 ของค่าชนะปกติในระดับตนเสมอ
+    // มติลุงเยาะ 2026-08-08: Grandmaster (Tier S) = ทุกค่าของ High Noble บวก +2 อิสระต่อกัน
+    // (ไม่ใช่ ×2 — highNobleMonarchWin×2=20 แต่ที่นี่คือ 10+2=12 ตั้งใจให้ต่างจากกฎ monarchMultiplier เดิม)
+    grandmasterWin:               7,
+    grandmasterMonarchWin:        12,  // ใช้ทั้ง Monarch และ Soren (บอสหายากของ Arena)
+    grandmasterNotWinNonNegative: 4,
+    grandmasterNegative:          2,
   },
 
   // ─── XP Rewards (End-of-Match Stats Recording MVP) ────────────
@@ -448,6 +492,37 @@ export const gameConfig = {
     ascendantPassPriceCrown:   20,         // ซื้อเพื่อเปิด Ascendant window (หรือ Instant Pass ถ้า token >= 1M อยู่แล้ว)
     arenaPassPriceCrown:       20,         // ซื้อเพื่อปลดล็อกเข้า Tier S / The Arena ถาวร — ด่านสุดท้ายบังคับทั้ง 2 เส้นทาง
     unlockCrownExchangeAtTier: 'highNoble' as const, // ต้องเคยปลด tier_unlocked_max ถึง highNoble ก่อนแลก Crown ได้
+  },
+
+  // ─── Merch Shop (มติลุงเยาะ 2026-08-04 — สินค้าจริง เสื้อ/ถ้วย/เหรียญรางวัล) ─────
+  // จ่ายด้วย Earned Crown เท่านั้น (Legal/Economy Rule #1 — Crown Package ใช้ได้เฉพาะ Crown Vault
+  // cosmetics เท่านั้น ห้ามใช้ซื้อสินค้าจริง) gate ด้วย tier_unlocked_max แบบเดียวกับ Competitive Items
+  // (ปลด Tier ไหนแล้วซื้อของ Tier นั้นได้ ไม่ต้องซื้อไล่ลำดับ) จัดส่งในประเทศไทยเท่านั้น
+  // ⚠️ single source of truth ราคา/แคตาล็อก — client (ShopScreen.tsx) ห้าม hardcode ราคาเอง
+  // ต้องดึงผ่าน GET /merch/catalog เท่านั้น (กัน bug 3-แหล่งขัดกันแบบ Auto Sort Fee เดิม)
+  merchConfig: {
+    catalog: [
+      { key: 'medal_initiate',    type: 'medal',  name: 'Initiate Medal',     tier: 'initiate',   priceCrown: 5 },
+      { key: 'trophy_initiate',   type: 'trophy', name: 'Initiate Trophy',    tier: 'initiate',   priceCrown: 10 },
+      { key: 'shirt_initiate',    type: 'shirt',  name: 'Initiate Shirt',     tier: 'initiate',   priceCrown: 15 },
+
+      { key: 'medal_adept',       type: 'medal',  name: 'Adept Medal',        tier: 'adept',      priceCrown: 8 },
+      { key: 'trophy_adept',      type: 'trophy', name: 'Adept Trophy',       tier: 'adept',      priceCrown: 15 },
+      { key: 'shirt_adept',       type: 'shirt',  name: 'Adept Shirt',        tier: 'adept',      priceCrown: 25 },
+
+      { key: 'medal_mastermind',  type: 'medal',  name: 'Mastermind Medal',   tier: 'mastermind', priceCrown: 12 },
+      { key: 'trophy_mastermind', type: 'trophy', name: 'Mastermind Trophy',  tier: 'mastermind', priceCrown: 25 },
+      { key: 'shirt_mastermind',  type: 'shirt',  name: 'Mastermind Shirt',   tier: 'mastermind', priceCrown: 40 },
+
+      { key: 'medal_highNoble',   type: 'medal',  name: 'High Noble Medal',   tier: 'highNoble',  priceCrown: 20 },
+      { key: 'trophy_highNoble',  type: 'trophy', name: 'High Noble Trophy',  tier: 'highNoble',  priceCrown: 40 },
+      { key: 'shirt_highNoble',   type: 'shirt',  name: 'High Noble Shirt',   tier: 'highNoble',  priceCrown: 60 },
+
+      { key: 'medal_grandmaster',  type: 'medal',  name: 'Grandmaster Medal',  tier: 'grandmaster', priceCrown: 35 },
+      { key: 'trophy_grandmaster', type: 'trophy', name: 'Grandmaster Trophy', tier: 'grandmaster', priceCrown: 70 },
+      { key: 'shirt_grandmaster',  type: 'shirt',  name: 'Grandmaster Shirt',  tier: 'grandmaster', priceCrown: 100 },
+    ] as { key: string; type: 'medal' | 'trophy' | 'shirt'; name: string; tier: 'initiate' | 'adept' | 'mastermind' | 'highNoble' | 'grandmaster'; priceCrown: number }[],
+    shippingCountry: 'TH' as const, // จัดส่งในประเทศไทยเท่านั้น (มติลุงเยาะ 2026-08-04)
   },
 
   // ─── Matchmaking Timeouts (LobbyMatchmaking_Spec_v1_1) ─────────

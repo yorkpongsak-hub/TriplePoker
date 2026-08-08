@@ -56,6 +56,7 @@ function previewSnapshot(mode?: string): ArenaClientSnapshot {
         { label: 'Win / Loss', crest: 66 },
       ],
       netCrest: 21,
+      psGained: 7,
     } : null,
     reveal: phase === 'REVEAL_PILE_2' ? {
       pile: 2, winnerSeat: 2, winnerDisplayName: 'Cipher Veil', handName: 'full_house',
