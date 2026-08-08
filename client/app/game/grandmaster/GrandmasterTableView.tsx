@@ -14,6 +14,8 @@ interface Props { snapshot: ArenaClientSnapshot; onIntent: (intent: ArenaClientI
 
 type ArrangingPhase = 'ARRANGE_1' | 'FINAL_ARRANGE' | 'FINAL_LOCK'
 const ARRANGING_PHASES: ArrangingPhase[] = ['ARRANGE_1', 'FINAL_ARRANGE', 'FINAL_LOCK']
+// ต้องตรงกับ styles.communityCard.height เสมอ — ใช้เลื่อนกองกลางขึ้นบนอีก 1 เท่าของความสูงไพ่กองกลาง
+const COMMUNITY_CARD_HEIGHT = 49
 
 const cardView = (code: string, hidden = false) => (
   <View key={code} style={styles.communityCard}>
@@ -152,7 +154,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
           {renderSeat(otherChallengerSeats[1], 'right')}
           {renderSeat(local.seat, 'bottom')}
 
-          <View style={styles.centerBoard}>
+          <View style={[styles.centerBoard, { top: height * 0.31 - COMMUNITY_CARD_HEIGHT }]}>
             <View style={styles.pileRow}>
               {([1, 2, 3] as const).map(pile => {
                 const cards = snapshot.communityCards[`pile${pile}`]
@@ -248,7 +250,7 @@ const styles = StyleSheet.create({
   seatName: { color: '#F5F2E8', fontSize: 9, fontWeight: '900', maxWidth: 100 },
   seatBalance: { color: '#FFD76A', fontSize: 7, marginTop: 1 },
   seatStatus: { color: '#FF8A8A', fontSize: 6, fontWeight: '800', maxWidth: 100 },
-  centerBoard: { position: 'absolute', alignSelf: 'center', top: '31%', alignItems: 'center' },
+  centerBoard: { position: 'absolute', alignSelf: 'center', alignItems: 'center' },
   pileRow: { flexDirection: 'row', gap: 12, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 18, backgroundColor: 'rgba(3,12,7,0.57)' },
   pile: { alignItems: 'center', minWidth: 76 },
   pileTitle: { color: '#FFD76A', fontSize: 8, fontWeight: '900', marginBottom: 4 },

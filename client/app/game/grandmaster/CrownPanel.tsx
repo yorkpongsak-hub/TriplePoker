@@ -23,7 +23,7 @@ export default function CrownPanel({ value }: { value: ArenaCrownView }) {
 }
 
 const styles = StyleSheet.create({
-  panel: { width: 146, padding: 9, borderRadius: 10, backgroundColor: 'rgba(7,18,12,0.91)', borderWidth: 1, borderColor: 'rgba(255,215,106,0.55)' },
+  panel: { alignSelf: 'flex-start', padding: 9, borderRadius: 10, backgroundColor: 'rgba(7,18,12,0.91)', borderWidth: 1, borderColor: 'rgba(255,215,106,0.55)' },
   title: { color: '#FFD76A', fontSize: 9, letterSpacing: 1.4, fontWeight: '900', marginBottom: 5 },
   row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2 },
   totalRow: { borderTopWidth: 1, borderTopColor: 'rgba(255,215,106,0.25)', marginTop: 3, paddingTop: 5 },

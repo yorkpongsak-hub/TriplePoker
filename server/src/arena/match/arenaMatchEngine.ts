@@ -134,10 +134,16 @@ export class ArenaMatchEngine {
     this.humanActorIds = composition.seats
       .map((seat, index) => seat.controller === 'HUMAN' ? this.actorIds[index] : null)
       .filter((id): id is string => id !== null)
+    // AI/บอททุกที่นั่ง (Boss หรือ Arena Minion) ได้ยอด Crest ตั้งต้นเท่ากับ human's worst-case reservation
+    // เป๊ะ (requiredReservationCrest = 19 Crown) แทนเลขลอยๆ 100,000 เดิม — ตัวเลขนี้ถูกออกแบบ/เทสไว้แล้วว่า
+    // ครอบคลุม worst-case ค่าใช้จ่ายผันแปรทั้งแมตช์ (Ante+Joker x2 / Auction ชนะทุกรอบ / GF Call ทุกกอง)
+    // จึงปลอดภัยพอสำหรับบอทเหมือนกับที่ปลอดภัยพอสำหรับ human — และแสดงผลบนโต๊ะแล้วดูสมเหตุสมผล ไม่ใช่ยอด
+    // ลอยๆ ที่ไม่มีความหมายในเชิงเศรษฐกิจแบบเดิม (100,000 เคยทำให้ Boss/Arena Minion โชว์ ~8,333 Crown)
     const balances: Record<string, number | SettlementAccount> = startingBalances ?? Object.fromEntries(
-      this.actorIds.map(id => [id, this.humanActorIds.includes(id)
-        ? { balanceCrest: tierSEconomyConfig.requiredReservationCrest, persisted: true }
-        : { balanceCrest: 100_000, persisted: false }]),
+      this.actorIds.map(id => [id, {
+        balanceCrest: tierSEconomyConfig.requiredReservationCrest,
+        persisted: this.humanActorIds.includes(id),
+      }]),
     )
     this.settlement = new ArenaSettlementEngine(balances)
     this.setDeadline(startedAt)

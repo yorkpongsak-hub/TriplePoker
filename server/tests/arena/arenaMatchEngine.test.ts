@@ -100,7 +100,7 @@ describe('Gate 5 - end-to-end Arena match state machine', () => {
   // ลดจำนวน seed จาก 1,000 เหลือ 6 เพื่อให้ชุดเทสรันจบในเวลาที่สมเหตุสมผล — รวม assertion ของ completion +
   // settlement conservation ไว้ในลูปเดียวกัน (แทนที่จะรัน playMatch ซ้ำสองรอบสำหรับสองเทสแยกกัน)
   test('จำลอง 6 Matches: ทุก Match ต้องจบครบสาม Games และ Settlement conservation คงที่', () => {
-    const startingTotal = 3 * 228 + 100_000 // p1/p2/p3 = requiredReservationCrest, AI boss = virtual balance non-persisted
+    const startingTotal = 4 * 228 // p1/p2/p3 + AI boss ทั้งหมดเริ่มที่ requiredReservationCrest เท่ากันแล้ว
     for (let seed = 1; seed <= 6; seed++) {
       const engine = playMatch(seed)
       expect(engine.snapshot().gameNumber).toBe(3)
