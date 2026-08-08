@@ -146,6 +146,59 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
     expect(afterReveal.communityCards.pile3[1]).not.toBe('')
   })
 
+  test('auctionDisplay เห็นได้ทุกคนตลอดช่วงประมูล (ต่างจาก auction ที่เห็นเฉพาะคนกำลังบิดตาตัวเอง) และเป็น null นอกช่วงนั้น', () => {
+    const engine = new ArenaMatchEngine('m2c', composition, createSeededRandom(2), 0)
+    reserveAll(engine, 1)
+    for (const actorId of engine.snapshot().pendingActorIds) {
+      engine.submit({ type: 'ARRANGE_1', actionId: `arrange-${actorId}`, actorId, ...arrangementFor(engine, actorId) }, 2)
+    }
+    expect(engine.snapshot().phase).toBe('AUCTION_FACE_UP')
+    const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
+    const deal = engine.currentDeal()!
+    const expectedFaceUp = arenaCardKey(deal.auction.faceUp)
+
+    // ก่อน bid: p1 กำลัง bid ตาตัวเอง (auction ไม่ null) — auctionDisplay ก็ต้องไม่ null เหมือนกัน
+    const beforeBid = projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, new Map())
+    expect(beforeBid.auctionDisplay).toEqual({ faceUpCard: expectedFaceUp })
+    engine.submit({ type: 'FACE_UP_BID', actionId: 'bid-p1', actorId: 'p1', amountCrest: 0 }, 3)
+    // หลัง p1 bid แล้ว: auction (ของ p1) เป็น null แต่ auctionDisplay ต้องยังไม่ null เพราะทุกคนต้องเห็นไพ่ประมูลตลอด
+    const afterBid = projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, new Map())
+    expect(afterBid.auction).toBeNull()
+    expect(afterBid.auctionDisplay).toEqual({ faceUpCard: expectedFaceUp })
+    // p2 ยังไม่ได้ bid เลย (ไม่ pending สำหรับ auction ของ p1) ก็ต้องเห็น auctionDisplay เหมือนกัน
+    const p2View = projectArenaClientSnapshot(engine, composition, connections, 'p2', 10, new Map())
+    expect(p2View.auctionDisplay).toEqual({ faceUpCard: expectedFaceUp })
+
+    // ก่อนเข้า auction เลย (ARRANGE_1) ต้องเป็น null
+    const engine2 = new ArenaMatchEngine('m2d', composition, createSeededRandom(2), 0)
+    reserveAll(engine2, 1)
+    expect(engine2.snapshot().phase).toBe('ARRANGE_1')
+    expect(projectArenaClientSnapshot(engine2, composition, connections, 'p1', 10, new Map()).auctionDisplay).toBeNull()
+  })
+
+  test('pilesResolved: false ทุกกองตอนต้นเกม แล้วเป็น true ทีละกองตามลำดับที่ resolve จริง (แยก engine ต่อ checkpoint กัน driveTo ต่อกันซ้ำ actionId เดิม)', () => {
+    const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
+
+    const fresh = new ArenaMatchEngine('m2e-fresh', composition, createSeededRandom(1), 0)
+    reserveAll(fresh, 1)
+    expect(projectArenaClientSnapshot(fresh, composition, connections, 'p1', 10, new Map()).pilesResolved)
+      .toEqual({ pile1: false, pile2: false, pile3: false })
+
+    const afterPile1 = new ArenaMatchEngine('m2e-p1', composition, createSeededRandom(1), 0)
+    reserveAll(afterPile1, 1)
+    driveTo(afterPile1, 'REVEAL_PILE_1')
+    expect(projectArenaClientSnapshot(afterPile1, composition, connections, 'p1', 10, new Map()).pilesResolved)
+      .toEqual({ pile1: true, pile2: false, pile3: false })
+
+    const afterPile2 = new ArenaMatchEngine('m2e-p2', composition, createSeededRandom(1), 0)
+    reserveAll(afterPile2, 1)
+    driveTo(afterPile2, 'REVEAL_PILE_2')
+    if (!afterPile2.snapshot().completed) {
+      expect(projectArenaClientSnapshot(afterPile2, composition, connections, 'p1', 10, new Map()).pilesResolved)
+        .toEqual({ pile1: true, pile2: true, pile3: false })
+    }
+  })
+
   test('connection view ส่งต่อจาก ArenaConnectionManager ตรงๆ', () => {
     const engine = new ArenaMatchEngine('m3', composition, createSeededRandom(3), 0)
     const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])

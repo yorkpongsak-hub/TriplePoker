@@ -17,6 +17,12 @@ type ArrangingPhase = 'ARRANGE_1' | 'FINAL_ARRANGE' | 'FINAL_LOCK'
 const ARRANGING_PHASES: ArrangingPhase[] = ['ARRANGE_1', 'FINAL_ARRANGE', 'FINAL_LOCK']
 // ต้องตรงกับ styles.communityCard.height เสมอ — ใช้เลื่อนกองกลางขึ้นบนอีก 1 เท่าของความสูงไพ่กองกลาง
 const COMMUNITY_CARD_HEIGHT = 49
+// จำนวนไพ่ต่อกอง (นับทุกที่นั่งรวม Fold/Foul ตามมติลุงเยาะ — "จำนวนไพ่บนจอทั้งหงายคว่ำต้องครบ") โต๊ะ Arena
+// มี 4 ที่นั่งตายตัวเสมอ (tierSConfig's tableSeats) — pile3 = 5 ใบเสมอหลัง Discard (11 ใบ = 3+3+5)
+const PILE_SIZES: Record<1 | 2 | 3, number> = { 1: 3, 2: 3, 3: 5 }
+const STACK_SEAT_COUNT = 4
+const STACK_CARD_W = 22
+const STACK_CARD_H = 32
 
 const cardView = (code: string, hidden = false) => (
   <View key={code} style={styles.communityCard}>
@@ -170,16 +176,42 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
           {renderSeat(otherChallengerSeats[1], 'right')}
           {renderSeat(local.seat, 'bottom')}
 
+          {/* ไพ่ประมูล — ต้องเห็นได้ทุกคนตลอดช่วงประมูล ไม่ใช่แค่คนกำลังบิดตาตัวเอง (มติลุงเยาะ) ใบเปิดซ้าย
+              ใบปิด (Blind) 2 ใบขวา แสดงแค่หลังไพ่เสมอ (คงหลังไพ่ Blind Auction ไว้ตามกฎเดิม ไม่ใช่บั๊ก) */}
+          {snapshot.auctionDisplay && (
+            <View style={[styles.auctionRow, { top: height * 0.31 - COMMUNITY_CARD_HEIGHT - 78 }]}>
+              <View style={styles.auctionSide}>
+                <Text style={styles.auctionLabel}>FACE-UP</Text>
+                <View style={styles.cardsRow}>{cardView(snapshot.auctionDisplay.faceUpCard)}</View>
+              </View>
+              <View style={styles.auctionSide}>
+                <Text style={styles.auctionLabel}>BLIND</Text>
+                <View style={styles.cardsRow}>{cardView('blind0', true)}{cardView('blind1', true)}</View>
+              </View>
+            </View>
+          )}
+
           <View style={[styles.centerBoard, { top: height * 0.31 - COMMUNITY_CARD_HEIGHT }]}>
             <View style={styles.pileRow}>
               {([1, 2, 3] as const).map(pile => {
                 const cards = snapshot.communityCards[`pile${pile}`]
                 const pot = snapshot.crown[`pile${pile}PotCrest`]
+                const resolved = snapshot.pilesResolved[`pile${pile}`]
+                const stackCount = PILE_SIZES[pile] * STACK_SEAT_COUNT
                 return (
                   <View key={pile} style={styles.pile}>
                     <Text style={styles.pileTitle}>PILE {pile}</Text>
                     <View style={styles.cardsRow}>{cards.map(code => cardView(code))}</View>
                     <Text style={styles.pot}>{pot} Crest</Text>
+                    {/* กองไพ่คว่ำสะสมของกองที่จบแล้ว — ไพ่ทุกที่นั่ง (รวม Fold/Foul) ไม่ใช่แค่ผู้ชนะ เพราะคว่ำ
+                        อยู่แล้วไม่ผิดกฎ Fog of War แค่ต้องนับจำนวนให้ครบ (มติลุงเยาะ) เลื่อนแกน Y ใบละ 10px */}
+                    {resolved && (
+                      <View style={[styles.pileStackWrap, { height: STACK_CARD_H + (stackCount - 1) * 10 }]}>
+                        {Array.from({ length: stackCount }).map((_, index) => (
+                          <Image key={index} source={CARD_BACK_IMG} style={[styles.pileStackCard, { top: index * 10 }]} resizeMode="cover" />
+                        ))}
+                      </View>
+                    )}
                   </View>
                 )
               })}
@@ -273,6 +305,12 @@ const styles = StyleSheet.create({
   seatBalance: { color: '#FFD76A', fontSize: 7, marginTop: 1 },
   seatStatus: { color: '#FF8A8A', fontSize: 6, fontWeight: '800', maxWidth: 100 },
   centerBoard: { position: 'absolute', alignSelf: 'center', alignItems: 'center' },
+  auctionRow: {
+    position: 'absolute', alignSelf: 'center', flexDirection: 'row', gap: 20,
+    paddingHorizontal: 14, paddingVertical: 6, borderRadius: 14, backgroundColor: 'rgba(3,12,7,0.57)',
+  },
+  auctionSide: { alignItems: 'center' },
+  auctionLabel: { color: '#FFD76A', fontSize: 7, fontWeight: '900', letterSpacing: 1, marginBottom: 3 },
   pileRow: { flexDirection: 'row', gap: 12, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 18, backgroundColor: 'rgba(3,12,7,0.57)' },
   pile: { alignItems: 'center', minWidth: 76 },
   pileTitle: { color: '#FFD76A', fontSize: 8, fontWeight: '900', marginBottom: 4 },
@@ -282,6 +320,11 @@ const styles = StyleSheet.create({
   communityJoker: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#160C1E' },
   communityJokerText: { color: '#FFD76A', fontSize: 7, fontWeight: '900', transform: [{ rotate: '-90deg' }] },
   pot: { color: '#8DFFB5', fontSize: 7, fontWeight: '800', marginTop: 3 },
+  pileStackWrap: { marginTop: 6, width: STACK_CARD_W, alignSelf: 'center' },
+  pileStackCard: {
+    position: 'absolute', width: STACK_CARD_W, height: STACK_CARD_H, borderRadius: 3,
+    borderWidth: 1, borderColor: 'rgba(255,215,106,0.4)', backgroundColor: '#091808',
+  },
   battleBadge: { marginTop: 7, paddingHorizontal: 14, paddingVertical: 5, borderRadius: 12, backgroundColor: 'rgba(22,12,30,0.9)', borderWidth: 1, borderColor: '#B982FF', alignItems: 'center' },
   battleLabel: { color: '#C8A1FF', fontSize: 7, fontWeight: '900', letterSpacing: 1 },
   battleValue: { color: '#F5F2E8', fontSize: 10, fontWeight: '900' },

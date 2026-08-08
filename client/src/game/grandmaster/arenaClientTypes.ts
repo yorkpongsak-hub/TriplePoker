@@ -52,6 +52,11 @@ export interface ArenaClientSnapshot {
   crown: ArenaCrownView
   communityCards: { pile1: string[]; pile2: string[]; pile3: string[] }
   auction: null | { round: 'FACE_UP' | 'BLIND'; faceUpCard?: string; bidOptionsCrest: number[]; locked: boolean }
+  // เห็นได้ทุกคนตลอดช่วงประมูล (ต่างจาก auction ด้านบนที่เห็นเฉพาะคนกำลังบิดตาตัวเอง) — ไพ่ปิด 2 ใบไม่มีข้อมูล
+  // ส่งมาเลย (คงหลังไพ่ไว้ตามกฎ Blind Auction) render แค่ backs คงที่ 2 ใบเสมอที่ client
+  auctionDisplay: null | { faceUpCard: string }
+  // true ทันทีที่กองนั้น resolve แล้วคงเป็น true ต่อไปตลอดเกมนั้น
+  pilesResolved: { pile1: boolean; pile2: boolean; pile3: boolean }
   joker: null | { canChoose: boolean; anteX2Enabled: boolean; selectedMode?: 'WILD' | 'ANTE_X2'; selectedPile?: 1 | 2 | 3 }
   gf: null | { pile: 2 | 3; round: 1 | 2; localTurn: boolean; callCostCrest: number }
   bossPresentation: null | {

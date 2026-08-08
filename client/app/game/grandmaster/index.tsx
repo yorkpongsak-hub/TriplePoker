@@ -26,6 +26,12 @@ function previewSnapshot(mode?: string): ArenaClientSnapshot {
     crown: { pile1PotCrest: 12, pile2PotCrest: 15, pile3PotCrest: 24, battleRewardsCrest: 18, tableTotalCrest: 954, localBalanceCrest: 246 },
     communityCards: { pile1: ['ah', '10h'], pile2: ['ks', 'kd'], pile3: ['qc', 'JOKER'] },
     auction: phase === 'AUCTION_BLIND' ? { round: 'BLIND', bidOptionsCrest: [0, 3, 6, 9, 12], locked: false } : null,
+    auctionDisplay: phase === 'AUCTION_BLIND' ? { faceUpCard: 'ah' } : null,
+    pilesResolved: {
+      pile1: phase !== 'ARRANGE_1' && phase !== 'AUCTION_BLIND',
+      pile2: phase === 'REVEAL_PILE_2' || phase === 'MATCH_RESULT',
+      pile3: phase === 'MATCH_RESULT',
+    },
     joker: phase === 'JOKER_DECLARE' ? { canChoose: true, anteX2Enabled: true } : null,
     gf: phase === 'GF_PILE_3_ROUND_1' ? { pile: 3, round: 1, localTurn: true, callCostCrest: 3 } : null,
     bossPresentation: mode === 'boss' ? {

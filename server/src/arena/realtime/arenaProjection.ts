@@ -32,6 +32,11 @@ export interface ArenaClientSnapshotWire {
   crown: { pile1PotCrest: number; pile2PotCrest: number; pile3PotCrest: number; battleRewardsCrest: number; tableTotalCrest: number; localBalanceCrest: number }
   communityCards: { pile1: string[]; pile2: string[]; pile3: string[] }
   auction: null | { round: 'FACE_UP' | 'BLIND'; faceUpCard?: string; bidOptionsCrest: number[]; locked: boolean }
+  // เห็นได้ทุกคนเสมอตลอดช่วงประมูล (ไม่ผูก viewerPending แบบ `auction` ด้านบนที่ gate เฉพาะคนกำลังบิดตาตัวเอง) —
+  // ไพ่ใบเปิดจริง + จำนวนไพ่ปิด 2 ใบคงที่ (ไม่ส่งข้อมูลไพ่ปิดเลย กันหลุด fog of war ของ Blind Auction)
+  auctionDisplay: null | { faceUpCard: string }
+  // true ทันทีที่กองนั้น resolve แล้วคงเป็น true ต่อไปตลอดเกมนั้น (reset พร้อม pile1WinnerId ตอนเกมใหม่)
+  pilesResolved: { pile1: boolean; pile2: boolean; pile3: boolean }
   joker: null | { canChoose: boolean; anteX2Enabled: boolean; selectedMode?: 'WILD' | 'ANTE_X2'; selectedPile?: 1 | 2 | 3 }
   gf: null | { pile: 2 | 3; round: 1 | 2; localTurn: boolean; callCostCrest: number }
   bossPresentation: null | { bossId: 'MONARCH' | 'SOREN'; title: string; subtitle: string; atmosphere: string; quote: string }
@@ -133,6 +138,17 @@ export function projectArenaClientSnapshot(
       ? { round: snapshot.phase === 'AUCTION_FACE_UP' ? 'FACE_UP' : 'BLIND', faceUpCard: arenaCardKey(deal.auction.faceUp), bidOptionsCrest: [...tierSEconomyConfig.auctionBidOptionsCrest], locked: false }
       : null
 
+  const auctionDisplay: ArenaClientSnapshotWire['auctionDisplay'] =
+    deal && (snapshot.phase === 'AUCTION_FACE_UP' || snapshot.phase === 'AUCTION_BLIND')
+      ? { faceUpCard: arenaCardKey(deal.auction.faceUp) }
+      : null
+
+  const pilesResolved: ArenaClientSnapshotWire['pilesResolved'] = {
+    pile1: detail.pile1WinnerId !== null,
+    pile2: detail.pile2WinnerId !== null,
+    pile3: detail.pile3WinnerId !== null,
+  }
+
   const joker: ArenaClientSnapshotWire['joker'] =
     snapshot.phase === 'JOKER_DECLARE' && detail.jokerOwnerId === viewerId && !detail.jokerDeclaration
       ? { canChoose: true, anteX2Enabled: true }
@@ -192,7 +208,7 @@ export function projectArenaClientSnapshot(
       localBalanceCrest: localBreakdown?.endingCrest ?? 0,
     },
     communityCards,
-    auction, joker, gf, bossPresentation,
-    result, reveal,
+    auction, auctionDisplay, joker, gf, bossPresentation,
+    result, reveal, pilesResolved,
   }
 }
