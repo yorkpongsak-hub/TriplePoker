@@ -127,6 +127,25 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
     expect(stillPending.auction).not.toBeNull()
   })
 
+  test('communityCards.pile3 ส่งมาครบ 2 ช่องเสมอ — ใบที่ 2 เป็น "" (placeholder หลังไพ่) จนกว่าจะหงายจริงหลังประมูลรอบสอง', () => {
+    const engine = new ArenaMatchEngine('m2b', composition, createSeededRandom(2), 0)
+    reserveAll(engine, 1)
+    for (const actorId of engine.snapshot().pendingActorIds) {
+      engine.submit({ type: 'ARRANGE_1', actionId: `arrange-${actorId}`, actorId, ...arrangementFor(engine, actorId) }, 2)
+    }
+    expect(engine.snapshot().phase).toBe('AUCTION_FACE_UP')
+    const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
+    const beforeReveal = projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, new Map())
+    expect(beforeReveal.communityCards.pile3).toHaveLength(2)
+    expect(beforeReveal.communityCards.pile3[1]).toBe('')
+
+    driveTo(engine, 'FINAL_ARRANGE')
+    expect(engine.snapshot().phase).toBe('FINAL_ARRANGE')
+    const afterReveal = projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, new Map())
+    expect(afterReveal.communityCards.pile3).toHaveLength(2)
+    expect(afterReveal.communityCards.pile3[1]).not.toBe('')
+  })
+
   test('connection view ส่งต่อจาก ArenaConnectionManager ตรงๆ', () => {
     const engine = new ArenaMatchEngine('m3', composition, createSeededRandom(3), 0)
     const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])

@@ -121,8 +121,10 @@ export function projectArenaClientSnapshot(
   const communityCards = {
     pile1: deal ? deal.community.pile1.map(arenaCardKey) : [],
     pile2: deal ? deal.community.pile2.map(arenaCardKey) : [],
+    // การ์ดใบที่ 2 ของกอง 3 ต้องส่งมาเสมอ (แม้ยังไม่หงาย) ให้ client รู้ว่ามี 2 ใบจริง — ส่ง '' แทนตอนยังไม่
+    // เปิดเผย (ไม่ใช่ตัดออกจาก array เหมือนเดิม) client's cardView ไม่เจอ CARD_IMG[''] จะ fallback เป็นหลังไพ่เอง
     pile3: deal
-      ? [deal.community.pile3[0], ...(atOrAfter(snapshot.phase, 'REVEAL_PILE3_COMMUNITY_CARD_2') ? [deal.community.pile3[1]] : [])].filter(Boolean).map(card => arenaCardKey(card!))
+      ? [arenaCardKey(deal.community.pile3[0]), atOrAfter(snapshot.phase, 'REVEAL_PILE3_COMMUNITY_CARD_2') ? arenaCardKey(deal.community.pile3[1]) : '']
       : [],
   }
 

@@ -113,20 +113,33 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
     if (!seat) return null
     if (seat.isLocal && arrangingPhase) return <View style={[styles.seat, styles[placement]]}><SeatLabel seat={seat} /></View>
     const side = placement === 'left' || placement === 'right'
+    const hand = (
+      <View style={side && (placement === 'left' ? styles.rotateLeft : styles.rotateRight)}>
+        <FanHand
+          cards={seat.cards}
+          cardCount={seat.cardCount}
+          faceUp={seat.isLocal}
+          compact={!seat.isLocal}
+          width={seat.isLocal ? Math.min(width * 0.7, 420) : 190}
+          disabled={!seat.isLocal}
+          onCardPress={cardId => onIntent({ type: 'SELECT_CARD', cardId })}
+        />
+      </View>
+    )
+    // มติลุงเยาะ: ไพ่ในมือ P1 (ตัวเอง) ต้องอยู่เหนือรายชื่อ/Avatar เสมอ ห่างจากขอบล่างไพ่ไม่น้อยกว่า 30px —
+    // สลับลำดับเฉพาะที่นั่งตัวเอง คู่ต่อสู้คนอื่นยังคงชื่ออยู่บนไพ่เหมือนเดิม (ยังต้องแยกจาก reference ใหม่)
+    if (seat.isLocal) {
+      return (
+        <View style={[styles.seat, styles[placement]]}>
+          <View style={styles.localHandGap}>{hand}</View>
+          <SeatLabel seat={seat} />
+        </View>
+      )
+    }
     return (
       <View style={[styles.seat, styles[placement]]}>
         <SeatLabel seat={seat} />
-        <View style={side && (placement === 'left' ? styles.rotateLeft : styles.rotateRight)}>
-          <FanHand
-            cards={seat.cards}
-            cardCount={seat.cardCount}
-            faceUp={seat.isLocal}
-            compact={!seat.isLocal}
-            width={seat.isLocal ? Math.min(width * 0.7, 420) : 190}
-            disabled={!seat.isLocal}
-            onCardPress={cardId => onIntent({ type: 'SELECT_CARD', cardId })}
-          />
-        </View>
+        {hand}
       </View>
     )
   }
@@ -185,7 +198,11 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
               <Text style={styles.arrangeSub}>Tap a card, then tap another to swap. Pile 1 must not beat Pile 2; Pile 2 must not beat Pile 3.</Text>
               <PlayerHandView piles={piles} selected={selectedCard} onCardPress={handleArrangeCardPress} isVip={false} />
               <Pressable onPress={confirmArrangement} hitSlop={10} style={({ pressed }) => [styles.primaryAction, pressed && styles.primaryActionPressed]}>
-                <Text style={styles.primaryActionText}>{arrangingPhase === 'FINAL_LOCK' ? 'FINAL LOCK' : arrangingPhase === 'ARRANGE_1' ? 'READY' : 'CONFIRM ARRANGEMENT'}</Text>
+                {({ pressed }) => (
+                  <Text style={[styles.primaryActionText, pressed && styles.primaryActionTextPressed]}>
+                    {arrangingPhase === 'FINAL_LOCK' ? 'FINAL LOCK' : arrangingPhase === 'ARRANGE_1' ? 'READY' : 'CONFIRM ARRANGEMENT'}
+                  </Text>
+                )}
               </Pressable>
             </View>
           )}
@@ -211,7 +228,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
                 hitSlop={10}
                 style={({ pressed }) => [styles.primaryAction, pressed && styles.primaryActionPressed]}
               >
-                <Text style={styles.primaryActionText}>DISCARD</Text>
+                {({ pressed }) => <Text style={[styles.primaryActionText, pressed && styles.primaryActionTextPressed]}>DISCARD</Text>}
               </Pressable>
             </View>
           )}
@@ -246,6 +263,8 @@ const styles = StyleSheet.create({
   right: { right: -34, top: '38%' },
   rotateLeft: { transform: [{ rotate: '90deg' }], marginTop: 30 },
   rotateRight: { transform: [{ rotate: '-90deg' }], marginTop: 30 },
+  // ระยะห่างขั้นต่ำ 30px ระหว่างขอบล่างไพ่ในมือ P1 กับรายชื่อ/Avatar ด้านล่าง (มติลุงเยาะ)
+  localHandGap: { marginBottom: 30 },
   seatLabel: { minWidth: 108, maxWidth: 145, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 18, backgroundColor: 'rgba(7,18,12,0.9)', borderWidth: 1, borderColor: '#3A5A44', zIndex: 20 },
   seatTurn: { borderColor: '#8DFFB5', shadowColor: '#8DFFB5', shadowOpacity: 0.8, shadowRadius: 8, elevation: 8 },
   bossLabel: { borderColor: '#FFD76A', backgroundColor: 'rgba(29,19,5,0.94)' },
@@ -274,8 +293,10 @@ const styles = StyleSheet.create({
   discardCardSelected: { borderColor: '#FF6B6B', borderWidth: 2 },
   discardImage: { width: 44, height: 62 },
   primaryAction: { marginTop: 6, minHeight: 44, paddingHorizontal: 22, paddingVertical: 12, borderRadius: 10, backgroundColor: '#245C39', borderWidth: 1, borderColor: '#8DFFB5', alignItems: 'center', justifyContent: 'center' },
-  primaryActionPressed: { opacity: 0.65, transform: [{ scale: 0.97 }] },
+  // มติลุงเยาะ: ต้องเปลี่ยนสีจริงตอนกด ใช้สีทองสัญญาณ "active" เดียวกับทั้งแอป (ดู ArenaOverlays.tsx's pressed)
+  primaryActionPressed: { opacity: 0.85, transform: [{ scale: 0.97 }], backgroundColor: '#FFD76A', borderColor: '#FFD76A' },
   primaryActionText: { color: '#F5F2E8', fontSize: 11, fontWeight: '900' },
+  primaryActionTextPressed: { color: '#0F2418' },
   fatal: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0F2418' },
   fatalText: { color: '#FF6B6B', fontWeight: '900' },
 })

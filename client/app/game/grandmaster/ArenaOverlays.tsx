@@ -112,7 +112,9 @@ function PileRevealOverlay({ reveal }: { reveal: NonNullable<ArenaClientSnapshot
   )
 }
 
-// เพิ่ม hitSlop + pressed-state ให้เห็นชัดว่ากดโดน (ของเดิมไม่มี feedback ตอนกด ผู้เล่นจริงบอกว่า "เหมือนกดไม่ได้")
+// เพิ่ม hitSlop + pressed-state ให้เห็นชัดว่ากดโดน — มติลุงเยาะ: ต้อง "เปลี่ยนสี" จริง ไม่ใช่แค่ opacity/scale
+// เดิม ถึงจะเช็คได้แน่ชัดว่ามีอะไรเกิดขึ้นหลังกด — เปลี่ยนเป็นสีทอง (#FFD76A, สีสัญญาณ "active/confirmed"
+// เดียวกับที่ใช้ทั่วทั้งแอปอยู่แล้ว เช่น seatTurn glow) ไม่ว่าปุ่มจะเป็นสีอะไรตามปกติก็ตาม
 const Button = ({ label, onPress, danger = false, disabled = false }: { label: string; onPress: () => void; danger?: boolean; disabled?: boolean }) => (
   <Pressable
     disabled={disabled}
@@ -120,7 +122,7 @@ const Button = ({ label, onPress, danger = false, disabled = false }: { label: s
     hitSlop={8}
     style={({ pressed }) => [styles.button, danger && styles.danger, disabled && styles.disabled, pressed && !disabled && styles.pressed]}
   >
-    <Text style={styles.buttonText}>{label}</Text>
+    {({ pressed }) => <Text style={[styles.buttonText, pressed && !disabled && styles.buttonTextPressed]}>{label}</Text>}
   </Pressable>
 )
 
@@ -203,7 +205,7 @@ export default function ArenaOverlays({ snapshot, onIntent }: Props) {
               hitSlop={8}
               style={({ pressed }) => [styles.lobbyButton, pressed && styles.pressed]}
             >
-              <Text style={styles.lobbyButtonText}>BACK TO LOBBY</Text>
+              {({ pressed }) => <Text style={[styles.lobbyButtonText, pressed && styles.buttonTextPressed]}>BACK TO LOBBY</Text>}
             </Pressable>
           </View>
         </View>
@@ -243,8 +245,11 @@ const styles = StyleSheet.create({
   button: { minWidth: 60, minHeight: 40, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, backgroundColor: '#245C39', borderWidth: 1, borderColor: '#8DFFB5', alignItems: 'center', justifyContent: 'center' },
   danger: { backgroundColor: '#5A2020', borderColor: '#FF6B6B' },
   disabled: { opacity: 0.35 },
-  pressed: { opacity: 0.65, transform: [{ scale: 0.97 }] },
+  // มติลุงเยาะ: ต้องเปลี่ยนสีจริงตอนกด (ไม่ใช่แค่ opacity/scale) ใช้สีทองสัญญาณ "active" เดียวกับที่ใช้ทั่วแอป
+  // (seatTurn glow ฯลฯ) ไม่ว่าปุ่มพื้นฐานจะสีอะไร — buttonTextPressed คู่กันให้ตัวหนังสือยังอ่านออกบนพื้นทอง
+  pressed: { opacity: 0.85, transform: [{ scale: 0.97 }], backgroundColor: '#FFD76A', borderColor: '#FFD76A' },
   buttonText: { color: '#F5F2E8', fontSize: 10, fontWeight: '900', textAlign: 'center' },
+  buttonTextPressed: { color: '#0F2418' },
   lobbyButton: { marginTop: 14, paddingVertical: 12, borderRadius: 10, backgroundColor: '#245C39', borderWidth: 1, borderColor: '#8DFFB5', alignItems: 'center' },
   lobbyButtonText: { color: '#F5F2E8', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
   modalShade: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.75)' },
