@@ -14,6 +14,7 @@ import { io, Socket } from 'socket.io-client'
 import { router, useLocalSearchParams } from 'expo-router'
 import * as Haptics from 'expo-haptics'
 import { useAuthStore } from '../../../src/store/authStore'
+import { GAME_RESUME_RESULT_EVENT, requestGameResume } from '../../../src/services/gameResumeProtocol'
 // Patch 2026-07-18: resolve avatar preset key → emoji/รูปภาพ (แก้ VIP preset ไม่โชว์ที่โต๊ะ)
 import { PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
 import { useTableSkins } from '../../../src/hooks/useTableSkins'
@@ -277,6 +278,7 @@ const GameTableLive: React.FC = () => {
   const authUserId = useUserStore(s => s.userId)
   const usingDevFakeId = !authUserId && !!DEV_FAKE_USER_ID
   const PLAYER_ID = authUserId || DEV_FAKE_USER_ID || ''
+  const accessToken = useAuthStore(s => s.session?.access_token ?? null)
   // roomId ต้อง unique ต่อผู้เล่น — เดิม hardcode 'Beginner1' ชนกันเหมือน Initiate ถ้ามี 2 Human เข้าพร้อมกัน
   // (บั๊กเดียวกัน กันปะทุล่วงหน้า — ดู auth guard ที่ block ก่อน emit ใดๆ ถ้า PLAYER_ID ว่าง)
   const ROOM_ID = `mastermind-${PLAYER_ID}`
@@ -561,17 +563,24 @@ const GameTableLive: React.FC = () => {
       console.warn('[game] Using DEV_FAKE_USER_ID for PLAYER_ID:', PLAYER_ID)
     }
 
-    const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: false })
+    const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: true, reconnectionDelay: 1000 })
     socketRef.current = socket
 
-    let matchStarted = false
+    let startRequested = false
     socket.on('connect', () => {
-      if (matchStarted) return
-      matchStarted = true
+      if (!accessToken) {
+        if (!startRequested) { startRequested = true; socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'mastermind', bossId }) }
+        return
+      }
+      requestGameResume(socket, { roomId: ROOM_ID, userId: PLAYER_ID, accessToken, matchType: 'MASTERMIND' })
       // token ไม่ส่งจาก client (server-authoritative — escrowBuyIn คิดจาก users.token_balance สดเท่านั้น)
       // (player_join_room ถูกตัดออก — dead path เดิม: client ไม่เคย listen 'player_joined'/'arrangement_start'
       // ที่มันคืนมา แถมยังสร้างตาราง tableRegistry ซ้ำด้วย roomId เดิมอีกชั้น start_match ด้านล่างทำ
       // socket.join(roomId) ให้อยู่แล้วเหมือนกัน — pattern เดียวกับ initiate Phase 2.2)
+    })
+    socket.on(GAME_RESUME_RESULT_EVENT, (result: { ok: boolean; status: string; matchType: string }) => {
+      if (result.matchType !== 'MASTERMIND' || result.ok || result.status !== 'MATCH_NOT_FOUND' || startRequested) return
+      startRequested = true
       socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'mastermind', bossId })
     })
 

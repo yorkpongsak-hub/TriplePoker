@@ -10,7 +10,7 @@
 import { Server, Socket } from "socket.io";
 import { SpectatorService } from '../spectator/spectatorService';
 import { dealCards, validateDeal } from "../game/cardEngine";
-import { startMatch, submitArrangement, submitArrangementRound2, resolveContinue, submitAuctionBid, submitDiscard, submitGrandFinaleAction, settleAndEndSoloMatch } from "../game/gameLoop";
+import { startMatch, submitArrangement, submitArrangementRound2, resolveContinue, submitAuctionBid, submitDiscard, submitGrandFinaleAction, markSoloPlayerDisconnected, clearSoloDisconnectGrace, resendSoloStateToPlayer } from "../game/gameLoop";
 import { startMultiplayerMatch, submitMultiArrangement, markPlayerAFK, resendRoundStartToPlayer, settleAndEndMultiMatch, requestAutoSort } from "../game/gameLoop";
 import { getMatchState, getMultiMatchState, settleEscrow } from "../game/gameLoop";
 import {
@@ -320,9 +320,11 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
         if (!state) return fail('MATCH_NOT_FOUND')
         if (state.humanPlayerId !== request.userId) return fail('NOT_A_MEMBER')
         if (state.phase === 'match_end') return fail('MATCH_ENDED')
-        // Solo engines do not yet expose a safe full-phase snapshot. The common
-        // protocol reports this explicitly instead of accidentally starting a duplicate match.
-        return fail('UNSUPPORTED_MATCH_TYPE')
+        socket.join(request.roomId); socket.join(request.userId)
+        trackMatchmakingSocket(socket.id, { userId: request.userId, roomId: request.roomId, tier: request.matchType === 'INITIATE' ? 'initiate' : 'mastermind' })
+        clearSoloDisconnectGrace(request.roomId, request.userId)
+        if (!resendSoloStateToPlayer(io, request.roomId, request.userId)) return fail('MATCH_NOT_FOUND')
+        return resumed()
       }
       return fail('UNSUPPORTED_MATCH_TYPE')
     })
@@ -1042,8 +1044,9 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
             // ดู markHNPlayerAFK/finalizeHNAFKReplacement ใน highNobleMultiEngine.ts)
             markHNPlayerAFK(io, info.roomId, info.userId);
           } else if (info.tier === 'initiate' || info.tier === 'mastermind') {
-            // Buy-in Spec §4: solo tier ไม่มี Human อื่นให้เล่นต่อ — settle ทันทีด้วย stack ปัจจุบันแล้วปิดแมตช์
-            await settleAndEndSoloMatch(info.roomId);
+            // Keep the authoritative solo state for 60 seconds so a transient
+            // network loss can resume without creating a second escrow/match.
+            markSoloPlayerDisconnected(info.roomId, info.userId);
           } else if (info.tier === 'monarch') {
             // Sprint 10 → Batch 1.5 Task 6: Monarch เป็นโต๊ะ solo-like (1 human + AI ล้วน) ไม่มี grace
             // period (ไม่มี human อื่นให้รอ) แต่ต้อง resolve จนจบเสมอถ้า seal ไปแล้ว (ห้าม freeze) —
