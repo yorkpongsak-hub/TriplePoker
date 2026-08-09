@@ -467,14 +467,18 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
 
   const [piles, setPiles] = useState<[HandCardData[], HandCardData[], HandCardData[]] | null>(null)
   const [selectedCard, setSelectedCard] = useState<{ pi: number; ci: number } | null>(null)
+  const [discardTarget, setDiscardTarget] = useState<string | null>(null)
   const finalDraftSentRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!arrangingPhase || !local) { setPiles(null); setSelectedCard(null); return }
-    setPiles(restoreSavedPiles(local.cards, local.arrangedPiles))
+    const isDiscardTurn = snapshot.phase === 'DISCARD' && local?.isCurrentTurn
+    if ((!arrangingPhase && !isDiscardTurn) || !local) { setPiles(null); setSelectedCard(null); setDiscardTarget(null); return }
+    const restored = restoreSavedPiles(local.cards, local.arrangedPiles)
+    setPiles(restored)
     setSelectedCard(null)
+    setDiscardTarget(isDiscardTurn ? restored[2].at(-1)?.key ?? null : null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [arrangingPhase, snapshot.gameNumber])
+  }, [arrangingPhase, snapshot.phase, snapshot.gameNumber, local?.isCurrentTurn])
 
   // Save every stable ARRANGE_1 edit as a server-side draft without marking
   // the player Ready. This survives reconnects and becomes the starting layout
@@ -501,14 +505,6 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
     })
   }, [arrangingPhase, onIntent, piles, seconds, snapshot.gameNumber, snapshot.phaseEndsAt])
 
-  const [discardTarget, setDiscardTarget] = useState<string | null>(null)
-  useEffect(() => {
-    if (snapshot.phase !== 'DISCARD' || !local?.isCurrentTurn) { setDiscardTarget(null); return }
-    const pile3 = local.arrangedPiles?.pile3
-    setDiscardTarget(pile3?.length ? pile3[pile3.length - 1] : null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snapshot.phase, snapshot.gameNumber])
-
   if (!local) return <View style={styles.fatal}><Text style={styles.fatalText}>LOCAL SEAT NOT FOUND</Text></View>
 
   // ที่นั่ง 3 คือ Boss เสมอ (AI เท่านั้น ไม่มีทาง isLocal) เลยตรึงไว้ 'top' ได้ตายตัว
@@ -533,6 +529,28 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
     const pileKeys = { pile1: piles[0].map(card => card.key), pile2: piles[1].map(card => card.key), pile3: piles[2].map(card => card.key) }
     if (arrangingPhase === 'FINAL_LOCK') onIntent({ type: 'FINAL_LOCK', ...pileKeys })
     else if (arrangingPhase) onIntent({ type: 'SUBMIT_ARRANGEMENT', stage: arrangingPhase, ...pileKeys })
+  }
+
+  const chooseDiscard = (pi: number, ci: number) => {
+    if (!piles || !piles[2].length) return
+    const next: [HandCardData[], HandCardData[], HandCardData[]] = [[...piles[0]], [...piles[1]], [...piles[2]]]
+    const lastIndex = next[2].length - 1
+    const chosen = next[pi][ci]
+    if (pi !== 2 || ci !== lastIndex) {
+      const previousLast = next[2][lastIndex]
+      next[pi][ci] = previousLast
+      next[2][lastIndex] = chosen
+    }
+    setPiles(next)
+    setDiscardTarget(chosen.key)
+  }
+
+  const confirmDiscard = () => {
+    if (!piles || !discardTarget) return
+    onIntent({
+      type: 'DISCARD', cardId: discardTarget,
+      pile1: piles[0].map(card => card.key), pile2: piles[1].map(card => card.key), pile3: piles[2].map(card => card.key),
+    })
   }
 
   const renderSeat = (number: 1 | 2 | 3 | 4, placement: 'top' | 'left' | 'right' | 'bottom') => {
@@ -729,24 +747,19 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
             </View>
           )}
 
-          {snapshot.phase === 'DISCARD' && local.isCurrentTurn && (
+          {snapshot.phase === 'DISCARD' && local.isCurrentTurn && piles && (
             <View style={styles.arrangeSheet}>
-              <Text style={styles.arrangeTitle}>MANDATORY DISCARD</Text>
-              <Text style={styles.arrangeSub}>The final card in Pile 3 must be discarded. The first five cards plus two community cards rank as Best 5 of 7.</Text>
-              <View style={styles.discardRow}>
-                {discardTarget ? [discardTarget].map(code => (
-                  <Pressable
-                    key={code}
-                    disabled
-                    hitSlop={6}
-                    style={[styles.discardCard, styles.discardCardSelected]}
-                  >
-                    <Image source={CARD_IMG[code]} style={styles.discardImage} resizeMode="cover" />
-                  </Pressable>
-                )) : null}
-              </View>
+              <Text style={styles.arrangeTitle}>FINAL HAND · DISCARD</Text>
+              <Text style={styles.arrangeSub}>The last card is marked ×. Tap any card to replace it, then discard. Pile 3 ranks the remaining five cards plus two community cards as Best 5 of 7.</Text>
+              <PlayerHandView
+                piles={piles}
+                selected={null}
+                discardMarked={{ pi: 2, ci: Math.max(0, piles[2].length - 1) }}
+                onCardPress={chooseDiscard}
+                isVip={false}
+              />
               <Pressable
-                onPress={() => discardTarget && onIntent({ type: 'DISCARD', cardId: discardTarget })}
+                onPress={confirmDiscard}
                 hitSlop={10}
                 style={({ pressed }) => [styles.primaryAction, pressed && styles.primaryActionPressed]}
               >

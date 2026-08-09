@@ -112,5 +112,5 @@ export type ArenaClientIntent =
   | { type: 'AUCTION_BID'; round: 'FACE_UP' | 'BLIND'; cardIndex: 0 | 1; amountCrest: 0 | 3 | 6 | 9 | 12 }
   | { type: 'JOKER_DECLARE'; mode: 'WILD' | 'ANTE_X2'; targetPile: 1 | 2 | 3; availableCrest: number }
   | { type: 'GF_ACTION'; decision: 'CALL' | 'FOLD'; revealCardIds?: string[] }
-  | { type: 'DISCARD'; cardId: string }
+  | ({ type: 'DISCARD'; cardId: string } & ArenaPileArrangement)
   | ({ type: 'FINAL_LOCK' } & ArenaPileArrangement)

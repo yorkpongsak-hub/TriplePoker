@@ -21,7 +21,7 @@ export type ArenaMatchAction =
   | { type: 'BLIND_BID'; actionId: string; actorId: string; amountCrest: 0 | 3 | 6 | 9 | 12; cardIndex: 0 | 1 }
   | { type: 'FINAL_ARRANGE'; actionId: string; actorId: string; pile1: string[]; pile2: string[]; pile3: string[] }
   | { type: 'JOKER_DECLARE'; actionId: string; actorId: string; mode: 'WILD' | 'ANTE_X2'; targetPile: 1 | 2 | 3; availableCrest: number }
-  | { type: 'DISCARD'; actionId: string; actorId: string; cardId: string }
+  | { type: 'DISCARD'; actionId: string; actorId: string; cardId: string; pile1?: string[]; pile2?: string[]; pile3?: string[] }
   | { type: 'FINAL_LOCK'; actionId: string; actorId: string; pile1: string[]; pile2: string[]; pile3: string[] }
   | { type: 'GF_ACTION'; actionId: string; actorId: string; decision: 'CALL' | 'FOLD'; revealCardIds?: string[] }
 
@@ -333,7 +333,15 @@ export class ArenaMatchEngine {
     if (action.type === 'BLIND_BID' && action.actorId === this.faceUpWinnerId) throw new Error('ARENA_FACE_UP_WINNER_INELIGIBLE_FOR_BLIND_AUCTION')
     if (action.type === 'DISCARD') {
       if (!this.heldCardIds.get(action.actorId)?.has(action.cardId)) throw new Error('ARENA_DISCARD_CARD_NOT_HELD')
-      const mandatoryDiscard = this.lastArrangement.get(action.actorId)?.pile3.at(-1)
+      const proposed = action.pile1 && action.pile2 && action.pile3
+        ? { pile1: action.pile1, pile2: action.pile2, pile3: action.pile3 }
+        : this.lastArrangement.get(action.actorId)
+      if (action.pile1 || action.pile2 || action.pile3) {
+        if (!action.pile1 || !action.pile2 || !action.pile3) throw new Error('ARENA_DISCARD_ARRANGEMENT_INCOMPLETE')
+        const check = validateArenaPartition(proposed!, this.heldCardIds.get(action.actorId) ?? new Set())
+        if (!check.ok) throw new Error(check.reason ?? 'ARENA_ARRANGEMENT_INVALID')
+      }
+      const mandatoryDiscard = proposed?.pile3.at(-1)
       if (!mandatoryDiscard || action.cardId !== mandatoryDiscard) throw new Error('ARENA_DISCARD_MUST_BE_LAST_PILE3_CARD')
     }
     if (isArrangementAction(action)) {
@@ -372,8 +380,16 @@ export class ArenaMatchEngine {
       }
     }
     if (action.type === 'DISCARD') {
+      if (action.pile1 && action.pile2 && action.pile3) {
+        this.lastArrangement.set(action.actorId, { pile1: action.pile1, pile2: action.pile2, pile3: action.pile3 })
+      }
       this.heldCardIds.get(action.actorId)?.delete(action.cardId)
       this.removeFromLastArrangement(action.actorId, action.cardId)
+      const locked = this.lastArrangement.get(action.actorId)
+      if (!locked) throw new Error('ARENA_DISCARD_LOCK_REQUIRES_ARRANGEMENT')
+      this.lockedArrangements.set(action.actorId, locked)
+      const foul = checkArenaFoul(locked, this.dealCardsById, this.deal!.community)
+      this.fouled.set(action.actorId, foul.fouled)
     }
     if (isArrangementAction(action)) {
       const arrangement: ArenaArrangement = { pile1: action.pile1, pile2: action.pile2, pile3: action.pile3 }
@@ -466,7 +482,7 @@ export class ArenaMatchEngine {
     if (this.phase === 'AUCTION_FACE_UP_RESULT') return this.transition('AUCTION_BLIND', now)
     if (this.phase === 'AUCTION_BLIND_RESULT') return this.transition('REVEAL_PILE3_COMMUNITY_CARD_2', now)
     if (this.phase === 'REVEAL_PILE3_COMMUNITY_CARD_2') return this.transition('FINAL_ARRANGE', now)
-    if (this.phase === 'FINAL_LOCK' && this.allActorsActed()) return this.transition('RESOLVE_PILE_1', now)
+    if (this.phase === 'FINAL_LOCK' && this.pendingActors().length === 0) return this.transition('RESOLVE_PILE_1', now)
     if (this.phase === 'RESOLVE_PILE_1') {
       this.pile1WinnerId = this.resolvePileWinner(1, this.actorIds)
       this.maybeApplyJokerAnteX2(1, this.pile1WinnerId)
@@ -845,7 +861,8 @@ export class ArenaMatchEngine {
       if (this.jokerDeclaration?.mode === 'ANTE_X2' && this.jokerOwnerId) required.add(this.jokerOwnerId)
       return [...required].filter(id => !this.phaseActions.has(id))
     }
-    if (['ARRANGE_1', 'AUCTION_FACE_UP', 'FINAL_ARRANGE', 'FINAL_LOCK'].includes(this.phase)) return this.actorIds.filter(id => !this.phaseActions.has(id))
+    if (this.phase === 'FINAL_LOCK') return this.actorIds.filter(id => !this.lockedArrangements.has(id) && !this.phaseActions.has(id))
+    if (['ARRANGE_1', 'AUCTION_FACE_UP', 'FINAL_ARRANGE'].includes(this.phase)) return this.actorIds.filter(id => !this.phaseActions.has(id))
     return []
   }
 

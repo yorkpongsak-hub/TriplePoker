@@ -145,8 +145,16 @@ describe('Gate 5 - end-to-end Arena match state machine', () => {
     expect(engine.pileHandFor(winnerId, 3)?.score).toBe(expected.score)
     expect(() => engine.submit({ type: 'DISCARD', actionId: 'wrong-discard', actorId: winnerId, cardId: pile3[0] }, now))
       .toThrow('ARENA_DISCARD_MUST_BE_LAST_PILE3_CARD')
-    expect(engine.submit({ type: 'DISCARD', actionId: 'mandatory-discard', actorId: winnerId, cardId: pile3[5] }, now))
+    const changedPile3 = [...pile3]
+    ;[changedPile3[0], changedPile3[5]] = [changedPile3[5], changedPile3[0]]
+    const previous = engine.snapshotDetail().lastArrangements[winnerId]
+    expect(engine.submit({
+      type: 'DISCARD', actionId: 'changed-discard', actorId: winnerId, cardId: pile3[0],
+      pile1: previous.pile1, pile2: previous.pile2, pile3: changedPile3,
+    }, now))
       .toMatchObject({ accepted: true })
+    expect(engine.snapshotDetail().lockedArrangements[winnerId].pile3).toEqual(changedPile3.slice(0, 5))
+    expect(engine.snapshot().pendingActorIds).not.toContain(winnerId)
   })
 
   test('face-up winner cannot submit a blind bid', () => {
