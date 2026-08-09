@@ -5,6 +5,8 @@
  * The Sage Unicorn Studio Co., Ltd.
  */
 
+import { pickRandomMinions } from './aiEngine'
+
 export type Tier = 'initiate' | 'adept' | 'mastermind' | 'high_noble' | 'last_boss';
 
 export type SeatType = 'human' | 'bot' | 'ai' | 'empty';
@@ -185,13 +187,15 @@ export function createAdeptTable(
     throw new Error('PIN ต้องเป็นตัวเลข 4 หลักเท่านั้น');
   }
 
+  const [minion1, minion2] = pickRandomMinions(2)
+
   const table: GameTable = {
     tableId,
     tier: 'adept',
     seats: [
       { type: 'human', userId: hostUserId, name: hostName, joinedAt: Date.now() },
-      { type: 'bot', name: randomBotName(), joinedAt: Date.now() },
-      { type: 'ai', name: 'Minion', joinedAt: Date.now() },
+      { type: 'bot', name: minion1, joinedAt: Date.now() },
+      { type: 'ai', name: minion2, joinedAt: Date.now() },
       emptySeat(),
     ],
     createdAt: Date.now(),
@@ -224,11 +228,6 @@ export function joinAdeptTable(
   table.seats[3] = { type: 'human', userId, name: userName, joinedAt: Date.now() };
   recomputeStatus(table);
   return { ok: true, reason: 'success' };
-}
-
-const BOT_NAME_POOL = ['Alex', 'Jordan', 'Taylor', 'Morgan', 'Casey', 'Riley', 'Avery', 'Quinn', 'Reese', 'Sage'];
-function randomBotName(): string {
-  return BOT_NAME_POOL[Math.floor(Math.random() * BOT_NAME_POOL.length)];
 }
 
 // ตรวจ timeout ของโต๊ะ Adept ทั้งหมด — เรียกจาก setInterval ใน index.ts หรือ gameSocket.ts

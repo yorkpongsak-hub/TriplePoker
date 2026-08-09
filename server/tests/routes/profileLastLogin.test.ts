@@ -1,0 +1,65 @@
+const mockGetUser = jest.fn()
+const mockMaybeSingle = jest.fn()
+const mockSelect = jest.fn(() => ({ maybeSingle: mockMaybeSingle }))
+const mockEq = jest.fn(() => ({ select: mockSelect }))
+const mockUpdate = jest.fn(() => ({ eq: mockEq }))
+const mockFrom = jest.fn(() => ({ update: mockUpdate }))
+
+jest.mock('../../src/config/supabase', () => ({
+  supabase: { auth: { getUser: mockGetUser } },
+  supabaseAdmin: { from: mockFrom },
+}))
+
+import Fastify from 'fastify'
+import { profileRoutes } from '../../src/routes/profile'
+
+async function buildApp() {
+  const app = Fastify()
+  await app.register(profileRoutes)
+  await app.ready()
+  return app
+}
+
+beforeEach(() => {
+  mockGetUser.mockReset()
+  mockMaybeSingle.mockReset()
+  mockFrom.mockClear()
+  mockUpdate.mockClear()
+  mockEq.mockClear()
+  mockSelect.mockClear()
+})
+
+describe('POST /profile/touch-last-login', () => {
+  test('requires an authenticated user', async () => {
+    const app = await buildApp()
+    const response = await app.inject({ method: 'POST', url: '/profile/touch-last-login' })
+    expect(response.statusCode).toBe(401)
+    expect(mockGetUser).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  test('updates last_login for the authenticated profile', async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
+    mockMaybeSingle.mockResolvedValue({ data: { last_login: '2026-08-03T12:00:00.000Z' }, error: null })
+    const app = await buildApp()
+    const response = await app.inject({
+      method: 'POST', url: '/profile/touch-last-login', headers: { authorization: 'Bearer valid-token' },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(mockUpdate).toHaveBeenCalledWith({ last_login: expect.any(String) })
+    expect(mockEq).toHaveBeenCalledWith('user_id', 'user-1')
+    expect(response.json()).toEqual({ success: true, lastLoginAt: '2026-08-03T12:00:00.000Z' })
+    await app.close()
+  })
+
+  test('does not report success when the public profile row is missing', async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: 'user-2' } }, error: null })
+    mockMaybeSingle.mockResolvedValue({ data: null, error: null })
+    const app = await buildApp()
+    const response = await app.inject({
+      method: 'POST', url: '/profile/touch-last-login', headers: { authorization: 'Bearer valid-token' },
+    })
+    expect(response.statusCode).toBe(404)
+    await app.close()
+  })
+})

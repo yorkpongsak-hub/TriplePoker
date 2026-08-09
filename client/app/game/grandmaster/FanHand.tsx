@@ -1,0 +1,73 @@
+import React from 'react'
+import { Image, Pressable, StyleSheet, View } from 'react-native'
+import { CARD_BACK_IMG, CARD_IMG } from '../../../src/components/game/cardAssets'
+
+interface FanHandProps {
+  cards: string[]
+  cardCount: number
+  faceUp: boolean
+  width: number
+  compact?: boolean
+  disabled?: boolean
+  revealedCardIds?: readonly string[]
+  selectedCardIds?: readonly string[]
+  onCardPress?: (cardId: string) => void
+}
+
+export default function FanHand({ cards, cardCount, faceUp, width, compact = false, disabled = false, revealedCardIds = [], selectedCardIds = [], onCardPress }: FanHandProps) {
+  const count = Math.max(cards.length, cardCount)
+  // 62px = ขนาดเดียวกับ PlayerHandView's FREE_CW (ไพ่ในมือของ Tier อื่นเช่น Mastermind) — เดิมใช้ 44px
+  // เล็กกว่ามากจนอ่านยากบนมือถือจริง โดยเฉพาะเมื่อ compact ถูกลดขนาดซ้ำเพราะจอแคบ (ตอนนี้ compact ผูกกับ
+  // isLocal เท่านั้น ไม่ผูกกับความกว้างจอแล้ว — ดู GrandmasterTableView.tsx)
+  const cardWidth = compact ? 30 : 62
+  const cardHeight = Math.round(cardWidth * 1.44)
+  const spread = Math.min(width - cardWidth, compact ? 94 : 220)
+  const step = count > 1 ? spread / (count - 1) : 0
+  const totalWidth = spread + cardWidth
+
+  return (
+    <View style={[styles.fan, { width: totalWidth, height: cardHeight + (compact ? 15 : 24) }]}>
+      {Array.from({ length: count }).map((_, index) => {
+        const code = cards[index]
+        const angle = count > 1 ? -16 + (32 * index) / (count - 1) : 0
+        const lift = Math.abs(angle) * 0.28
+        const showFace = faceUp && !!code
+        const revealed = !!code && revealedCardIds.includes(code)
+        const selected = !!code && selectedCardIds.includes(code)
+        return (
+          <Pressable
+            key={`${code ?? 'hidden'}-${index}`}
+            disabled={disabled || !showFace}
+            onPress={() => code && onCardPress?.(code)}
+            style={[
+              styles.card,
+              {
+                width: cardWidth,
+                height: cardHeight,
+                left: index * step,
+                top: lift - (revealed ? 30 : 0),
+                zIndex: index + 1,
+                transform: [{ rotate: `${angle}deg` }],
+              },
+              revealed && styles.revealedCard,
+              selected && !revealed && styles.selectedCard,
+            ]}
+          >
+            <Image source={showFace && CARD_IMG[code] ? CARD_IMG[code] : CARD_BACK_IMG} style={{ width: cardWidth, height: cardHeight }} resizeMode="cover" />
+          </Pressable>
+        )
+      })}
+    </View>
+  )
+}
+
+const styles = StyleSheet.create({
+  fan: { position: 'relative', alignSelf: 'center' },
+  card: {
+    position: 'absolute', borderRadius: 5, overflow: 'hidden', borderWidth: 1,
+    borderColor: 'rgba(255,215,106,0.72)', backgroundColor: '#091808',
+    shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 3, shadowOffset: { width: 0, height: 2 }, elevation: 4,
+  },
+  revealedCard: { borderWidth: 3, borderColor: '#FF3B30', elevation: 12 },
+  selectedCard: { borderWidth: 3, borderColor: '#8DFFB5', elevation: 12 },
+})

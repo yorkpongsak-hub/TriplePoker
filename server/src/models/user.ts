@@ -10,7 +10,7 @@ export interface User {
   xp: number
   streak_count: number
   streak_shield: number
-  last_login_at: string
+  last_login: string
   created_at: string
 }
 

@@ -59,6 +59,8 @@ export default function SetupProfileScreen() {
   })
   const [vipStatus, setVipStatus] = useState<VipStatus>('none')
   const [isSaving, setIsSaving] = useState(false)
+  // Patch 2026-07-18: สมาชิกเก่า = มี display_name ใน DB อยู่แล้วตอนเปิดหน้า — ใช้ตัดสินข้าม Onboarding
+  const [isExistingMember, setIsExistingMember] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   // โหลดค่าเดิม (ถ้าเคยตั้งแล้วกลับมาแก้)
@@ -71,7 +73,7 @@ export default function SetupProfileScreen() {
         .select('display_name, avatar_url, vip_status')
         .eq('user_id', session.user.id)
         .maybeSingle()
-      if (data?.display_name) setDisplayName(data.display_name)
+      if (data?.display_name) { setDisplayName(data.display_name); setIsExistingMember(true) }
       if (data?.vip_status) setVipStatus(data.vip_status as VipStatus)
       // avatar_url เก่าบางบัญชีเป็น emoji ดิบ (ก่อนระบบ preset) ไม่ตรง key ไหนเลย — เช็คก่อน
       // ไม่งั้น fall back ไป default preset เฉยๆ (กัน crash ไม่ต้องพยายาม render emoji เก่า)
@@ -138,8 +140,13 @@ export default function SetupProfileScreen() {
       console.log('[setup-profile] profile after refresh:', useAuthStore.getState().profile)
 
       // ผู้เล่นใหม่ (ยังไม่เคยดู Onboarding) -- ไปหน้า Onboarding ก่อน แล้วค่อยเข้าหน้าหลัก
+      // Patch 2026-07-18: สมาชิกเก่า (มีชื่อใน DB อยู่แล้ว) ข้าม Onboarding เสมอ — flag ฝั่งเครื่อง
+      // เชื่อถือไม่ได้ (clear cache/ลงแอปใหม่/เปลี่ยนเครื่องแล้วหาย) + เซ็ต flag คืนให้ด้วยกันหลุดซ้ำ
       const onboardingSeen = await AsyncStorage.getItem('onboarding_seen')
-      router.replace(onboardingSeen === '1' ? '/(home)/profile' : '/(auth)/onboarding')
+      if (isExistingMember && onboardingSeen !== '1') {
+        await AsyncStorage.setItem('onboarding_seen', '1')
+      }
+      router.replace((isExistingMember || onboardingSeen === '1') ? '/(home)/profile' : '/(auth)/onboarding')
 
     } catch (e: any) {
       setError(e?.message ?? 'Unexpected error')

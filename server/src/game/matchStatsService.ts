@@ -49,6 +49,68 @@ function getBangkokDateString(d: Date): string {
   return `${y}-${m}-${day}`
 }
 
+export interface DailyStreakResult {
+  cycleDay: number
+  bestStreak: number
+  shields: number
+  tokenReward: number
+  xpReward: number
+  shieldUsed: boolean
+  badgeUnlocked: boolean
+  rewarded: boolean
+}
+
+/** Pure daily-play calculation. Dates must be YYYY-MM-DD in Asia/Bangkok. */
+export function computeDailyPlayStreak(
+  previousDay: number,
+  previousBest: number,
+  previousPlayedDate: string | null,
+  previousShields: number,
+  hadSevenDayBadge: boolean,
+  today: string,
+): DailyStreakResult {
+  const cfg = gameConfig.dailyEconomy.playStreak
+  const safeDay = Math.max(0, Math.min(cfg.cycleDays, previousDay || 0))
+  const safeShields = Math.max(0, Math.min(cfg.maxShields, previousShields || 0))
+
+  if (previousPlayedDate === today) {
+    return {
+      cycleDay: safeDay, bestStreak: previousBest, shields: safeShields,
+      tokenReward: 0, xpReward: 0, shieldUsed: false,
+      badgeUnlocked: hadSevenDayBadge, rewarded: false,
+    }
+  }
+
+  const dayMs = 24 * 60 * 60 * 1000
+  const parseDate = (value: string) => Date.parse(`${value}T00:00:00Z`)
+  const elapsedDays = previousPlayedDate
+    ? Math.round((parseDate(today) - parseDate(previousPlayedDate)) / dayMs)
+    : Number.POSITIVE_INFINITY
+  const consecutive = elapsedDays === 1
+  // หลังจบ Day 7 รอบใหม่เริ่ม Day 1 อยู่แล้ว จึงไม่เผา Shield โดยไม่จำเป็น
+  const useShield = elapsedDays === 2 && safeShields > 0 && safeDay < cfg.cycleDays
+  const cycleDay = consecutive || useShield
+    ? (safeDay >= cfg.cycleDays ? 1 : safeDay + 1)
+    : 1
+  const reward = cfg.rewards[cycleDay - 1]
+  const reachedDay7 = cycleDay === cfg.cycleDays
+  const shieldsAfterUse = safeShields - (useShield ? 1 : 0)
+  const shields = reachedDay7
+    ? Math.min(cfg.maxShields, shieldsAfterUse + cfg.day7ShieldBonus)
+    : shieldsAfterUse
+
+  return {
+    cycleDay,
+    bestStreak: Math.max(previousBest || 0, cycleDay),
+    shields,
+    tokenReward: reward.token,
+    xpReward: reward.xp,
+    shieldUsed: useShield,
+    badgeUnlocked: hadSevenDayBadge || reachedDay7,
+    rewarded: true,
+  }
+}
+
 // ─── Helper: Debt Recovery — คืน token_balance สุดท้าย + debt_amount ที่ต้องตั้ง ───
 function computeDebtRecovery(
   tier: StatsTier, isVip: boolean, tokenBalance: number,
@@ -92,6 +154,8 @@ interface CurrentUserRow {
   streak_count: number
   last_played_date: string | null
   streak_shields: number
+  best_streak_count: number
+  streak_7days_badge: boolean
 }
 
 // บันทึกผลจบเกมของผู้เล่น human ทุกคนในแมตช์นี้ — เรียกจากจุด match_end ปกติเท่านั้น (จบครบ totalRounds)
@@ -109,10 +173,14 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
   const userIds = valid.map(p => p.userId)
   const current: Record<string, CurrentUserRow> = {}
   try {
-    const { data } = await supabaseAdmin
+    const { data, error: readErr } = await supabaseAdmin
       .from('users')
-      .select('user_id, token_balance, vip_status, games_played, games_won, xp, best_hands, debt_amount, streak_count, last_played_date, streak_shields')
+      .select('user_id, token_balance, vip_status, games_played, games_won, xp, best_hands, debt_amount, streak_count, last_played_date, streak_shields, best_streak_count, streak_7days_badge')
       .in('user_id', userIds)
+    if (readErr) {
+      console.error('[MATCH_STATS] Read failed:', readErr, '| userIds:', userIds)
+      return
+    }
     for (const row of data ?? []) {
       current[row.user_id] = {
         token_balance:    row.token_balance ?? 0,
@@ -125,6 +193,8 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
         streak_count:     row.streak_count ?? 0,
         last_played_date: row.last_played_date ?? null,
         streak_shields:   row.streak_shields ?? 0,
+        best_streak_count: row.best_streak_count ?? 0,
+        streak_7days_badge: row.streak_7days_badge ?? false,
       }
     }
   } catch (err) {
@@ -134,13 +204,13 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
 
   const now = new Date()
   const todayStr = getBangkokDateString(now)
-  const yesterdayStr = getBangkokDateString(new Date(now.getTime() - 24 * 60 * 60 * 1000))
   const nowISO = now.toISOString()
 
   const rows = valid.map(p => {
     const prev = current[p.userId] ?? {
       token_balance: 0, vip_status: 'none', games_played: 0, games_won: 0, xp: 0,
       best_hands: {}, debt_amount: 0, streak_count: 0, last_played_date: null, streak_shields: 0,
+      best_streak_count: 0, streak_7days_badge: false,
     }
 
     // 1-2) Escrow settle เขียน token_balance ไปแล้วก่อนหน้านี้ (settleEscrow) — ที่นี่แค่ตรวจ Debt Recovery
@@ -154,21 +224,18 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
 
     // 4) XP + D1 Hook
     let newXp = prev.xp + computeBaseXp(p.tier, p.won, p.isTripleSweep)
-    let newStreakShields = prev.streak_shields
+    let streakShieldsBeforeReward = prev.streak_shields
     if (newGamesPlayed === 1) {
       newXp += gameConfig.xpRewards.d1Hook.xpBonus
-      newStreakShields += gameConfig.xpRewards.d1Hook.streakShieldBonus
+      streakShieldsBeforeReward += gameConfig.xpRewards.d1Hook.streakShieldBonus
     }
 
-    // 5) Daily Streak (Asia/Bangkok เท่านั้น)
-    let newStreakCount: number
-    if (prev.last_played_date === todayStr) {
-      newStreakCount = prev.streak_count // เล่นซ้ำวันเดียวกัน — ไม่เปลี่ยน streak
-    } else if (prev.last_played_date === yesterdayStr) {
-      newStreakCount = prev.streak_count + 1
-    } else {
-      newStreakCount = 1 // เก่ากว่าเมื่อวาน หรือไม่เคยเล่นมาก่อน (NULL)
-    }
+    // 5) Daily Play Streak — reward ครั้งเดียวเมื่อจบแมตช์แรกของวัน
+    const streak = computeDailyPlayStreak(
+      prev.streak_count, prev.best_streak_count, prev.last_played_date,
+      streakShieldsBeforeReward, prev.streak_7days_badge, todayStr,
+    )
+    newXp += streak.xpReward
 
     // 6) best_hands (jsonb, key = tier) — replace เฉพาะ key ของ tier นี้ถ้า score สูงกว่าเดิม
     let newBestHands = prev.best_hands ?? {}
@@ -193,22 +260,32 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
 
     return {
       user_id: p.userId,
-      token_balance: newTokenBalance,
+      token_balance: newTokenBalance + streak.tokenReward,
       debt_amount: newDebtAmount,
       games_played: newGamesPlayed,
       games_won: newGamesWon,
       xp: newXp,
       best_hands: newBestHands,
-      streak_count: newStreakCount,
+      streak_count: streak.cycleDay,
       last_played_date: todayStr,
-      streak_shields: newStreakShields,
+      streak_shields: streak.shields,
+      best_streak_count: streak.bestStreak,
+      streak_7days_badge: streak.badgeUnlocked,
     }
   })
 
   try {
-    const { error } = await supabaseAdmin.from('users').upsert(rows, { onConflict: 'user_id' })
-    if (error) {
-      console.error('[MATCH_STATS] Upsert failed:', error, '| payload:', JSON.stringify(rows))
+    for (const row of rows) {
+      const { user_id, ...fields } = row
+      const { error } = await supabaseAdmin
+        .from('users')
+        .update(fields)
+        .eq('user_id', user_id)
+      if (error) {
+        console.error('[MATCH_STATS] Update failed:', error, '| user_id:', user_id, '| fields:', JSON.stringify(fields))
+      } else {
+        console.log('[MATCH_STATS] OK', user_id, 'games_played=', fields.games_played, 'xp=', fields.xp)
+      }
     }
   } catch (err) {
     console.error('[MATCH_STATS] Unexpected error during upsert:', err, '| payload:', JSON.stringify(rows))

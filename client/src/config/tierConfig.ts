@@ -6,40 +6,56 @@
 // ห้ามประกาศ TIER_CONFIG/threshold ซ้ำที่ไฟล์อื่นอีก — ย้ายมาจาก lobby.tsx เดิม
 //
 // มี 2 concept แยกกัน:
-//   1. Tier    — key เดิมของระบบ Lobby/Matchmaking (6 ค่า รวม demo/last_boss)
+//   1. Tier    — key เดิมของระบบ Lobby/Matchmaking (5 ค่า รวม last_boss)
 //   2. TierKey — 4 tier หลักที่คำนวณจาก token_balance จริงได้ (canon MasterPlan v10.0)
-//                ไม่รวม demo/last_boss เพราะไม่ใช่ token-threshold tier
+//                ไม่รวม last_boss เพราะไม่ใช่ token-threshold tier
 //
 // Ascendant (S) / Last Boss (S+) เป็น status แยก ไม่ใช่ token-threshold —
 // ห้ามเพิ่มเข้า TierKey หรือ getTierFromToken() เด็ดขาด (ดู TriplePoker_Ascendant_Spec_v1_1 — ยัง stub)
+//
+// 'demo' ถูกลบออกจากที่นี่แล้ว (เคยเป็น tier placeholder implemented:false ไม่เคยเล่นได้จริง) —
+// ตำแหน่งเดิมในล็อบบี้ถูกแทนที่ด้วยปุ่ม "How to Play" (เปิด Onboarding ตรงๆ ไม่ผ่าน Tier system นี้แล้ว)
 
-export type Tier = 'demo' | 'initiate' | 'adept' | 'mastermind' | 'high_noble' | 'last_boss'
+export type Tier = 'initiate' | 'adept' | 'mastermind' | 'high_noble' | 'grandmaster' | 'last_boss'
 
+// Threshold ชุดนี้ต้องตรงกับ server/src/config/gameConfig.ts (tierRanges + progressionGate) เสมอ —
+// Canon: TriplePoker_EconomyProgression_Spec_v2_0.md §5 (2026-07-30, แทนที่ชุดเดิม 10k/40k/100k)
+// ⚠️ ค่านี้เป็นแค่ token axis เดียว ใช้แสดงผล/preview เท่านั้น (isEligible ด้านล่างก็เช่นกัน) — Time Gate
+// (minDays) และ Skill Gate ไม่ถูกคำนวณฝั่ง client เลยตาม Spec §9 "Client ห้ามคำนวณ minDays เอง"
+// การ enforce จริงอยู่ที่ server (room_auto_match handler ใน gameSocket.ts อ่าน tier_unlocked_max
+// ตรงๆ) — ปุ่ม/badge ที่นี่อาจโชว์ "ปลดล็อกแล้ว" ทั้งที่ server ยังบล็อกเพราะวันไม่ครบ เป็นเรื่องปกติ
 export const TIER_CONFIG: Record<Tier, { label: string; letter: string; minToken: number; implemented: boolean; badgeColor: string }> = {
-  demo:        { label: 'Demo',          letter: 'D',  minToken: 0,       implemented: false, badgeColor: '#8DFFB5' },
   initiate:    { label: 'Initiate',      letter: 'C',  minToken: 100,     implemented: true,  badgeColor: '#8DFFB5' },
-  adept:       { label: 'Adept',         letter: 'B',  minToken: 10_000,  implemented: true,  badgeColor: '#FFD76A' },
-  mastermind:  { label: 'Mastermind',    letter: 'A',  minToken: 40_000,  implemented: true,  badgeColor: '#FFD76A' },
+  adept:       { label: 'Adept',         letter: 'B',  minToken: 6_000,   implemented: true,  badgeColor: '#FFD76A' },
+  mastermind:  { label: 'Mastermind',    letter: 'A',  minToken: 20_000,  implemented: true,  badgeColor: '#FFD76A' },
   // letter เดิมเป็น 'S' — แก้เป็น 'A+' ตาม canon ล่าสุด (profile.tsx TIER_INFO) High Noble = A+, สงวน S ไว้ให้ Ascendant
   high_noble:  { label: 'High Noble',    letter: 'A+', minToken: 100_000, implemented: true,  badgeColor: '#FF6B6B' },
+  grandmaster: { label: 'Grandmaster',   letter: 'S',  minToken: 1_000_001, implemented: true, badgeColor: '#E9C96B' },
   last_boss:   { label: 'The Last Boss', letter: 'S+', minToken: 0,       implemented: false, badgeColor: '#FFC857' },
 }
 
 export function meetsLastBossCondition(_token: number): boolean { return false }
 
-export function isEligible(tier: Tier, token: number): boolean {
+export function isEligible(tier: Tier, token: number, tierUnlockedMax?: string | null): boolean {
   if (tier === 'last_boss') return meetsLastBossCondition(token)
+  if (tier === 'grandmaster' && tierUnlockedMax === 'grandmaster') return true
   return token >= TIER_CONFIG[tier].minToken
 }
 
 // ─── Canon 4-tier ที่คำนวณจาก token_balance ได้จริง (TriplePoker_MasterPlan_v10_0) ───
-export type TierKey = 'initiate' | 'adept' | 'mastermind' | 'highNoble'
+export type TierKey = 'initiate' | 'adept' | 'mastermind' | 'highNoble' | 'grandmaster'
 
 // คำนวณ tier สดจาก token_balance — ใช้แทนการอ่าน users.tier ตรงๆ (คอลัมน์นั้นไม่มี pipeline ไหนอัปเดตจริง)
 // อ้างอิง threshold จาก TIER_CONFIG ด้านบนตัวเดียว กันเลข drift ระหว่าง 2 ค่า
 export function getTierFromToken(tokenBalance: number): TierKey {
+  if (tokenBalance >= TIER_CONFIG.grandmaster.minToken) return 'grandmaster'
   if (tokenBalance >= TIER_CONFIG.high_noble.minToken) return 'highNoble'
   if (tokenBalance >= TIER_CONFIG.mastermind.minToken) return 'mastermind'
   if (tokenBalance >= TIER_CONFIG.adept.minToken) return 'adept'
   return 'initiate'
+}
+
+export function getAuthoritativeDisplayTier(tokenBalance: number, tierUnlockedMax?: string | null): TierKey {
+  if (tierUnlockedMax === 'grandmaster') return 'grandmaster'
+  return getTierFromToken(tokenBalance)
 }

@@ -12,9 +12,11 @@ import { supabaseAdmin } from '../config/supabase'
 import { gameConfig } from '../config/gameConfig'
 
 export interface AwardPerformanceScoreInput {
-  tier: 'highNoble' | 'ascendant'
+  tier: 'highNoble' | 'ascendant' | 'grandmaster' | 'sovereign'
   finalWinnerId: string | null            // userId ของผู้เล่นอันดับ 1 ในโต๊ะ ถ้าเป็น human — null ถ้า Boss ชนะ
-  isMonarchMatch: boolean
+  legendaryBossDefeated?: boolean        // Monarch, Soren หรือ Last Boss เท่านั้น
+  /** @deprecated compatibility for older callers/tests; use legendaryBossDefeated */
+  isMonarchMatch?: boolean
   humanNetDeltas: Record<string, number>  // userId (human ทุกคนในโต๊ะ) -> net token delta ของทั้งแมตช์ (ก่อนคูณ Monarch)
 }
 
@@ -24,41 +26,31 @@ export async function awardPerformanceScore(input: AwardPerformanceScoreInput): 
   if (userIds.length === 0) return
 
   const cfg = gameConfig.psConfig
-  const winPoints = input.isMonarchMatch
-    ? (input.tier === 'highNoble' ? cfg.highNobleMonarchWin : cfg.ascendantMonarchWin)
-    : (input.tier === 'highNoble' ? cfg.highNobleWin : cfg.ascendantWin)
+  const tierPoints = cfg[input.tier]
+  const legendaryBossDefeated = input.legendaryBossDefeated ?? input.isMonarchMatch ?? false
+  const winPoints = tierPoints.bossWin + (legendaryBossDefeated ? cfg.legendaryBossBonus : 0)
 
-  const currentCareer: Record<string, number> = {}
-  const currentSeason: Record<string, number> = {}
-  try {
-    const { data } = await supabaseAdmin
-      .from('users')
-      .select('user_id, performance_score, ps_season')
-      .in('user_id', userIds)
-    for (const row of data ?? []) {
-      currentCareer[row.user_id] = row.performance_score ?? 0
-      currentSeason[row.user_id] = row.ps_season ?? 0
-    }
-  } catch (err) {
-    // Patch: ถ้า migration 006_monarch_spawn_reward.sql ยังไม่ได้รันบน Supabase คอลัมน์เหล่านี้จะยังไม่มี — fallback 0 ทุกคน (ไม่ throw)
-    console.error('[PS] Error reading performance_score/ps_season:', err)
-  }
-
-  const rows = userIds.map(userId => {
+  const awards = userIds.map(userId => {
     const netDelta = input.humanNetDeltas[userId]
     const gained = userId === input.finalWinnerId
       ? winPoints
-      : (netDelta >= 0 ? cfg.notWinNonNegative : cfg.negative)
-    return {
-      user_id: userId,
-      performance_score: (currentCareer[userId] ?? 0) + gained,
-      ps_season: (currentSeason[userId] ?? 0) + gained,
-    }
+      : (netDelta >= 0 ? tierPoints.nonNegative : tierPoints.negative)
+    return { userId, gained }
   })
 
   try {
-    await supabaseAdmin.from('users').upsert(rows, { onConflict: 'user_id' })
+    for (const { userId, gained } of awards) {
+      const { error } = await supabaseAdmin.rpc('increment_performance_score', {
+        p_user_id: userId,
+        p_delta: gained,
+      })
+      if (error) {
+        console.error('[PS] Atomic increment failed:', error, '| user_id:', userId, '| delta:', gained)
+      } else {
+        console.log('[PS] OK', userId, 'delta=', gained)
+      }
+    }
   } catch (err) {
-    console.error('[PS] Error updating performance_score/ps_season batch:', err)
+    console.error('[PS] Error incrementing performance_score/ps_season:', err)
   }
 }

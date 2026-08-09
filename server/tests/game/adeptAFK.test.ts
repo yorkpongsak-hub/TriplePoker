@@ -11,6 +11,8 @@
 let tokenBalances: Record<string, number> = {}
 let escrowIdCounter = 0
 let escrowStatuses: Record<string, string> = {}
+let escrowOwners: Record<string, string> = {}
+let escrowBuyIns: Record<string, number> = {}
 
 function makeSupabaseAdminMock() {
   const from = jest.fn((table: string) => {
@@ -23,6 +25,7 @@ function makeSupabaseAdminMock() {
     builder.eq = jest.fn((col: string, val: any) => { lastEqValues.push([col, val]); return builder })
     builder.limit = jest.fn(() => builder)
     builder.lt = jest.fn(() => builder)
+    builder.in = jest.fn(() => builder)
     builder.insert = jest.fn(() => { isInsert = true; return builder })
     builder.update = jest.fn((payload: any) => { pendingUpdate = payload; return builder })
 
@@ -51,13 +54,57 @@ function makeSupabaseAdminMock() {
       }
       if (table === 'match_escrow' && pendingUpdate?.status) {
         const escrowId = lastEqValues.find(([c]) => c === 'escrow_id')?.[1]
-        if (escrowId) escrowStatuses[escrowId] = pendingUpdate.status
+        // settleEscrow() ใช้ claim-first: .update(...).eq('escrow_id', id).eq('status', 'in_match').select(...)
+        // กัน Double Settle — ต้องจำลอง WHERE status=<filter> จริง ไม่ใช่คืน [] เสมอ (บั๊กเดิม: ทำให้
+        // settleEscrow เข้าใจผิดว่ามีคน settle ไปแล้วทุกครั้ง แม้เป็นครั้งแรกจริง — leavingBalance เลยเป็น null เสมอ)
+        const statusFilter = lastEqValues.find(([c]) => c === 'status')?.[1]
+        if (escrowId) {
+          const filterMatches = statusFilter === undefined || escrowStatuses[escrowId] === statusFilter
+          if (filterMatches) {
+            escrowStatuses[escrowId] = pendingUpdate.status
+            resolve({ data: [{ escrow_id: escrowId }], error: null })
+            return
+          }
+          resolve({ data: [], error: null })
+          return
+        }
       }
       resolve({ data: table === 'match_escrow' ? [] : null, error: null })
     }
     return builder
   })
-  return { from }
+  const rpc = jest.fn(async (name: string, args: any) => {
+    if (name === 'begin_match_escrow') {
+      if ((tokenBalances[args.p_user_id] ?? 0) < args.p_buyin_amount) {
+        return { data: null, error: { message: 'INSUFFICIENT_TOKENS' } }
+      }
+      escrowIdCounter++
+      const id = `escrow-${escrowIdCounter}`
+      escrowStatuses[id] = 'in_match'
+      escrowOwners[id] = args.p_user_id
+      escrowBuyIns[id] = args.p_buyin_amount
+      tokenBalances[args.p_user_id] -= args.p_buyin_amount
+      return { data: [{ escrow_id: id, new_token_balance: tokenBalances[args.p_user_id] }], error: null }
+    }
+    if (name === 'settle_match_escrow') {
+      if (escrowStatuses[args.p_escrow_id] !== 'in_match' || escrowOwners[args.p_escrow_id] !== args.p_user_id) {
+        return { data: null, error: { message: 'ESCROW_NOT_ACTIVE' } }
+      }
+      escrowStatuses[args.p_escrow_id] = 'settled'
+      tokenBalances[args.p_user_id] += args.p_final_stack
+      return { data: tokenBalances[args.p_user_id], error: null }
+    }
+    if (name === 'refund_match_escrow') {
+      if (escrowStatuses[args.p_escrow_id] !== 'in_match' || escrowOwners[args.p_escrow_id] !== args.p_user_id) {
+        return { data: null, error: { message: 'ESCROW_NOT_ACTIVE' } }
+      }
+      escrowStatuses[args.p_escrow_id] = 'refunded'
+      tokenBalances[args.p_user_id] += escrowBuyIns[args.p_escrow_id]
+      return { data: tokenBalances[args.p_user_id], error: null }
+    }
+    return { data: null, error: { message: 'UNKNOWN_RPC' } }
+  })
+  return { from, rpc }
 }
 
 jest.mock('../../src/config/supabase', () => ({
@@ -86,21 +133,35 @@ const ROOM_ID = 'adept_test_room'
 
 // ที่นั่งจำลองแบบ Adept จริง (Sage เข้ารอ + 2 Human + Bot ตัวที่ 2) — ตรงกับ roomRegistry.ts seat order
 const SEATS = [
-  { type: 'ai' as const, name: 'The Sage', aiConfigId: 'sage' },
+  { type: 'ai' as const, name: 'Veyra', aiConfigId: 'AI_SAGE' },
   { type: 'human' as const, userId: USER_A, name: 'PlayerA', avatarUrl: '🐉' },
   { type: 'human' as const, userId: USER_B, name: 'PlayerB', avatarUrl: '🦊' },
-  { type: 'ai' as const, name: 'The Ghost', aiConfigId: 'ghost' },
+  { type: 'ai' as const, name: 'Kaelith', aiConfigId: 'AI_GHOST' },
 ]
 
 beforeEach(() => {
   tokenBalances = { [USER_A]: 100_000, [USER_B]: 100_000 }
   escrowIdCounter = 0
   escrowStatuses = {}
+  escrowOwners = {}
+  escrowBuyIns = {}
   jest.useFakeTimers()
 })
 
 afterEach(() => {
   jest.useRealTimers()
+})
+
+describe('Adept Minion identities', () => {
+  test('shows Minion names while retaining the original AI configs', async () => {
+    const { io } = makeIoMock()
+    await startMultiplayerMatch(io, ROOM_ID, SEATS, 'adept')
+
+    const state: any = getMultiMatchState(ROOM_ID)
+    const bots = state.seatOrder.filter((seat: any) => !seat.isHuman)
+    expect(bots.map((seat: any) => seat.displayName)).toEqual(['Veyra', 'Kaelith'])
+    expect(bots.map((seat: any) => seat.userId)).toEqual(['AI_SAGE', 'AI_GHOST'])
+  })
 })
 
 describe('Adept Grace Period — markPlayerAFK', () => {

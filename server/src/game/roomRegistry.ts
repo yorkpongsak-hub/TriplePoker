@@ -2,16 +2,24 @@
  * roomRegistry.ts
  * Room Registry กลาง (Redis-backed) — ใช้กับ Adept / Mastermind / HighNoble เท่านั้น
  * (Initiate ยังคง 1 Human + 3 AI แบบเดิม ไม่ใช้ไฟล์นี้)
- * Adept: Dynamic 2-3 Human + 1-2 AI — โต๊ะ public (auto-match) รอ human คนที่ 2/3 ผ่าน grace
- * period สั้นๆ (ADEPT_GRACE_MS) ก่อนจะยอมเติม AI/ยกเลิกโต๊ะ (ดู resolveAdeptGraceExpiry ด้านล่าง)
- * โต๊ะ private (PIN) ยังคงพฤติกรรมเดิม (2H+2AI ตายตัว เติม bot ตัวที่ 2 ทันทีที่ human ครบ 2)
- * Mastermind / HighNoble: 3 Human + 1 AI
+ * LobbyMatchmaking_Spec_v1_2 — Adept public (auto-match): ล็อคตายตัวที่ 2 Human + 2 AI เท่านั้น ไม่มี
+ * 3rd human ทุกกรณี (v1.2 ตัดสเตจรอคนที่ 3 ทิ้งแล้ว — เดิม v1.1 เคยรอ 15 วิ) Human เติมจากหัว (seat 0→1),
+ * AI เติมจากท้าย (seat 3→2) — seat แรกว่างทั้งหมดตอนสร้างห้อง ไม่ fix ตำแหน่งใดๆ Human คนแรก join → เติม
+ * Companion Bot (Sage) ทันทีที่ seat ว่างสุดท้าย + เริ่ม timer 2 นาทีรอคนที่ 2 (ไม่ครบ → ปิดโต๊ะ, ดู
+ * resolveAdeptWaitExpiry ด้านล่าง) Human คนที่ 2 join → เติม Companion Bot ตัวที่ 2 ทันที (ไม่มี wait
+ * stage อีกแล้ว) ห้องเต็ม 2H+2AI ทันที ไม่มีทางที่คนที่ 3 จะเข้าห้องนี้ได้อีก (ดู isRoomFull/saveRoom —
+ * ห้องหลุดจาก openSetKey ทันทีที่ status กลายเป็น 'full' คนที่ 3 ที่มา auto-match จะได้ห้องใหม่แทนเสมอ)
+ * Adept private (PIN): ยังคงพฤติกรรมเดิมทั้งหมด ไม่ถูกแตะ (2H+2AI ตายตัว, Sage เข้ารอทันทีตอน
+ * สร้างห้อง — ดู buildAdeptPrivateInitialSeats)
+ * Mastermind: 3 Human + 1 AI | HighNoble public: 2-stage wait timer แบบเดียวกับ Adept เดิม (v1.1) ยังคง
+ * รอคนที่ 3 ได้ 15 วิ ไม่ถูกกระทบโดย v1.2 นี้ — ดู resolveHighNobleWaitExpiry แยกต่างหาก
  * The Sage Unicorn Studio Co., Ltd.
  */
 
 import { redis } from '../config/redis'
 import { FOUR_GODS, AI_CONFIGS, AIConfig, pickRandomMinions } from './aiEngine'
-import { rollHighNobleBoss } from './monarchSpawn'
+import { rollHighNobleBoss, type MonarchRollResult } from './monarchSpawn'
+import { gameConfig } from '../config/gameConfig'
 
 // ─── Types ───────────────────────────────────────────────────────
 export type Tier = 'adept' | 'mastermind' | 'highNoble'
@@ -39,33 +47,40 @@ export interface GameRoom {
   isPrivate: boolean
   pin?: string
   hostUserId?: string
-  // LobbyMatchmaking_Spec_v1_0 §4.4/§6.1: waiting timeout — 'waiting' (รอบแรก 3 นาที) จบแล้วถามผู้เล่น
-  // ('awaiting_choice') → เลือก "รอต่อ" เข้า 'extended' (2 นาที) → หมดแล้ว: Adept ลบทันที, High Noble
-  // เช็ค Human count ก่อน — ถ้า >=2 เข้า 'awaiting_deadlock_choice' (Host เลือก Start Now/Delete) ถ้า =1 ลบทันที
+  // Spectator MVP: immutable matchmaking lane. LIVE rooms never mix with STANDARD rooms.
+  liveMode?: 'STANDARD' | 'LIVE'
+  liveEnabledByUserId?: string
+  broadcastId?: string
+  // LobbyMatchmaking_Spec_v1_0 §4.4/§6.1: waiting timeout เดิม — HighNoble เท่านั้นตอนนี้ (Adept public
+  // ย้ายไปใช้ waitStage ด้านล่างแทนแล้วตาม v1.1) — 'waiting' (รอบแรก 3 นาที) จบแล้วถามผู้เล่น
+  // ('awaiting_choice') → เลือก "รอต่อ" เข้า 'extended' (2 นาที) → หมดแล้ว เช็ค Human count ก่อน —
+  // ถ้า >=2 เข้า 'awaiting_deadlock_choice' (Host เลือก Start Now/Delete) ถ้า =1 ปิดโต๊ะทันที
   timeoutStage?: 'waiting' | 'awaiting_choice' | 'extended' | 'awaiting_deadlock_choice'
+  // LobbyMatchmaking_Spec_v1_1 §Adept: stage ของ timer ใหม่ — ใช้ตัดสินใจใน resolveAdeptWaitExpiry()
+  // (humanCount ตอน timer หมดจะบอกเองว่าอยู่ stage ไหน แต่เก็บ field นี้ไว้ส่งให้ client โชว์ label ถูก)
+  waitStage?: 'waiting_2nd' | 'waiting_3rd'
 }
 
 // ─── Config ต่อ Tier ────────────────────────────────────────────
 // humanSeatsRequired: จำนวนที่นั่ง Human ที่ต้องการ — ที่เหลือ (4 - จำนวนนี้) = AI fix ตั้งแต่สร้างห้อง
 // adept.waitTimeoutMs/humanSeatsRequired ตอนนี้ใช้แค่ฝั่ง private room เท่านั้น (2H+2AI ตายตัว) —
-// โต๊ะ public (auto-match) ใช้ ADEPT_GRACE_MS ด้านล่างแทน (dynamic 2-3H, ดู joinRoom/resolveAdeptGraceExpiry)
+// โต๊ะ public (auto-match) ใช้ gameConfig.matchmakingTimeouts.adept.secondHumanWaitMs แทน (v1.2: ล็อค
+// ตายตัว 2H+2AI เท่านั้น ไม่มี 3rd-human wait stage อีกแล้ว, ดู joinRoom/resolveAdeptWaitExpiry)
+// ค่าตัวเลขทั้งหมดย้ายไป gameConfig.matchmakingTimeouts แล้ว (config-driven ตามกติกา) — ไฟล์นี้แค่ import มาใช้
 export const TIER_ROOM_CONFIG: Record<Tier, { waitTimeoutMs: number; humanSeatsRequired: number }> = {
-  adept:      { waitTimeoutMs: 3 * 60_000, humanSeatsRequired: 2 }, // private room เท่านั้น — Sage เข้ารอทันที, Ghost/Reckless สุ่มตอน Human คนที่ 2
-  mastermind: { waitTimeoutMs: 120_000,    humanSeatsRequired: 3 }, // 3H + 1AI
-  highNoble:  { waitTimeoutMs: 3 * 60_000, humanSeatsRequired: 3 }, // 3H + 1AI (Boss = Four Gods ปกติ 97% / Monarch ลับ 3%+pity — ดู monarchSpawn.ts)
+  adept:      { waitTimeoutMs: gameConfig.matchmakingTimeouts.adeptPrivateWaitTimeoutMs, humanSeatsRequired: 2 }, // private room เท่านั้น — Sage เข้ารอทันที, Ghost/Reckless สุ่มตอน Human คนที่ 2
+  mastermind: { waitTimeoutMs: gameConfig.matchmakingTimeouts.mastermindWaitTimeoutMs,    humanSeatsRequired: 3 }, // 3H + 1AI
+  highNoble:  { waitTimeoutMs: gameConfig.matchmakingTimeouts.highNobleWaitTimeoutMs,     humanSeatsRequired: 3 }, // 3H + 1AI (Boss = Four Gods ปกติ 97% / Monarch ลับ 3%+pity — ดู monarchSpawn.ts)
 }
 
-// Adept public (auto-match) grace period — โต๊ะรอ human คนถัดไปนานเท่านี้ก่อนตัดสินใจ
-// ยกเลิกโต๊ะ (ยังมีแค่ 1H) หรือเติม AI (มี 2H แล้ว) ใช้ค่าเดียวกันทั้ง 2 stage
-export const ADEPT_GRACE_MS = 40_000 // tune ได้ในช่วง 30_000-45_000
-
-// §4.4: รอบขยายเวลาหลัง Dialog เลือก "Wait 2 More Minutes"
-export const WAIT_EXTENSION_MS = 2 * 60_000
+// §4.4: รอบขยายเวลาหลัง Dialog เลือก "Wait 2 More Minutes" (HighNoble เท่านั้น จนกว่าจะทำ Step 3)
+export const WAIT_EXTENSION_MS = gameConfig.matchmakingTimeouts.waitExtensionMs
 
 // ─── Redis Key Helpers ──────────────────────────────────────────
 const metaKey = (roomId: string) => `room:${roomId}:meta`
 const fullKey = (roomId: string) => `room:${roomId}:full`
 const openSetKey = (tier: Tier) => `rooms:open:${tier}`
+const privateOpenSetKey = (tier: Tier) => `rooms:private-open:${tier}`
 
 const ROOM_TTL_SECONDS = 60 * 30
 
@@ -77,45 +92,83 @@ function aiSeat(idx: number): Seat {
   return { type: 'ai', name: `Minion-${idx + 1}`, joinedAt: Date.now() }
 }
 
-// LobbyMatchmaking_Spec_v1_0 §4.2: The Sage เข้ารอทันทีตอนสร้างโต๊ะ Adept
-function sageSeat(): Seat {
+// Adept ใช้ชื่อ Minion สุ่มจาก roster 25 คน แต่เก็บ aiConfigId เดิมไว้เพื่อไม่เปลี่ยนความเก่ง/บุคลิก AI
+function sageSeat(excludeNames: string[] = []): Seat {
   const sage = AI_CONFIGS.find(a => a.personality === 'sage')!
-  return { type: 'ai', name: sage.name, joinedAt: Date.now(), aiConfigId: sage.id }
+  const minionName = pickRandomMinions(1, excludeNames)[0]
+  return { type: 'ai', name: minionName, joinedAt: Date.now(), aiConfigId: sage.id, isMinion: true }
 }
 
-// §4.3: Human คนที่ 2 join → สุ่ม Bot อีก 1 ตัว (The Ghost หรือ The Reckless)
-function secondAdeptBotSeat(): Seat {
+// Companion bot ตัวที่ 2 ของ Adept (The Ghost หรือ The Reckless สุ่ม 1 ตัว) — private: ตอน human ครบ 2
+// | public v1.2: เติมทันทีตอน human คนที่ 2 join เลย (ไม่มี wait stage รอคนที่ 3 อีกต่อไป — ดู joinRoom())
+function secondAdeptBotSeat(excludeNames: string[] = []): Seat {
   const pool = AI_CONFIGS.filter(a => a.personality === 'ghost' || a.personality === 'reckless')
   const pick = pool[Math.floor(Math.random() * pool.length)]
-  return { type: 'ai', name: pick.name, joinedAt: Date.now(), aiConfigId: pick.id }
+  const minionName = pickRandomMinions(1, excludeNames)[0]
+  return { type: 'ai', name: minionName, joinedAt: Date.now(), aiConfigId: pick.id, isMinion: true }
 }
 
-// §4.2: seat 0 = The Sage ทันที, seat 1 ว่างไว้ก่อน (เติมสุ่มตอน Human คนที่ 2 join ใน joinRoom())
-function buildAdeptInitialSeats(): [Seat, Seat, Seat, Seat] {
+// LobbyMatchmaking_Spec_v1_0 §4.2 (private room เท่านั้น ไม่ถูกแตะโดย v1.1): seat 0 = The Sage ทันที
+// ตอนสร้างห้อง, seat 1 ว่างไว้ก่อน (host เข้า) — Companion bot ตัวที่ 2 เติมตอน human ครบ 2 ใน joinRoom()
+function buildAdeptPrivateInitialSeats(): [Seat, Seat, Seat, Seat] {
   return [sageSeat(), emptySeat(), emptySeat(), emptySeat()]
 }
 
-// Patch Multiplayer HighNoble: ที่นั่ง Boss (index 0) — สุ่ม placeholder ตอนสร้างห้อง (ยังไม่รู้ว่าใครจะมานั่ง Human บ้าง)
-// ตัวจริงจะถูกสุ่มใหม่ทับด้วย finalizeBossSeat() ตอนห้องเต็ม (รู้ user_id ครบ 3 คนแล้ว ใช้คำนวณ Monarch pity ได้)
+// LobbyMatchmaking_Spec_v1_1 §Adept public: ไม่ fix ตำแหน่งใดๆ ตั้งแต่สร้างห้อง — ทุกที่นั่งว่างหมด รอ
+// Human เข้าที่นั่งว่างแรกที่เจอ (findIndex) เอง ซึ่งจะกลายเป็น seat 0→1→2 โดยธรรมชาติ (ดู joinRoom())
+function buildAdeptPublicInitialSeats(): [Seat, Seat, Seat, Seat] {
+  return [emptySeat(), emptySeat(), emptySeat(), emptySeat()]
+}
+
+// หา index ของที่นั่งว่างตัว "ท้ายสุด" (index มากสุด) — ใช้เติม AI จากท้ายตาม v1.1 (Human เติมจากหัว
+// ด้วย findIndex ปกติอยู่แล้ว, AI ต้องเติมจากท้ายแทนไม่ให้ชนกับ human ที่กำลังจะ join ต่อ)
+function lastEmptySeatIndex(seats: readonly Seat[]): number {
+  for (let i = seats.length - 1; i >= 0; i--) {
+    if (seats[i].type === 'empty') return i
+  }
+  return -1
+}
+
+// Patch Multiplayer HighNoble (private room เท่านั้นหลัง v1.1): ที่นั่ง Boss (index 0) — สุ่ม placeholder
+// ตอนสร้างห้อง (ยังไม่รู้ว่าใครจะมานั่ง Human บ้าง) ตัวจริงจะถูกสุ่มใหม่ทับด้วย finalizeBossSeat() ตอน
+// ห้องเต็ม (รู้ user_id ครบ 3 คนแล้ว ใช้คำนวณ Monarch pity ได้) — public room ไม่ใช้ฟังก์ชันนี้อีกต่อไป
+// (ดู joinRoom(): roll จริงตอน Human คนแรก join เลย ไม่มี placeholder)
 function bossSeat(): Seat {
   const god: AIConfig = FOUR_GODS[Math.floor(Math.random() * FOUR_GODS.length)]
   return { type: 'ai', name: god.name, joinedAt: Date.now(), aiConfigId: god.id, isBoss: true }
+}
+
+// LobbyMatchmaking_Spec_v1_1 §HighNoble public: เหมือน Adept public — ไม่ fix ตำแหน่งใดๆ ตั้งแต่สร้าง
+// ห้อง ทุกที่นั่งว่างหมด รอ Human คนแรก join ก่อนค่อยสุ่ม Boss/Monarch จริง (ดู joinRoom())
+function buildHighNoblePublicInitialSeats(): [Seat, Seat, Seat, Seat] {
+  return [emptySeat(), emptySeat(), emptySeat(), emptySeat()]
+}
+
+// แปลงผลลัพธ์จาก rollHighNobleBoss() เป็น Seat จริง — ใช้ร่วมกัน 2 จุด: finalizeBossSeat() (private
+// room, roll ตอนห้องเต็ม) และ joinRoom() public v1.1 (roll ตอน Human คนแรก join) กันโค้ดซ้ำ
+function bossSeatFromRoll(result: MonarchRollResult): Seat {
+  return result.isMonarch
+    ? { type: 'ai', name: 'Monarch', joinedAt: Date.now(), isBoss: true, isMonarch: true }
+    : { type: 'ai', name: result.boss!.name, joinedAt: Date.now(), aiConfigId: result.boss!.id, isBoss: true }
 }
 
 function makeRoomId(tier: Tier): string {
   return `${tier}_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e4)}`
 }
 
-function buildInitialSeats(tier: Tier): [Seat, Seat, Seat, Seat] {
-  // §4.2: Adept มี seat layout พิเศษ — bot ตัวที่ 2 ไม่ fix ตั้งแต่สร้างห้อง (ดู buildAdeptInitialSeats)
-  if (tier === 'adept') return buildAdeptInitialSeats()
+function buildInitialSeats(tier: Tier, isPrivate: boolean): [Seat, Seat, Seat, Seat] {
+  // Adept: private (PIN) ใช้ layout เดิม (Sage seat 0 ทันที) | public (auto-match) v1.1 ว่างหมดทุกที่นั่ง
+  if (tier === 'adept') return isPrivate ? buildAdeptPrivateInitialSeats() : buildAdeptPublicInitialSeats()
+  // HighNoble: private ใช้ layout เดิม (Boss placeholder seat 0 ทันที, real roll ตอนห้องเต็มผ่าน
+  // finalizeBossSeat) | public v1.1 ว่างหมดทุกที่นั่งเหมือน Adept (real roll ตอน Human คนแรก join)
+  if (tier === 'highNoble' && !isPrivate) return buildHighNoblePublicInitialSeats()
 
   const cfg = TIER_ROOM_CONFIG[tier]
   const aiCount = 4 - cfg.humanSeatsRequired
   const seats: Seat[] = []
   for (let i = 0; i < 4; i++) {
     if (i >= aiCount) { seats.push(emptySeat()); continue }
-    // Patch Multiplayer HighNoble: seat 0 = Boss (fixed, never human-joinable) — seat 1+ (ถ้ามี) = generic AI filler
+    // Patch Multiplayer HighNoble (private เท่านั้นตอนนี้): seat 0 = Boss placeholder — seat 1+ (ถ้ามี, Mastermind) = generic AI filler
     seats.push(i === 0 && tier === 'highNoble' ? bossSeat() : aiSeat(i))
   }
   return seats as [Seat, Seat, Seat, Seat]
@@ -147,6 +200,16 @@ async function saveRoom(room: GameRoom): Promise<void> {
   } else {
     await redis.srem(openSetKey(room.tier), room.roomId)
   }
+  if (room.status === 'waiting' && room.isPrivate && room.pin) {
+    await redis.sadd(privateOpenSetKey(room.tier), room.roomId)
+  } else {
+    await redis.srem(privateOpenSetKey(room.tier), room.roomId)
+  }
+}
+
+export function toPublicRoom(room: GameRoom): Omit<GameRoom, 'pin'> {
+  const { pin: _privatePin, ...safeRoom } = room
+  return safeRoom
 }
 
 export async function getRoom(roomId: string): Promise<GameRoom | null> {
@@ -156,39 +219,73 @@ export async function getRoom(roomId: string): Promise<GameRoom | null> {
 }
 
 // §4.1: จับ user ใหม่เข้า "โต๊ะที่รอนานที่สุด" เสมอ — Redis SMEMBERS ไม่การันตีลำดับ ต้องดึงมาเทียบ createdAt เอง
-export async function findOpenRoom(tier: Tier): Promise<GameRoom | null> {
+export async function findOpenRoom(tier: Tier, liveMode: 'STANDARD' | 'LIVE' = 'STANDARD'): Promise<GameRoom | null> {
   const roomIds = await redis.smembers(openSetKey(tier))
   const candidates: GameRoom[] = []
   for (const roomId of roomIds) {
     const room = await getRoom(roomId)
-    if (room && room.status === 'waiting' && !room.isPrivate) candidates.push(room)
+    if (room && room.status === 'waiting' && !room.isPrivate && (room.liveMode ?? 'STANDARD') === liveMode) candidates.push(room)
   }
   if (candidates.length === 0) return null
   return candidates.reduce((oldest, r) => (r.createdAt < oldest.createdAt ? r : oldest))
 }
 
+export function isValidRoomPin(pin: string | undefined): pin is string {
+  return typeof pin === 'string' && /^\d{4}$/.test(pin)
+}
+
+// Unknown and incorrect PINs intentionally produce the same null result.
+export async function findPrivateRoomByPin(tier: Tier, pin: string): Promise<GameRoom | null> {
+  if (!isValidRoomPin(pin)) return null
+  const roomIds = await redis.smembers(privateOpenSetKey(tier))
+  const matches: GameRoom[] = []
+  for (const roomId of roomIds) {
+    const room = await getRoom(roomId)
+    if (room && room.status === 'waiting' && room.isPrivate && room.pin === pin) matches.push(room)
+  }
+  if (matches.length === 0) return null
+  return matches.reduce((oldest, room) => room.createdAt < oldest.createdAt ? room : oldest)
+}
+
+export async function joinPrivateRoomByPin(
+  tier: Tier, pin: string, userId: string, userName: string, avatarUrl?: string,
+): Promise<JoinResult> {
+  return withLock(`matchmaking:${tier}:private:${pin}`, async () => {
+    const room = await findPrivateRoomByPin(tier, pin)
+    if (!room) return { ok: false, reason: 'not_found' }
+    return joinRoom(room.roomId, userId, userName, pin, avatarUrl)
+  })
+}
+
 // ─── สร้างห้องใหม่ — AI seats fix ตาม config ทันที ──────────────
 // (เรียกจาก findOrCreateRoom() เท่านั้น — public room เสมอ, isPrivate default false)
-export async function createRoom(tier: Tier, isPrivate = false): Promise<GameRoom> {
+export async function createRoom(tier: Tier, isPrivate = false, liveMode: 'STANDARD' | 'LIVE' = 'STANDARD', liveEnabledByUserId?: string): Promise<GameRoom> {
   const cfg = TIER_ROOM_CONFIG[tier]
-  // Adept public: เริ่มนับ grace period รอ human คนที่ 2 ทันที (แทน waitTimeoutMs 3 นาทีเดิม)
-  const timeoutAt = tier === 'adept' ? Date.now() + ADEPT_GRACE_MS : Date.now() + cfg.waitTimeoutMs
+  // Adept/HighNoble public v1.1: ยังไม่เริ่มนับ timer ใดๆ ตอนสร้างห้อง — รอ Human คนแรก join ก่อน (ดู
+  // joinRoom()) เพราะ findOrCreateRoomAndJoin() เรียก createRoom() แล้ว join ทันทีในธุรกรรมเดียวกันเสมออยู่แล้ว
+  const usesNewWaitFlow = (tier === 'adept' || tier === 'highNoble') && !isPrivate
+  const timeoutAt = usesNewWaitFlow ? null : Date.now() + cfg.waitTimeoutMs
   const room: GameRoom = {
     roomId: makeRoomId(tier),
     tier,
-    seats: buildInitialSeats(tier),
+    seats: buildInitialSeats(tier, isPrivate),
     createdAt: Date.now(),
     timeoutAt,
     status: 'waiting',
     isPrivate,
+    liveMode,
+    liveEnabledByUserId,
   }
   await saveRoom(room)
   return room
 }
 
-export async function findOrCreateRoom(tier: Tier): Promise<GameRoom> {
-  const open = await findOpenRoom(tier)
-  return open ?? (await createRoom(tier))
+// isNew: บอก caller ว่าห้องที่ได้เป็นห้องใหม่ (ไม่มีคนรอ) หรือห้องเดิมที่มีคนอยู่แล้ว —
+// ใช้ตัดสินใจ broadcast "server_activity" (table_open) เฉพาะห้องที่เพิ่งเกิดขึ้นจริง
+export async function findOrCreateRoom(tier: Tier, liveMode: 'STANDARD' | 'LIVE' = 'STANDARD', liveEnabledByUserId?: string): Promise<{ room: GameRoom; isNew: boolean }> {
+  const open = await findOpenRoom(tier, liveMode)
+  if (open) return { room: open, isNew: false }
+  return { room: await createRoom(tier, false, liveMode, liveEnabledByUserId), isNew: true }
 }
 
 // ─── Distributed lock (Redis SET NX EX) ─────────────────────────
@@ -226,10 +323,23 @@ async function withLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
 // ล็อกต่อ tier ตลอดช่วง find/create + จองที่นั่ง กันสองคำขอชนกันได้ห้องคนละใบ หรือแย่งที่นั่งเดียวกัน
 export async function findOrCreateRoomAndJoin(
   tier: Tier, userId: string, userName: string, avatarUrl?: string,
+  liveMode: 'STANDARD' | 'LIVE' = 'STANDARD', liveEnabledByUserId?: string,
 ): Promise<JoinResult> {
-  return withLock(`matchmaking:${tier}`, async () => {
-    const room = await findOrCreateRoom(tier)
-    return joinRoom(room.roomId, userId, userName, undefined, avatarUrl)
+  return withLock(`matchmaking:${tier}:${liveMode}`, async () => {
+    const { room, isNew } = await findOrCreateRoom(tier, liveMode, liveEnabledByUserId)
+    const result = await joinRoom(room.roomId, userId, userName, undefined, avatarUrl)
+    return { ...result, isNew }
+  })
+}
+
+export async function createNewPublicRoomAndJoin(
+  tier: Tier, userId: string, userName: string, avatarUrl?: string,
+  liveMode: 'STANDARD' | 'LIVE' = 'STANDARD', liveEnabledByUserId?: string,
+): Promise<JoinResult> {
+  return withLock(`matchmaking:${tier}:${liveMode}`, async () => {
+    const room = await createRoom(tier, false, liveMode, liveEnabledByUserId)
+    const result = await joinRoom(room.roomId, userId, userName, undefined, avatarUrl)
+    return { ...result, isNew: true }
   })
 }
 
@@ -242,12 +352,12 @@ export async function createPrivateRoom(
   pin?: string,
 ): Promise<GameRoom> {
   const vipPin = isVipHost && pin ? pin : undefined
-  if (vipPin && (!/^\d{4}$/.test(vipPin))) {
+  if (vipPin && !isValidRoomPin(vipPin)) {
     throw new Error('PIN ต้องเป็นตัวเลข 4 หลักเท่านั้น')
   }
 
   const cfg = TIER_ROOM_CONFIG[tier]
-  const seats = buildInitialSeats(tier)
+  const seats = buildInitialSeats(tier, true)
   const firstHumanIdx = seats.findIndex(s => s.type === 'empty')
   if (firstHumanIdx !== -1) {
     seats[firstHumanIdx] = { type: 'human', userId: hostUserId, name: hostName, joinedAt: Date.now() }
@@ -274,6 +384,7 @@ export interface JoinResult {
   seatIndex?: number
   room?: GameRoom
   reason?: 'not_found' | 'full' | 'wrong_pin' | 'closed'
+  isNew?: boolean // true = ห้องนี้เพิ่งถูกสร้างจาก findOrCreateRoomAndJoin() (ดู findOrCreateRoom)
 }
 
 export async function joinRoom(
@@ -296,20 +407,57 @@ export async function joinRoom(
   room.seats[seatIdx] = { type: 'human', userId, name: userName, joinedAt: Date.now(), avatarUrl }
   if (!room.hostUserId) room.hostUserId = userId // คนแรกที่ join ห้อง public = host (ใช้กับ Deadlock dialog §4.4/§6.1)
 
-  // Adept: private room (PIN) ยังคงพฤติกรรมเดิม — human ครบ 2 → เติม Bot ตัวที่ 2 ทันที
-  // (ไม่มี resolveAdeptGraceExpiry() มาช่วยเพราะ private room ไม่อยู่ใน openSetKey เลย — ถ้าไม่เติม
+  // Adept: private room (PIN) ยังคงพฤติกรรมเดิมทั้งหมด — human ครบ 2 → เติม Bot ตัวที่ 2 ทันที
+  // (ไม่มี resolveAdeptWaitExpiry() มาช่วยเพราะ private room ไม่อยู่ใน openSetKey เลย — ถ้าไม่เติม
   // ทันทีตรงนี้ที่นั่งจะว่างค้างตลอดไป ไม่มีวันเริ่มเกมได้)
   if (room.tier === 'adept' && room.isPrivate) {
     if (humanCount(room) === TIER_ROOM_CONFIG.adept.humanSeatsRequired) {
       const remainingEmpty = room.seats.findIndex(s => s.type === 'empty')
-      if (remainingEmpty !== -1) room.seats[remainingEmpty] = secondAdeptBotSeat()
+      if (remainingEmpty !== -1) room.seats[remainingEmpty] = secondAdeptBotSeat(room.seats.map(s => s.name))
     }
-  } else if (room.tier === 'adept' && humanCount(room) === 2) {
-    // Public Adept, human คนที่ 2 เพิ่ง join — ยังไม่เติม Bot ทันที เริ่ม grace period รอบ 2
-    // รอ human คนที่ 3 แทน (resolveAdeptGraceExpiry จะเติม Bot เองถ้าหมดเวลาแล้วยังมีแค่ 2H —
-    // ไม่ต้องเช็ค humanCount===3 ตรงนี้เพราะที่นั่งสุดท้ายถูกเติมแบบปกติด้านบนอยู่แล้ว isRoomFull()
-    // ด้านล่างจะกลายเป็น true เองตามปกติ เหมือน tier อื่น)
-    room.timeoutAt = Date.now() + ADEPT_GRACE_MS
+  } else if (room.tier === 'adept' && !room.isPrivate) {
+    // LobbyMatchmaking_Spec_v1_2 §Adept public — ล็อคตายตัว 2H+2AI เท่านั้น ไม่มี 3rd-human wait stage
+    // อีกแล้ว (เดิม v1.1 เคยรอ 15 วิ) Human เติมจากหัว (seatIdx ด้านบนหาที่ว่างแรกเจอเองอยู่แล้ว),
+    // Companion Bot เติมจากท้ายด้วย lastEmptySeatIndex() แยกจาก path นี้
+    const hCount = humanCount(room)
+    if (hCount === 1) {
+      // Human คนแรก join — เติม Sage ที่ seat ว่างสุดท้ายทันที + เริ่ม timer 2 นาทีรอคนที่ 2 (Human>=2 บังคับ)
+      const lastEmpty = lastEmptySeatIndex(room.seats)
+      if (lastEmpty !== -1) room.seats[lastEmpty] = sageSeat(room.seats.map(s => s.name))
+      room.waitStage = 'waiting_2nd'
+      room.timeoutAt = Date.now() + gameConfig.matchmakingTimeouts.adept.secondHumanWaitMs
+    } else if (hCount === 2) {
+      // Human คนที่ 2 join — เติม Companion Bot ตัวที่ 2 ทันที ห้องเต็ม 2H+2AI พอดี (isRoomFull()
+      // ด้านล่างจะ mark 'full' เอง แล้ว saveRoom() จะเอาห้องนี้ออกจาก openSetKey ทันที — คนที่ 3 ที่มา
+      // auto-match ทีหลังจะไม่มีทางเห็น/เข้าห้องนี้ได้อีกเลย ดู findOpenRoom())
+      const remainingEmpty = room.seats.findIndex(s => s.type === 'empty')
+      if (remainingEmpty !== -1) room.seats[remainingEmpty] = secondAdeptBotSeat(room.seats.map(s => s.name))
+      room.waitStage = undefined
+      room.timeoutAt = null
+    }
+  } else if (room.tier === 'highNoble' && !room.isPrivate) {
+    // LobbyMatchmaking_Spec_v1_1 §HighNoble public — เหมือน Adept public แต่มี Companion Bot ตัวเดียว
+    // (Boss/Monarch เอง ไม่มี "ตัวที่ 2" แยก) roll จริง (weighted random + pity) เกิดตอน Human คนแรก
+    // join เลย ไม่ใช่ตอนห้องเต็มแบบเดิม (Monarch_Spec_v1_1: "Seat 1 = คน trigger การสุ่ม") — ผูก pity
+    // counter กับคนแรกที่ trigger คนเดียวเท่านั้น (ไม่ใช่ max ของทั้งโต๊ะแบบ private room เดิม เพราะตอนนี้
+    // ยังไม่รู้ว่าอีก 2 คนที่เหลือจะเป็นใคร) ผลที่ล็อกไว้ตรงนี้จะไม่ถูก re-roll ตอนห้องเต็มอีก — ดู
+    // finalizeAndStartRoom ใน gameSocket.ts ที่ข้าม finalizeBossSeat() สำหรับ public room โดยเฉพาะ
+    const hCount = humanCount(room)
+    if (hCount === 1) {
+      const lastEmpty = lastEmptySeatIndex(room.seats)
+      if (lastEmpty !== -1) {
+        const rollResult = await rollHighNobleBoss([userId])
+        room.seats[lastEmpty] = bossSeatFromRoll(rollResult)
+      }
+      room.waitStage = 'waiting_2nd'
+      room.timeoutAt = Date.now() + gameConfig.matchmakingTimeouts.highNoble.secondHumanWaitMs
+    } else if (hCount === 2) {
+      room.waitStage = 'waiting_3rd'
+      room.timeoutAt = Date.now() + gameConfig.matchmakingTimeouts.highNoble.thirdHumanWaitMs
+    } else if (hCount === 3) {
+      room.waitStage = undefined
+      room.timeoutAt = null
+    }
   }
 
   if (isRoomFull(room)) room.status = 'full'
@@ -425,15 +573,20 @@ export async function deleteRoomCompletely(roomId: string): Promise<void> {
   const room = await getRoom(roomId)
   if (!room) return
   await redis.srem(openSetKey(room.tier), roomId)
+  await redis.srem(privateOpenSetKey(room.tier), roomId)
   await redis.del(metaKey(roomId))
   await redis.del(fullKey(roomId))
 }
 
-// ─── Adept Dynamic Capacity — grace period scanner + resolver ──────────────
-// สแกนหาโต๊ะ Adept public (ไม่ใช่ private) ที่ยัง 'waiting' และ grace period หมดเวลาแล้ว
-// คืนแค่ roomId — ผู้เรียกต้องผ่าน resolveAdeptGraceExpiry() เสมอ เพราะระหว่าง scan เสร็จกับ
-// resolver ทำงานจริง อาจมี join ใหม่แทรกเข้ามาพอดี (ต้องอ่านสดอีกรอบใน resolver ก่อนตัดสินใจ)
-export async function getAdeptGraceExpiredRoomIds(): Promise<string[]> {
+// ─── Adept Dynamic Capacity (v1.2) — single-stage wait timer scanner + resolver ──
+// v1.2: Adept public ล็อคตายตัว 2H+2AI เท่านั้น — humanCount===2 เติม Companion Bot ตัวที่ 2 ทันที
+// ภายใน joinRoom() เอง (ห้องจะกลายเป็น 'full' และหลุดจาก openSetKey ทันทีในธุรกรรมเดียวกัน) ดังนั้นห้อง
+// ที่ยังเป็น 'waiting' ตอน timer หมดเวลาจะมี humanCount() แค่ 0 หรือ 1 เท่านั้นเสมอ (รอคนที่ 2 ไม่ทัน
+// secondHumanWaitMs) — ไม่มี "stage 2 รอคนที่ 3" อีกต่อไป (เคยมีใน v1.1 คืนค่า 'ai_filled') สแกนหาโต๊ะ
+// Adept public ที่ยัง 'waiting' และ timeoutAt หมดเวลาแล้ว — คืนแค่ roomId — ผู้เรียกต้องผ่าน
+// resolveAdeptWaitExpiry() เสมอ เพราะระหว่าง scan เสร็จกับ resolver ทำงานจริง อาจมี join ใหม่แทรกเข้ามา
+// พอดี (ต้องอ่านสดอีกรอบใน resolver ก่อนตัดสินใจ)
+export async function getAdeptWaitExpiredRoomIds(): Promise<string[]> {
   const roomIds = await redis.smembers(openSetKey('adept'))
   const now = Date.now()
   const result: string[] = []
@@ -449,28 +602,21 @@ export async function getAdeptGraceExpiredRoomIds(): Promise<string[]> {
 // ตัดสินใจ + แก้ไขห้องจริงสำหรับ 1 roomId — ล็อกด้วย lock เดียวกับ findOrCreateRoomAndJoin (tier
 // 'adept') กัน race กับ join ที่กำลังเข้ามาพอดี แล้วอ่านห้องสดอีกรอบ + เช็ค timeoutAt ซ้ำก่อนลงมือ
 // จริง (เผื่อ join ใหม่แทรกเข้ามาระหว่าง scan กับตอนนี้พอดี ทำให้ timeoutAt ถูกรีเซ็ตไปแล้ว)
-export type AdeptGraceResult =
+export type AdeptWaitExpiryResult =
   | { action: 'noop' }
-  | { action: 'cancelled' }
-  | { action: 'ai_filled'; room: GameRoom }
+  | { action: 'closed' }
 
-export async function resolveAdeptGraceExpiry(roomId: string): Promise<AdeptGraceResult> {
+export async function resolveAdeptWaitExpiry(roomId: string): Promise<AdeptWaitExpiryResult> {
   return withLock('matchmaking:adept', async () => {
     const room = await getRoom(roomId)
     if (!room || room.status !== 'waiting' || room.isPrivate || room.tier !== 'adept') return { action: 'noop' }
     if (room.timeoutAt === null || Date.now() <= room.timeoutAt) return { action: 'noop' } // มี join ใหม่รีเซ็ต timeoutAt ไปแล้ว
 
-    if (humanCount(room) <= 1) {
-      await deleteRoomCompletely(roomId)
-      return { action: 'cancelled' }
-    }
-
-    // มี 2 Human แล้วยังไม่มีคนที่ 3 ทันเวลา — เติม Bot ตัวที่ 2 ให้เริ่มเกมได้
-    const remainingEmpty = room.seats.findIndex(s => s.type === 'empty')
-    if (remainingEmpty !== -1) room.seats[remainingEmpty] = secondAdeptBotSeat()
-    if (isRoomFull(room)) room.status = 'full'
-    await saveRoom(room)
-    return { action: 'ai_filled', room }
+    // secondHumanWaitMs หมดเวลา ยังมีแค่ 1 Human (หรือ 0) — Human>=2 บังคับตาม Spec → ปิดโต๊ะ
+    // (ไม่ deleteRoomCompletely — mark status='closed' เฉยๆ ให้ client รู้สาเหตุชัดเจน ไม่ต้อง refund
+    // เพราะ escrow ยังไม่เคยหักในช่วง 'waiting' เลย — ดู finalizeAndStartRoom ที่หัก escrow ตอนห้องเต็มเท่านั้น)
+    await closeRoom(roomId)
+    return { action: 'closed' }
   })
 }
 
@@ -499,6 +645,50 @@ export async function fillWithMinion(roomId: string): Promise<GameRoom | null> {
   return room
 }
 
+// ─── HighNoble Dynamic Capacity (v1.1) — 2-stage wait timer scanner + resolver ──
+// โครงเหมือน Adept ทุกอย่าง (ดู resolveAdeptWaitExpiry ด้านบน) ยกเว้นตอนเติมที่นั่งที่เหลือเมื่อไม่มี
+// Human คนที่ 3 ทันเวลา — HighNoble มีที่นั่ง AI แค่ 1 ที่ (Boss/Monarch เท่านั้น สุ่มไปแล้วตอน Human
+// คนแรก join ใน joinRoom()) ที่นั่งว่างที่เหลือตอนนี้คือ "Human seat ที่ไม่มีคนมา" ไม่ใช่ companion bot
+// ตัวที่ 2 แบบ Adept — ใช้ fillWithMinion() (Minion pool เดิมจาก Deadlock "Start Now" §6.1) แทน ให้ตรง
+// ความหมายว่าเป็นตัวสำรองเติมที่นั่งเฉยๆ ไม่ใช่ Boss ซ้ำ
+export async function getHighNobleWaitExpiredRoomIds(): Promise<string[]> {
+  const roomIds = await redis.smembers(openSetKey('highNoble'))
+  const now = Date.now()
+  const result: string[] = []
+  for (const roomId of roomIds) {
+    const room = await getRoom(roomId)
+    if (room && room.status === 'waiting' && !room.isPrivate && room.timeoutAt !== null && now > room.timeoutAt) {
+      result.push(roomId)
+    }
+  }
+  return result
+}
+
+export type HighNobleWaitExpiryResult =
+  | { action: 'noop' }
+  | { action: 'closed' }
+  | { action: 'ai_filled'; room: GameRoom }
+
+export async function resolveHighNobleWaitExpiry(roomId: string): Promise<HighNobleWaitExpiryResult> {
+  return withLock('matchmaking:highNoble', async () => {
+    const room = await getRoom(roomId)
+    if (!room || room.status !== 'waiting' || room.isPrivate || room.tier !== 'highNoble') return { action: 'noop' }
+    if (room.timeoutAt === null || Date.now() <= room.timeoutAt) return { action: 'noop' } // มี join ใหม่รีเซ็ต timeoutAt ไปแล้ว
+
+    // Stage 1 (secondHumanWaitMs) หมดเวลา ยังมีแค่ 1 Human — Human>=2 บังคับตาม Spec v1.1 → ปิดโต๊ะ
+    // (ไม่ deleteRoomCompletely — ไม่ต้อง refund เพราะ escrow ยังไม่เคยหักในช่วง 'waiting' เลย)
+    if (humanCount(room) <= 1) {
+      await closeRoom(roomId)
+      return { action: 'closed' }
+    }
+
+    // Stage 2 (thirdHumanWaitMs) หมดเวลา มี 2 Human แล้วยังไม่มีคนที่ 3 — เติม Minion ที่นั่งที่เหลือ
+    const filled = await fillWithMinion(roomId)
+    if (!filled) return { action: 'noop' }
+    return { action: 'ai_filled', room: filled }
+  })
+}
+
 // ─── Monarch Boss Finalize (Spec v1.3) ──────────────────────────
 // เรียกตอนห้อง highNoble เต็ม (รู้ user_id ของ Human ครบ 3 คนแล้ว) — สุ่มทับที่นั่ง Boss (seat 0)
 // ด้วย weighted random + pity จริง (bossSeat() ตอนสร้างห้องเป็นแค่ placeholder ระหว่างรอ Human เข้า)
@@ -507,9 +697,7 @@ export async function finalizeBossSeat(room: GameRoom): Promise<GameRoom> {
   const humanUserIds = room.seats.filter(s => s.type === 'human' && s.userId).map(s => s.userId!)
   const result = await rollHighNobleBoss(humanUserIds)
 
-  room.seats[0] = result.isMonarch
-    ? { type: 'ai', name: 'Monarch', joinedAt: Date.now(), isBoss: true, isMonarch: true }
-    : { type: 'ai', name: result.boss!.name, joinedAt: Date.now(), aiConfigId: result.boss!.id, isBoss: true }
+  room.seats[0] = bossSeatFromRoll(result)
 
   await saveRoom(room)
   return room

@@ -8,6 +8,7 @@ import type {
   UpdateProfileRequest, TokenBalanceResponse,
   DebtPayAdResponse, ApiError,
 } from '../types/api.types';
+import type { SovereignArchiveResponse, SovereignPublicEventWire, SovereignStatusResponse } from '../types/sovereign.types';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000';
 
@@ -63,4 +64,32 @@ export async function payDebtWithAd(token: string): Promise<DebtPayAdResponse> {
 /** เลือก Pay Later → เปิด Debt Badge */
 export async function payDebtLater(token: string): Promise<{ success: boolean }> {
   return apiFetch<{ success: boolean }>('/users/me/debt/pay-later', { method: 'POST' }, token);
+}
+
+export async function getSovereignStatus(token: string): Promise<SovereignStatusResponse> {
+  return apiFetch<SovereignStatusResponse>('/sovereign/status', {}, token)
+}
+
+export async function getSovereignArchive(token: string): Promise<SovereignArchiveResponse> {
+  return apiFetch<SovereignArchiveResponse>('/sovereign/archive', {}, token)
+}
+
+export async function getSovereignPublicFeed(matchId: string, after: number, token: string): Promise<{ events: SovereignPublicEventWire[] }> {
+  return apiFetch(`/sovereign/public-feed?matchId=${encodeURIComponent(matchId)}&after=${after}`, {}, token)
+}
+
+export async function confirmSovereignSeat(seatId: string, decision: 'CONFIRM' | 'DECLINE', token: string): Promise<void> {
+  return apiFetch('/sovereign/confirmation', { method: 'POST', body: JSON.stringify({ seatId, decision }) }, token)
+}
+
+export async function checkInSovereignSeat(seatId: string, matchId: string, idempotencyKey: string, token: string): Promise<void> {
+  return apiFetch('/sovereign/check-in', { method: 'POST', body: JSON.stringify({ seatId, matchId, idempotencyKey }) }, token)
+}
+
+export async function joinSovereignStandby(matchId: string, idempotencyKey: string, token: string): Promise<void> {
+  return apiFetch('/sovereign/standby', { method: 'POST', body: JSON.stringify({ matchId, idempotencyKey }) }, token)
+}
+
+export async function completeSovereignRename(newName: string, idempotencyKey: string, token: string): Promise<void> {
+  return apiFetch('/sovereign/mandatory-rename', { method: 'POST', body: JSON.stringify({ newName, idempotencyKey }) }, token)
 }

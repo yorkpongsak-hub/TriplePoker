@@ -1,3 +1,6 @@
+// LEGACY ARRANGEMENT ADAPTER ONLY.
+// New Tier S+ work must use arena/sovereign/lastBossAIEngine.ts. This file is
+// retained temporarily for compatibility with the pre-Arena Card model.
 // ============================================================
 // lastBossAI.ts — The Last Boss AI (DDE + MCTS Dual Algorithm)
 // Sprint 5 | TriplePoker — The Sage Unicorn Studio Co., Ltd.
@@ -15,15 +18,15 @@
 //   Iteration 20 → อัปเดต earlyBest
 //   หมดเวลา (≥190ms) ก่อน iteration ครบ → คืน earlyBest ทันที
 //
-// Intelligence Modes (ใช้ร่วมกันทั้ง 2 algorithm):
-//   Full Power  : Lock ไพ่ J+ ไว้ใน Pile 3 (retryCount < 4)
-//   Balancing   : retryCount ≥ 4 → ปิด Full Power Lock
-//   Full Moon   : isFullMoon = true → สุ่มล้วน (handicap)
+// Intelligence policy:
+//   Full Power is identical for every challenger and every attempt.
+//   There is no retry-loss balancing or calendar-based handicap.
 // ============================================================
 
 import { checkFoul } from '../game/foulChecker';
 import { evaluateHand } from '../game/handEvaluator';
-import type { Card, Arrangement, CommunityCards } from '../types/game.types';
+import type { Card } from '../game/deck';
+import type { PlayerArrangement as Arrangement, CommunityCards } from '../game/foulChecker';
 
 // ─── Constants ───────────────────────────────────────────────
 const PILE1_SIZE         = 3;
@@ -46,8 +49,6 @@ const HIGH_RANK_THRESHOLD = 11;           // J=11, Q=12, K=13, A=14
 
 // ─── Types ───────────────────────────────────────────────────
 export interface LastBossOptions {
-  retryCount?:   number;   // จำนวนครั้งที่ผู้เล่นสู้ซ้ำ (Balancing trigger)
-  isFullMoon?:   boolean;  // true = Full Moon Handicap → สุ่มล้วน
   trackedCards?: Card[];   // ไพ่ที่ Perfect Memory จำได้ (สำหรับ scoring ภายนอก)
   serverUtcDay?: number;   // inject วันที่ UTC จาก Server (เพื่อ testability)
 }
@@ -89,17 +90,8 @@ export function lastBossArrange(
     );
   }
 
-  const {
-    retryCount   = 0,
-    isFullMoon   = false,
-    serverUtcDay = new Date().getUTCDate(),  // Server UTC date จริง
-  } = options;
-
-  // ─── Full Moon Handicap ────────────────────────────────────
-  if (isFullMoon) return fullMoonArrange(cards, community);
-
-  // ─── Balancing: retryCount ≥ 4 → ปิด Full Power Lock ──────
-  const useFullPowerLock = retryCount < 4;
+  const { serverUtcDay = new Date().getUTCDate() } = options;
+  const useFullPowerLock = true;
 
   // ─── เลือก Algorithm ตามวัน UTC ──────────────────────────
   const isEvenDay = serverUtcDay % 2 === 0;
@@ -333,21 +325,8 @@ function rollout(
 }
 
 // ============================================================
-// FULL MOON + FALLBACK
+// FALLBACK
 // ============================================================
-function fullMoonArrange(cards: Card[], community: CommunityCards): Arrangement {
-  for (let i = 0; i < 1000; i++) {
-    const s = shuffleCards([...cards]);
-    const arr: Arrangement = {
-      pile1: s.slice(0, PILE1_SIZE),
-      pile2: s.slice(PILE1_SIZE, PILE1_SIZE + PILE2_SIZE),
-      pile3: s.slice(PILE1_SIZE + PILE2_SIZE),
-    };
-    if (!checkFoul(arr, community)) return arr;
-  }
-  throw new Error('fullMoonArrange: ไม่พบ valid arrangement');
-}
-
 function fallbackArrange(cards: Card[], community: CommunityCards): Arrangement {
   for (let i = 0; i < 1000; i++) {
     const s = shuffleCards([...cards]);

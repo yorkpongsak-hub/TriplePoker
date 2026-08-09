@@ -1,22 +1,45 @@
 // ============================================================
-// monarchSpawn.ts — Monarch Boss Selection + Pity Counter (Monarch_Spec_v1_3 §2)
-// ใช้เฉพาะโต๊ะ High Noble ตอนห้องเต็ม (รู้ user_id ของ Human ทั้ง 3 คนแล้ว)
+// monarchSpawn.ts — Four Gods Boss Selection (โต๊ะ High Noble ปกติ)
+// Batch 1 Task 2 (Monarch v2.2 cleanup): Monarch ถูกถอดออกจาก pool นี้แล้วทั้งหมด — โต๊ะ High Noble
+// ปกติจะไม่มีทางสุ่มเจอ Monarch ผ่านทางนี้อีกต่อไป เหลือเส้นทางเดียวเท่านั้นคือ rollMonarchEntry()
+// (monarchEngine.ts) ที่ intercept ที่ gameSocket.ts ก่อนเข้า matchmaking ปกติเลย — แก้ known issue เดิม
+// ที่ Monarch เคยสุ่มได้ 2 ทางคู่ขนานกัน (ดู monarchEngine.ts header comment เดิม/audit ก่อนหน้า)
+// pity counter (users.monarch_pity_counter/monarch_encounters) ย้ายไปอยู่ที่ rollMonarchEntry() แล้ว
+// (Batch 1 Task 3) — ฟังก์ชันนี้ไม่อ่าน/ไม่เขียนคอลัมน์นั้นอีกต่อไป
 // The Sage Unicorn Studio Co., Ltd.
 // ============================================================
 
-import { supabaseAdmin } from '../config/supabase'
 import { gameConfig } from '../config/gameConfig'
 import { FOUR_GODS, AIConfig } from './aiEngine'
+import { supabaseAdmin } from '../config/supabase'
 
 export interface MonarchRollResult {
-  isMonarch: boolean
-  boss: AIConfig | null   // null เมื่อ isMonarch = true (Monarch ไม่ใช่หนึ่งใน Four Gods ปกติ)
-  effectiveRate: number
-  maxPity: number
-  guaranteed: boolean
+  isMonarch: false   // Batch 1 Task 2: เส้นทางนี้คืน false เสมอ — คง field ไว้ไม่ลบเพื่อไม่ต้องแตะ
+                      // roomRegistry.ts's bossSeatFromRoll() ที่อ่าน field นี้อยู่ (ดู audit ก่อนหน้า)
+  boss: AIConfig
 }
 
-// สุ่ม Four Gods ตัวใดตัวหนึ่งตามน้ำหนัก bossWeights (ไม่รวม Monarch — ถูกตัดสินไปแล้วก่อนเรียกฟังก์ชันนี้)
+// ── Batch 3D-1 — Royal Relic pool (MVP 6 ชิ้น, canon: TriplePoker_MonarchEncounter_Spec_v2_2.md §10) ──
+// เก็บสะสมไม่ซ้ำเมื่อชนะ Monarch — index 0 (blank_crest) การันตีเสมอสำหรับชัยชนะครั้งแรกสุด ที่เหลือ
+// สุ่มไม่ซ้ำจนกว่าจะครบ ไม่มี asset ภาพในเฟสแรก (relic = id + label + lore text ล้วนตาม spec)
+// lore text ตั้งใจเขียนแบบชวนสงสัยไม่เฉลย (Rise = ตั้งคำถามไม่ใช่ตอบ) เข้าธีม Monarch (ไร้หน้า/ไร้ยศ)
+export interface MonarchRelic {
+  id: string
+  label: string
+  lore: string
+  type: 'avatar_crest' | 'card_frame' | 'title'
+}
+
+export const MONARCH_RELICS: MonarchRelic[] = [
+  { id: 'blank_crest', label: 'The Blank Crest', lore: 'A crest belonging to no rank.', type: 'avatar_crest' },
+  { id: 'refused_crown', label: 'Refused Crown', lore: 'A crown, once offered. Never worn.', type: 'card_frame' },
+  { id: 'zero_mark', label: 'The Zero Mark', lore: 'Before Tier One, there was a hand dealt to no one.', type: 'card_frame' },
+  { id: 'monarchs_witness', label: "Monarch's Witness", lore: 'It has seen every hand at this table, and told no one.', type: 'title' },
+  { id: 'the_unbowed', label: 'The Unbowed', lore: 'It has never once said fold.', type: 'title' },
+  { id: 'faceless_joker', label: 'Faceless Joker', lore: 'NO HAND ABOVE ANOTHER. Yet somebody always deals.', type: 'avatar_crest' },
+]
+
+// สุ่ม Four Gods ตัวใดตัวหนึ่งตามน้ำหนัก bossWeights (normalize แล้วหลังถอด Monarch ออก — gameConfig.ts)
 function pickWeightedFourGod(weights: { reaper: number; crag: number; cortex: number; cipher: number }): AIConfig {
   const pool: Array<{ god: AIConfig; weight: number }> = [
     { god: FOUR_GODS.find(g => g.personality === 'reaper')!, weight: weights.reaper },
@@ -33,55 +56,18 @@ function pickWeightedFourGod(weights: { reaper: number; crag: number; cortex: nu
   return pool[pool.length - 1].god
 }
 
-// สุ่ม Boss ของโต๊ะ High Noble — weighted random (28/25/25/19) + Monarch pity (max ของโต๊ะ, การันตีเกม 30)
-// อัปเดต monarch_pity_counter / monarch_encounters ของผู้เล่นทั้งโต๊ะเป็น batch เดียว (upsert)
-export async function rollHighNobleBoss(humanUserIds: string[]): Promise<MonarchRollResult> {
-  const cfg = gameConfig.monarchConfig
-  const uniqueIds = [...new Set(humanUserIds.filter(Boolean))]
-
-  const pityByUser: Record<string, number> = {}
-  const encountersByUser: Record<string, number> = {}
-  let maxPity = 0
-
-  if (uniqueIds.length > 0) {
-    try {
-      const { data } = await supabaseAdmin
-        .from('users')
-        .select('user_id, monarch_pity_counter, monarch_encounters')
-        .in('user_id', uniqueIds)
-      for (const row of data ?? []) {
-        pityByUser[row.user_id] = row.monarch_pity_counter ?? 0
-        encountersByUser[row.user_id] = row.monarch_encounters ?? 0
-        maxPity = Math.max(maxPity, row.monarch_pity_counter ?? 0)
-      }
-    } catch (err) {
-      // Patch: ถ้า migration 006_monarch_spawn_reward.sql ยังไม่ได้รันบน Supabase คอลัมน์นี้จะยังไม่มี — fallback pity=0 ทุกคน (ไม่ throw)
-      console.error('[MONARCH] Error reading pity counters:', err)
-    }
-  }
-
-  const guaranteed = maxPity >= cfg.pityGuaranteeAt
-  const effectiveRate = guaranteed ? 1 : Math.min(1, cfg.spawnRateBase + maxPity * cfg.pityStepPerGame)
-  const isMonarch = Math.random() < effectiveRate
-
-  const boss = isMonarch ? null : pickWeightedFourGod(cfg.bossWeights)
-
-  if (uniqueIds.length > 0) {
-    const rows = uniqueIds.map(uid => isMonarch
-      ? { user_id: uid, monarch_pity_counter: 0, monarch_encounters: (encountersByUser[uid] ?? 0) + 1 }
-      : { user_id: uid, monarch_pity_counter: (pityByUser[uid] ?? 0) + 1 })
-    try {
-      await supabaseAdmin.from('users').upsert(rows, { onConflict: 'user_id' })
-    } catch (err) {
-      console.error('[MONARCH] Error updating pity/encounters batch:', err)
-    }
-  }
-
-  return { isMonarch, boss, effectiveRate, maxPity, guaranteed }
+// สุ่ม Boss ของโต๊ะ High Noble ปกติ — weighted random ล้วน (Four Gods เท่านั้น ไม่มี Monarch/pity/DB
+// อีกต่อไป) ยังคง async signature ไว้เพื่อไม่ต้องแก้ call site ที่ roomRegistry.ts:391,639 (ทั้งคู่ await
+// อยู่แล้ว) — humanUserIds ไม่ได้ใช้แล้วแต่คงพารามิเตอร์ไว้กันแก้ signature ที่ผู้เรียก
+export async function rollHighNobleBoss(_humanUserIds: string[]): Promise<MonarchRollResult> {
+  const boss = pickWeightedFourGod(gameConfig.monarchConfig.bossWeights)
+  return { isMonarch: false, boss }
 }
 
 // บันทึกชัยชนะเหนือ Monarch — ใช้แสดง Badge "Monarch Slayer" (monarch_victories >= 1) และเป็นเงื่อนไข Ascendant Gate
 // เรียกเฉพาะผู้ชนะ human 1 คนต่อแมตช์ ณ จุด settlement ของ finalizeHNGrandFinale
+// ⚠️ ยังใช้อยู่จริงที่ highNobleMultiEngine.ts:1322 (เส้นทางเก่า Monarch-in-regular-HN-table ที่ตอนนี้
+// unreachable ในทางปฏิบัติหลัง Batch 1 Task 2 แต่โค้ดยังคอมไพล์/เทสอยู่) — ห้ามแก้ signature/ชื่อ
 export async function recordMonarchVictory(userId: string): Promise<void> {
   try {
     const { data } = await supabaseAdmin
@@ -93,5 +79,97 @@ export async function recordMonarchVictory(userId: string): Promise<void> {
     await supabaseAdmin.from('users').update({ monarch_victories: current + 1 }).eq('user_id', userId)
   } catch (err) {
     console.error('[MONARCH] Error recording victory for', userId, err)
+  }
+}
+
+// Batch 1 Task 5 — บันทึกว่าเจอ Monarch จบแมตช์แล้ว 1 ครั้ง (ทุกผลลัพธ์: ชนะ/แพ้/disconnect) แยกจาก
+// recordMonarchVictory (นับเฉพาะชนะ) เพราะจังหวะเรียกไม่ตรงกัน — monarch_encounters +1 เสมอไม่มีเงื่อนไข
+export async function recordMonarchEncounter(userId: string): Promise<void> {
+  try {
+    const { data } = await supabaseAdmin
+      .from('users')
+      .select('monarch_encounters')
+      .eq('user_id', userId)
+      .single()
+    const current = data?.monarch_encounters ?? 0
+    await supabaseAdmin.from('users').update({ monarch_encounters: current + 1 }).eq('user_id', userId)
+  } catch (err) {
+    console.error('[MONARCH] Error recording encounter for', userId, err)
+  }
+}
+
+export interface MonarchRelicResult {
+  relicId?: string
+  label?: string
+  lore?: string
+  isNew: boolean
+  collectionComplete?: boolean
+  tokenBonus?: number
+}
+
+// Batch 3D-1 Task 3 — สุ่ม/บันทึก Royal Relic ตอนชนะ Monarch เรียกเฉพาะจาก settleMonarchMatch's
+// isHumanWinner block เท่านั้น (monarchEngine.ts) แยกจาก recordMonarchVictory เจตนา — ฟังก์ชันนั้น
+// ห้ามแก้ signature/ชื่อ (ยังใช้จากเส้นทาง legacy ที่คอมไพล์อยู่) และคืนแค่ void ไม่รองรับ return ผล relic
+//
+// ⚠️ อ่าน users.monarch_relics ด้วย pattern (b): destructure {error} แล้ว throw ทิ้งงานทันทีถ้า read
+// พลาด (ห้าม fallback เป็น [] แล้วเขียนทับ — จะทำ relic ที่สะสมไว้หายหมด) เหมือน conquered_sentinels
+// ที่ gameLoop.ts:2044-2062 เป๊ะ — ต่างจาก recordMonarchVictory/recordMonarchEncounter ด้านบนที่เป็น
+// counter เดี่ยวๆ ไม่มีความเสี่ยงเดียวกัน (fallback 0 ไม่ทำข้อมูลหาย)
+export async function rollAndRecordMonarchRelic(userId: string): Promise<MonarchRelicResult | null> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('users')
+      .select('monarch_relics')
+      .eq('user_id', userId)
+      .single()
+    if (error) {
+      console.error('[MONARCH_RELIC] Read failed, skip:', error, '| userId:', userId)
+      throw new Error('relic_read_failed')
+    }
+    const current: string[] = Array.isArray(data?.monarch_relics) ? data.monarch_relics : []
+
+    // เก็บครบทั้ง 6 ชิ้นแล้ว — claim-first: ยืนยันสถานะ "ครบ" จากข้อมูลที่อ่านมาแล้วก่อนเสมอ ค่อยไปแตะ
+    // token_balance (ไม่ append relic ใหม่ — เป็น recurring bonus ทุกครั้งที่ชนะหลังจากนี้ ไม่ใช่ one-time)
+    if (current.length >= MONARCH_RELICS.length) {
+      const bonus = gameConfig.monarchConfig.relicCompleteBonus
+      const { data: balData, error: balErr } = await supabaseAdmin
+        .from('users')
+        .select('token_balance')
+        .eq('user_id', userId)
+        .single()
+      if (balErr) {
+        console.error('[MONARCH_RELIC] Balance read failed, skip token bonus:', balErr, '| userId:', userId)
+        throw new Error('relic_balance_read_failed')
+      }
+      const newBalance = (balData?.token_balance ?? 0) + bonus
+      const { error: writeErr } = await supabaseAdmin
+        .from('users')
+        .update({ token_balance: newBalance })
+        .eq('user_id', userId)
+      if (writeErr) {
+        console.error('[MONARCH_RELIC] Token bonus write failed:', writeErr, '| userId:', userId)
+        throw new Error('relic_bonus_write_failed')
+      }
+      return { isNew: false, collectionComplete: true, tokenBonus: bonus }
+    }
+
+    // ยังเก็บไม่ครบ — เลือก relic ใหม่ 1 ชิ้น: ว่างเปล่า (ชนะครั้งแรกสุด) การันตี blank_crest เสมอ
+    // มีของแล้วแต่ยังไม่ครบ → สุ่มจากชิ้นที่เหลือที่ยังไม่มี
+    const remaining = MONARCH_RELICS.filter(r => !current.includes(r.id))
+    const picked = current.length === 0 ? MONARCH_RELICS[0] : remaining[Math.floor(Math.random() * remaining.length)]
+
+    const updated = [...current, picked.id]
+    const { error: writeErr } = await supabaseAdmin
+      .from('users')
+      .update({ monarch_relics: updated })
+      .eq('user_id', userId)
+    if (writeErr) {
+      console.error('[MONARCH_RELIC] Write failed:', writeErr, '| userId:', userId)
+      throw new Error('relic_write_failed')
+    }
+    return { relicId: picked.id, label: picked.label, lore: picked.lore, isNew: true }
+  } catch (err) {
+    console.error('[MONARCH_RELIC] Error rolling relic for', userId, err)
+    return null
   }
 }

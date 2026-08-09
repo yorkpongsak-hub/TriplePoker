@@ -15,15 +15,41 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
 import { io, Socket } from 'socket.io-client'
+import * as Haptics from 'expo-haptics'
 import { autoSort } from '../../../src/utils/autoSort'
+import { getReduceMotion } from '../../../src/utils/reduceMotion'
+import { clearPendingMatch, markPendingMatch } from '../../../src/utils/pendingMatch'
 import { useAuthStore } from '../../../src/store/authStore'
+// Patch 2026-07-18: resolve avatar preset key → emoji/รูปภาพ (แก้ VIP preset ไม่โชว์ที่โต๊ะ)
+import { PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
+import { useTableSkins } from '../../../src/hooks/useTableSkins'
+import { TABLE_SKINS } from '../../../src/config/tableSkins'
 import { useUserStore } from '../../../src/store/userStore'
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
+import MonarchConquestBanner from '../../../src/components/game/MonarchConquestBanner'
 import { ActionButton } from '../../../src/components/ui/ActionButton'
-import { MenuButton } from '../../../src/components/ui/MenuButton'
-import { ResultPanel } from '../../../src/components/ui/ResultPanel'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
 import { GuideOverlay } from '../../../src/components/onboarding/GuideOverlay'
+import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
+import PlayerHandView from '../../../src/components/game/PlayerHandView'
+import BossHandRow from '../../../src/components/game/BossHandRow'
+import GameTopBar from '../../../src/components/game/GameTopBar'
+import MatchEndOverlay from '../../../src/components/game/MatchEndOverlay'
+import { TierInfoModal } from '../../../src/components/game/TierInfoModal'
+import type { TierInfoLabel } from '../../../src/config/tierInfoData'
+import TokenFlowPanel, { PANEL_WIDTH, PANEL_RIGHT } from '../../../src/components/game/TokenFlowPanel'
+import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/game/FlyingCoins'
+import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
+
+// ตำแหน่งที่นั่งเดียวกับ targets ใน startDealAnimation (Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย)
+// ศูนย์กลาง = จุดกำเนิด/ปลายทางของกองกลาง (เหมือนที่ dealAnims ใช้เป็น origin ตอนแจกไพ่)
+const SEAT_TARGETS = {
+  boss:   { x: -50,  y: -240 },
+  p4:     { x: 90,   y: -10  },
+  user:   { x: -50,  y: 200  },
+  p2:     { x: -190, y: -10  },
+  center: { x: 0,    y: 0    },
+} as const
 
 // Feedback C5 — Showdown result ครอบด้วยพื้นหลังชุดเดียวกับ Profile/Lobby (bg free/vip ตาม isVip)
 const SHOWDOWN_BG_FREE = require('../../../assets/backgrounds/bg_main_free.png')
@@ -31,45 +57,13 @@ const SHOWDOWN_BG_VIP  = require('../../../assets/backgrounds/bg_main_vip.png')
 
 // ── Assets
 const studioLogo  = require('../../../assets/images/sage_unicorn_logo_transparent.png')
-const cardBackImg = require('../../../assets/images/card_back_default.png')
+const cardBackImg = CARD_BACK_IMG // ใช้หลังไพ่จากไฟล์กลาง cardAssets.ts (คง alias เดิมกันแก้ทุกจุดที่อ้างถึง)
 const tableImg    = require('../../../assets/images/table_default.png')
 const tripleSpade = require('../../../assets/images/triple_poker_icon.png')
-
-// ── Card image map
-const CARD_IMG: Record<string, any> = {
-  as: require('../../../assets/cards/classic/as.png'),
-  '2s': require('../../../assets/cards/classic/2s.png'), '3s': require('../../../assets/cards/classic/3s.png'),
-  '4s': require('../../../assets/cards/classic/4s.png'), '5s': require('../../../assets/cards/classic/5s.png'),
-  '6s': require('../../../assets/cards/classic/6s.png'), '7s': require('../../../assets/cards/classic/7s.png'),
-  '8s': require('../../../assets/cards/classic/8s.png'), '9s': require('../../../assets/cards/classic/9s.png'),
-  '10s': require('../../../assets/cards/classic/10s.png'), js: require('../../../assets/cards/classic/js.png'),
-  qs: require('../../../assets/cards/classic/qs.png'), ks: require('../../../assets/cards/classic/ks.png'),
-  ah: require('../../../assets/cards/classic/ah.png'), '2h': require('../../../assets/cards/classic/2h.png'),
-  '3h': require('../../../assets/cards/classic/3h.png'), '4h': require('../../../assets/cards/classic/4h.png'),
-  '5h': require('../../../assets/cards/classic/5h.png'), '6h': require('../../../assets/cards/classic/6h.png'),
-  '7h': require('../../../assets/cards/classic/7h.png'), '8h': require('../../../assets/cards/classic/8h.png'),
-  '9h': require('../../../assets/cards/classic/9h.png'), '10h': require('../../../assets/cards/classic/10h.png'),
-  jh: require('../../../assets/cards/classic/jh.png'), qh: require('../../../assets/cards/classic/qh.png'),
-  kh: require('../../../assets/cards/classic/kh.png'), ad: require('../../../assets/cards/classic/ad.png'),
-  '2d': require('../../../assets/cards/classic/2d.png'), '3d': require('../../../assets/cards/classic/3d.png'),
-  '4d': require('../../../assets/cards/classic/4d.png'), '5d': require('../../../assets/cards/classic/5d.png'),
-  '6d': require('../../../assets/cards/classic/6d.png'), '7d': require('../../../assets/cards/classic/7d.png'),
-  '8d': require('../../../assets/cards/classic/8d.png'), '9d': require('../../../assets/cards/classic/9d.png'),
-  '10d': require('../../../assets/cards/classic/10d.png'), jd: require('../../../assets/cards/classic/jd.png'),
-  qd: require('../../../assets/cards/classic/qd.png'), kd: require('../../../assets/cards/classic/kd.png'),
-  ac: require('../../../assets/cards/classic/ac.png'), '2c': require('../../../assets/cards/classic/2c.png'),
-  '3c': require('../../../assets/cards/classic/3c.png'), '4c': require('../../../assets/cards/classic/4c.png'),
-  '5c': require('../../../assets/cards/classic/5c.png'), '6c': require('../../../assets/cards/classic/6c.png'),
-  '7c': require('../../../assets/cards/classic/7c.png'), '8c': require('../../../assets/cards/classic/8c.png'),
-  '9c': require('../../../assets/cards/classic/9c.png'), '10c': require('../../../assets/cards/classic/10c.png'),
-  jc: require('../../../assets/cards/classic/jc.png'), qc: require('../../../assets/cards/classic/qc.png'),
-  kc: require('../../../assets/cards/classic/kc.png'),
-}
 
 const CW = 62; const CH = 90; const OVERLAP = -38
 const SIDE_COL_W = 72
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
-const ROOM_ID    = 'Initiate1'
 // Escrow ผูกกับ user_id จริงใน DB — ห้าม fallback เงียบเป็น literal เด็ดขาด (บั๊กเดิม: 'Human1' ทำ escrow
 // query หา user_id ไม่เจอ ได้ balance เป็น 0 เสมอ ไม่ว่า DB จะมีเท่าไหร่จริง)
 // เปิดทางเทสเร็วไม่ login ได้เฉพาะ __DEV__ + ตั้ง env EXPO_PUBLIC_DEV_FAKE_USER_ID เอง — production build ตัดทิ้งอัตโนมัติ
@@ -86,6 +80,7 @@ const TimerDisplay: React.FC<{
 }> = ({ valRef }) => {
   const [val, setVal] = useState(valRef.current.val)
   const [max, setMax] = useState(valRef.current.max)
+  const hapticFiredRef = useRef(false)
   useEffect(() => {
     const id = setInterval(() => {
       setVal(valRef.current.val)
@@ -94,7 +89,16 @@ const TimerDisplay: React.FC<{
     return () => clearInterval(id)
   }, [])
   const ratio = val / (max || 1)
-  const color = ratio <= 0.10 ? '#cc2222' : ratio <= 0.30 ? '#c9a84c' : '#3daa4a'
+  const isRed = ratio <= 0.10
+  useEffect(() => {
+    if (isRed && !hapticFiredRef.current) {
+      hapticFiredRef.current = true
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {})
+    } else if (!isRed) {
+      hapticFiredRef.current = false
+    }
+  }, [isRed])
+  const color = isRed ? '#cc2222' : ratio <= 0.30 ? '#c9a84c' : '#3daa4a'
   return (
     <>
       <Text style={[s.timerText, { color }]}>{val}</Text>
@@ -114,12 +118,53 @@ const NAMES  = ['SomchaiX','NongBeer','JaoPoker','WinWin99','ThaiDragon','LuckyA
 const TABLES = ['Table #1','Table #3','Table #7','VIP Room']
 const rnd = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)]
 
-const ServerLog = React.memo(() => {
+// Token counter นับวิ่งจาก 0 (หรือค่าเดิม) ไปค่าใหม่ ~650ms — ใช้ตอนโชว์ผล net token ต่อรอบ
+const AnimatedTokenNumber: React.FC<{ value: number; style?: any }> = ({ value, style }) => {
+  const [display, setDisplay] = useState(0)
+  const prevValueRef = useRef(0)
+  useEffect(() => {
+    const from = prevValueRef.current
+    const to = value
+    const duration = 650
+    const startTime = Date.now()
+    const id = setInterval(() => {
+      const t = Math.min(1, (Date.now() - startTime) / duration)
+      setDisplay(Math.round(from + (to - from) * t))
+      if (t >= 1) {
+        clearInterval(id)
+        prevValueRef.current = to
+      }
+    }, 33)
+    return () => clearInterval(id)
+  }, [value])
+  return <Text style={style}>{display > 0 ? '+' : ''}{display}</Text>
+}
+
+// Animated "Arranging..." dots ของ AI status badge — วนจำนวนจุดอิสระของตัวเอง ไม่ผูกกับ dotAnim ของ ServerLog ด้านล่าง
+const AiStatusDots = React.memo(({ label }: { label: string }) => {
+  const [dots, setDots] = useState(1)
+  useEffect(() => {
+    const id = setInterval(() => setDots(prev => (prev % 3) + 1), 450)
+    return () => clearInterval(id)
+  }, [])
+  return <Text style={s.statusText}>{label}{'.'.repeat(dots)}</Text>
+})
+
+const ServerLog = React.memo(({ socket, onMonarchWin }: { socket: Socket | null; onMonarchWin?: (name: string) => void }) => {
   interface LogEntry { id: number; icon: string; text: string; time: string }
   const [logs, setLogs]     = useState<LogEntry[]>([])
   const [online, setOnline] = useState(247)
   const idRef   = useRef(0)
   const dotAnim = useRef(new Animated.Value(1)).current
+
+  const pushLog = useCallback((icon: string, text: string) => {
+    const now = new Date()
+    const time = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`
+    setLogs(prev => {
+      const next = [...prev, { id: ++idRef.current, icon, text, time }]
+      return next.length > 8 ? next.slice(-8) : next
+    })
+  }, [])
 
   const addLog = useCallback(() => {
     const n = rnd(NAMES), t = rnd(TABLES)
@@ -131,27 +176,46 @@ const ServerLog = React.memo(() => {
       { icon: '🔮', text: `${n} won a Blind Auction!` },
       { icon: '💎', text: `${n} upgraded to VIP` },
     ]
-    const ev  = rnd(evts)
-    const now = new Date()
-    const time = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`
-    setLogs(prev => {
-      const next = [...prev, { id: ++idRef.current, ...ev, time }]
-      return next.length > 8 ? next.slice(-8) : next
-    })
-  }, [])
+    const ev = rnd(evts)
+    pushLog(ev.icon, ev.text)
+  }, [pushLog])
+
+  // Server Activity จริง (มติลุงเยาะ 2026-07-26): online count + table_open/win มาจาก
+  // io.emit('server_activity', ...) จริงฝั่ง server ผสมกับ mock event ด้านบน (join/entered/lost/auction/vip)
+  useEffect(() => {
+    if (!socket) return
+    const onActivity = (payload: { kind: string; tier?: string; winnerName?: string; isHuman?: boolean; count?: number }) => {
+      if (payload.kind === 'online_count') {
+        if (typeof payload.count === 'number') setOnline(payload.count)
+      } else if (payload.kind === 'win') {
+        pushLog(payload.isHuman ? '🏆' : '🤖', `${payload.winnerName} won a match at ${(payload.tier ?? '').toUpperCase()}!`)
+      } else if (payload.kind === 'table_open') {
+        pushLog('🆕', `New ${(payload.tier ?? '').toUpperCase()} table opened`)
+      } else if (payload.kind === 'monarch_spawn') {
+        // Sprint 8: Boss Monarch 1v1 — broadcast กว้างตอนโต๊ะเริ่ม (gameSocket.ts room_auto_match)
+        pushLog('👑', 'A Hidden Boss has appeared at the High Noble tables!')
+      } else if (payload.kind === 'monarch_win') {
+        // Sprint 8: broadcast ตอนมีคนพิชิต Monarch ได้ (monarchEngine.ts finalizeMonarchG3) — พิเศษ
+        // กว่าการชนะทั่วไป มีการ์ดเลื่อนลงจากขอบบนจอด้วย (ดู MonarchConquestBanner)
+        pushLog('👑', `${payload.winnerName} has conquered the Hidden Boss!`)
+        if (payload.winnerName) onMonarchWin?.(payload.winnerName)
+      }
+    }
+    socket.on('server_activity', onActivity)
+    return () => { socket.off('server_activity', onActivity) }
+  }, [socket, pushLog, onMonarchWin])
 
   useEffect(() => {
     for (let i = 0; i < 4; i++) setTimeout(() => addLog(), i * 200)
     let t: ReturnType<typeof setTimeout>
     const sched = () => { t = setTimeout(() => { addLog(); sched() }, 1500 + Math.random() * 2000) }
     sched()
-    const oi = setInterval(() => setOnline(180 + Math.floor(Math.random() * 140)), 15000)
     const p = Animated.loop(Animated.sequence([
       Animated.timing(dotAnim, { toValue: 0.25, duration: 900, useNativeDriver: false }),
       Animated.timing(dotAnim, { toValue: 1,    duration: 900, useNativeDriver: false }),
     ]))
     p.start()
-    return () => { clearTimeout(t); clearInterval(oi); p.stop() }
+    return () => { clearTimeout(t); p.stop() }
   }, [addLog])
 
   return (
@@ -189,17 +253,42 @@ const GameTableLive: React.FC = () => {
   const authUserId = useUserStore(s => s.userId)
   const usingDevFakeId = !authUserId && !!DEV_FAKE_USER_ID
   const PLAYER_ID = authUserId || DEV_FAKE_USER_ID || ''
-  const myAvatarEmoji = useAuthStore(s => s.profile?.avatar_url) || '👤'
+  // roomId ต้อง unique ต่อผู้เล่น — เดิม hardcode 'Initiate1' ทำให้ 2 Human เข้าพร้อมกัน
+  // ชน socket-room + matchStates key เดียวกัน (ไพ่คนแรกหาย) PLAYER_ID ว่างได้แค่ก่อน auth guard
+  // ด้านล่าง block ไว้แล้ว (ไม่มี emit เกิดขึ้นก่อนหน้านั้น)
+  const ROOM_ID = `initiate-${PLAYER_ID}`
+  // Patch 2026-07-18: avatar_url เก็บเป็น preset key — resolve ผ่าน PRESET_AVATARS ก่อน render
+  const myAvatarRaw = useAuthStore(s => s.profile?.avatar_url) || '👤'
+  const myPreset = PRESET_AVATARS.find(p => p.key === myAvatarRaw)
+  const myAvatarEmoji = myPreset?.emoji ?? (myPreset?.image ? '' : myAvatarRaw)
+  const myAvatarImage = myPreset?.image
   const myDisplayName = useAuthStore(s => s.profile?.display_name) || 'You'
   const isVip = useAuthStore(s => (s.profile?.vip_status ?? 'none') !== 'none') // Feedback C5 — ใช้ vip_status เดิม ไม่สร้าง state ใหม่
+  const { activeSkin } = useTableSkins()
+  const selectedTableImg = TABLE_SKINS[activeSkin] ?? tableImg
 
   // ── Timer ref (ไม่ trigger re-render)
   const timerValRef = useRef({ val: 90, max: 90 })
   const continueValRef = useRef(0)
   const aiListRef = useRef<AIInfo[]>([])
+  const flyingCoinsRef = useRef<FlyingCoinsHandle>(null)
+  // Coin Flying VFX (มติลุงเยาะ 2026-07-26) — แปลง playerId -> ตำแหน่งที่นั่งจริง อ่าน aiListRef.current
+  // สดทุกครั้งที่เรียก (ไม่ผูก useCallback deps) เพราะถูกเรียกจาก socket handler ที่ตั้ง listener แค่ครั้งเดียว
+  const seatTargetFor = (playerId: string): Point => {
+    if (playerId === PLAYER_ID) return SEAT_TARGETS.user
+    const opp = aiListRef.current
+    if (opp[0]?.id === playerId) return SEAT_TARGETS.boss
+    if (opp[1]?.id === playerId) return SEAT_TARGETS.p2
+    if (opp[2]?.id === playerId) return SEAT_TARGETS.p4
+    return SEAT_TARGETS.center
+  }
   const timerRef    = useRef<any>(null)
   const countdownAnimTimeoutRef = useRef<any>(null)
   const dealAnimCompositeRef = useRef<Animated.CompositeAnimation | null>(null)
+  // Reduce Motion preference (Settings modal, AsyncStorage local) — โหลดครั้งเดียวตอน mount แล้ว
+  // เก็บใน ref (ไม่ trigger re-render) ให้ startDealAnimation() อ่านสดตอนถูกเรียกจริง
+  const reduceMotionRef = useRef(false)
+  useEffect(() => { getReduceMotion().then(v => { reduceMotionRef.current = v }) }, [])
   const winPulseLoopRef = useRef<Animated.CompositeAnimation | null>(null)
   const winOpacityLoopRef = useRef<Animated.CompositeAnimation | null>(null)
   const confettiActiveRef = useRef(false)
@@ -218,6 +307,7 @@ const GameTableLive: React.FC = () => {
   const [countdown, setCountdown]     = useState(3)
   // Pre-Game Countdown (LobbyMatchmaking_Spec_v1_0 §7.1) — คนละตัวกับ `countdown` ข้างบน (Simultaneous Showdown 3-2-1 เดิม ห้ามแตะ)
   const [showPreGameCountdown, setShowPreGameCountdown] = useState(false)
+  const [monarchWinner, setMonarchWinner] = useState<string | null>(null) // Sprint 8: Boss Monarch conquest banner
   const preGameCountdownShownRef = useRef(false)
   const countAnim = useRef(new Animated.Value(1)).current
   const fadeCards    = useRef(new Animated.Value(1)).current
@@ -233,7 +323,9 @@ const GameTableLive: React.FC = () => {
       scale:   new Animated.Value(0.5),
     }))
   ).current
-  const [continueCountdown, setContinueCountdown] = useState(33)
+  // Solo tier (Initiate/Mastermind) — countdown คงที่ 33s เดิม ห้ามแก้ (ต่างจาก Adept/HighNoble ที่ยืดเป็น 45s)
+  const SHOWDOWN_TIMER_SEC = 33
+  const [continueCountdown, setContinueCountdown] = useState(SHOWDOWN_TIMER_SEC)
   const continueTimerRef = useRef<any>(null)
 
   // ── Cards
@@ -258,6 +350,10 @@ const GameTableLive: React.FC = () => {
   const [allCards, setAllCards]       = useState<Record<string, Record<number, string[]>>>({})
   const [pileWinners, setPileWinners] = useState<Record<number, string>>({})
   const [hasFoul, setHasFoul]         = useState<Record<string, boolean>>({})
+  // Haptic เตือน Foul ของฉันเอง — ยิงครั้งเดียวตอน hasFoul[PLAYER_ID] เปลี่ยนจาก false → true
+  useEffect(() => {
+    if (hasFoul[PLAYER_ID]) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {})
+  }, [hasFoul[PLAYER_ID]])
   const [foulReasons, setFoulReasons]   = useState<Record<string, string>>({})
   const [showResult, setShowResult]   = useState(false)
   const [handRanks, setHandRanks]       = useState<Record<number, string>>({})
@@ -269,15 +365,26 @@ const GameTableLive: React.FC = () => {
 
   // ── Triple Sweep Jackpot VFX — ใครก็ได้ (human/AI) ชนะครบ 3 กอง
   const [jackpotWinner, setJackpotWinner] = useState<string | null>(null)
-  const jackpotTimeoutRef = useRef<any>(null)
+  const [jackpotVfxComplete, setJackpotVfxComplete] = useState(false)
+  const jackpotTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     console.log('[JACKPOT] jackpotWinner state changed ->', jackpotWinner, 'at', Date.now())
   }, [jackpotWinner])
 
   // ── Result
   const [tokenBalance, setTokenBalance] = useState<Record<string, number>>({})
+  // Patch 2026-07-18: format ยอดโทเคนเต็มมี comma (มติลุงเยาะ: แบบเต็ม ไม่ย่อ K/M)
+  const fmtToken = (v: number | undefined) => (v ?? buyInAmount).toLocaleString('en-US')
   const [tokenDeltas, setTokenDeltas]   = useState<Record<string, number>>({})
   const [matchResult, setMatchResult]   = useState<any>(null)
+
+  // Token Flow Panel (Spec v1.1) - ค่าทั้งหมดมาจาก server ล้วน client ไม่คำนวณเอง
+  // แยก flowBuyIn ออกจาก buyInAmount เพราะตัวหลัง set เฉพาะรอบ 1 (คู่กับ popup Lock-up)
+  // ส่วนตัวนี้ server ส่งมาทุกรอบ ทำให้แถว Total ไม่พังถ้าพลาด round_start รอบแรก
+  const [flowPot, setFlowPot]         = useState<[number, number, number]>([0, 0, 0])
+  const [flowFeeRake, setFlowFeeRake] = useState(0)
+  const [flowBuyIn, setFlowBuyIn]     = useState(0)
+  const [burnToast, setBurnToast]     = useState<string | null>(null)
 
   // ── Discard
   const [showDiscard, setShowDiscard]         = useState(false)
@@ -297,7 +404,7 @@ const GameTableLive: React.FC = () => {
     }))
   ).current
 
-  // ── Jackpot VFX (แยก instance จาก match-end confetti เพราะอาจโชว์พร้อมกันได้ในรอบสุดท้าย)
+  // Legacy jackpot VFX — ใช้เมื่อ P2/P3/P4 หรือ AI เป็นผู้ทำ Triple Sweep เท่านั้น
   const jackpotPulse = useRef(new Animated.Value(0.5)).current
   const jackpotConfettiAnims = useRef(
     Array.from({ length: 20 }, () => ({
@@ -308,11 +415,11 @@ const GameTableLive: React.FC = () => {
     }))
   ).current
 
-  // showdown_result มาถึง → แสดง ShowdownResult popup ทันที countdown 15 วิ
+  // showdown_result มาถึง → แสดง ShowdownResult popup ทันที countdown 33 วิ
   const startContinueCountdown = () => {
     // ไม่เรียก setContinueCountdown ที่นี่แล้ว — ContinueTimer อ่านจาก continueValRef เองทุก 500ms
     // เพื่อเลี่ยง parent re-render ทุกวินาที (ต้นเหตุของไพ่กะพริบ)
-    continueValRef.current = 33
+    continueValRef.current = SHOWDOWN_TIMER_SEC
     if (continueTimerRef.current) clearInterval(continueTimerRef.current)
     continueTimerRef.current = setInterval(() => {
       const next = Math.max(0, continueValRef.current - 1)
@@ -324,31 +431,34 @@ const GameTableLive: React.FC = () => {
     }, 1000)
   }
 
-  // Triple Sweep Jackpot — burst ครั้งเดียว ไม่วนซ้ำ โชว์ไม่เกิน 5 วิ แล้วปิดเอง
+  // P1 uses Legendary Card; every other winner keeps the original jackpot VFX.
   const triggerJackpot = (winnerId: string) => {
     console.log('[JACKPOT] triggerJackpot called, winnerId=', winnerId, 'at', Date.now())
     if (jackpotTimeoutRef.current) clearTimeout(jackpotTimeoutRef.current)
+    setJackpotVfxComplete(false)
     setJackpotWinner(winnerId)
+
+    if (winnerId === PLAYER_ID) return
 
     jackpotPulse.setValue(0.5)
     Animated.sequence([
       Animated.timing(jackpotPulse, { toValue: 1.15, duration: 250, useNativeDriver: false }),
-      Animated.timing(jackpotPulse, { toValue: 1,    duration: 200, useNativeDriver: false }),
+      Animated.timing(jackpotPulse, { toValue: 1, duration: 200, useNativeDriver: false }),
     ]).start()
 
     jackpotConfettiAnims.forEach((a, i) => {
       a.x.setValue(Math.random() * 360 - 30)
       a.y.setValue(-20); a.opacity.setValue(1); a.rotate.setValue(0)
       Animated.parallel([
-        Animated.timing(a.y,       { toValue: 700, duration: 1800 + Math.random() * 1200, delay: i * 40, useNativeDriver: false }),
-        Animated.timing(a.opacity, { toValue: 0,   duration: 2200, delay: i * 40, useNativeDriver: false }),
-        Animated.timing(a.rotate,  { toValue: 720, duration: 1800, delay: i * 40, useNativeDriver: false }),
+        Animated.timing(a.y, { toValue: 700, duration: 1800 + Math.random() * 1200, delay: i * 40, useNativeDriver: false }),
+        Animated.timing(a.opacity, { toValue: 0, duration: 2200, delay: i * 40, useNativeDriver: false }),
+        Animated.timing(a.rotate, { toValue: 720, duration: 1800, delay: i * 40, useNativeDriver: false }),
       ]).start()
     })
 
     jackpotTimeoutRef.current = setTimeout(() => {
-      console.log('[JACKPOT] 5s timeout fired, clearing at', Date.now())
       setJackpotWinner(null)
+      setJackpotVfxComplete(true)
     }, 5000)
   }
 
@@ -357,10 +467,12 @@ const GameTableLive: React.FC = () => {
     const winnersReady = pileWinners[1] && pileWinners[2] && pileWinners[3]
     if (!winnersReady && !hasFoulAll) return
     if (showResult) return // ป้องกัน run ซ้ำ
+    const hasTripleSweep = Boolean(winnersReady && pileWinners[1] === pileWinners[2] && pileWinners[2] === pileWinners[3])
+    if (hasTripleSweep && !jackpotVfxComplete) return
     setShowResult(true)
     startContinueCountdown()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(pileWinners), JSON.stringify(hasFoul)])
+  }, [JSON.stringify(pileWinners), JSON.stringify(hasFoul), jackpotVfxComplete])
 
   // ── Connect Socket (ครั้งเดียว)
   useEffect(() => {
@@ -388,7 +500,9 @@ const GameTableLive: React.FC = () => {
       if (matchStarted) return
       matchStarted = true
       // token ไม่ส่งจาก client (server-authoritative — escrowBuyIn คิดจาก users.token_balance สดเท่านั้น)
-      socket.emit('player_join_room', { roomId: ROOM_ID, playerId: PLAYER_ID, isVip: false })
+      // (player_join_room ถูกตัดออก — dead path เดิม: client ไม่เคย listen 'player_joined'/'arrangement_start'
+      // ที่มันคืนมา แถมยังสร้างตาราง tableRegistry ซ้ำด้วย roomId เดิมอีกชั้น start_match ด้านล่างทำ
+      // socket.join(roomId) ให้อยู่แล้วเหมือนกัน)
       // tier ต้องตรงกับ 'initiate' เป๊ะ — aiEngine.ts เช็ค tier === 'initiate' ตรงๆ (ไม่มี normalize)
       // ของเดิมส่ง 'beginner' ทำให้ Beginner's Luck System (subOptimal/firstValid) ไม่เคย trigger เลย
       socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'initiate' })
@@ -410,6 +524,7 @@ const GameTableLive: React.FC = () => {
     })
 
     socket.on('round_start', (data: any) => {
+      if (typeof data.buyInAmount === 'number') void markPendingMatch('initiate')
       console.log('[DEAL] round_start received, roundNumber=', data.roundNumber, 'at', Date.now())
       // Pre-Game Countdown §7.1 — โชว์ครั้งเดียวตอนเริ่มแมตช์ (ref ไม่ reset ตอน Rematch เพราะ component เดิมไม่ remount)
       if (data.roundNumber === 1 && !preGameCountdownShownRef.current) {
@@ -422,24 +537,34 @@ const GameTableLive: React.FC = () => {
       setAllCards({}); setPileWinners({})
       setHasFoul({}); setFoulReasons({}); setTokenDeltas({})
       setShowResult(false)
+      setJackpotWinner(null); setJackpotVfxComplete(false)
       setHandRanks({})
       setRevealPile(0)
       setActiveShowdownTab(1)
-      setContinueCountdown(33)
-      continueValRef.current = 33
+      setContinueCountdown(SHOWDOWN_TIMER_SEC)
+      continueValRef.current = SHOWDOWN_TIMER_SEC
       if (continueTimerRef.current) clearInterval(continueTimerRef.current)
       setShowDiscard(false); setDiscardSelected([])
       // ต้อง stopAnimation ก่อน setValue เสมอ กัน native-driven timing ที่ยังค้างจาก handleContinue ชนกัน
       fadeCards.stopAnimation(() => { fadeCards.setValue(0) })
       setBlind([]); setDealCount(0)
       setTokenBalance(data.tokenBalance ?? {})
+      // Token Flow: ต้นรอบ server หัก Ante เข้า Pot มาให้แล้ว (tokenBalance ข้างบนคือยอดหลังหัก)
+      setFlowPot(data.pot ?? [0, 0, 0])
+      setFlowFeeRake(data.feeRake ?? 0)
+      if (typeof data.buyIn === 'number') setFlowBuyIn(data.buyIn)
       const aiNames = data.aiNames ?? []
       setAiList(aiNames)
       aiListRef.current = aiNames
 
       const init: Record<string, string> = {}
-      data.aiNames?.forEach((a: any) => { init[a.id] = 'Arranging...' })
+      data.aiNames?.forEach((a: any) => { init[a.id] = 'Arranging' })
       setAiStatus(init)
+
+      // Coin Flying VFX — Ante: ทุกที่นั่งส่งเหรียญเข้ากองกลางตอนเริ่มรอบ (มติลุงเยาะ 2026-07-26)
+      ;[SEAT_TARGETS.boss, SEAT_TARGETS.p4, SEAT_TARGETS.user, SEAT_TARGETS.p2].forEach(from => {
+        flyingCoinsRef.current?.fire('ante', from, SEAT_TARGETS.center)
+      })
 
       setComm({
         p1: data.communityCards.pile1,
@@ -464,8 +589,9 @@ const GameTableLive: React.FC = () => {
       const cardObjs = myCards.map((k: string, i: number) => ({ id: `c${i}`, key: k }))
       setPiles([cardObjs.slice(0, 3), cardObjs.slice(3, 6), cardObjs.slice(6, 11)])
 
-      const tierBonus = 15 // บวก 15 วิ เพื่อชดเชยเวลาแจกไพ่
-      const t = (data.timer ?? 90) + tierBonus
+      // Patch v1.2: tierBonus (+15 เดิม) พับเข้า gameConfig.arrangementTimer.initiate (90→105) แล้ว —
+      // ใช้ data.timer ตรงๆ เหมือน Mastermind/HighNoble (ผู้เล่นเห็นตัวเลขเท่าเดิมทุกประการ)
+      const t = data.timer ?? 105
       timerValRef.current = { val: t, max: t }
       if (timerRef.current) clearInterval(timerRef.current)
       timerRef.current = setInterval(() => {
@@ -531,7 +657,21 @@ const GameTableLive: React.FC = () => {
       setHasFoul(newFouled)
       setFoulReasons(data.foulReasons ?? {})
       setTokenDeltas(data.tokenDeltas ?? {})
+      // Token Flow: Pot ไหลออกไปหาผู้ชนะ/Fee & Rake แล้ว - stack ทุกที่นั่งเปลี่ยนตรงนี้
+      // (เดิม client รอถึง round_result กว่าจะอัปเดตยอด ทำให้ Panel กับยอดใต้ชื่อไม่ตรงกันชั่วขณะ)
+      if (data.tokenBalance) setTokenBalance(data.tokenBalance)
+      if (data.pot) setFlowPot(data.pot)
+      if (typeof data.feeRake === 'number') setFlowFeeRake(data.feeRake)
+      if (typeof data.buyIn === 'number') setFlowBuyIn(data.buyIn)
       setPhase('showdown')
+
+      // Coin Flying VFX — รางวัลออกจากกองกลางไปหาผู้ชนะแต่ละกอง (มติลุงเยาะ 2026-07-26)
+      // Simultaneous Showdown: pile1/2/3 รู้ผลพร้อมกันหมด ยิงพร้อมกันได้เลย ไม่ต้อง stagger
+      const pileCoinVariant = { 1: 'pile1', 2: 'pile2', 3: 'pile3' } as const
+      ;([1, 2, 3] as const).forEach(pNum => {
+        const winnerId = newWinners[pNum]
+        if (winnerId) flyingCoinsRef.current?.fire(pileCoinVariant[pNum], SEAT_TARGETS.center, seatTargetFor(winnerId))
+      })
 
       // Triple Sweep Jackpot — คนเดียวกันชนะครบทั้ง 3 กอง
       if (newWinners[1] && newWinners[1] === newWinners[2] && newWinners[2] === newWinners[3]) {
@@ -562,12 +702,23 @@ const GameTableLive: React.FC = () => {
       setPhase('result')
       setTokenBalance(data.tokenBalance ?? {})
       setTokenDeltas(data.tokenDeltas ?? {})
+      if (data.pot) setFlowPot(data.pot)
+      if (typeof data.feeRake === 'number') setFlowFeeRake(data.feeRake)
+      if (typeof data.buyIn === 'number') setFlowBuyIn(data.buyIn)
     })
 
     socket.on('match_end', (data: any) => {
+      void clearPendingMatch()
       setPhase('end')
       setMatchResult(data)
       setTokenBalance(data.tokenBalance ?? {})
+      // Token Flow Spec ข้อ 5: จบเกม -> Fee & Rake burn จริง (ออกจากจอ)
+      if (typeof data.feeRakeBurned === 'number') {
+        setFlowFeeRake(0)
+        setFlowPot([0, 0, 0])
+        setBurnToast(`House collected: ${data.feeRakeBurned.toLocaleString('en-US')} tokens`)
+        setTimeout(() => setBurnToast(null), 4000)
+      }
       // Server ส่งยอด token_balance จริงหลัง settle มาด้วย — ห้ามคำนวณเองจาก buyin/stack (bug: Profile ค้างยอดเก่า)
       if (typeof data.newTokenBalance === 'number') {
         useUserStore.getState().updateTokenBalance(data.newTokenBalance)
@@ -611,6 +762,10 @@ const GameTableLive: React.FC = () => {
       if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop()
       stopMatchEndAnimations()
       if (jackpotTimeoutRef.current) clearTimeout(jackpotTimeoutRef.current)
+      jackpotPulse.stopAnimation()
+      jackpotConfettiAnims.forEach(a => {
+        a.x.stopAnimation(); a.y.stopAnimation(); a.opacity.stopAnimation(); a.rotate.stopAnimation()
+      })
       socket.disconnect()
     }
   }, [])
@@ -622,10 +777,10 @@ const GameTableLive: React.FC = () => {
     if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop()
     // ตำแหน่งปลายทาง: Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย
     const targets = [
-      { x: 0,    y: -240 }, // Boss AI (บน)
-      { x: 140,  y: -10  }, // P4 (ขวา)
-      { x: 0,    y: 200  }, // User (ล่าง)
-      { x: -140, y: -10  }, // P2 (ซ้าย)
+      { x: -50,  y: -240 }, // Boss AI (บน)
+      { x: 90,   y: -10  }, // P4 (ขวา)
+      { x: -50,  y: 200  }, // User (ล่าง)
+      { x: -190, y: -10  }, // P2 (ซ้าย)
     ]
     // reset ทุกใบ
     dealAnims.forEach(a => {
@@ -633,7 +788,9 @@ const GameTableLive: React.FC = () => {
       a.opacity.setValue(0); a.scale.setValue(0.5)
     })
 
-    const delayPerCard = (10000 - 1000) / DEAL_COUNT // ~205ms ต่อใบ
+    // Reduce Motion: ย่นเวลารวมจาก 4s เหลือ ~1.2s ตามสัดส่วนเดิม (DEAL_COUNT ไม่เปลี่ยน)
+    const dealDurationMs = reduceMotionRef.current ? 1200 : 4000
+    const delayPerCard = (dealDurationMs - 1000) / DEAL_COUNT // ~68ms ต่อใบ (ปกติ) / ~4.5ms (Reduce Motion)
     const anims: Animated.CompositeAnimation[] = []
 
     dealAnims.forEach((a, i) => {
@@ -760,11 +917,10 @@ const GameTableLive: React.FC = () => {
     confettiCompositesRef.current = []
   }
 
-  const handleRematch = () => {
-    stopMatchEndAnimations()
-    setMatchResult(null); setPhase('arrangement')
-    socketRef.current?.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'initiate' })
-  }
+  // handleRematch ถูกลบตาม TokenFlowPanel_Spec_v1_1 ข้อ 5.1 (No Rematch)
+  // เหตุผล: Token Flow ตั้งอยู่บนสมมติฐานว่า Buy-in ล็อคค่าตั้งแต่ต้นเกม (Total = 4 x Buy-in คงที่)
+  // ถ้ารีแมตช์ในโต๊ะเดิม stack แต่ละคนตอนจบไม่เท่ากัน -> "4 x Buy-in" ของเกมถัดไปนิยามไม่ได้ กฎเหล็กพัง
+  // บังคับออกโต๊ะแล้ว buy-in ใหม่ ทำให้ทุกเกมเป็น single-game session ที่ conservation reset สะอาดทุกครั้ง
 
   // ── Sub-components
   const CardBack: React.FC<{ w: number; h: number; ml?: number }> = ({ w, h, ml = 0 }) => (
@@ -773,9 +929,12 @@ const GameTableLive: React.FC = () => {
     </View>
   )
 
-  const AvatarBubble: React.FC<{ emoji: string; size?: number }> = ({ emoji, size = 36 }) => (
-    <View style={[s.avatarBubble, { width: size, height: size, borderRadius: size / 2 }]}>
-      <Text style={{ fontSize: size * 0.45 }}>{emoji}</Text>
+  // Patch 2026-07-18: รองรับ preset แบบรูปภาพ (avatar_vip_01-09) — เดิมรับแต่ emoji
+  const AvatarBubble: React.FC<{ emoji: string; size?: number; image?: any }> = ({ emoji, size = 36, image }) => (
+    <View style={[s.avatarBubble, { width: size, height: size, borderRadius: size / 2, overflow: 'hidden' }]}>
+      {image
+        ? <Image source={image} style={{ width: size, height: size }} resizeMode="cover" />
+        : <Text style={{ fontSize: size * 0.45 }}>{emoji}</Text>}
     </View>
   )
 
@@ -790,32 +949,13 @@ const GameTableLive: React.FC = () => {
     return <CardBack key={elKey} w={w} h={h} ml={ml} />
   }
 
-  const AIPiles: React.FC<{ aiId: string }> = ({ aiId }) => {
-    const p1 = allCards[aiId]?.[1] ?? []; const p2 = allCards[aiId]?.[2] ?? []; const p3 = allCards[aiId]?.[3] ?? []
-    const cards = [...p1, ...p2, ...p3]
-    return (
-      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        {([3, 3, 5] as number[]).map((cnt, pi) => (
-          <React.Fragment key={pi}>
-            {pi > 0 && <View style={{ width: 4 }} />}
-            <View style={{ flexDirection: 'row' }}>
-              {Array.from({ length: cnt }).map((_, ci) => {
-                const idx = pi === 0 ? ci : pi === 1 ? 3 + ci : 6 + ci
-                const cardKey = cards[idx]
-                return renderCard(cardKey, 25, 36, ci === 0 ? 0 : -18, `${aiId}-${pi}-${ci}-${cardKey ?? 'back'}`)
-              })}
-            </View>
-          </React.Fragment>
-        ))}
-      </View>
-    )
-  }
+  // (AIPiles เดิมถูกแทนที่ด้วย BossHandRow กลางแล้ว — ดู src/components/game/BossHandRow.tsx)
 
-  const SideSeat: React.FC<{ rot: '270deg' | '90deg'; aiId: string }> = ({ rot, aiId }) => {
+  const SideSeat: React.FC<{ rot: string; aiId: string; offsetX?: number; offsetY?: number }> = ({ rot, aiId, offsetX = 0, offsetY = 0 }) => {
     const p1 = allCards[aiId]?.[1] ?? []; const p2 = allCards[aiId]?.[2] ?? []; const p3 = allCards[aiId]?.[3] ?? []
     const cards = [...p1, ...p2, ...p3]
     return (
-      <View style={s.sideSeatWrap}>
+      <View style={[s.sideSeatWrap, { transform: [{ translateX: offsetX }, { translateY: offsetY }] }]}>
         <View style={[s.sideSeatInner, { transform: [{ rotate: rot }] }]}>
           {([5, 3, 3] as number[]).map((cnt, pi) => (
             <React.Fragment key={pi}>
@@ -872,14 +1012,17 @@ const GameTableLive: React.FC = () => {
           {/* Community cards */}
           {/* two-layer wrapper: View ชั้นนอกถือเงา (ห้ามมี overflow:hidden กันเงาโดนตัดบน iOS) / View ชั้นในคง s.commCard เดิมทุกประการ */}
           {k1 && CARD_IMG[k1] && <View style={pileShadowStyle}><View style={s.commCard}><Image source={CARD_IMG[k1]} style={{ width: 50, height: 72 }} resizeMode="cover" /></View></View>}
-          {k2 && CARD_IMG[k2] && <View style={pileShadowStyle}><View style={s.commCard}><Image source={CARD_IMG[k2]} style={{ width: 50, height: 72 }} resizeMode="cover" /></View></View>}
+          {/* Patch 2026-07-18: ไพ่กองกลางใบ 2 ซ้อนทับใบแรก 1/3 — แยก visual จากไพ่ในมือ + ประหยัดพื้นที่โต๊ะ */}
+          {k2 && CARD_IMG[k2] && <View style={[pileShadowStyle, { marginLeft: -17 }]}><View style={s.commCard}><Image source={CARD_IMG[k2]} style={{ width: 50, height: 72 }} resizeMode="cover" /></View></View>}
           {/* Divider */}
           {hasWinner && <View style={{ width: 1, height: 72, backgroundColor: 'rgba(201,168,76,0.3)', marginHorizontal: 2 }} />}
           {/* Winner cards */}
+          {/* Patch 2026-07-18: ไพ่ผู้ชนะซ้อน 1/3 เท่ากองกลาง — แถว showdown ไม่ยาวล้น */}
           {hasWinner && winCards.map((k, i) => (
             <View key={i} style={[s.commCard, {
               borderColor: isWin ? '#4ade80' : '#f87171',
               borderWidth: 1.5,
+              marginLeft: i > 0 ? -17 : 0,
             }]}>
               {CARD_IMG[k]
                 ? <Image source={CARD_IMG[k]} style={{ width: 50, height: 72 }} resizeMode="cover" />
@@ -891,110 +1034,7 @@ const GameTableLive: React.FC = () => {
     )
   }
 
-  const FaceCard: React.FC<{ card: CardData; pi: number; ci: number; first: boolean }> = ({ card, pi, ci, first }) => {
-    const isSel = selected?.pi === pi && selected?.ci === ci
-    return (
-      <TouchableOpacity onPress={() => handleCardPress(pi, ci)} activeOpacity={0.85}
-        style={[s.userCard, !first && { marginLeft: OVERLAP }, isSel && s.userCardSel, { zIndex: ci }]}>
-        {CARD_IMG[card.key]
-          ? <Image source={CARD_IMG[card.key]} style={{ width: CW, height: CH }} resizeMode="cover" />
-          : <Text style={{ fontSize: 8 }}>{card.key}</Text>}
-      </TouchableOpacity>
-    )
-  }
-
-  // Pile Reveal Overlay — Tab mode ผู้เล่นเลือกดูได้ + Continue button
-  const PileRevealOverlay: React.FC<{ pileNum: 1|2|3 }> = ({ pileNum }) => {
-    const players = [
-      { id: PLAYER_ID, label: myDisplayName, emoji: myAvatarEmoji },
-      ...(aiList.map(a => ({ id: a.id, label: a.name, emoji: a.emoji }))),
-    ]
-    const commMap: Record<number, string[]> = { 1: comm.p1, 2: comm.p2, 3: comm.p3 }
-    const cCards = commMap[pileNum] ?? []
-    const winner = pileWinners[pileNum]
-    const rank   = handRanks[pileNum]
-    const CARD_W = 50; const CARD_H = 72
-
-    return (
-      <View style={[s.overlay, { justifyContent: 'flex-start', padding: 16, backgroundColor: 'rgba(15,36,24,0.97)' }]}>
-        {/* Tab selector */}
-        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12, marginTop: 8 }}>
-          {([1,2,3] as const).map(n => (
-            <TouchableOpacity key={n} onPress={() => setRevealPile(n)}
-              style={{ flex: 1, paddingVertical: 8, borderRadius: 8, borderWidth: 1.5, alignItems: 'center',
-                borderColor: pileNum === n ? '#FFD76A' : 'rgba(255,215,106,0.3)',
-                backgroundColor: pileNum === n ? 'rgba(255,215,106,0.15)' : 'transparent' }}>
-              <Text style={{ fontSize: 14, color: pileNum === n ? '#FFD76A' : '#a89060', fontWeight: '800' }}>PILE {n}</Text>
-              {pileWinners[n] === PLAYER_ID && <Text style={{ fontSize: 9, color: '#8DFFB5' }}>🏆 YOU</Text>}
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        {/* Hand rank */}
-        {rank && <Text style={{ fontSize: 16, color: '#8DFFB5', marginBottom: 10, letterSpacing: 1, fontWeight: '700', alignSelf: 'center' }}>{rank}</Text>}
-
-        {/* Community cards */}
-        <View style={{ marginBottom: 12, alignItems: 'center' }}>
-          <Text style={{ fontSize: 12, color: '#38bdf8', fontWeight: '800', marginBottom: 6, letterSpacing: 2 }}>COMMUNITY</Text>
-          <View style={{ flexDirection: 'row', gap: 6 }}>
-            {cCards.map((k, i) => (
-              <View key={i} style={{ width: CARD_W, height: CARD_H, borderRadius: 4, overflow: 'hidden', borderWidth: 2, borderColor: '#38bdf8' }}>
-                {CARD_IMG[k]
-                  ? <Image source={CARD_IMG[k]} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" />
-                  : <Image source={cardBackImg} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" />}
-              </View>
-            ))}
-          </View>
-        </View>
-
-        {/* ไพ่แต่ละคน */}
-        <View style={{ width: '100%', gap: 8, flex: 1 }}>
-          {players.map(p => {
-            const revealed = allCards[p.id]?.[pileNum]
-            const cardKeys = revealed ? (pileNum === 3 ? revealed.slice(0, 3) : revealed) : []
-            const isWinner = pileWinners[pileNum] === p.id
-            const isUser   = p.id === PLAYER_ID
-            return (
-              <View key={p.id} style={{
-                flexDirection: 'row', alignItems: 'center',
-                borderWidth: isWinner ? 1.5 : 1,
-                borderColor: isWinner ? '#4ade80' : '#2A4A34',
-                borderRadius: 8, padding: 8,
-                backgroundColor: isWinner ? 'rgba(74,222,128,0.08)' : 'rgba(0,0,0,0.3)',
-              }}>
-                <View style={{ width: 56, alignItems: 'center', marginRight: 8 }}>
-                  <Text style={{ fontSize: 20 }}>{p.emoji}</Text>
-                  <Text style={{ fontSize: 10, color: isUser ? '#FFD76A' : '#F5F2E8', fontWeight: '800', marginTop: 2 }} numberOfLines={1}>
-                    {isUser ? myDisplayName : p.label.split(' ')[0]}
-                  </Text>
-                  {isWinner && <Text style={{ fontSize: 9, color: '#8DFFB5', fontWeight: '900' }}>🏆 WIN</Text>}
-                </View>
-                <View style={{ flexDirection: 'row', gap: 4 }}>
-                  {cardKeys.length > 0 ? cardKeys.map((k, i) => (
-                    <View key={i} style={{ width: CARD_W, height: CARD_H, borderRadius: 4, overflow: 'hidden', borderWidth: 1.5, borderColor: isWinner ? '#4ade80' : '#2A4A34' }}>
-                      {CARD_IMG[k]
-                        ? <Image source={CARD_IMG[k]} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" />
-                        : <Image source={cardBackImg} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" />}
-                    </View>
-                  )) : Array.from({ length: 3 }).map((_, i) => (
-                    <View key={i} style={{ width: CARD_W, height: CARD_H, borderRadius: 4, overflow: 'hidden', borderWidth: 1, borderColor: '#2A4A34' }}>
-                      <Image source={cardBackImg} style={{ width: CARD_W, height: CARD_H }} resizeMode="cover" />
-                    </View>
-                  ))}
-                </View>
-              </View>
-            )
-          })}
-        </View>
-
-
-        {/* Continue button */}
-        <View style={{ marginTop: 12, width: '100%' }}>
-          <ContinueTimer valRef={continueValRef} onContinue={handleContinue} />
-        </View>
-      </View>
-    )
-  }
+  // (FaceCard เดิมถูกแทนที่ด้วย PlayerHandView กลางแล้ว — ดู src/components/game/PlayerHandView.tsx)
 
   // ContinueTimer — แยก component ไม่ให้ ScrollView re-render
   const ContinueTimer: React.FC<{
@@ -1124,9 +1164,7 @@ const GameTableLive: React.FC = () => {
                       <Text style={{ fontSize: 11, color: '#FFC857', fontWeight: '700', textAlign: 'center' }}>⚡ Triple!</Text>
                     )}
                     {raw > 0 && <Text style={{ fontSize: 11, color: '#FFB74D' }}>Rake -5%</Text>}
-                    <Text style={{ fontSize: 16, color: net > 0 ? '#8DFFB5' : '#FF6B6B', fontWeight: '900', marginTop: 2 }}>
-                      {net > 0 ? '+' : ''}{net}
-                    </Text>
+                    <AnimatedTokenNumber value={net} style={{ fontSize: 16, color: net > 0 ? '#8DFFB5' : '#FF6B6B', fontWeight: '900', marginTop: 2 }} />
                     <Text style={{ fontSize: 10, color: '#a89060' }}>tokens</Text>
                   </>
                 )
@@ -1148,8 +1186,9 @@ const GameTableLive: React.FC = () => {
                   borderColor: isWinner ? '#8DFFB5' : '#2A4A34',
                   backgroundColor: isWinner ? 'rgba(141,255,181,0.08)' : 'rgba(0,0,0,0.3)',
                 }}>
+                  {/* Patch 3.5 Step 7: ตัด Avatar emoji ออก เหลือชื่อ+ตัวเลข — คงความกว้างคอลัมน์ 76px
+                      ไว้เท่าเดิม เพื่อไม่ให้แถวไพ่หงาย (marginLeft: 25 ด้านล่าง) เลื่อนหนี — ห้ามแก้ไฟล์เดียว */}
                   <View style={{ width: 76, alignItems: 'center', marginRight: 8 }}>
-                    <Text style={{ fontSize: 18 }}>{p.emoji}</Text>
                     <Text style={{ fontSize: 9, color: isUser ? '#FFD76A' : '#F5F2E8', fontWeight: '800' }} numberOfLines={1}>
                       {isUser ? myDisplayName : p.label}
                     </Text>
@@ -1193,8 +1232,9 @@ const GameTableLive: React.FC = () => {
         <View style={s.gameArea}>
 
           <PreGameCountdown visible={showPreGameCountdown} onComplete={() => setShowPreGameCountdown(false)} />
+          <MonarchConquestBanner winnerName={monarchWinner} onHidden={() => setMonarchWinner(null)} />
 
-          <View style={StyleSheet.absoluteFill as any} pointerEvents="none"><Image source={tableImg} style={{ width: '100%', height: '100%' }} resizeMode="cover" /></View>
+          <View style={StyleSheet.absoluteFill as any} pointerEvents="none"><Image source={selectedTableImg} style={{ width: '100%', height: '100%' }} resizeMode="cover" /></View>
           <View style={[StyleSheet.absoluteFill as any, s.logoWatermark]} pointerEvents="none">
             <Image source={tripleSpade} style={{ width: 120, height: 120, opacity: 0.07 }} resizeMode="contain" />
           </View>
@@ -1206,14 +1246,14 @@ const GameTableLive: React.FC = () => {
               {dealAnims.map((a, i) => (
                 <Animated.View key={i} style={{
                   position: 'absolute',
-                  width: 50, height: 72, borderRadius: 6,
+                  width: 25, height: 36, borderRadius: 6,
                   backgroundColor: '#091808',
                   borderWidth: 1, borderColor: 'rgba(201,168,76,.5)',
                   overflow: 'hidden',
                   opacity: a.opacity,
                   transform: [{ translateX: a.x }, { translateY: a.y }, { scale: a.scale }],
                 }}>
-                  <Image source={cardBackImg} style={{ width: 50, height: 72 }} resizeMode="cover" />
+                  <Image source={cardBackImg} style={{ width: 25, height: 36 }} resizeMode="cover" />
                 </Animated.View>
               ))}
               <Text style={{ color: 'rgba(201,168,76,0.4)', fontSize: 10, letterSpacing: 2, marginTop: 80 }}>DEALING...</Text>
@@ -1226,24 +1266,31 @@ const GameTableLive: React.FC = () => {
               {[0,1,2,3].map(playerIdx => {
                 const count = Math.floor(dealCount / 4) + (dealCount % 4 > playerIdx ? 1 : 0)
                 const positions = [
-                  { x: 195, y: 80 },   // Boss
-                  { x: 350, y: 300 },  // P4
-                  { x: 195, y: 520 },  // User
-                  { x: 40,  y: 300 },  // P2
+                  { x: 145, y: 80 },   // Boss
+                  { x: 300, y: 300 },  // P4
+                  { x: 145, y: 520 },  // User
+                  { x: -10, y: 300 },  // P2
                 ]
                 const pos = positions[playerIdx]
                 return Array.from({ length: Math.min(count, 11) }).map((_, ci) => (
                   <View key={`p${playerIdx}c${ci}`} style={{
-                    position: 'absolute', left: pos.x - 25 + ci * 4, top: pos.y - 36 + ci * 3,
-                    width: 50, height: 72, borderRadius: 6, overflow: 'hidden',
+                    position: 'absolute', left: pos.x - 12 + ci * 4, top: pos.y - 18 + ci * 3,
+                    width: 25, height: 36, borderRadius: 6, overflow: 'hidden',
                     borderWidth: 1, borderColor: 'rgba(201,168,76,.5)', backgroundColor: '#091808',
                   }}>
-                    <Image source={cardBackImg} style={{ width: 50, height: 72 }} resizeMode="cover" />
+                    <Image source={cardBackImg} style={{ width: 25, height: 36 }} resizeMode="cover" />
                   </View>
                 ))
               })}
           </View>
 
+          {/* ── COIN FLYING VFX (มติลุงเยาะ 2026-07-26) ── */}
+          {/* ค้าง mount เสมอ ไม่ผูก opacity กับ phase เหมือน dealAnims เพราะต้องเล่นได้ทั้งตอน
+              round_start (dealing) และตอน showdown_result (showdown) — sprite แต่ละตัวจัดการ
+              opacity ของตัวเองอยู่แล้ว ไม่ต้องซ่อน wrapper */}
+          <View style={[StyleSheet.absoluteFill as any, { alignItems: 'center', justifyContent: 'center', zIndex: 55 }]} pointerEvents="none">
+            <FlyingCoins ref={flyingCoinsRef} />
+          </View>
 
           {/* ── LOCKUP OVERLAY (Round 1 only, พร้อม deal animation) ── */}
           {showLockup && phase === 'dealing' && (
@@ -1347,80 +1394,60 @@ const GameTableLive: React.FC = () => {
                   })}
                 </View>
               )}
-              <ResultPanel
+              <MatchEndOverlay
                 variant={matchResult.finalWinner === PLAYER_ID ? 'victory' : 'defeat'}
-              >
-                {/* Buy-in Spec §6 — Buy-in/Returned/Net เหนือ Final Token Balance, JetBrains Mono */}
-                {(() => {
-                  const buyIn = matchResult.buyInAmount ?? buyInAmount
-                  const returned = tokenBalance[PLAYER_ID] ?? 0
-                  const net = returned - buyIn
-                  return (
-                    <View style={s.buyInSummaryRow}>
-                      <Text style={s.buyInSummaryText}>
-                        Buy-in <Text style={{ color: '#f87171' }}>−{buyIn.toLocaleString('en-US')}</Text>
-                        {'   '}Returned <Text style={{ color: '#4ade80' }}>+{returned.toLocaleString('en-US')}</Text>
-                        {'   '}Net <Text style={{ color: net >= 0 ? '#4ade80' : '#f87171', fontWeight: '800' }}>
-                          {net >= 0 ? '+' : ''}{net.toLocaleString('en-US')}
-                        </Text>
-                      </Text>
-                    </View>
-                  )
-                })()}
-                {/* ยอด token_balance จริงหลัง settle จาก server (ไม่คำนวณเอง) — ต่างจาก "Final Token Balance"
-                    ด้านล่างที่เป็น leaderboard stack ในแมตช์นี้ (รวม AI ซึ่งไม่มี token_balance จริงใน DB) */}
-                {typeof matchResult.newTokenBalance === 'number' && (
-                  <Text style={[s.buyInSummaryText, { textAlign: 'center', marginBottom: 8 }]}>
-                    Your Token Balance <Text style={{ color: '#c9a84c', fontWeight: '800' }}>{matchResult.newTokenBalance.toLocaleString('en-US')}</Text>
-                  </Text>
-                )}
-                <Text style={s.matchEndSub}>Final Token Balance</Text>
-                {[PLAYER_ID, ...aiList.map(a => a.id)].sort((a, b) => (tokenBalance[b] ?? 0) - (tokenBalance[a] ?? 0)).map(pid => {
-                  const ai  = aiList.find(a => a.id === pid)
-                  const bal = tokenBalance[pid] ?? (matchResult.buyInAmount ?? buyInAmount)
-                  return (
-                    <View key={pid} style={s.matchEndRow}>
-                      <Text style={[s.matchEndName, pid === PLAYER_ID && { color: '#c9a84c' }]} numberOfLines={1}>
-                        {pid === PLAYER_ID ? `${myAvatarEmoji} ${myDisplayName}` : `${ai?.emoji} ${ai?.name}`}
-                      </Text>
-                      <Text style={[s.matchEndBal, { color: bal >= (matchResult.buyInAmount ?? buyInAmount) ? '#4ade80' : '#f87171' }]}>🪙 {bal}</Text>
-                    </View>
-                  )
-                })}
-              </ResultPanel>
-              {/* เลื่อนลงมาทับแนวปุ่ม Auto Sort (s.actionBar) ที่ก้นจอ แทนที่จะลอยอยู่ใน footer ของ ResultPanel */}
-              <View style={[s.actionBar, { position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 150 }]}>
-                <MenuButton icon="rematch" label="Rematch" size="md" onPress={handleRematch} />
-                <MenuButton icon="exit" label="Lobby" size="md" onPress={() => router.replace('/(home)/lobby')} />
-              </View>
+                buyInAmount={matchResult.buyInAmount ?? buyInAmount}
+                returnedAmount={tokenBalance[PLAYER_ID] ?? 0}
+                tokenBalanceDisplay={typeof matchResult.newTokenBalance === 'number' ? matchResult.newTokenBalance : undefined}
+                leaderboard={[PLAYER_ID, ...aiList.map(a => a.id)]
+                  .sort((a, b) => (tokenBalance[b] ?? 0) - (tokenBalance[a] ?? 0))
+                  .map(pid => {
+                    const ai = aiList.find(a => a.id === pid)
+                    return {
+                      id: pid,
+                      label: pid === PLAYER_ID ? myDisplayName : (ai?.name ?? pid),
+                      balance: tokenBalance[pid] ?? (matchResult.buyInAmount ?? buyInAmount),
+                      isSelf: pid === PLAYER_ID,
+                    }
+                  })}
+                onBackToLobby={() => router.replace('/(home)/lobby')}
+                insetsBottom={insets.bottom}
+              />
             </>
           )}
 
-          {/* ── TRIPLE SWEEP JACKPOT VFX — โชว์ไม่เกิน 5 วิ แล้วปิดเอง ── */}
+          {/* ── TRIPLE SWEEP — Legendary สำหรับ P1, VFX เดิมสำหรับผู้เล่นอื่น ── */}
           {jackpotWinner && (() => {
             const isMe = jackpotWinner === PLAYER_ID
             const winAI = aiList.find(a => a.id === jackpotWinner)
             const label = isMe ? myDisplayName : (winAI?.name ?? jackpotWinner)
-            const emoji = isMe ? myAvatarEmoji : (winAI?.emoji ?? '🤖')
+            if (isMe) return (
+              <LegendaryCardVFX
+                title="TRIPLE SWEEP JACKPOT"
+                subtitle={`${label} WON ALL 3 PILES`}
+                extraHoldMs={3000}
+                onFinish={() => {
+                  setJackpotWinner(null)
+                  setJackpotVfxComplete(true)
+                }}
+              />
+            )
+            const emoji = winAI?.emoji ?? '🤖'
             return (
               <View style={[s.overlay, { backgroundColor: 'rgba(0,0,0,0.55)', zIndex: 300 }]} pointerEvents="none">
                 {jackpotConfettiAnims.map((a, i) => {
                   const colors = ['#FFD76A', '#FFC857', '#8DFFB5', '#ff6b6b', '#4d96ff', '#cc5de8']
                   const rotStr = a.rotate.interpolate({ inputRange: [0, 720], outputRange: ['0deg', '720deg'] })
-                  return (
-                    <Animated.View key={i} style={{
-                      position: 'absolute', width: 8, height: 8, borderRadius: 2,
-                      backgroundColor: colors[i % colors.length], zIndex: 301,
-                      transform: [{ translateX: a.x }, { translateY: a.y }, { rotate: rotStr }],
-                      opacity: a.opacity,
-                    }} />
-                  )
+                  return <Animated.View key={i} style={{
+                    position: 'absolute', width: 8, height: 8, borderRadius: 2,
+                    backgroundColor: colors[i % colors.length], zIndex: 301,
+                    transform: [{ translateX: a.x }, { translateY: a.y }, { rotate: rotStr }], opacity: a.opacity,
+                  }} />
                 })}
                 <Animated.Text style={{
-                  transform: [{ scale: jackpotPulse }],
-                  fontSize: 26, fontWeight: '900', color: '#FFD76A', letterSpacing: 1,
-                  textShadowColor: '#ffd700', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 20,
-                  textAlign: 'center',
+                  transform: [{ scale: jackpotPulse }], fontSize: 26, fontWeight: '900', color: '#FFD76A',
+                  letterSpacing: 1, textShadowColor: '#ffd700', textShadowOffset: { width: 0, height: 0 },
+                  textShadowRadius: 20, textAlign: 'center',
                 }}>⚡ TRIPLE SWEEP JACKPOT! ⚡</Animated.Text>
                 <Text style={{ marginTop: 10, fontSize: 16, color: '#8DFFB5', fontWeight: '800' }}>
                   {emoji} {label} won all 3 piles!
@@ -1433,13 +1460,10 @@ const GameTableLive: React.FC = () => {
           <View style={{ position: 'absolute', top: 8, left: 10, zIndex: 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }} pointerEvents="none">
             <Image source={studioLogo} style={{ width: 28, height: 28, opacity: 0.9 }} resizeMode="contain" />
           </View>
-          <View style={{ position: 'absolute', top: 70, left: 0, zIndex: (phase === 'showdown' || phase === 'result') ? 0 : 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }}>
-            <TouchableOpacity onPress={() => { setShowTierInfo(true); setActiveTierTab('INITIATE') }}
-              style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(180,0,0,0.3)', borderWidth: 1.5, borderColor: '#ff3333', alignItems: 'center', justifyContent: 'center' }}>
-              <Text style={{ fontSize: 11, color: '#ff3333', fontWeight: '900' }}>i</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={{ position: 'absolute', top: 8, left: 0, right: 0, alignItems: 'center', zIndex: 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }} pointerEvents="box-none">
+          {/* Hand Ranking (?) — ย้ายจากกลางบนจอ (ชนกล้องหน้ามือถือ กดไม่ได้) ไปอยู่ใต้ปุ่ม i ใน
+              leftSlot ของ GameTopBar แทน (มติลุงเยาะ 2026-07-26) — top ใช้สูตรเดียวกับ paddingTop
+              ของ topBar เอง (isWeb?22:insets.top+14) บวกความสูงแถว i/Timer อีก ~30 */}
+          <View style={{ position: 'absolute', top: (isWeb ? 22 : insets.top + 14) + 30, left: 14, zIndex: 10, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }} pointerEvents="box-none">
             <TouchableOpacity onPress={() => setShowRankTable(true)}
               style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(201,168,76,0.2)', borderWidth: 1, borderColor: 'rgba(201,168,76,0.5)', alignItems: 'center', justifyContent: 'center' }}>
               <Text style={{ fontSize: 11, color: '#c9a84c', fontWeight: '800' }}>?</Text>
@@ -1447,136 +1471,17 @@ const GameTableLive: React.FC = () => {
           </View>
 
           {/* ── TIER INFO OVERLAY ── */}
-{showTierInfo && (
-  <View style={[s.overlay, { justifyContent: 'flex-start', paddingTop: 20, backgroundColor: 'rgba(15,36,24,0.97)' }]}>
-    <Text style={[s.showdownTitle, { marginBottom: 12 }]}>Tier Information</Text>
-
-    {/* แท็บ */}
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginBottom: 12, justifyContent: 'center' }}>
-      {['INITIATE','ADEPT','MASTERMIND','HIGH NOBLE','LAST BOSS'].map(t => (
-        <TouchableOpacity key={t} onPress={() => setActiveTierTab(t)}
-          style={{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1,
-            borderColor: activeTierTab === t ? '#c9a84c' : 'rgba(201,168,76,0.5)',
-            backgroundColor: activeTierTab === t ? 'rgba(201,168,76,0.2)' : 'transparent' }}>
-          <Text style={{ fontSize: 9, color: activeTierTab === t ? '#c9a84c' : '#a89060', fontWeight: '800' }}>{t}</Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-
-    {/* เนื้อหาแต่ละ Tier */}
-    <ScrollView style={{ width: '100%' }} showsVerticalScrollIndicator={false}>
-    {(() => {
-      const TIERS: Record<string, any> = {
-        'INITIATE': {
-          name: 'Initiate', tagline: 'The First Step',
-          tokenRange: '100 – 49,999',
-          table: 'Bot × 3',
-          ante: { pile1: 10, pile2: 20, pile3: 40, call: '-' },
-          pot:  { pile1: 40, pile2: 80, pile3: 160 },
-          jackpot: { payout: 504, penalty: 90 },
-          features: ['Simultaneous Showdown', 'No Fog of War', 'No Blind Auction', 'No Grand Finale Betting', 'Learn the basics (~6 days to advance)'],
-        },
-        'ADEPT': {
-          name: 'Adept', tagline: 'The Rising Player',
-          tokenRange: '50,000 – 149,999',
-          table: 'Real Player × 1 + Bot × 2',
-          ante: { pile1: 60, pile2: 100, pile3: 140, call: '-' },
-          pot:  { pile1: 230, pile2: 380, pile3: 530 },
-          jackpot: { payout: 2052, penalty: 380 },
-          features: ['Simultaneous Showdown', 'No Fog of War', 'No Blind Auction', 'No Grand Finale Betting', 'First real opponents (~12 days to advance)'],
-        },
-        'MASTERMIND': {
-          name: 'Mastermind', tagline: 'The Auction Begins',
-          tokenRange: '150,000 – 399,999',
-          table: 'Real Player × 2 + Minion AI × 1',
-          ante: { pile1: 200, pile2: 300, pile3: 500, call: 1000 },
-          pot:  { pile1: 760, pile2: 1140, pile3: 1900 },
-          jackpot: { payout: 6840, penalty: 1260 },
-          features: ['Sequential Showdown', 'Fog of War ✅', 'Blind Auction ✅', 'Grand Finale Betting ✅', 'Discard Phase ✅ (~31 days to advance)'],
-        },
-        'HIGH NOBLE': {
-          name: 'High Noble', tagline: 'Audience with the Four Gods',
-          tokenRange: '400,000+',
-          table: 'Real Player × 2 + Four Gods AI × 1',
-          ante: { pile1: 500, pile2: 1000, pile3: 1500, call: 3000 },
-          pot:  { pile1: 1900, pile2: 3800, pile3: 5700 },
-          jackpot: { payout: 20520, penalty: 3800 },
-          features: ['Sequential Showdown', 'Fog of War ✅', 'Blind Auction ✅', 'Grand Finale Betting ✅', 'Full Competitive Experience'],
-        },
-        'LAST BOSS': {
-          name: 'The Last Boss', tagline: 'Beyond the Four Gods',
-          tokenRange: 'Special Condition',
-          table: 'Special Condition',
-          ante: { pile1: 1000, pile2: 2000, pile3: 3000, call: 6000 },
-          pot:  { pile1: 3800, pile2: 7600, pile3: 11400 },
-          jackpot: { payout: 41040, penalty: 7600 },
-          features: ['Sequential Showdown', 'Fog of War ✅', 'Blind Auction ✅', 'Grand Finale Betting ✅', 'Final Challenge'],
-        },
-      }
-      const t = TIERS[activeTierTab]
-      if (!t) return null
-      const Row = ({ label, value, valueColor = '#e8dfc0' }: { label: string; value: string; valueColor?: string }) => (
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: 'rgba(201,168,76,0.2)' }}>
-          <Text style={{ fontSize: 10, color: '#a89060', flex: 1 }}>{label}</Text>
-          <Text style={{ fontSize: 10, color: valueColor, fontWeight: '700', flex: 2, textAlign: 'right' }}>{value}</Text>
-        </View>
-      )
-      return (
-        <View>
-          {/* Header */}
-          <View style={{ alignItems: 'center', marginBottom: 12, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(201,168,76,0.2)' }}>
-            <Text style={{ fontSize: 16, color: '#c9a84c', fontWeight: '900', letterSpacing: 2 }}>{t.name}</Text>
-            <Text style={{ fontSize: 10, color: '#c9a84c', marginTop: 2, fontStyle: 'italic' }}>"{t.tagline}"</Text>
-          </View>
-
-          {/* General */}
-          <Text style={{ fontSize: 9, color: '#38bdf8', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 4 }}>GENERAL</Text>
-          <Row label="Token Range" value={t.tokenRange} valueColor="#4ade80" />
-          <Row label="Table" value={t.table} />
-
-          {/* Ante */}
-          <Text style={{ fontSize: 9, color: '#38bdf8', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>ANTE PER HAND</Text>
-          <Row label="Pile 1" value={`${t.ante.pile1} tokens`} />
-          <Row label="Pile 2" value={`${t.ante.pile2} tokens`} />
-          <Row label="Pile 3" value={`${t.ante.pile3} tokens`} />
-          <Row label="Grand Finale Call" value={t.ante.call === '-' ? 'N/A' : `${t.ante.call} tokens/round`} valueColor={t.ante.call === '-' ? '#555' : '#e8dfc0'} />
-
-          {/* Pot */}
-          <Text style={{ fontSize: 14, color: '#8DFFB5', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>POT PAYOUT (Rake 5%)</Text>
-          <Row label="Win Pile 1" value={`${t.pot.pile1} tokens`} valueColor="#8DFFB5" />
-          <Row label="Win Pile 2" value={`${t.pot.pile2} tokens`} valueColor="#8DFFB5" />
-          <Row label="Win Pile 3" value={`${t.pot.pile3} tokens`} valueColor="#8DFFB5" />
-
-          {/* Triple Sweep */}
-          <Text style={{ fontSize: 14, color: '#FFB74D', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>⚡ TRIPLE SWEEP JACKPOT</Text>
-          <Row label="Winner Payout" value={`${t.jackpot.payout} tokens`} valueColor="#FFD76A" />
-          <Row label="Loser Penalty" value={`${t.jackpot.penalty} tokens each`} valueColor="#FFB74D" />
-          <Row label="Rake" value="5% (burn)" valueColor="#FFB74D" />
-
-          {/* Features */}
-          <Text style={{ fontSize: 14, color: '#8DFFB5', fontWeight: '800', letterSpacing: 2, marginBottom: 6, marginTop: 12 }}>FEATURES</Text>
-          {t.features.map((f: string, i: number) => (
-            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 4 }}>
-              <Text style={{ fontSize: 14, color: '#FFD76A', marginRight: 8 }}>•</Text>
-              <Text style={{ fontSize: 16, color: '#F5F2E8' }}>{f}</Text>
-            </View>
-          ))}
-          <View style={{ height: 20 }} />
-        </View>
-      )
-    })()}
-    </ScrollView>
-
-    <TouchableOpacity style={[s.continueBtn, { marginTop: 12, backgroundColor: '#102218', borderColor: '#FFD76A' }]} onPress={() => setShowTierInfo(false)}>
-      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>Close</Text>
-    </TouchableOpacity>
-  </View>
-)}
+          <TierInfoModal
+            visible={showTierInfo}
+            activeTab={activeTierTab as TierInfoLabel}
+            onTabChange={setActiveTierTab}
+            onClose={() => setShowTierInfo(false)}
+          />
 
           {/* ── RANK TABLE OVERLAY ── */}
 {showRankTable && (
   <View style={[s.overlay, { justifyContent: 'flex-start', paddingTop: 40, backgroundColor: 'rgba(11,21,16,0.92)' }]}>
-    <Text style={[s.showdownTitle, { marginBottom: 12, fontSize: 24, color: '#FFD76A' }]}>Hand Rankings</Text>
+    <Text style={[s.showdownTitle, { marginBottom: 12, fontSize: 18, color: '#FFD76A' }]}>Hand Rankings</Text>
     <ScrollView style={{ width: '100%' }} showsVerticalScrollIndicator={false}>
     {[
       { rank: 9, name: 'Royal Flush',     desc: '5 same-suit cards in sequence',        low: 'A♠ K♠ Q♠ J♠ 10♠',  high: 'A♥ K♥ Q♥ J♥ 10♥' },
@@ -1590,16 +1495,16 @@ const GameTableLive: React.FC = () => {
       { rank: 1, name: 'One Pair',        desc: '2 cards of the same value',            low: '2♠ 2♥ 3♦ 4♣ 5♠',   high: 'A♠ A♥ K♦ Q♣ J♠' },
       { rank: 0, name: 'High Card',       desc: 'No combination — highest card wins',   low: '2♠ 3♥ 5♦ 7♣ 9♠',   high: 'A♠ K♥ Q♦ J♣ 9♠' },
     ].map((h, i) => (
-      <View key={i} style={{ flexDirection: 'row', alignItems: 'center', width: '100%', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#2A4A34' }}>
-        <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: 'rgba(255,215,106,0.15)', borderWidth: 1, borderColor: '#FFD76A', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
-          <Text style={{ fontSize: 13, color: '#FFD76A', fontWeight: '900' }}>{h.rank}</Text>
+      <View key={i} style={{ flexDirection: 'row', alignItems: 'center', width: '100%', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#2A4A34' }}>
+        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(255,215,106,0.15)', borderWidth: 1, borderColor: '#FFD76A', alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
+          <Text style={{ fontSize: 10, color: '#FFD76A', fontWeight: '900' }}>{h.rank}</Text>
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: 18, color: '#F5F2E8', fontWeight: '700' }}>{h.name}</Text>
-          <Text style={{ fontSize: 14, color: '#c9b87a', marginTop: 2 }}>{h.desc}</Text>
-          <View style={{ flexDirection: 'row', gap: 12, marginTop: 3 }}>
-            <Text style={{ fontSize: 14, color: '#8DFFB5' }}>Low: {h.low}</Text>
-            <Text style={{ fontSize: 14, color: '#FFC857' }}>High: {h.high}</Text>
+          <Text style={{ fontSize: 13, color: '#F5F2E8', fontWeight: '700' }}>{h.name}</Text>
+          <Text style={{ fontSize: 10, color: '#c9b87a', marginTop: 1 }}>{h.desc}</Text>
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 2 }}>
+            <Text style={{ fontSize: 10, color: '#8DFFB5' }}>Low: {h.low}</Text>
+            <Text style={{ fontSize: 10, color: '#FFC857' }}>High: {h.high}</Text>
           </View>
         </View>
       </View>
@@ -1607,28 +1512,55 @@ const GameTableLive: React.FC = () => {
     <View style={{ height: 16 }} />
     </ScrollView>
     <TouchableOpacity style={[s.continueBtn, { marginTop: 12, backgroundColor: '#102218', borderColor: '#FFD76A' }]} onPress={() => setShowRankTable(false)}>
-      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 18 }]}>Close</Text>
+      <Text style={[s.continueBtnTxt, { color: '#FFD76A', fontSize: 14 }]}>Close</Text>
     </TouchableOpacity>
   </View>
 )}
 
           {/* TOP BAR */}
-          <View style={[s.topBar, { paddingTop: isWeb ? 22 : insets.top + 14, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 }]}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: 50 }}>
-              <View style={s.tierBadge}><Text style={s.tierText}>INITIATE</Text></View>
-              <Text style={s.roundText}>R{roundNumber}/5</Text>
+          <GameTopBar
+            tierName="INITIATE"
+            tierStars={2}
+            round={roundNumber}
+            isWeb={isWeb}
+            insetsTop={insets.top}
+            opacity={(phase === 'showdown' || phase === 'result') ? 0 : 1}
+            /* Timer ย้ายจาก children (ขวาสุด) มาเป็น leftSlot (ซ้ายสุด) เพื่อเปิดพื้นที่มุมขวาบน
+               ทั้งแถบให้ Token Flow Panel  ไม่ต้องเว้นระยะหลบโลโก้ studio เพราะโลโก้อยู่ที่
+               top 8 ซึ่งเป็นคนละแถวกับ TopBar (top = insets.top + 14) ไม่เคยชนกันจริง */
+            leftSlot={
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                {/* ปุ่ม i (Tier Info) ย้ายมาจาก absolute top:70 left:0 ที่เดิมลอยเดี่ยวข้าง avatar Boss
+                    มาต่อแถวเดียวกับ Timer + Tier badge  ยังกดได้ปกติเพราะ TopBar ไม่ได้ตั้ง pointerEvents */}
+                <TouchableOpacity
+                  onPress={() => { setShowTierInfo(true); setActiveTierTab('INITIATE') }}
+                  style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(180,0,0,0.3)', borderWidth: 1.5, borderColor: '#ff3333', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Text style={{ fontSize: 11, color: '#ff3333', fontWeight: '900' }}>i</Text>
+                </TouchableOpacity>
+                <TimerDisplay valRef={timerValRef} />
+              </View>
+            }
+          />
+
+          {/* TOKEN FLOW PANEL - ค้างตลอดเกม (Spec ข้อ 2) ซ่อนเฉพาะตอนจบเกมที่มีจอสรุปทับ
+              ชิดขอบบนสุด (แถบขวาว่างแล้วหลังย้าย Timer ไปซ้าย) กันไม่ให้ห้อยลงมาบังไพ่กองกลาง/ชื่อ P4 */}
+          {phase !== 'end' && flowBuyIn > 0 && (
+            <TokenFlowPanel
+              pot={flowPot}
+              feeRake={flowFeeRake}
+              stacks={tokenBalance}
+              seatIds={[PLAYER_ID, ...aiList.map(a => a.id)]}
+              buyIn={flowBuyIn}
+              topOffset={isWeb ? 6 : insets.top + 2}
+            />
+          )}
+
+          {burnToast && (
+            <View style={s.burnToast} pointerEvents="none">
+              <Text style={s.burnToastText}>{burnToast}</Text>
             </View>
-            <View style={[s.potBadge, { marginLeft: 6 }]}>
-              <Text style={s.stackLabel}>STACK</Text>
-              <Text style={s.potText}>🪙 {tokenBalance[PLAYER_ID] ?? buyInAmount}</Text>
-              {(tokenDeltas[PLAYER_ID] ?? 0) !== 0 && (
-                <Text style={[s.deltaText, { color: (tokenDeltas[PLAYER_ID] ?? 0) > 0 ? '#4ade80' : '#f87171' }]}>
-                  {(tokenDeltas[PLAYER_ID] ?? 0) > 0 ? '+' : ''}{tokenDeltas[PLAYER_ID]}
-                </Text>
-              )}
-            </View>
-            <TimerDisplay valRef={timerValRef} />
-          </View>
+          )}
 
           {/* AI SEAT + MAIN + USER — fade เมื่อ continue, ซ่อนระหว่าง dealing
               ห้ามสลับ opacity ระหว่าง literal 0 กับ fadeCards node ตรงนี้ (native driver
@@ -1637,28 +1569,41 @@ const GameTableLive: React.FC = () => {
           <Animated.View style={{ flex: 1, opacity: fadeCards }}>
           <View style={[s.aiSeat, { opacity: (phase === 'countdown' || phase === 'showdown' || phase === 'result') ? 0 : 1 }]}>
             <View style={s.aiRow}>
-              <AvatarBubble emoji={bossAI?.emoji ?? '🤖'} size={36} />
-              <Text style={s.aiName}>{bossAI?.name ?? 'BOSS AI'}</Text>
+              {/* translateX -50 เดิม (Patch 2026-07-18) ถูกลบแล้ว - ตอนนี้ aiSeat เป็น flex-start
+                  ทั้งบล็อกชิดซ้ายพร้อมกันอยู่แล้ว ไม่ต้องเลื่อนเฉพาะ avatar ให้เยื้องจากกรอบไพ่อีก */}
+              <View><AvatarBubble emoji={bossAI?.emoji ?? '🤖'} size={36} /></View>
+              <View>
+                <Text style={s.aiName}>{bossAI?.name ?? 'BOSS AI'}</Text>
+                <Text style={s.seatToken}>🪙 {fmtToken(tokenBalance[bossAI?.id ?? ''])}</Text>
+              </View>
               <View style={s.statusBadge}>
-                <Text style={s.statusText}>{aiStatus[bossAI?.id ?? ''] ?? 'Arranging...'}</Text>
+                <AiStatusDots label={aiStatus[bossAI?.id ?? ''] ?? 'Arranging'} />
               </View>
             </View>
-            {bossAI && <AIPiles aiId={bossAI.id} />}
+            {bossAI && <View style={{ marginTop: -10 /* Patch 2026-07-18: ยกไพ่บอสขึ้น 10px */ }}>
+              <BossHandRow revealed={[
+                ...(allCards[bossAI.id]?.[1] ?? []),
+                ...(allCards[bossAI.id]?.[2] ?? []),
+                ...(allCards[bossAI.id]?.[3] ?? []),
+              ]} />
+            </View>}
           </View>
 
           {/* MAIN AREA */}
           <View style={[s.mainArea, { opacity: (phase === 'countdown' || phase === 'showdown' || phase === 'result') ? 0 : 1 }]}>
             <View style={[s.sideCol, { paddingLeft: 10 }]}>
               <Text style={s.sideName}>{p2AI?.name ?? 'P2'}</Text>
+              <Text style={s.seatToken}>🪙 {fmtToken(tokenBalance[p2AI?.id ?? ''])}</Text>
               <View style={{ marginTop: -6, marginBottom: 60 }}>
                 <AvatarBubble emoji={p2AI?.emoji ?? '👤'} size={36} />
               </View>
-              {p2AI && <SideSeat rot="270deg" aiId={p2AI.id} />}
+              {/* เอียงตาม perspective ขอบผ้าขาวม้าฝั่งซ้าย โดยคงขนาดและระยะซ้อนไพ่เดิม */}
+              {p2AI && <SideSeat rot="273.5deg" aiId={p2AI.id} offsetX={13} offsetY={1} />}
             </View>
 
             <View style={s.commWrap}>
               {/* Pile 1 & 2 แถวเดียวกัน */}
-              <View style={{ flexDirection: 'row', gap: 4, marginBottom: 4, marginLeft: -25 }}>
+              <View style={{ flexDirection: 'row', gap: 4, marginBottom: 4, marginLeft: 0 /* Patch 2026-07-18: เดิม -25 → ขยับขวา 25px */ }}>
                 <CommRow pileNum={1} k1={comm.p1[0]} k2={comm.p1[1]} />
                 <CommRow pileNum={2} k1={comm.p2[0]} k2={comm.p2[1]} />
               </View>
@@ -1670,12 +1615,14 @@ const GameTableLive: React.FC = () => {
 
             <View style={[s.sideCol, { paddingRight: 10 }]}>
               <Text style={s.sideName}>{p4AI?.name ?? 'P4'}</Text>
+              <Text style={s.seatToken}>🪙 {fmtToken(tokenBalance[p4AI?.id ?? ''])}</Text>
               <View style={{ marginTop: -6, marginBottom: 60 }}>
                 <AvatarBubble emoji={p4AI?.emoji ?? '👤'} size={36} />
               </View>
               {p4AI && (
                 <View style={{ marginLeft: 15 }}>
-                  <SideSeat rot="90deg" aiId={p4AI.id} />
+                  {/* เอียงตาม perspective ขอบผ้าขาวม้าฝั่งขวาแบบสมมาตรกับ P2 */}
+                  <SideSeat rot="86.5deg" aiId={p4AI.id} offsetX={-18} offsetY={1} />
                 </View>
               )}
             </View>
@@ -1688,7 +1635,7 @@ const GameTableLive: React.FC = () => {
 
 
             {isRevealed ? (
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 20 /* Patch 2026-07-18 */ }}>
                 {[1, 2, 3].flatMap(pNum => userRevealed[pNum] ?? []).map((key, ci) => (
                   <View key={ci} style={[s.userCard, { zIndex: ci }]}>
                     {CARD_IMG[key] && <Image source={CARD_IMG[key]} style={{ width: CW, height: CH }} resizeMode="cover" />}
@@ -1696,44 +1643,14 @@ const GameTableLive: React.FC = () => {
                 ))}
               </View>
             ) : (
-              <View style={{ gap: 4 }}>
-                {/* แถวบน: Pile 1 + Pile 2 แยกซ้ายขวา */}
-                <View style={{ flexDirection: 'row', gap: 6 }}>
-                  <View style={{ flexDirection: 'column', alignItems: 'center' }}>
-                    <Text style={[s.pileLabel, { marginBottom: 2 }]}>PILE 1</Text>
-                    <View style={{ flexDirection: 'row', marginRight: CW / 2 }}>
-                      {piles[0].map((card, ci) => (
-                        <FaceCard key={card.id} card={card} pi={0} ci={ci} first={ci === 0} />
-                      ))}
-                    </View>
-                  </View>
-                  <View style={{ flexDirection: 'column', alignItems: 'center' }}>
-                    <Text style={[s.pileLabel, { marginBottom: 2 }]}>PILE 2</Text>
-                    <View style={{ flexDirection: 'row', marginLeft: CW / 2 }}>
-                      {piles[1].map((card, ci) => (
-                        <FaceCard key={card.id} card={card} pi={1} ci={ci} first={ci === 0} />
-                      ))}
-                    </View>
-                  </View>
-                </View>
-                {/* แถวล่าง: Pile 3 */}
-                <View style={{ flexDirection: 'column', alignItems: 'center' }}>
-                  <Text style={[s.pileLabel, { marginBottom: 2 }]}>PILE 3</Text>
-                  <View style={{ flexDirection: 'row', alignSelf: 'center' }}>
-                    {piles[2].map((card, ci) => (
-                      <TouchableOpacity key={card.id}
-                        onPress={() => handleCardPress(2, ci)}
-                        activeOpacity={0.85}
-                        style={[s.userCard, ci > 0 && { marginLeft: -24 },
-                          selected?.pi === 2 && selected?.ci === ci && s.userCardSel,
-                          { zIndex: ci }]}>
-                        {CARD_IMG[card.key]
-                          ? <Image source={CARD_IMG[card.key]} style={{ width: CW, height: CH }} resizeMode="cover" />
-                          : <Text style={{ fontSize: 8 }}>{card.key}</Text>}
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </View>
+              // โซนจัดไพ่ในมือ — PlayerHandView กลาง (Free: overlap แถวตรง / VIP: fan arc)
+              <View style={{ width: '100%', marginTop: 20, alignItems: 'center' }}>
+                <PlayerHandView
+                  piles={piles}
+                  selected={selected}
+                  onCardPress={handleCardPress}
+                  isVip={isVip}
+                />
               </View>
             )}
           </View>
@@ -1742,8 +1659,11 @@ const GameTableLive: React.FC = () => {
           {/* USER AVATAR — มุมล่างซ้าย — Feedback C2: ใช้ myAvatarEmoji/myDisplayName จริงแทน hardcode */}
           {/* P1 HUD ย้ายลงชิดขอบล่าง — pointerEvents none เพื่อไม่บังปุ่ม actionBar */}
           <View style={{ position: 'absolute', bottom: Math.max(insets.bottom, 4), left: 10, zIndex: 3, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1, flexDirection: 'row', alignItems: 'center', gap: 6 }} pointerEvents="none">
-            <AvatarBubble emoji={myAvatarEmoji} size={40} />
-            <Text style={s.userNameTag} numberOfLines={1}>{myDisplayName}</Text>
+            <AvatarBubble emoji={myAvatarEmoji} image={myAvatarImage} size={40} />
+            <View>
+              <Text style={s.userNameTag} numberOfLines={1}>{myDisplayName}</Text>
+              <Text style={s.seatToken}>🪙 {fmtToken(tokenBalance[PLAYER_ID])}</Text>
+            </View>
           </View>
 
           {/* ACTION BAR */}
@@ -1776,7 +1696,7 @@ const GameTableLive: React.FC = () => {
             </ImageBackground>
           </View>
         )}
-        <ServerLog />
+        <ServerLog socket={socketRef.current} onMonarchWin={setMonarchWinner} />
       </View>
     </View>
   )
@@ -1794,21 +1714,19 @@ const s = StyleSheet.create({
   feltOverlay:   { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.2)' },
   logoWatermark: { alignItems: 'center', justifyContent: 'center' },
 
-  topBar:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6, zIndex: 2 },
   studioLogo: { width: 28, height: 28, opacity: 0.9 },
-  tierBadge:  { borderWidth: 1.5, borderColor: '#38bdf8', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2, backgroundColor: 'rgba(56,189,248,0.12)' },
-  tierText:   { fontSize: 8, color: '#38bdf8', letterSpacing: 2, fontWeight: '800' },
-  roundText:  { fontSize: 9, color: '#38bdf8', fontWeight: '800' },
-  potBadge:   { borderWidth: 1, borderColor: 'rgba(201,168,76,.4)', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 2, backgroundColor: 'rgba(0,0,0,.4)', alignItems: 'center' },
-  stackLabel: { fontSize: 6, fontWeight: '800', letterSpacing: 1, color: 'rgba(201,168,76,.6)', fontFamily: 'JetBrainsMono_400Regular' },
-  potText:    { fontSize: 10, fontWeight: '700', color: '#c9a84c' },
-  deltaText:  { fontSize: 9, fontWeight: '800' },
-  timerText:  { fontSize: 20, fontWeight: '700', minWidth: 48, textAlign: 'right' },
+  // minWidth ลด 48 -> 34 (พอดี 3 หลักที่ fontSize 20) คง textAlign right ไว้ให้เลขอยู่นิ่งตอนนับถอยหลัง
+  // ของเดิม 48 ทำให้เลข 2 หลักลอยห่างขอบซ้ายราว 20px ดันแถบ Tier ไปชน Token Flow Panel
+  timerText:  { fontSize: 20, fontWeight: '700', minWidth: 34, textAlign: 'right' },
   tbarWrap:   { paddingHorizontal: 12, paddingBottom: 2, zIndex: 2 },
   tbarBg:     { height: 3, backgroundColor: 'rgba(255,255,255,.08)', borderRadius: 2, overflow: 'hidden' },
   tbarFill:   { height: '100%' as any, borderRadius: 2 },
 
-  aiSeat:       { paddingHorizontal: 12, paddingVertical: 4, alignItems: 'center', gap: 4, zIndex: 2 },
+  // จัดบล็อก Boss ชิดขวาแล้วเว้น paddingRight เท่ากับพื้นที่ที่ Token Flow Panel กินไปพอดี
+  // ผลคือขอบขวาของกรอบไพ่สีทองไปชนขอบซ้ายของ Panel เป๊ะ (มติลุงเยาะ 2026-07-25)
+  // ผูกค่ากับ PANEL_WIDTH/PANEL_RIGHT ที่ export มาจาก TokenFlowPanel ไม่ใช้เลขตายตัว
+  // เพราะทั้งคู่อ้างอิงขอบขวาของจอเหมือนกัน จอขนาดไหนก็ชนพอดีเสมอ (เลขตายตัวจะเพี้ยนทันทีที่จอกว้างไม่เท่านี้)
+  aiSeat:       { paddingLeft: 12, paddingRight: PANEL_WIDTH + PANEL_RIGHT, paddingVertical: 4, alignItems: 'flex-end', gap: 4, zIndex: 2 },
   aiRow:        { flexDirection: 'row', alignItems: 'center', gap: 6 },
   avatarBubble: { backgroundColor: '#132019', borderWidth: 2, borderColor: '#c9a84c', alignItems: 'center', justifyContent: 'center', shadowColor: '#c9a84c', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 6, elevation: 4 },
   aiName:       { fontSize: 9, color: '#ff3333', letterSpacing: 1.5, textTransform: 'uppercase', fontWeight: '800' },
@@ -1820,10 +1738,12 @@ const s = StyleSheet.create({
   sideCol:       { width: SIDE_COL_W, alignItems: 'center', paddingTop: 0, gap: 2 },
   sideName:      { fontSize: 9, color: '#ffffff', letterSpacing: 1, fontWeight: '700' },
   userNameTag:   { fontSize: 10, color: '#ffffff', letterSpacing: 1, fontWeight: '800', maxWidth: 100, textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
+  // Patch 2026-07-18: ยอดโทเคนคงเหลือใต้ชื่อทุกที่นั่ง — ทองธีมหลัก, JetBrains Mono ตามมาตรฐานตัวเลข
+  seatToken:     { fontSize: 9, color: '#FFD76A', fontFamily: 'JetBrainsMono_600SemiBold', textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
   sideSeatWrap:  { flex: 1, width: SIDE_COL_W, overflow: 'visible', justifyContent: 'flex-start', alignItems: 'center' },
   sideSeatInner: { flexDirection: 'row', alignItems: 'center' },
 
-  commWrap:    { flex: 1, paddingLeft: 4, paddingRight: 18, alignItems: 'flex-start', justifyContent: 'center', zIndex: 2 },
+  commWrap:    { flex: 1, paddingLeft: 4, paddingRight: 18, alignItems: 'flex-start', justifyContent: 'center', marginTop: 40 /* Patch 2026-07-18: เลื่อนกองกลางทั้ง 3 กองลง 40px — ใช้พื้นที่ว่างกลางจอ */, zIndex: 2 },
   auctionLbl:  { fontSize: 7, color: 'rgba(160,80,220,.55)', letterSpacing: 1, textTransform: 'uppercase' },
   auctionCard: { width: 50, height: 72, borderRadius: 4, backgroundColor: '#091808', borderWidth: 2, borderColor: '#a855f7', overflow: 'hidden', shadowColor: '#a855f7', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.9, shadowRadius: 8, elevation: 8 },
   commCard:    { width: 50, height: 72, borderRadius: 4, backgroundColor: '#fdfaf3', borderWidth: 1, borderColor: 'rgba(74,154,90,.75)', overflow: 'hidden' },
@@ -1837,6 +1757,7 @@ const s = StyleSheet.create({
   userCard:     { width: CW, height: CH, borderRadius: 4, backgroundColor: '#fdfaf3', borderWidth: 1, borderColor: 'rgba(201,168,76,.65)', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   userCardSel:  { borderColor: '#6ec87a', borderWidth: 2, transform: [{ translateY: -16 }] },
   swapHint:     { fontSize: 8, color: 'rgba(201,168,76,.9)', textAlign: 'center', marginBottom: 2 },
+  foulText:     { fontSize: 12, color: '#FF6B6B', fontWeight: '800', letterSpacing: 1, textAlign: 'center', marginBottom: 4 },
   actionBar:      { flexDirection: 'row', justifyContent: 'center', gap: 16, paddingHorizontal: 10, paddingTop: 4, paddingBottom: 20, zIndex: 2 },
   actionBtnSize:  { width: 130 },
 
@@ -1868,13 +1789,9 @@ const s = StyleSheet.create({
   countdownNum:   { fontSize: 88, color: '#fff', fontWeight: '900' },
   countdownSub:   { fontSize: 11, color: 'rgba(201,168,76,0.6)', letterSpacing: 2, marginTop: 10 },
 
-  // Match end
-  buyInSummaryRow:  { alignItems: 'center', marginBottom: 8 },
-  buyInSummaryText: { fontSize: 10, fontFamily: 'JetBrainsMono_400Regular', color: '#C8C4B0', textAlign: 'center' },
-  matchEndSub:   { fontSize: 10, color: 'rgba(201,168,76,0.5)', letterSpacing: 2, marginBottom: 10, textAlign: 'center' },
-  matchEndRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#1e2e22' },
-  matchEndName:  { flexShrink: 1, marginRight: 8, fontSize: 13, color: '#e8dfc0', fontWeight: '600' },
-  matchEndBal:   { flexShrink: 0, fontSize: 13, fontWeight: '800' },
+  // Token Flow Panel - toast แจ้ง burn ตอนจบเกม (Spec ข้อ 9)
+  burnToast:     { position: 'absolute', top: '42%', alignSelf: 'center', zIndex: 400, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: '#3A5A44', backgroundColor: 'rgba(15,36,24,0.94)' },
+  burnToastText: { fontSize: 11, color: '#FFD76A', fontFamily: 'JetBrainsMono_600SemiBold', letterSpacing: 0.5 },
 
   // Server log
   logZone:   { flex: 10, backgroundColor: '#080808', borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,.12)' },

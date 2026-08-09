@@ -15,7 +15,7 @@ import {
   StyleSheet,
   ViewStyle,
 } from 'react-native';
-import type { AiPersonality } from '../ai/aiFillSystem';
+import type { AiPersonality } from './aiTypes';
 
 // ─── Types ───────────────────────────────────────────────────
 interface AiThinkingIndicatorProps {

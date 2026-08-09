@@ -14,7 +14,7 @@ import {
   View, Text, Animated, StyleSheet, ViewStyle,
 } from 'react-native';
 import type { PileResult } from '../../types/game.types';
-import { COLORS, ANIMATION, HAND_RANK_NAMES } from '../../constants/gameConstants';
+import { COLORS, ANIMATION } from '../../constants/gameConstants';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

@@ -57,14 +57,15 @@ export const NINE_SENTINELS: (AIConfig & { bossId: string })[] = [
 // ใช้เป็น P2/P4 filler ของ Mastermind — ชื่อต้องตรงกับ suffix ไฟล์เป๊ะ (ตัวพิมพ์เล็ก) ห้ามลบชื่อกลุ่ม pride flag
 // (Prim, Xander, Yuri) ออกจาก roster นี้เด็ดขาด
 export const MINION_NAMES: string[] = [
-  'Alex', 'Bella', 'Charlie', 'Diana', 'Edward', 'Fiona', 'Gabriel', 'Hana', 'Ivan', 'Julia',
-  'Kevin', 'Lily', 'Max', 'Natalie', 'Oliver', 'Prim', 'Queenie', 'Ryan', 'Sophia', 'Tom',
-  'Uma', 'Vincent', 'Willow', 'Xander', 'Yuri',
+  'Veyra', 'Kaelith', 'Morwyn', 'Zephra', 'Orlune', 'Nyxen', 'Grimble', 'Fenwick', 'Runebit', 'Zorvak',
+  'Draven', 'Vaelor', 'Korrin', 'Pyralis', 'Iskara', 'Elarin', 'Bellara', 'Luneth', 'Bramble', 'Mosskin',
+  'Noctis', 'Duskryn', 'Ashveil', 'Sylphin', 'Thorn',
 ]
 
 // สุ่ม Minion `count` ตัวแบบไม่ซ้ำกันจาก MINION_NAMES (Fisher-Yates แบบย่อ)
-export function pickRandomMinions(count: number): string[] {
-  const pool = [...MINION_NAMES]
+export function pickRandomMinions(count: number, excludeNames: string[] = []): string[] {
+  const excluded = new Set(excludeNames)
+  const pool = MINION_NAMES.filter(name => !excluded.has(name))
   const picked: string[] = []
   for (let i = 0; i < count && pool.length > 0; i++) {
     const idx = Math.floor(Math.random() * pool.length)

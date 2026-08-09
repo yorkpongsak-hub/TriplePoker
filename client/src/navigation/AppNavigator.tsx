@@ -16,7 +16,7 @@ const Stack = createNativeStackNavigator<RootStackParamList>()
 export default function AppNavigator() {
   return (
     <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Navigator id="legacy-root" screenOptions={{ headerShown: false }}>
         <Stack.Screen name="GameTable" component={GameTable} />
         <Stack.Screen name="GameTable1" component={GameTable1} options={{ headerShown: false }} />
         <Stack.Screen name="GameTableLive" component={GameTableLive} options={{ headerShown: false }} />

@@ -170,4 +170,22 @@ describe('compareHands — Tie-breaking', () => {
     expect(compareHands(sf, foak)).toBeGreaterThan(0)
   })
 
+  test('Straight: 2-3-4-5-6 > A-2-3-4-5', () => {
+    const sixHigh = evaluateHand([c(6, S), c(5, H), c(4, D), c(3, C), c(2, S)])
+    const wheel = evaluateHand([c(14, S), c(5, H), c(4, D), c(3, C), c(2, S)])
+
+    expect(sixHigh.rank).toBe('straight')
+    expect(wheel.rank).toBe('straight')
+    expect(compareHands(sixHigh, wheel)).toBeGreaterThan(0)
+  })
+
+  test('Straight Flush: 2-3-4-5-6 > A-2-3-4-5', () => {
+    const sixHigh = evaluateHand([c(6, S), c(5, S), c(4, S), c(3, S), c(2, S)])
+    const wheel = evaluateHand([c(14, H), c(5, H), c(4, H), c(3, H), c(2, H)])
+
+    expect(sixHigh.rank).toBe('straight_flush')
+    expect(wheel.rank).toBe('straight_flush')
+    expect(compareHands(sixHigh, wheel)).toBeGreaterThan(0)
+  })
+
 })

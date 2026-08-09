@@ -23,12 +23,16 @@ import {
   StyleSheet,
   Modal,
   Platform,
+  TextInput,
 } from 'react-native'
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated'
-import { useFocusEffect } from 'expo-router'
+import { router, useFocusEffect } from 'expo-router'
 import { useAuthStore } from '../../store/authStore'
 import { ThemedBackground } from '../ui/ThemedBackground'
 import { glassPanel, glassPanelDense, textOnGlass } from '../../ui/glassStyles'
+import { TIER_CONFIG } from '../../config/tierConfig'
+
+const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
 // ─── ธีมสีหลัก (Website Theme Spec v1.0 — เหมือน profile.tsx เป๊ะ) ─────────
 const C = {
@@ -53,15 +57,76 @@ const C = {
 
 const fmt = (n: number) => n.toLocaleString('en-US')
 
-type TabKey = 'items' | 'fun' | 'vip' | 'packs' | 'cosmetics'
+type TabKey = 'items' | 'fun' | 'vip' | 'packs' | 'cosmetics' | 'vault'
 
+// Tier progression lock — Competitive Items ปลดล็อคทีละ Tier (มติลุงเยาะ 2026-07-26)
+// ceiling model เดียวกับ profile.tsx (TIER_ORDER local const): 'D' = ยังไม่เคยปลด Tier ไหนเลย
+// เพิ่ม 'grandmaster' เข้า union นี้ (2026-08-04, Merch Shop) — เดิมมีแค่ 4 ตัวเพราะ Competitive
+// Items/Crown Vault ไม่เคย gate ถึง Grandmaster มาก่อน ตอนนี้ Merch catalog มีสินค้า Tier Grandmaster ด้วย
+type TierKeyLocal = 'initiate' | 'adept' | 'mastermind' | 'highNoble' | 'grandmaster'
+const CEILING_ORDER = ['D', 'initiate', 'adept', 'mastermind', 'highNoble', 'grandmaster'] as const
+const TIER_LETTER: Record<TierKeyLocal, string> = {
+  initiate:    TIER_CONFIG.initiate.letter,
+  adept:       TIER_CONFIG.adept.letter,
+  mastermind:  TIER_CONFIG.mastermind.letter,
+  highNoble:   TIER_CONFIG.high_noble.letter,
+  grandmaster: TIER_CONFIG.grandmaster.letter,
+}
+
+// MVP audit (2026-08-04, มติลุงเยาะ): ตัด ITEMS / FUN / COSMETICS ออกจาก tab bar —
+// ทั้ง 3 แท็บไม่มี engine hook ใช้งานจริงในเกมเลย (gameLoop.ts ไม่มี item logic,
+// FunItems.tsx HUD ไม่เคยถูก import ที่ไหน, shop.ts route ไม่ได้ register ใน index.ts)
+// และ Cosmetics/Bundles เป็น PLACEHOLDER ที่ไม่มี backend เลยตั้งแต่แรก — โค้ด/แคตาล็อก
+// ด้านล่างยังอยู่ครบ ไม่ลบทิ้ง เผื่อทำต่อ v1.1 หลัง engine hook + XP/Leveling เสร็จ
 const TABS: { key: TabKey; label: string }[] = [
-  { key: 'items',      label: 'ITEMS' },
-  { key: 'fun',        label: 'FUN' },
   { key: 'vip',        label: 'VIP' },
   { key: 'packs',      label: 'TOKEN PACKS' },
-  { key: 'cosmetics',  label: 'COSMETICS' },
+  { key: 'vault',      label: 'CROWN VAULT' },
 ]
+
+// The Crown Vault — response shape ของ GET /crown-vault/status (server/src/routes/crownVault.ts)
+interface AscendantStatusData {
+  status: 'none' | 'active' | 'passed' | 'failed'
+  startedAt: string | null
+  expiresAt: string | null
+}
+interface CrownVaultData {
+  tokenBalance: number
+  crownBalance: number
+  crownPackageBalance: number
+  arenaUnlocked: boolean
+  ascendantStatus: AscendantStatusData
+  ascendantEligible: boolean
+  ascendantEligibilityReason: string
+  arenaPassEligible: boolean
+  config: { tokenToCrownRate: number; ascendantPassPriceCrown: number; arenaPassPriceCrown: number }
+}
+
+function ascendantStatusLabel(status?: AscendantStatusData): string {
+  if (!status) return ''
+  switch (status.status) {
+    case 'active': {
+      const daysLeft = status.expiresAt
+        ? Math.max(0, Math.ceil((new Date(status.expiresAt).getTime() - Date.now()) / 86_400_000))
+        : 0
+      return `⏳ Window open — ${daysLeft} day${daysLeft === 1 ? '' : 's'} left`
+    }
+    case 'passed': return '✅ Passed — proceed to Arena Pass'
+    case 'failed': return '❌ Window closed — one-time chance used'
+    default: return ''
+  }
+}
+
+function ascendantLockLabel(reason?: string): string {
+  switch (reason) {
+    case 'TOKEN_BELOW_MIN':  return '🔒 Need 600,000 Token'
+    // มติลุงเยาะ — ปุ่มนี้ล็อคอยู่แปลว่าผู้เล่นยังไม่เคยชนะ Monarch มาก่อนแน่นอน ห้ามสปอยล์ชื่อ
+    case 'MONARCH_REQUIRED': return '🔒 Defeat the Hidden Boss first'
+    case 'TIER_REQUIRED':    return '🔒 Reach Tier A+ first'
+    case 'ALREADY_USED':     return '🔒 Already used'
+    default:                 return '🔒 Not Eligible Yet'
+  }
+}
 
 // ─── Canon Catalog ──────────────────────────────────────────────────────
 // key ภายในตรงกับ CompetitiveItemKey ฝั่ง server (server/src/items/itemPhaseController.ts)
@@ -72,19 +137,22 @@ interface CatalogItem {
   icon: string
   price: number
   desc: string
+  unlockTier?: TierKeyLocal
 }
 
+// unlockTier: Tier ที่ต้องปลดถึงก่อนถึงจะซื้อได้ (ซ้อนกับ VIP PRO gate เดิม ไม่แทนที่)
+// มติลุงเยาะ 2026-07-26: 2 ตัวแรกปลดที่ C, อีก 3 ตัวปลดที่ B (รวม 5), อีก 5 ตัวปลดที่ A (รวม 10)
 const COMPETITIVE_ITEMS: CatalogItem[] = [
-  { key: 'vision',           name: "Oracle's Vision",      icon: '👁️', price: 300,  desc: 'Peek at a hidden community card before it reveals.' },
-  { key: 'auction_veil',     name: 'Shadow Bid',           icon: '🌑', price: 200,  desc: 'Hide your Blind Auction bid from other players.' },
-  { key: 'chrono_shard',     name: 'Chrono Shard',         icon: '⏳', price: 250,  desc: 'Extend your arrangement timer for one round.' },
-  { key: 'free_sort',        name: 'Free Sort',            icon: '🃏', price: 0,    desc: 'Waive the Auto Sort fee for one round.', tiered: [15, 40, 80] },
-  { key: 'alliance_of_fate', name: 'Alliance of Fate',     icon: '🤝', price: 400,  desc: 'Temporarily team up with another player for one pile.' },
-  { key: 'streak_shield',    name: 'Eternal Streak',       icon: '🔥', price: 350,  desc: 'Protect your win streak from breaking on one loss.' },
-  { key: 'swap',             name: "The Alchemist's Swap", icon: '⚗️', price: 600,  desc: 'Swap one card in your hand for a random new one.' },
-  { key: 'auction_peek',     name: "Thief's Glance",       icon: '🔍', price: 700,  desc: 'See one auction card before bidding opens.' },
-  { key: 'recall',           name: 'Memory Sigil',         icon: '🔮', price: 800,  desc: 'Recall a previously discarded card back into play.' },
-  { key: 'super_vision',     name: 'Eye of the Demon',     icon: '👹', price: 2000, desc: 'Reveal an opponent\'s full hand for one round.' },
+  { key: 'vision',           name: "Oracle's Vision",      icon: '👁️', price: 300,  desc: 'Peek at a hidden community card before it reveals.', unlockTier: 'initiate' },
+  { key: 'auction_veil',     name: 'Shadow Bid',           icon: '🌑', price: 200,  desc: 'Hide your Blind Auction bid from other players.', unlockTier: 'initiate' },
+  { key: 'chrono_shard',     name: 'Chrono Shard',         icon: '⏳', price: 250,  desc: 'Extend your arrangement timer for one round.', unlockTier: 'adept' },
+  { key: 'free_sort',        name: 'Free Sort',            icon: '🃏', price: 0,    desc: 'Waive the Auto Sort fee for one round.', tiered: [15, 40, 80], unlockTier: 'adept' },
+  { key: 'alliance_of_fate', name: 'Alliance of Fate',     icon: '🤝', price: 400,  desc: 'Temporarily team up with another player for one pile.', unlockTier: 'adept' },
+  { key: 'streak_shield',    name: 'Eternal Streak',       icon: '🔥', price: 350,  desc: 'Protect your win streak from breaking on one loss.', unlockTier: 'mastermind' },
+  { key: 'swap',             name: "The Alchemist's Swap", icon: '⚗️', price: 600,  desc: 'Swap one card in your hand for a random new one.', unlockTier: 'mastermind' },
+  { key: 'auction_peek',     name: "Thief's Glance",       icon: '🔍', price: 700,  desc: 'See one auction card before bidding opens.', unlockTier: 'mastermind' },
+  { key: 'recall',           name: 'Memory Sigil',         icon: '🔮', price: 800,  desc: 'Recall a previously discarded card back into play.', unlockTier: 'mastermind' },
+  { key: 'super_vision',     name: 'Eye of the Demon',     icon: '👹', price: 2000, desc: 'Reveal an opponent\'s full hand for one round.', unlockTier: 'mastermind' },
 ] as (CatalogItem & { tiered?: number[] })[]
 
 const FUN_ITEMS: CatalogItem[] = [
@@ -216,7 +284,8 @@ const TOKEN_PACKS: TokenPack[] = [
 interface VipPlan {
   tier: 'vip' | 'vip_pro'
   label: string
-  priceTHB: number
+  priceTHB: number       // ราคา Monthly
+  price3moTHB: number    // ราคา Special แบบ 3 Months
   accent: string
   ribbon?: string
   benefits: string[]
@@ -224,14 +293,16 @@ interface VipPlan {
 
 const VIP_PLANS: VipPlan[] = [
   {
-    tier: 'vip', label: 'VIP', priceTHB: 99, accent: C.silver,
+    tier: 'vip', label: 'VIP', priceTHB: 99, price3moTHB: 259, accent: C.silver,
     benefits: ['No Ads', '+300 Tokens daily', 'All Cosmetics', 'Bag Expansion purchases unlocked', 'VIP Milestone Rewards'],
   },
   {
-    tier: 'vip_pro', label: 'VIP PRO', priceTHB: 159, accent: C.gold, ribbon: 'BEST VALUE',
+    tier: 'vip_pro', label: 'VIP PRO', priceTHB: 199, price3moTHB: 499, accent: C.gold, ribbon: 'BEST VALUE',
     benefits: ['Everything in VIP', '+400 Tokens daily', 'All Competitive Items', 'Grand Master (D30)', 'Exclusive Badge & Avatar Frame'],
   },
 ]
+
+type BillingPeriod = 'monthly' | '3mo'
 
 // ─── Small building blocks ──────────────────────────────────────────────
 
@@ -309,7 +380,7 @@ function VipUpgradeSheet({ visible, onClose, onUpgrade }: { visible: boolean; on
           </View>
           <PressScale onPress={onUpgrade}>
             <View style={s.sheetUpgradeBtn}>
-              <Text style={s.sheetUpgradeTxt}>UPGRADE TO VIP PRO — ฿159/mo</Text>
+              <Text style={s.sheetUpgradeTxt}>UPGRADE TO VIP PRO — ฿{VIP_PLANS[1].priceTHB}/mo</Text>
             </View>
           </PressScale>
           <TouchableOpacity onPress={onClose} style={{ marginTop: 10, alignItems: 'center' }}>
@@ -366,7 +437,7 @@ interface ShopScreenProps {
   initialTab?: TabKey
 }
 
-export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreenProps) {
+export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenProps) {
   const profile = useAuthStore(s => s.profile)
   const refreshProfile = useAuthStore(s => s.refreshProfile)
 
@@ -374,6 +445,7 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
   const [upgradeSheetVisible, setUpgradeSheetVisible] = useState(false)
   const [oddsBox, setOddsBox] = useState<LootBoxDef | null>(null)
   const [toastMsg, setToastMsg] = useState<string | null>(null)
+  const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly')
 
   // refetch token/vip ล่าสุดทุกครั้งที่กลับมาโฟกัสหน้านี้ — pattern เดียวกับ profile.tsx
   useFocusEffect(
@@ -393,12 +465,21 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
   const isVipPro   = vipStatus === 'vip_pro'
   const tokenBalance = profile?.token_balance ?? 0
 
+  // Tier progression lock — ceiling model จาก tier_unlocked_max (ไม่ลดกลับแม้ token จะลดลงทีหลัง)
+  const unlockedIdx = CEILING_ORDER.indexOf((profile?.tier_unlocked_max as any) ?? 'D')
+  const tierMet = (required?: TierKeyLocal) =>
+    !required || CEILING_ORDER.indexOf(required) <= (unlockedIdx === -1 ? 0 : unlockedIdx)
+
   // ยังไม่มี backend ที่ใช้งานได้จริง (shopRoutes ไม่ได้ register ใน index.ts — ดู comment บนไฟล์) —
   // ทุกปุ่มซื้อตอนนี้โชว์ toast แทนการยิง API เพื่อไม่ให้ผู้เล่นเข้าใจผิดว่าโดนหักเงินจริง
   const handleComingSoon = (label: string) => setToastMsg(`${label} — Coming Soon`)
 
   const handleBuyCompetitive = (item: CatalogItem) => {
     if (!isVipPro) { setUpgradeSheetVisible(true); return }
+    if (!tierMet(item.unlockTier)) {
+      setToastMsg(`Reach Tier ${TIER_LETTER[item.unlockTier!]} to unlock ${item.name}`)
+      return
+    }
     handleComingSoon(item.name)
   }
 
@@ -418,14 +499,104 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
     setOddsBox(null)
   }
 
-  const handleSubscribe = (plan: VipPlan) => {
+  const handleSubscribe = (plan: VipPlan, period: BillingPeriod) => {
     // TODO(RevenueCat): ต่อ purchase flow จริงตอน integrate IAP subscription (Sprint 7)
-    handleComingSoon(plan.label)
+    handleComingSoon(`${plan.label} — ${period === 'monthly' ? 'Monthly' : '3 Months'}`)
   }
 
   const handleBuyTokenPack = (pack: TokenPack) => {
     // TODO(RevenueCat): ต่อ IAP purchase flow จริง — ตอนนี้เป็น shell ตาม Phase 1 audit
     handleComingSoon(pack.name)
+  }
+
+  // ─── The Crown Vault — ต่อ backend จริง (routes/crownVault.ts) ต่างจาก tab อื่นที่ยังเป็น
+  // Coming Soon shell เพราะ Ascendant/Arena Pass เป็นฟีเจอร์ใหม่ที่ implement backend เสร็จแล้ว ─
+  const session = useAuthStore(s => s.session)
+  const [vault, setVault] = useState<CrownVaultData | null>(null)
+  const [vaultBusy, setVaultBusy] = useState(false)
+  const [exchangeInput, setExchangeInput] = useState('')
+  const [confirmAction, setConfirmAction] = useState<'exchange' | 'ascendant' | 'arena' | null>(null)
+
+  const vaultAuthHeaders = () => ({
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${session?.access_token ?? ''}`,
+  })
+
+  const fetchVaultStatus = useCallback(async () => {
+    if (!session?.access_token) return
+    try {
+      const res = await fetch(`${SERVER_URL}/crown-vault/status`, { headers: vaultAuthHeaders() })
+      const data = await res.json()
+      if (data.success) setVault(data)
+    } catch (e) {
+      console.error('[ShopScreen] fetchVaultStatus failed:', e)
+    }
+  }, [session?.access_token])
+
+  useEffect(() => {
+    if (activeTab === 'vault') fetchVaultStatus()
+  }, [activeTab, fetchVaultStatus])
+
+  const handleConfirmExchange = async () => {
+    const crownAmount = parseInt(exchangeInput, 10)
+    if (!crownAmount || crownAmount <= 0) { setConfirmAction(null); return }
+    setVaultBusy(true)
+    try {
+      const res = await fetch(`${SERVER_URL}/crown-vault/exchange`, {
+        method: 'POST', headers: vaultAuthHeaders(), body: JSON.stringify({ crownAmount }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setToastMsg(`Exchanged ${fmt(crownAmount)} Crown`)
+        setExchangeInput('')
+        await Promise.all([fetchVaultStatus(), refreshProfile()])
+      } else {
+        setToastMsg(data.error === 'TIER_REQUIRED' ? 'Reach Tier A+ to unlock Crown Exchange' : 'Not enough Token')
+      }
+    } catch (e) {
+      setToastMsg('Exchange failed — try again')
+    } finally {
+      setVaultBusy(false)
+      setConfirmAction(null)
+    }
+  }
+
+  const handleConfirmBuyAscendantPass = async () => {
+    setVaultBusy(true)
+    try {
+      const res = await fetch(`${SERVER_URL}/crown-vault/buy-ascendant-pass`, { method: 'POST', headers: vaultAuthHeaders() })
+      const data = await res.json()
+      if (data.success) {
+        setToastMsg(data.status?.status === 'passed' ? 'Instant Pass! Welcome, Ascendant.' : 'Ascendant window opened — 30 days on the clock')
+        await Promise.all([fetchVaultStatus(), refreshProfile()])
+      } else {
+        setToastMsg(data.error === 'INSUFFICIENT_CROWN' ? 'Not enough Crown' : 'Not eligible yet')
+      }
+    } catch (e) {
+      setToastMsg('Purchase failed — try again')
+    } finally {
+      setVaultBusy(false)
+      setConfirmAction(null)
+    }
+  }
+
+  const handleConfirmBuyArenaPass = async () => {
+    setVaultBusy(true)
+    try {
+      const res = await fetch(`${SERVER_URL}/crown-vault/buy-arena-pass`, { method: 'POST', headers: vaultAuthHeaders() })
+      const data = await res.json()
+      if (data.success) {
+        setToastMsg('The Arena awaits.')
+        await Promise.all([fetchVaultStatus(), refreshProfile()])
+      } else {
+        setToastMsg(data.error === 'INSUFFICIENT_CROWN' ? 'Not enough Crown' : data.error === 'ALREADY_UNLOCKED' ? 'Already unlocked' : 'Not eligible yet')
+      }
+    } catch (e) {
+      setToastMsg('Purchase failed — try again')
+    } finally {
+      setVaultBusy(false)
+      setConfirmAction(null)
+    }
   }
 
   return (
@@ -447,14 +618,15 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
 
           <Text style={s.headerTitle}>THE TREASURE VAULT</Text>
 
-          <View style={s.headerRight}>
-            <GlassCard dense style={s.tokenChip}>
-              <Text style={s.tokenChipTxt}>🪙 {fmt(tokenBalance)}</Text>
-            </GlassCard>
-            <TouchableOpacity onPress={() => setActiveTab('packs')} style={s.addBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Text style={s.addBtnTxt}>+</Text>
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity onPress={() => setActiveTab('packs')} style={s.addBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Text style={s.addBtnTxt}>+</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={s.tokenRow}>
+          <GlassCard dense style={s.tokenChip}>
+            <Text style={s.tokenChipTxt}>🪙 {fmt(tokenBalance)}</Text>
+          </GlassCard>
         </View>
 
         {/* ═══════════════ TAB BAR ═══════════════ */}
@@ -471,6 +643,21 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
           ))}
         </View>
 
+        {/* Official Collectibles - ร้านสินค้าจริง จ่ายเงินบาทจริง คนละระบบกับ MERCH tab (จ่ายด้วย
+            Earned Crown ในเกม) ด้านบน ตั้งใจแยก route/ธีมให้ชัดกันผู้เล่นสับสนว่าเป็นร้านเดียวกัน */}
+        <TouchableOpacity
+          onPress={() => router.push('/(home)/collectibles' as any)}
+          activeOpacity={0.85}
+          style={s.collectiblesBanner}
+        >
+          <Text style={s.collectiblesBannerIcon}>🏆</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={s.collectiblesBannerTitle}>Official Collectibles</Text>
+            <Text style={s.collectiblesBannerSub}>Real merchandise. Real prices. Earned achievements.</Text>
+          </View>
+          <Text style={s.collectiblesBannerArrow}>›</Text>
+        </TouchableOpacity>
+
         {/* ═══════════════ CONTENT ═══════════════ */}
         <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 
@@ -478,15 +665,19 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
           {activeTab === 'items' && (
             <>
               <SectionTitle title="Competitive Items" />
-              <SectionNote text="Competitive Items are exclusive to VIP PRO members. Free & VIP players can still see everything here." />
+              <SectionNote text="Competitive Items are exclusive to VIP PRO members and unlock progressively as you reach higher Tiers." />
               <View style={s.grid}>
                 {COMPETITIVE_ITEMS.map(item => {
                   const tiered = (item as any).tiered as number[] | undefined
+                  const tierLocked = !tierMet(item.unlockTier)
+                  const locked = !isVipPro || tierLocked
+                  const lockLabel = !isVipPro ? 'VIP PRO ONLY' : `TIER ${TIER_LETTER[item.unlockTier!]} REQUIRED`
                   return (
                     <ShopItemCard
                       key={item.key}
                       item={item}
-                      locked={!isVipPro}
+                      locked={locked}
+                      lockLabel={lockLabel}
                       priceLabel={tiered ? `${tiered.join(' / ')} 🪙` : undefined}
                       onBuy={() => handleBuyCompetitive(item)}
                     />
@@ -556,32 +747,57 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
           {/* ── VIP (comparison cards) ── */}
           {activeTab === 'vip' && (
             <View style={{ gap: 14 }}>
-              {VIP_PLANS.map(plan => (
-                <GlassCard key={plan.tier} style={[s.vipCard, { borderColor: plan.accent }]}>
-                  {plan.ribbon && (
-                    <View style={s.vipRibbon}>
-                      <Text style={s.vipRibbonTxt}>{plan.ribbon}</Text>
-                    </View>
-                  )}
-                  <View style={s.vipHeaderRow}>
-                    <Text style={s.vipCrown}>👑</Text>
-                    <View>
-                      <Text style={[s.vipLabel, { color: plan.accent }]}>{plan.label}</Text>
-                      <Text style={s.vipPrice}>฿{plan.priceTHB} <Text style={s.vipPriceUnit}>/ month</Text></Text>
+              <View style={s.billingToggle}>
+                <PressScale onPress={() => setBillingPeriod('monthly')} style={{ flex: 1 }}>
+                  <View style={[s.billingToggleBtn, billingPeriod === 'monthly' && s.billingToggleBtnActive]}>
+                    <Text style={[s.billingToggleTxt, billingPeriod === 'monthly' && s.billingToggleTxtActive]}>Monthly</Text>
+                  </View>
+                </PressScale>
+                <PressScale onPress={() => setBillingPeriod('3mo')} style={{ flex: 1 }}>
+                  <View style={[s.billingToggleBtn, billingPeriod === '3mo' && s.billingToggleBtnActive]}>
+                    <Text style={[s.billingToggleTxt, billingPeriod === '3mo' && s.billingToggleTxtActive]}>3 Months</Text>
+                    <View style={s.billingSpecialBadge}>
+                      <Text style={s.billingSpecialBadgeTxt}>SPECIAL</Text>
                     </View>
                   </View>
-                  <View style={s.vipBenefits}>
-                    {plan.benefits.map((b, i) => (
-                      <Text key={i} style={s.vipBenefitRow}>✦  {b}</Text>
-                    ))}
-                  </View>
-                  <PressScale onPress={() => handleSubscribe(plan)}>
-                    <View style={[s.subscribeBtn, { backgroundColor: plan.accent }]}>
-                      <Text style={s.subscribeBtnTxt}>SUBSCRIBE</Text>
+                </PressScale>
+              </View>
+              {VIP_PLANS.map(plan => {
+                const isMonthly = billingPeriod === 'monthly'
+                const price = isMonthly ? plan.priceTHB : plan.price3moTHB
+                const unit = isMonthly ? '/ month' : '/ 3 months'
+                const fullPrice3mo = plan.priceTHB * 3
+                const savings = fullPrice3mo - plan.price3moTHB
+                return (
+                  <GlassCard key={plan.tier} style={[s.vipCard, { borderColor: plan.accent }]}>
+                    {plan.ribbon && (
+                      <View style={s.vipRibbon}>
+                        <Text style={s.vipRibbonTxt}>{plan.ribbon}</Text>
+                      </View>
+                    )}
+                    <View style={s.vipHeaderRow}>
+                      <Text style={s.vipCrown}>👑</Text>
+                      <View>
+                        <Text style={[s.vipLabel, { color: plan.accent }]}>{plan.label}</Text>
+                        <Text style={s.vipPrice}>฿{price} <Text style={s.vipPriceUnit}>{unit}</Text></Text>
+                        {!isMonthly && (
+                          <Text style={s.vipSavingsNote}>฿{fullPrice3mo} billed monthly · Save ฿{savings}</Text>
+                        )}
+                      </View>
                     </View>
-                  </PressScale>
-                </GlassCard>
-              ))}
+                    <View style={s.vipBenefits}>
+                      {plan.benefits.map((b, i) => (
+                        <Text key={i} style={s.vipBenefitRow}>✦  {b}</Text>
+                      ))}
+                    </View>
+                    <PressScale onPress={() => handleSubscribe(plan, billingPeriod)}>
+                      <View style={[s.subscribeBtn, { backgroundColor: plan.accent }]}>
+                        <Text style={s.subscribeBtnTxt}>SUBSCRIBE</Text>
+                      </View>
+                    </PressScale>
+                  </GlassCard>
+                )
+              })}
               <Text style={s.iapDisclaimer}>
                 Subscriptions renew monthly via App Store / Google Play. Cancel anytime.
               </Text>
@@ -632,6 +848,72 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
             </>
           )}
 
+          {/* ── THE CROWN VAULT (Ascendant Pass / Arena Pass / Token→Crown Exchange) ── */}
+          {activeTab === 'vault' && (
+            <View style={{ gap: 14 }}>
+              <SectionNote text="Bridge to The Arena — trade Token for Crown, then ascend." />
+
+              {/* Token → Crown Exchange */}
+              <GlassCard style={s.vaultCard}>
+                <Text style={s.vaultCardTitle}>💱 Token → Crown Exchange</Text>
+                <Text style={s.vaultCardDesc}>
+                  1 Crown = {fmt(vault?.config.tokenToCrownRate ?? 5000)} Token · one-way, cannot be reversed
+                </Text>
+                {!tierMet('highNoble') ? (
+                  <Text style={s.vaultLockedTxt}>🔒 Unlocks at Tier A+ (High Noble)</Text>
+                ) : (
+                  <>
+                    <View style={s.vaultExchangeRow}>
+                      <TextInput
+                        style={s.vaultInput}
+                        placeholder="Crown amount"
+                        placeholderTextColor={C.textDim}
+                        keyboardType="number-pad"
+                        value={exchangeInput}
+                        onChangeText={setExchangeInput}
+                      />
+                      <Text style={s.vaultExchangeCost}>
+                        = {fmt((parseInt(exchangeInput, 10) || 0) * (vault?.config.tokenToCrownRate ?? 5000))} 🪙
+                      </Text>
+                    </View>
+                    <PressScale onPress={() => setConfirmAction('exchange')} disabled={vaultBusy || !exchangeInput}>
+                      <View style={[s.vaultBuyBtn, (!exchangeInput || vaultBusy) && s.vaultBuyBtnDisabled]}>
+                        <Text style={s.vaultBuyBtnTxt}>EXCHANGE</Text>
+                      </View>
+                    </PressScale>
+                  </>
+                )}
+                <Text style={s.vaultCrownBalance}>Earned Crown: 👑 {fmt(vault?.crownBalance ?? 0)}</Text>
+              </GlassCard>
+
+              {/* Ascendant Pass */}
+              <GlassCard style={s.vaultCard}>
+                <Text style={s.vaultCardTitle}>⚡ Ascendant Pass</Text>
+                <Text style={s.vaultCardDesc}>
+                  Open a 30-day window to reach 1,000,000 Token. Already there? Instant Pass. One-time only per account.
+                </Text>
+                {vault && vault.ascendantStatus.status !== 'none' && (
+                  <Text style={s.vaultStatusTxt}>{ascendantStatusLabel(vault.ascendantStatus)}</Text>
+                )}
+                {vault?.ascendantStatus.status === 'none' && (
+                  <PressScale onPress={() => setConfirmAction('ascendant')} disabled={!vault.ascendantEligible || vaultBusy}>
+                    <View style={[s.vaultBuyBtn, (!vault.ascendantEligible || vaultBusy) && s.vaultBuyBtnDisabled]}>
+                      <Text style={s.vaultBuyBtnTxt}>
+                        {vault.ascendantEligible
+                          ? `BUY — 👑 ${vault.config.ascendantPassPriceCrown}`
+                          : ascendantLockLabel(vault.ascendantEligibilityReason)}
+                      </Text>
+                    </View>
+                  </PressScale>
+                )}
+              </GlassCard>
+
+              <Text style={s.iapDisclaimer}>
+                Crown and Token cannot be exchanged for real money. Only Earned Crown works here — Crown Package (paid) cannot be used for Match Stake or Passes.
+              </Text>
+            </View>
+          )}
+
           <View style={{ height: 24 }} />
         </ScrollView>
 
@@ -645,6 +927,35 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
         {/* ── Loot Box Odds Modal ── */}
         <LootBoxOddsModal box={oddsBox} onClose={() => setOddsBox(null)} onConfirm={handleConfirmLootBox} />
 
+        {/* ── Crown Vault Confirm Modal — Opt-in ตัวจริงของ Ascendant Pass / Arena Pass / Exchange ── */}
+        <VaultConfirmModal
+          visible={confirmAction !== null}
+          title={
+            confirmAction === 'exchange' ? 'Confirm Exchange'
+            : confirmAction === 'ascendant' ? 'Begin Your Ascension'
+            : 'Confirm Arena Pass'
+          }
+          message={
+            confirmAction === 'exchange'
+              ? `Exchange ${fmt(parseInt(exchangeInput, 10) || 0)} Crown for ${fmt((parseInt(exchangeInput, 10) || 0) * (vault?.config.tokenToCrownRate ?? 5000))} Token. This cannot be reversed — Token spent here no longer counts toward Buy-in.`
+              : confirmAction === 'ascendant'
+              ? 'One-time only. You will have 30 days to reach 1,000,000 Token — miss it and this chance is gone for good.'
+              : 'This permanently unlocks Tier S / The Arena for this account.'
+          }
+          priceLabel={
+            confirmAction === 'ascendant' ? `👑 ${vault?.config.ascendantPassPriceCrown ?? 20} Crown`
+            : confirmAction === 'arena' ? `👑 ${vault?.config.arenaPassPriceCrown ?? 20} Crown`
+            : undefined
+          }
+          busy={vaultBusy}
+          onCancel={() => setConfirmAction(null)}
+          onConfirm={
+            confirmAction === 'exchange' ? handleConfirmExchange
+            : confirmAction === 'ascendant' ? handleConfirmBuyAscendantPass
+            : handleConfirmBuyArenaPass
+          }
+        />
+
       </View>
     </ThemedBackground>
   )
@@ -657,9 +968,63 @@ function SectionNote({ text }: { text: string }) {
   return <Text style={s.sectionNote}>{text}</Text>
 }
 
+// Confirm dialog ที่ Crown Vault ทุก action ต้องผ่านก่อนซื้อจริง (Opt-in ตามมติลุงเยาะ —
+// การกด Confirm ที่นี่คือจุดเริ่ม Ascendant window จริงๆ ไม่มีปุ่ม "Begin" แยกอีกแล้ว)
+function VaultConfirmModal({
+  visible, title, message, priceLabel, busy, onConfirm, onCancel,
+}: {
+  visible: boolean
+  title: string
+  message: string
+  priceLabel?: string
+  busy: boolean
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <View style={s.vaultModalOverlay}>
+        <GlassCard style={s.vaultModalBox}>
+          <Text style={s.vaultModalTitle}>{title}</Text>
+          <Text style={s.vaultModalMsg}>{message}</Text>
+          {priceLabel && <Text style={s.vaultModalPrice}>{priceLabel}</Text>}
+          <View style={s.vaultModalBtns}>
+            <PressScale onPress={onCancel} style={{ flex: 1 }}>
+              <View style={s.vaultModalCancelBtn}><Text style={s.vaultModalCancelTxt}>Cancel</Text></View>
+            </PressScale>
+            <PressScale onPress={onConfirm} disabled={busy} style={{ flex: 1 }}>
+              <View style={s.vaultModalConfirmBtn}><Text style={s.vaultModalConfirmTxt}>{busy ? '…' : 'Confirm'}</Text></View>
+            </PressScale>
+          </View>
+        </GlassCard>
+      </View>
+    </Modal>
+  )
+}
+
 // ─── Styles ──────────────────────────────────────────────────────────
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: 'transparent' }, // ThemedBackground ครอบพื้นหลังแล้ว
+
+  // Official Collectibles banner - จงใจใช้สีดำ/ม่วงต่างจาก glassPanel เขียวเดิมทั้งหน้า
+  // ให้รู้สึกว่าเป็นร้านคนละแบบ (ของจริง จ่ายเงินบาทจริง) ไม่ใช่ tab ในร้านเดิม
+  collectiblesBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginHorizontal: 14,
+    marginBottom: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    backgroundColor: 'rgba(20,16,26,0.85)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,215,106,0.45)',
+  },
+  collectiblesBannerIcon: { fontSize: 20 },
+  collectiblesBannerTitle: { color: C.gold, fontSize: 13, fontWeight: '800' },
+  collectiblesBannerSub: { color: C.textDim, fontSize: 10, marginTop: 1 },
+  collectiblesBannerArrow: { color: C.purple, fontSize: 20, fontWeight: '700' },
 
   // Header
   headerRow: {
@@ -672,8 +1037,9 @@ const s = StyleSheet.create({
   },
   backBtn: {
     ...glassPanel,
-    paddingHorizontal: 12,
+    width: 82,
     paddingVertical: 8,
+    alignItems: 'center',
   },
   backTxt: { color: C.gold, fontSize: 13, fontWeight: '800', ...textOnGlass },
   headerTitle: {
@@ -683,7 +1049,7 @@ const s = StyleSheet.create({
     letterSpacing: 1,
     ...textOnGlass,
   },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  tokenRow: { alignItems: 'center', marginBottom: 10 },
   tokenChip: { paddingHorizontal: 10, paddingVertical: 7 },
   tokenChipTxt: { fontFamily: 'JetBrainsMono_600SemiBold', color: C.gold, fontSize: 13 },
   addBtn: {
@@ -790,6 +1156,14 @@ const s = StyleSheet.create({
   oddsConfirmTxt: { color: C.bg, fontSize: 12, fontWeight: '900' },
 
   // VIP comparison cards
+  billingToggle: { flexDirection: 'row', gap: 8, backgroundColor: C.card, borderRadius: 10, padding: 4, borderWidth: 1, borderColor: C.border },
+  billingToggleBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 9, borderRadius: 8 },
+  billingToggleBtnActive: { backgroundColor: C.card2 },
+  billingToggleTxt: { color: C.textDim, fontSize: 12, fontWeight: '700' },
+  billingToggleTxtActive: { color: C.textPrimary },
+  billingSpecialBadge: { backgroundColor: C.gold, borderRadius: 5, paddingHorizontal: 5, paddingVertical: 1 },
+  billingSpecialBadgeTxt: { color: C.bg, fontSize: 8, fontWeight: '900', letterSpacing: 0.3 },
+  vipSavingsNote: { color: C.green, fontSize: 10, fontWeight: '700', marginTop: 3 },
   vipCard: { padding: 16, borderWidth: 1.5, position: 'relative', overflow: 'hidden' },
   vipRibbon: {
     position: 'absolute', top: 12, right: -30, width: 130,
@@ -835,4 +1209,50 @@ const s = StyleSheet.create({
     paddingVertical: 10, paddingHorizontal: 16,
   },
   toastText: { color: C.textPrimary, fontSize: 12, fontWeight: '700', textAlign: 'center' },
+
+  // The Crown Vault
+  vaultCard: { padding: 16, gap: 8 },
+  vaultCardTitle: { color: C.gold, fontFamily: 'Cinzel_700Bold', fontSize: 14, letterSpacing: 0.5 },
+  vaultCardDesc: { color: C.textSec, fontSize: 11, lineHeight: 16 },
+  vaultLockedTxt: { color: C.textDim, fontSize: 12, fontWeight: '700', marginTop: 4 },
+  vaultStatusTxt: { color: C.textPrimary, fontSize: 12, fontWeight: '700', marginTop: 2 },
+  vaultCrownBalance: { color: C.textDim, fontSize: 11, marginTop: 4 },
+  vaultExchangeRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4 },
+  vaultInput: {
+    ...glassPanelDense,
+    flex: 1,
+    color: C.textPrimary,
+    fontSize: 13,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  vaultExchangeCost: { fontFamily: 'JetBrainsMono_600SemiBold', color: C.gold, fontSize: 13 },
+  vaultBuyBtn: {
+    backgroundColor: C.gold,
+    borderRadius: 10,
+    paddingVertical: 11,
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  vaultBuyBtnDisabled: { backgroundColor: C.border },
+  vaultBuyBtnTxt: { color: C.bg, fontSize: 12, fontWeight: '900', letterSpacing: 0.5 },
+
+  // Vault confirm modal
+  vaultModalOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.75)',
+    justifyContent: 'center', alignItems: 'center', padding: 28,
+  },
+  vaultModalBox: { width: '100%', padding: 22, gap: 10 },
+  vaultModalTitle: { color: C.gold, fontFamily: 'Cinzel_700Bold', fontSize: 16, textAlign: 'center' },
+  vaultModalMsg: { color: C.textSec, fontSize: 12, lineHeight: 18, textAlign: 'center' },
+  vaultModalPrice: { color: C.gold, fontSize: 18, fontWeight: '900', textAlign: 'center', marginTop: 4 },
+  vaultModalBtns: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  vaultModalCancelBtn: {
+    borderWidth: 1, borderColor: C.border, borderRadius: 10,
+    paddingVertical: 12, alignItems: 'center',
+  },
+  vaultModalCancelTxt: { color: C.textSec, fontSize: 13, fontWeight: '700' },
+  vaultModalConfirmBtn: { backgroundColor: C.gold, borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
+  vaultModalConfirmTxt: { color: C.bg, fontSize: 13, fontWeight: '900' },
 })

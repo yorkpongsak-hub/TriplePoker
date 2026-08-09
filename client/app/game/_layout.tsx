@@ -1,13 +1,18 @@
 // app/game/_layout.tsx
 // Auth Guard สำหรับทุกหน้าใน group game
 // ต้องมี session + display_name ถึงจะเข้าได้ (กันการเข้าตรงผ่าน URL)
-import { Stack, Redirect } from 'expo-router'
+import { Stack, Redirect, usePathname } from 'expo-router'
 import { useAuthStore } from '../../src/store/authStore'
 import { needsProfileSetup } from '../../src/utils/authGuard'
 import { View, ActivityIndicator } from 'react-native'
 
 export default function GameLayout() {
   const { isInitialized, session, profile } = useAuthStore()
+  const pathname = usePathname()
+  // เปิดเฉพาะ development preview ของโต๊ะใหม่ เพื่อ QA หน้าจอโดยไม่สร้าง session ปลอม
+  const isArenaDevPreview = __DEV__ && pathname === '/game/grandmaster'
+
+  if (isArenaDevPreview) return <Stack screenOptions={{ headerShown: false }} />
 
   if (!isInitialized) {
     return (

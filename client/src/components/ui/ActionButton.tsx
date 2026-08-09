@@ -42,7 +42,7 @@ export function ActionButton({ icon, label, onPress, disabled, variant = 'normal
           <Image source={ACTION_BUTTON_IMAGES[icon]} style={styles.image} resizeMode="contain" />
           {vipShimmer && <ShimmerOverlay />}
           <View style={styles.labelSlot} pointerEvents="none">
-            <Text style={[styles.label, labelStyle]} numberOfLines={1}>{displayLabel}</Text>
+            <Text style={[styles.label, labelStyle]} numberOfLines={3}>{displayLabel}</Text>
           </View>
           {pressed && !interactionDisabled && <View style={styles.pressOverlay} pointerEvents="none" />}
           {isDisabled && <View style={styles.disabledOverlay} pointerEvents="none" />}
@@ -84,12 +84,15 @@ const styles = StyleSheet.create({
     top: 0, left: 0, right: 0, bottom: 0,
     backgroundColor: 'rgba(0,0,0,0.55)',
   },
+  // Patch 2026-07-18: label กึ่งกลางปุ่ม — เดิมชิดขอบล่าง (bottom 12%)
   labelSlot: {
     position: 'absolute',
+    top: 0,
     left: 0,
     right: 0,
-    bottom: '12%',
+    bottom: 0,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   label: {
     fontFamily: UI_THEME.fonts.headingBold,
