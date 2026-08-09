@@ -15,6 +15,7 @@ import { glassPanelDense } from '../../../src/ui/glassStyles'
 import { useTableSkins } from '../../../src/hooks/useTableSkins'
 import { TABLE_SKINS } from '../../../src/config/tableSkins'
 import BossVictoryVFX from '../../../src/components/vfx/BossVictoryVFX'
+import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
 import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/game/FlyingCoins'
 import { AvatarDisplay, PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
 import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
@@ -202,6 +203,7 @@ export default function VipPlusTableScreen() {
   const [showPrivateAuctionCard, setShowPrivateAuctionCard] = useState(false)
   const [matchResult, setMatchResult] = useState<MatchResult | null>(null)
   const [showVictoryVfx, setShowVictoryVfx] = useState(false)
+  const [royalFlushPlayer, setRoyalFlushPlayer] = useState<string | null>(null)
   const [hostToast, setHostToast] = useState(false)
   // ใบที่ P1 เลือกไว้ว่าจะหงายตอนกด CALL รอบเดิมพันปัจจุบัน — reset ทุกครั้งที่ถึงตาใหม่/CALL สำเร็จ
   // เป็น array เพราะ G3 รอบแรก (groupRound 1) ต้องหงายมากกว่า 1 ใบ (ดู requiredRevealCount)
@@ -336,7 +338,7 @@ export default function VipPlusTableScreen() {
     })
     socket.on('vip_plus:group_settled', (data: {
       gameNumber: number; group: number; winnerSeat: Seat | null; winnerHandName: string | null
-      winningCards: string[]; highlightedCards?: string[]; payout: number; tokenBalance: Partial<Record<Seat, number>>
+      winnerDisplayName?: string | null; winningCards: string[]; highlightedCards?: string[]; payout: number; tokenBalance: Partial<Record<Seat, number>>
     }) => {
       setGame(prev => ({ ...prev, balances: data.tokenBalance }))
       // Feedback ลุงเยาะ (เทสมือถือรอบ 1, ปรับรอบ 3: 10วิ->6วิ) — server หน่วงจริง resultDisplayMs (6 วิ)
@@ -345,6 +347,9 @@ export default function VipPlusTableScreen() {
       // safety net เฉยๆ เผื่อ event ถัดไปมาช้าผิดปกติ — ต้องตรงกับ gameConfig.vipPlus5.resultDisplayMs เสมอ
       // เฉพาะตอนมีผู้ชนะจริง (all-fold ทั้งกอง winnerSeat เป็น null ไม่มีอะไรให้ฉลอง)
       if (data.winnerSeat && data.winnerHandName) {
+        if (String(data.winnerHandName).toLowerCase().replace(/[ _-]/g, '') === 'royalflush') {
+          setRoyalFlushPlayer(data.winnerDisplayName ?? data.winnerSeat)
+        }
         setRoundResultBanner({
           group: data.group, seat: data.winnerSeat, handName: data.winnerHandName, cards: data.winningCards,
           // มติลุงเยาะ (รอบ 10) — fallback เป็น cards ทั้งชุด (blink ทุกใบ) เผื่อ server รุ่นเก่าที่ยังไม่ส่ง
@@ -869,6 +874,7 @@ export default function VipPlusTableScreen() {
           <BossVictoryVFX tier="sentinel" titleOverride="MATCH VICTORY" onFinish={() => setShowVictoryVfx(false)} />
         </View>
       )}
+      {royalFlushPlayer && <RoyalStraightFlushVFX playerName={royalFlushPlayer} onClose={() => setRoyalFlushPlayer(null)} />}
     </ImageBackground>
   )
 }

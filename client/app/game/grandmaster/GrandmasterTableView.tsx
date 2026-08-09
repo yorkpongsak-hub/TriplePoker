@@ -10,6 +10,7 @@ import CrownPanel from './CrownPanel'
 import FanHand from './FanHand'
 import { ArenaClientIntent, ArenaClientSnapshot, ArenaSeatView } from '../../../src/game/grandmaster/arenaClientTypes'
 import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
+import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
 
 const MONARCH_TABLE = require('../../../assets/tables/boss_monarch_skin_table.png')
 
@@ -389,6 +390,17 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
   const [auctionAwardActive, setAuctionAwardActive] = useState(false)
   const [completedBlindAwards, setCompletedBlindAwards] = useState<Set<string>>(new Set())
   const [selectedGFCardIds, setSelectedGFCardIds] = useState<string[]>([])
+  const [royalFlushPlayer, setRoyalFlushPlayer] = useState<string | null>(null)
+  const lastRoyalRevealRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    const reveal = snapshot.reveal
+    if (!reveal || String(reveal.handName).toLowerCase().replace(/[ _-]/g, '') !== 'royalflush') return
+    const key = `${snapshot.matchId}:${snapshot.gameNumber}:${reveal.pile}:${reveal.winnerSeat}:${reveal.handName}`
+    if (lastRoyalRevealRef.current === key) return
+    lastRoyalRevealRef.current = key
+    setRoyalFlushPlayer(reveal.winnerDisplayName || (reveal.winnerSeat ? `SEAT ${reveal.winnerSeat}` : 'PLAYER'))
+  }, [snapshot.matchId, snapshot.gameNumber, snapshot.reveal])
   const [callRevealQueue, setCallRevealQueue] = useState<CallRevealEvent[]>([])
   const previousGFReveals = useRef<Map<number, string[]>>(new Map())
   const seenCallRevealEvents = useRef<Set<string>>(new Set())
@@ -772,6 +784,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
         </View>
       </SafeAreaView>
       {!isDealAnimation && <ArenaOverlays snapshot={auctionAwardActive ? { ...snapshot, auction: null } : snapshot} onIntent={onIntent} selectedGFCardIds={selectedGFCardIds} requiredGFSelection={requiredGFSelection} />}
+      {royalFlushPlayer && <RoyalStraightFlushVFX playerName={royalFlushPlayer} onClose={() => setRoyalFlushPlayer(null)} />}
       {callRevealQueue[0] && <CallRevealSpotlight event={callRevealQueue[0]} width={width} />}
     </ImageBackground>
   )

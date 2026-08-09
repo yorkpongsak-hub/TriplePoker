@@ -934,6 +934,7 @@ function settleVipPlusGroup(state: VipPlusMatchState, group: 1 | 2 | 3): void {
     gameNumber: state.gameNumber,
     group,
     winnerSeat: winner ? seatForPlayer(state, winner) : null,
+    winnerDisplayName: winner ? state.displayNameBySeat[seatForPlayer(state, winner)!] : null,
     winnerHandName,
     winningCards,
     highlightedCards,
