@@ -1,9 +1,15 @@
-import React, { useEffect, useMemo } from 'react'
-import { useLocalSearchParams } from 'expo-router'
+import React, { useEffect, useMemo, useState } from 'react'
+import { ActivityIndicator, StyleSheet, View } from 'react-native'
+import AsyncStorage from '@react-native-async-storage/async-storage'
+import { useLocalSearchParams, useRouter } from 'expo-router'
 import GrandmasterTableView from './GrandmasterTableView'
+import ArenaWelcomeGuide from './ArenaWelcomeGuide'
 import { ArenaClientIntent, ArenaClientPhase, ArenaClientSnapshot } from '../../../src/game/grandmaster/arenaClientTypes'
 import { useArenaTableStore } from '../../../src/game/grandmaster/useArenaTableStore'
 import { useArenaTransport } from '../../../src/game/grandmaster/useArenaTransport'
+import { useAuthStore } from '../../../src/store/authStore'
+
+const ARENA_GUIDE_VERSION = 'v1'
 
 const cards = ['as', 'kh', 'qd', 'jc', '10s', '9h', '8d', '7c', '6s', '5h', 'JOKER']
 
@@ -79,11 +85,26 @@ function previewSnapshot(mode?: string): ArenaClientSnapshot {
 }
 
 export default function GrandmasterScreen() {
-  const params = useLocalSearchParams<{ preview?: string }>()
+  const params = useLocalSearchParams<{ preview?: string; guide?: string }>()
+  const router = useRouter()
+  const userId = useAuthStore(state => state.user?.id ?? 'preview')
+  const [guideSeen, setGuideSeen] = useState<boolean | null>(null)
   const snapshot = useArenaTableStore(state => state.snapshot)
   const applyServerSnapshot = useArenaTableStore(state => state.applyServerSnapshot)
   const live = typeof params.preview !== 'string'
-  const transport = useArenaTransport(live)
+  const guideKey = `arena_first_visit_${ARENA_GUIDE_VERSION}_${userId}`
+  const forceGuide = params.guide === '1'
+  // Development table previews stay one-tap; append ?guide=1 when QA needs this onboarding.
+  const tableReady = !forceGuide && (guideSeen === true || !live)
+  const transport = useArenaTransport(live && tableReady)
+
+  useEffect(() => {
+    let active = true
+    AsyncStorage.getItem(guideKey)
+      .then(value => { if (active) setGuideSeen(value === '1') })
+      .catch(() => { if (active) setGuideSeen(false) })
+    return () => { active = false }
+  }, [guideKey])
   const initial = useMemo(() => {
     const value = previewSnapshot(params.preview)
     if (!live) return value
@@ -116,5 +137,16 @@ export default function GrandmasterScreen() {
     else console.log('[ARENA-PREVIEW-INTENT]', intent)
   }
 
+  const completeGuide = async () => {
+    await AsyncStorage.setItem(guideKey, '1').catch(() => {})
+    setGuideSeen(true)
+    if (forceGuide) router.replace('/game/grandmaster')
+  }
+
+  if (guideSeen === null) return <View style={styles.guideLoading}><ActivityIndicator color="#FFD76A" /></View>
+  if (!tableReady) return <ArenaWelcomeGuide onComplete={completeGuide} onExit={() => router.replace('/(home)/lobby')} />
+
   return <GrandmasterTableView snapshot={snapshot ?? initial} onIntent={handleIntent} transportStatus={live ? transport.status : undefined} />
 }
+
+const styles = StyleSheet.create({ guideLoading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#07100B' } })
