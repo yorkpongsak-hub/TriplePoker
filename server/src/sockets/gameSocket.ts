@@ -39,6 +39,7 @@ import {
 } from "../game/roomRegistry";
 import { broadcastTableUpdate } from "./lobbySocket";
 import { registerVipPlusSocket } from './vipPlusSocket';
+import { GAME_RESUME_EVENT, GAME_RESUME_RESULT_EVENT, isGameResumeRequest, type GameResumeResult } from './gameResumeProtocol';
 
 // แปลง card key string (เช่น "10s", "jh") → Card object — ใช้ร่วมกันทุก handler ที่รับไพ่จาก client
 function toCards(keys: string[]) {
@@ -276,6 +277,55 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
   }, 3_000);
 
   io.on("connection", (socket: Socket) => {
+    socket.on(GAME_RESUME_EVENT, async (request: unknown) => {
+      if (!isGameResumeRequest(request)) return
+      const fail = (status: Exclude<GameResumeResult, { ok: true }>['status']) =>
+        socket.emit(GAME_RESUME_RESULT_EVENT, { ok: false, status, roomId: request.roomId, matchType: request.matchType } satisfies GameResumeResult)
+
+      const { data: authenticated, error } = await supabase.auth.getUser(request.accessToken ?? '')
+      if (error || authenticated.user?.id !== request.userId) return fail('UNAUTHORIZED')
+
+      const resumed = () => socket.emit(GAME_RESUME_RESULT_EVENT, {
+        ok: true, status: 'RESUMED', roomId: request.roomId, matchType: request.matchType,
+      } satisfies GameResumeResult)
+
+      if (request.matchType === 'ADEPT') {
+        const state = getMultiMatchState(request.roomId)
+        if (!state) return fail('MATCH_NOT_FOUND')
+        if (!state.humanPlayerIds.includes(request.userId)) return fail('NOT_A_MEMBER')
+        socket.join(request.roomId); socket.join(request.userId)
+        trackMatchmakingSocket(socket.id, { userId: request.userId, roomId: request.roomId, tier: 'adept' })
+        await resendRoundStartToPlayer(io, request.roomId, request.userId); return resumed()
+      }
+      if (request.matchType === 'HIGH_NOBLE') {
+        const state = getHNMatchState(request.roomId)
+        if (!state) return fail('MATCH_NOT_FOUND')
+        if (!state.seats.some(seat => seat.isHuman && seat.id === request.userId)) return fail('NOT_A_MEMBER')
+        socket.join(request.roomId); socket.join(request.userId)
+        trackMatchmakingSocket(socket.id, { userId: request.userId, roomId: request.roomId, tier: 'highNoble' })
+        resendHNRoundStartToPlayer(io, request.roomId, request.userId); return resumed()
+      }
+      if (request.matchType === 'MONARCH') {
+        const state = getMonarchMatchState(request.roomId)
+        if (!state) return fail('MATCH_NOT_FOUND')
+        if (state.humanUserId !== request.userId) return fail('NOT_A_MEMBER')
+        if (state.phase === 'match_end') return fail('MATCH_ENDED')
+        socket.join(request.roomId); socket.join(request.userId)
+        trackMatchmakingSocket(socket.id, { userId: request.userId, roomId: request.roomId, tier: 'monarch' })
+        clearMonarchDisconnectState(request.roomId, request.userId)
+        socket.emit('monarch_round_start', buildMonarchRoundSnapshot(state)); return resumed()
+      }
+      if (request.matchType === 'INITIATE' || request.matchType === 'MASTERMIND') {
+        const state = getMatchState(request.roomId)
+        if (!state) return fail('MATCH_NOT_FOUND')
+        if (state.humanPlayerId !== request.userId) return fail('NOT_A_MEMBER')
+        if (state.phase === 'match_end') return fail('MATCH_ENDED')
+        // Solo engines do not yet expose a safe full-phase snapshot. The common
+        // protocol reports this explicitly instead of accidentally starting a duplicate match.
+        return fail('UNSUPPORTED_MATCH_TYPE')
+      }
+      return fail('UNSUPPORTED_MATCH_TYPE')
+    })
 
     // Patch 03: ผูก Lobby realtime (subscribe/unsubscribe ต่อ Tier)
     registerLobbySocket(io, socket);

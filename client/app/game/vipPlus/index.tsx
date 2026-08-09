@@ -4,6 +4,7 @@ import Animated, { Easing, SharedValue, useAnimatedStyle, useSharedValue, withRe
 import { router } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { io, Socket } from 'socket.io-client'
+import { requestGameResume } from '../../../src/services/gameResumeProtocol'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useAuthStore } from '../../../src/store/authStore'
 import Card, { Suit, Value } from '../../../src/components/game/Card'
@@ -232,7 +233,13 @@ export default function VipPlusTableScreen() {
       const storedTableId = activeTableIdRef.current ?? await AsyncStorage.getItem(ACTIVE_MATCH_KEY)
       if (storedTableId) {
         activeTableIdRef.current = storedTableId
-        socket.emit('vip_plus:resume_match', { ...authPayload(), tableId: storedTableId })
+        const auth = authPayload()
+        requestGameResume(socket, {
+          roomId: storedTableId,
+          userId: auth.userId,
+          accessToken: auth.accessToken,
+          matchType: 'VIP_PLUS',
+        })
       }
     })
     socket.on('vip_plus:tables', (next: WaitingTable[]) => setTables(next))
