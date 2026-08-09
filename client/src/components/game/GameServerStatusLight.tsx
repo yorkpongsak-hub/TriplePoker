@@ -22,15 +22,15 @@ export default function GameServerStatusLight({ socketRef, online, compact = fal
     }
     const update = () => setConnected(socketRef?.current?.connected === true)
     update()
-    const timer = setInterval(update, 400)
+    const timer = setInterval(update, 5_000)
     return () => clearInterval(timer)
   }, [online, socketRef])
 
   useEffect(() => {
     pulse.setValue(0.35)
     const animation = Animated.loop(Animated.sequence([
-      Animated.timing(pulse, { toValue: 1, duration: 520, useNativeDriver: true }),
-      Animated.timing(pulse, { toValue: 0.35, duration: 520, useNativeDriver: true }),
+      Animated.timing(pulse, { toValue: 1, duration: 500, useNativeDriver: true }),
+      Animated.timing(pulse, { toValue: 0.35, duration: 500, useNativeDriver: true }),
     ]))
     animation.start()
     return () => animation.stop()
