@@ -40,6 +40,10 @@ export interface PlayerHandViewProps {
   revealedCards?: Record<number, string[]>
   // map รูปไพ่ (default = CARD_IMG กลาง) — เผื่อ skin อื่นในอนาคต
   cardImages?: Record<string, any>
+
+  // มติลุงเยาะ 2026-08-04: ขยายมุมกางพัดไพ่เฉพาะ VIP mode (default 1 = ไม่กระทบ Tier ที่ไม่ส่ง prop
+  // นี้เลย — opt-in เหมือน pattern leftSlot ของ GameTopBar) ไม่แตะ Free mode/exposed calc
+  handFanAngleScale?: number
 }
 
 // ── ค่าคงที่ layout ──
@@ -77,8 +81,8 @@ interface LayoutTarget { cw: number; ch: number; hardMinCw: number; minExposed: 
 
 // VIP pivot-rotation: geometry ของพัด 1 กอง (bounding box + R ที่ใช้จริง) — ใช้ร่วมกันทั้ง PileColumn
 // (ตำแหน่งใบไพ่แต่ละใบ) และ PlayerHandView (คำนวณ overlap ของแถวล่างที่ทับแถวบน 2-row layout)
-export function vipFanGeometry(n: number, cw: number, ch: number) {
-  const maxAngle = n >= 5 ? 16 : n >= 4 ? 12 : 8
+export function vipFanGeometry(n: number, cw: number, ch: number, angleScale = 1) {
+  const maxAngle = (n >= 5 ? 16 : n >= 4 ? 12 : 8) * angleScale
   const R = VIP_PIVOT_R[n] ?? VIP_PIVOT_R[3]
   const maxAngleRad = (maxAngle * Math.PI) / 180
   const spreadX = R * Math.sin(maxAngleRad)       // ระยะห่างแนวนอนของใบขอบสุดจากศูนย์กลาง
@@ -212,7 +216,8 @@ const PileColumn: React.FC<{
   onCardPress: (pi: number, ci: number) => void
   cw: number; ch: number; exposed: number
   images: Record<string, any>
-}> = ({ cards, pi, isVip, selected, onCardPress, cw, ch, exposed, images }) => {
+  fanAngleScale?: number
+}> = ({ cards, pi, isVip, selected, onCardPress, cw, ch, exposed, images, fanAngleScale = 1 }) => {
   const n = cards.length
   const center = n > 1 ? (n - 1) / 2 : 0
 
@@ -220,7 +225,7 @@ const PileColumn: React.FC<{
     // VIP pivot-rotation: ทุกใบวาง base เดียวกันกึ่งกลาง container แล้วปล่อยให้ transform ของ FanCard
     // กวาดออกเป็นพัดเอง — geometry (R/มุม/bounding box) มาจาก vipFanGeometry() ตัวเดียวกับที่
     // PlayerHandView ใช้คำนวณ overlap ของ 2-row layout ด้านล่าง กันเลขสองจุดขัดกัน
-    const { maxAngle, R, containerW, containerH } = vipFanGeometry(n, cw, ch)
+    const { maxAngle, R, containerW, containerH } = vipFanGeometry(n, cw, ch, fanAngleScale)
     const baseLeft = (containerW - cw) / 2
     const baseTop  = VIP_TOP_PAD
 
@@ -279,6 +284,7 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
   visiblePiles = [0, 1, 2],
   revealedCards,
   cardImages = CARD_IMG,
+  handFanAngleScale = 1,
 }) => {
   const { width: screenW } = useWindowDimensions()
 
@@ -309,7 +315,7 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
     const topPiles = paired.filter(p => p.pi !== 2)
     const bottomPiles = paired.filter(p => p.pi === 2)
     const bottomN = bottomPiles[0]?.cards.length ?? 0
-    const overlapPx = bottomN > 0 ? Math.round(vipFanGeometry(bottomN, cw, ch).containerH * VIP_ROW_OVERLAP_RATIO) : 0
+    const overlapPx = bottomN > 0 ? Math.round(vipFanGeometry(bottomN, cw, ch, handFanAngleScale).containerH * VIP_ROW_OVERLAP_RATIO) : 0
 
     const renderPile = (p: { cards: HandCardData[]; pi: number }) => (
       <PileColumn
@@ -321,6 +327,7 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
         onCardPress={onCardPress}
         cw={cw} ch={ch} exposed={exposed}
         images={cardImages}
+        fanAngleScale={handFanAngleScale}
       />
     )
 

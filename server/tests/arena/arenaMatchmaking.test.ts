@@ -3,6 +3,7 @@ import {
   createHumanBossComposition,
   validateArenaComposition,
 } from '../../src/arena/matchmaking/arenaMatchmaking'
+import { tierSConfig } from '../../src/arena/config/tierSConfig'
 
 function sequenceRandom(...values: number[]): () => number {
   let index = 0
@@ -34,10 +35,17 @@ describe('Gate 4 - Arena entry and queue safety', () => {
     const queue = new ArenaMatchmakingQueue('q1', 0, sequenceRandom(0.9, 0, 0.5))
     queue.join(eligible('p1', 0))
     queue.join(eligible('p2', 1))
-    const first = queue.tryFinalize(180_000)
-    const retry = queue.tryFinalize(180_001)
+    const first = queue.tryFinalize(60_001)
+    const retry = queue.tryFinalize(60_002)
     expect(retry).toBe(first)
-    expect(queue.join(eligible('p3', 180_001))).toEqual({ ok: false, reason: 'QUEUE_FINALIZED' })
+    expect(queue.join(eligible('p3', 60_002))).toEqual({ ok: false, reason: 'QUEUE_FINALIZED' })
+  })
+  test('old queue age cannot skip the 60-second wait after the second human joins', () => {
+    const queue = new ArenaMatchmakingQueue('q-aged', 0, sequenceRandom(0.9, 0, 0))
+    queue.join(eligible('p1', 1))
+    queue.join(eligible('p2', 500_000), 500_000)
+    expect(queue.tryFinalize(559_999)).toBeNull()
+    expect(queue.tryFinalize(560_000)).not.toBeNull()
   })
 })
 
@@ -46,16 +54,16 @@ describe('Gate 4 - legal Arena compositions', () => {
     const queue = new ArenaMatchmakingQueue('q-fast', 0, sequenceRandom(0.9, 0.7))
     queue.join(eligible('p1', 1_000))
     queue.join(eligible('p2', 2_000))
-    const result = queue.join(eligible('p3', 3_000))
-    expect(result.ok && result.status === 'MATCHED' ? result.match.kind : null).toBe('FOUR_GODS')
-    if (!result.ok || result.status !== 'MATCHED') throw new Error('expected match')
-    expect(result.match.seats).toEqual([
+    expect(queue.join(eligible('p3', 3_000))).toEqual({ ok: true, status: 'WAITING', humanCount: 3 })
+    const match = queue.tryFinalize(3_000)!
+    expect(match.kind).toBe('FOUR_GODS')
+    expect(match.seats).toEqual([
       { seat: 1, controller: 'HUMAN', playerId: 'p1', role: 'CHALLENGER' },
       { seat: 2, controller: 'HUMAN', playerId: 'p2', role: 'CHALLENGER' },
       { seat: 3, controller: 'AI', aiId: 'CORTEX', role: 'BOSS' },
       { seat: 4, controller: 'HUMAN', playerId: 'p3', role: 'CHALLENGER' },
     ])
-    validateArenaComposition(result.match)
+    validateArenaComposition(match)
   })
 
   test('Human 3 คน + encounter hit สุ่ม Monarch/Soren และไม่มี Dual เกินสี่ที่นั่ง', () => {
@@ -63,12 +71,12 @@ describe('Gate 4 - legal Arena compositions', () => {
     const queue = new ArenaMatchmakingQueue('q-boss', 0, sequenceRandom(0.1, 0.9))
     queue.join(eligible('p1', 1))
     queue.join(eligible('p2', 2))
-    const result = queue.join(eligible('p3', 3))
-    if (!result.ok || result.status !== 'MATCHED') throw new Error('expected match')
-    expect(result.match.kind).toBe('BOSS_ENCOUNTER')
-    expect(result.match.seats[2]).toEqual({ seat: 3, controller: 'AI', aiId: 'SOREN', role: 'BOSS' })
-    expect(result.match.seats).toHaveLength(4)
-    validateArenaComposition(result.match)
+    expect(queue.join(eligible('p3', 3))).toEqual({ ok: true, status: 'WAITING', humanCount: 3 })
+    const match = queue.tryFinalize(3)!
+    expect(match.kind).toBe('BOSS_ENCOUNTER')
+    expect(match.seats[2]).toEqual({ seat: 3, controller: 'AI', aiId: 'SOREN', role: 'BOSS' })
+    expect(match.seats).toHaveLength(4)
+    validateArenaComposition(match)
   })
 
   test('Human 2 คนครบ 3 นาที + encounter miss เติม Four God P3 และ Sentinel P4 (ไม่ใช่ ARENA_MINION เฉยๆ อีกต่อไป)', () => {
@@ -76,8 +84,8 @@ describe('Gate 4 - legal Arena compositions', () => {
     const queue = new ArenaMatchmakingQueue('q-two', 0, sequenceRandom(0.8, 0, 0.5))
     queue.join(eligible('p1', 1))
     queue.join(eligible('p2', 2))
-    expect(queue.tryFinalize(179_999)).toBeNull()
-    const match = queue.tryFinalize(180_000)!
+    expect(queue.tryFinalize(60_001)).toBeNull()
+    const match = queue.tryFinalize(60_002)!
     expect(match.kind).toBe('FOUR_GODS')
     expect(match.seats[2]).toEqual({ seat: 3, controller: 'AI', aiId: 'REAPER', role: 'BOSS' })
     expect(match.seats[3]).toEqual({ seat: 4, controller: 'AI', aiId: 'DARK_SHARK', role: 'FILL' })
@@ -92,22 +100,35 @@ describe('Gate 4 - legal Arena compositions', () => {
       const queue = new ArenaMatchmakingQueue(`q-roster-${index}`, 0, sequenceRandom(0.9, 0, sentinelRoll))
       queue.join(eligible('p1', 1))
       queue.join(eligible('p2', 2))
-      const match = queue.tryFinalize(180_000)!
+      const match = queue.tryFinalize(60_002)!
       const seat4 = match.seats[3]
       expect(seat4.controller === 'AI' ? seat4.aiId : null).toBe(expected)
     })
   })
 
-  test('Dual Boss เกิดได้เฉพาะโต๊ะ Human 2 คนและไม่เกิน configured encounter share', () => {
-    const queue = new ArenaMatchmakingQueue('q-dual', 0, sequenceRandom(0.1, 0.05))
+  test('โต๊ะ Human 2 คนมีโอกาส Monarch + Soren 10% ของทุกแมตช์', () => {
+    expect(tierSConfig.bossEncounterRate * tierSConfig.dualBossRateWithinEncounterMax).toBeCloseTo(0.1)
+
+    const queue = new ArenaMatchmakingQueue('q-dual', 0, sequenceRandom(0.1, 0.49))
     queue.join(eligible('p1', 1))
     queue.join(eligible('p2', 2))
-    const match = queue.tryFinalize(180_000)!
+    const match = queue.tryFinalize(60_002)!
     expect(match.kind).toBe('DUAL_BOSS_ENCOUNTER')
     expect(match.seats.slice(2)).toEqual([
       { seat: 3, controller: 'AI', aiId: 'MONARCH', role: 'BOSS' },
       { seat: 4, controller: 'AI', aiId: 'SOREN', role: 'BOSS' },
     ])
+    validateArenaComposition(match)
+  })
+
+  test('โต๊ะ Human 2 คนที่พลาด Dual roll ลดไปเป็น Monarch หรือ Soren เดี่ยว', () => {
+    const queue = new ArenaMatchmakingQueue('q-dual-miss', 0, sequenceRandom(0.1, 0.5, 0.9, 0))
+    queue.join(eligible('p1', 1))
+    queue.join(eligible('p2', 2))
+    const match = queue.tryFinalize(60_002)!
+    expect(match.kind).toBe('BOSS_ENCOUNTER')
+    expect(match.seats[2]).toEqual({ seat: 3, controller: 'AI', aiId: 'SOREN', role: 'BOSS' })
+    expect(match.seats[3].controller).toBe('AI')
     validateArenaComposition(match)
   })
 

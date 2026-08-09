@@ -26,6 +26,8 @@ function reserveAll(engine: ArenaMatchEngine, now: number): void {
   for (const actorId of engine.snapshot().pendingActorIds) {
     engine.submit({ type: 'BUY_IN_RESERVED', actionId: `reserve-${++sequence}`, actorId }, now)
   }
+  expect(engine.snapshot().phase).toBe('DEAL_ANIMATION')
+  engine.tick(now + 4_000)
 }
 
 function arrangementFor(engine: ArenaMatchEngine, actorId: string) {
@@ -39,7 +41,7 @@ function arrangementFor(engine: ArenaMatchEngine, actorId: string) {
 
 function actionFor(engine: ArenaMatchEngine, actorId: string, sequence: number): ArenaMatchAction {
   const phase = engine.snapshot().phase
-  const base = { actionId: `a-${sequence}`, actorId }
+  const base = { actionId: `a-${phase}-${sequence}`, actorId }
   switch (phase) {
     case 'MATCH_BUY_IN_RESERVE': return { ...base, type: 'BUY_IN_RESERVED' }
     case 'ARRANGE_1': return { ...base, type: 'ARRANGE_1', ...arrangementFor(engine, actorId) }
@@ -48,8 +50,8 @@ function actionFor(engine: ArenaMatchEngine, actorId: string, sequence: number):
     case 'FINAL_ARRANGE': return { ...base, type: 'FINAL_ARRANGE', ...arrangementFor(engine, actorId) }
     case 'JOKER_DECLARE': return { ...base, type: 'JOKER_DECLARE', mode: 'WILD', targetPile: 3, availableCrest: 100 }
     case 'DISCARD': {
-      const held = engine.snapshotDetail().heldCardIds[actorId] ?? []
-      return { ...base, type: 'DISCARD', cardId: held[held.length - 1] }
+      const pile3 = engine.snapshotDetail().lastArrangements[actorId]?.pile3 ?? []
+      return { ...base, type: 'DISCARD', cardId: pile3[pile3.length - 1] }
     }
     case 'FINAL_LOCK': return { ...base, type: 'FINAL_LOCK', ...arrangementFor(engine, actorId) }
     case 'GF_PILE_2': case 'GF_PILE_3_ROUND_1': case 'GF_PILE_3_ROUND_2':
@@ -81,6 +83,44 @@ describe('arenaCardKey', () => {
 })
 
 describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', () => {
+  test('card zones ย้ายไพ่ครบ 53 ใบตั้งแต่ Deal Animation จนกอง 3 resolve โดยไม่ซ้ำ', () => {
+    const engine = new ArenaMatchEngine('m-card-zones', composition, createSeededRandom(31), 0)
+    let reserveSequence = 0
+    for (const actorId of engine.snapshot().pendingActorIds) {
+      engine.submit({ type: 'BUY_IN_RESERVED', actionId: `zone-reserve-${++reserveSequence}`, actorId }, 1)
+    }
+    const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
+    const assertConserved = (expected: { phase: string; stock?: number; auction?: number; discard?: number; resolved?: number }) => {
+      const view = projectArenaClientSnapshot(engine, composition, connections, 'p1', engine.snapshot().deadlineAt ?? 10, new Map())
+      const handCount = view.seats.reduce((sum, seat) => sum + seat.cardCount, 0)
+      const communityCount = view.communityCards.pile1.length + view.communityCards.pile2.length + view.communityCards.pile3.length
+      const resolvedCount = view.cardZones.resolvedPileCounts.pile1 + view.cardZones.resolvedPileCounts.pile2 + view.cardZones.resolvedPileCounts.pile3
+      const auctionCount = (view.cardZones.auction.faceUpCard ? 1 : 0) + view.cardZones.auction.blindCount
+      expect(view.phase).toBe(expected.phase)
+      expect(view.cardZones.stockCount + view.cardZones.discardCount + auctionCount + resolvedCount + handCount + communityCount).toBe(53)
+      if (expected.stock !== undefined) expect(view.cardZones.stockCount).toBe(expected.stock)
+      if (expected.auction !== undefined) expect(auctionCount).toBe(expected.auction)
+      if (expected.discard !== undefined) expect(view.cardZones.discardCount).toBe(expected.discard)
+      if (expected.resolved !== undefined) expect(resolvedCount).toBe(expected.resolved)
+    }
+
+    assertConserved({ phase: 'DEAL_ANIMATION', stock: 3, auction: 0, discard: 0, resolved: 0 })
+    engine.tick(4_001)
+    assertConserved({ phase: 'ARRANGE_1', stock: 0, auction: 3, discard: 0, resolved: 0 })
+    driveTo(engine, 'AUCTION_FACE_UP')
+    assertConserved({ phase: 'AUCTION_FACE_UP', stock: 0, auction: 3, discard: 0, resolved: 0 })
+    driveTo(engine, 'AUCTION_BLIND')
+    assertConserved({ phase: 'AUCTION_BLIND', stock: 0, auction: 2, discard: 1, resolved: 0 })
+    driveTo(engine, 'FINAL_ARRANGE')
+    assertConserved({ phase: 'FINAL_ARRANGE', stock: 0, auction: 0, discard: 3, resolved: 0 })
+    driveTo(engine, 'REVEAL_PILE_1')
+    assertConserved({ phase: 'REVEAL_PILE_1', discard: 3, resolved: 12 })
+    driveTo(engine, 'REVEAL_PILE_2')
+    assertConserved({ phase: 'REVEAL_PILE_2', discard: 3, resolved: 24 })
+    driveTo(engine, 'REVEAL_PILE_3')
+    assertConserved({ phase: 'REVEAL_PILE_3', discard: 3, resolved: 44 })
+  })
+
   test('viewer เห็นไพ่ตัวเองเท่านั้น ฝ่ายอื่นเห็นแค่ cardCount', () => {
     const engine = new ArenaMatchEngine('m1', composition, createSeededRandom(1), 0)
     reserveAll(engine, 1)
@@ -96,6 +136,89 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
     expect(other.cardCount).toBe(11)
   })
 
+  test('pile 1 opening exposes only the local locked grouping and pauses before resolution', () => {
+    const engine = new ArenaMatchEngine('m-pile-1-opening', composition, createSeededRandom(32), 0)
+    driveTo(engine, 'RESOLVE_PILE_1')
+    const opening = engine.snapshot()
+    expect(opening.deadlineAt).not.toBeNull()
+
+    const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
+    const p1View = projectArenaClientSnapshot(engine, composition, connections, 'p1', opening.deadlineAt! - 1, new Map())
+    const local = p1View.seats.find(seat => seat.playerId === 'p1')!
+    const other = p1View.seats.find(seat => seat.playerId === 'p2')!
+    expect(local.arrangedPiles?.pile1).toHaveLength(3)
+    expect(local.arrangedPiles?.pile2).toHaveLength(3)
+    expect(local.arrangedPiles?.pile3).toHaveLength(5)
+    expect(other.arrangedPiles).toBeNull()
+
+    engine.tick(opening.deadlineAt!)
+    expect(engine.snapshot().phase).toBe('REVEAL_PILE_1')
+  })
+
+  test('ARRANGE_1 draft stays pending, is private, and is used when the arrange timer expires', () => {
+    const engine = new ArenaMatchEngine('m-arrange-draft', composition, createSeededRandom(33), 0)
+    reserveAll(engine, 1)
+    const draft = arrangementFor(engine, 'p1')
+    const swappedDraft = {
+      pile1: [draft.pile1[1], draft.pile1[0], draft.pile1[2]],
+      pile2: draft.pile2,
+      pile3: draft.pile3,
+    }
+    engine.submit({ type: 'ARRANGE_DRAFT', actionId: 'draft-p1', actorId: 'p1', ...swappedDraft }, 5)
+    expect(engine.snapshot().phase).toBe('ARRANGE_1')
+    expect(engine.snapshot().pendingActorIds).toContain('p1')
+
+    const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
+    const ownView = projectArenaClientSnapshot(engine, composition, connections, 'p1', 6, new Map())
+    const otherView = projectArenaClientSnapshot(engine, composition, connections, 'p2', 6, new Map())
+    expect(ownView.seats.find(seat => seat.playerId === 'p1')?.arrangedPiles).toEqual(swappedDraft)
+    expect(otherView.seats.find(seat => seat.playerId === 'p1')?.arrangedPiles).toBeNull()
+
+    engine.tick(engine.snapshot().deadlineAt!)
+    expect(engine.snapshot().phase).toBe('AUCTION_FACE_UP')
+    expect(engine.snapshotDetail().lastArrangements.p1).toEqual(swappedDraft)
+  })
+
+  test('pile 3 Call reveals private cards publicly as 2, then 4, then 5 at showdown', () => {
+    const engine = new ArenaMatchEngine('m-pile3-public-calls', composition, createSeededRandom(34), 0)
+    driveTo(engine, 'GF_PILE_3_ROUND_1')
+    const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
+    const view = () => projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, new Map())
+    const firstCaller = engine.snapshot().pendingActorIds[0]
+    const firstSelection = engine.snapshotDetail().lockedArrangements[firstCaller].pile3.slice(-2)
+    engine.submit({ type: 'GF_ACTION', actionId: 'p3-r1-first', actorId: firstCaller, decision: 'CALL', revealCardIds: firstSelection }, 10)
+    expect(view().gfTable?.players.find(player => player.seat === composition.seats[engine.actorIds.indexOf(firstCaller)].seat)?.revealedCards).toEqual(firstSelection)
+
+    let sequence = 0
+    while (engine.snapshot().phase === 'GF_PILE_3_ROUND_1') {
+      const actorId = engine.snapshot().pendingActorIds[0]
+      engine.submit({ type: 'GF_ACTION', actionId: `p3-r1-${++sequence}`, actorId, decision: 'CALL' }, 11 + sequence)
+    }
+    expect(engine.snapshot().phase).toBe('GF_PILE_3_ROUND_2')
+    const round2Caller = engine.snapshot().pendingActorIds[0]
+    const already = engine.snapshotDetail().gfRevealedCardIds[round2Caller]
+    const secondSelection = engine.snapshotDetail().lockedArrangements[round2Caller].pile3.filter(id => !already.includes(id)).slice(-2)
+    engine.submit({ type: 'GF_ACTION', actionId: 'p3-r2-first', actorId: round2Caller, decision: 'CALL', revealCardIds: secondSelection }, 30)
+    expect(view().gfTable?.players.find(player => player.seat === composition.seats[engine.actorIds.indexOf(round2Caller)].seat)?.revealedCards).toEqual([...already, ...secondSelection])
+
+    while (engine.snapshot().phase === 'GF_PILE_3_ROUND_2') {
+      const actorId = engine.snapshot().pendingActorIds[0]
+      engine.submit({ type: 'GF_ACTION', actionId: `p3-r2-${++sequence}`, actorId, decision: 'CALL' }, 31 + sequence)
+    }
+    expect(engine.snapshot().phase).toBe('REVEAL_PILE_3')
+    expect(view().gfTable?.players.filter(player => player.status === 'SHOWDOWN').every(player => player.revealedCards.length === 5)).toBe(true)
+  })
+
+  test('pile 2 Call reveals all three private cards on the caller seat', () => {
+    const engine = new ArenaMatchEngine('m-pile2-public-call', composition, createSeededRandom(35), 0)
+    driveTo(engine, 'GF_PILE_2')
+    const callerId = engine.snapshot().pendingActorIds[0]
+    engine.submit({ type: 'GF_ACTION', actionId: 'p2-public-call', actorId: callerId, decision: 'CALL' }, 10)
+    const view = projectArenaClientSnapshot(engine, composition, new ArenaConnectionManager(['p1', 'p2', 'p3']), 'p1', 11, new Map())
+    expect(view.gfTable?.pile).toBe(2)
+    expect(view.gfTable?.players.find(player => player.seat === composition.seats[engine.actorIds.indexOf(callerId)].seat)?.revealedCards).toHaveLength(3)
+  })
+
   test('avatar: Human ใช้ preset key จริงจาก identities (fallback ว่างถ้าไม่มีข้อมูล), AI ใช้สัญลักษณ์ตัวอักษรเดิม', () => {
     const engine = new ArenaMatchEngine('m1b', composition, createSeededRandom(1), 0)
     const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
@@ -109,7 +232,7 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
     expect(boss).toMatchObject({ controller: 'AI', avatar: '♛' })
   })
 
-  test('auction sheet หายไปทันทีหลัง viewer bid แล้ว แต่ยังโชว์ให้คนที่ยังไม่ bid', () => {
+  test('auction sheet stays visible but locks immediately after viewer bid; pending players remain unlocked', () => {
     const engine = new ArenaMatchEngine('m2', composition, createSeededRandom(2), 0)
     reserveAll(engine, 1)
     for (const actorId of engine.snapshot().pendingActorIds) {
@@ -122,9 +245,76 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
     expect(beforeBid.auction).not.toBeNull()
     engine.submit({ type: 'FACE_UP_BID', actionId: 'bid-p1', actorId: 'p1', amountCrest: 0 }, 3)
     const afterBid = projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, identities)
-    expect(afterBid.auction).toBeNull()
+    expect(afterBid.auction).toMatchObject({ round: 'FACE_UP', locked: true })
     const stillPending = projectArenaClientSnapshot(engine, composition, connections, 'p2', 10, identities)
-    expect(stillPending.auction).not.toBeNull()
+    expect(stillPending.auction).toMatchObject({ round: 'FACE_UP', locked: false })
+    for (const actorId of engine.snapshot().pendingActorIds) {
+      engine.submit({ type: 'FACE_UP_BID', actionId: `bid-${actorId}`, actorId, amountCrest: 3 }, 4)
+    }
+    expect(engine.snapshot().phase).toBe('AUCTION_FACE_UP_RESULT')
+    const resolved = projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, identities)
+    expect(resolved.auctionResult).toMatchObject({ round: 'FACE_UP', card: expect.any(String), winnerSeat: expect.any(Number) })
+    expect(resolved.auctionResult?.winnerDisplayName).toBeTruthy()
+    engine.tick(engine.snapshot().deadlineAt!)
+    expect(engine.snapshot().phase).toBe('AUCTION_BLIND')
+  })
+
+  test('face-up auction with all zero bids pauses 3 seconds and exposes NO WINNER before blind auction', () => {
+    const engine = new ArenaMatchEngine('m-face-no-bid', composition, createSeededRandom(202), 0)
+    reserveAll(engine, 1)
+    for (const actorId of engine.snapshot().pendingActorIds) {
+      engine.submit({ type: 'ARRANGE_1', actionId: `no-bid-arrange-${actorId}`, actorId, ...arrangementFor(engine, actorId) }, 2)
+    }
+    for (const actorId of [...engine.snapshot().pendingActorIds]) {
+      engine.submit({ type: 'FACE_UP_BID', actionId: `no-bid-${actorId}`, actorId, amountCrest: 0 }, 3)
+    }
+    expect(engine.snapshot().phase).toBe('AUCTION_FACE_UP_RESULT')
+    expect(engine.snapshot().deadlineAt).toBe(3_003)
+    const view = projectArenaClientSnapshot(engine, composition, new ArenaConnectionManager(['p1', 'p2', 'p3']), 'p1', 4, new Map())
+    expect(view.auctionResult).toMatchObject({ winnerSeat: null, winnerDisplayName: 'NO WINNER' })
+    expect(view.cardZones.discardCount).toBeGreaterThanOrEqual(1)
+    engine.tick(3_003)
+    expect(engine.snapshot().phase).toBe('AUCTION_BLIND')
+  })
+
+  test('ARRANGE_1 parks one face-up auction card on the left and two blind cards on the right', () => {
+    const engine = new ArenaMatchEngine('m-auction-parking', composition, createSeededRandom(22), 0)
+    reserveAll(engine, 1)
+    const view = projectArenaClientSnapshot(engine, composition, new ArenaConnectionManager(['p1', 'p2', 'p3']), 'p1', 10, new Map())
+    expect(view.phase).toBe('ARRANGE_1')
+    expect(view.cardZones.stockCount).toBe(0)
+    expect(view.cardZones.auction.faceUpCard).toBe(arenaCardKey(engine.currentDeal()!.auction.faceUp))
+    expect(view.cardZones.auction.blindCount).toBe(2)
+  })
+
+  test('Blind Auction result never exposes card faces; only winner gets a private hand-filter key', () => {
+    const engine = new ArenaMatchEngine('m-blind-private-result', composition, createSeededRandom(27), 0)
+    reserveAll(engine, 1)
+    for (const actorId of engine.snapshot().pendingActorIds) {
+      engine.submit({ type: 'ARRANGE_1', actionId: `private-arrange-${actorId}`, actorId, ...arrangementFor(engine, actorId) }, 2)
+    }
+    for (const actorId of engine.snapshot().pendingActorIds) {
+      engine.submit({ type: 'FACE_UP_BID', actionId: `private-face-${actorId}`, actorId, amountCrest: actorId === 'p1' ? 3 : 0 }, 3)
+    }
+    expect(engine.snapshot().phase).toBe('AUCTION_FACE_UP_RESULT')
+    engine.tick(engine.snapshot().deadlineAt!)
+    expect(engine.snapshot().phase).toBe('AUCTION_BLIND')
+    for (const actorId of engine.snapshot().pendingActorIds) {
+      engine.submit({ type: 'BLIND_BID', actionId: `private-blind-${actorId}`, actorId, amountCrest: 3, cardIndex: 0 }, 4)
+    }
+    expect(engine.snapshot().phase).toBe('AUCTION_BLIND_RESULT')
+    const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
+    const views = ['p1', 'p2', 'p3'].map(viewerId => projectArenaClientSnapshot(engine, composition, connections, viewerId, 10, new Map()))
+    const winnerSeat = views[0].blindAuctionResults.find(result => result.winnerSeat !== null)?.winnerSeat
+    expect(winnerSeat).toBeTruthy()
+    for (const view of views) {
+      for (const result of view.blindAuctionResults) expect(result).not.toHaveProperty('card')
+      const viewerSeat = view.seats.find(seat => seat.isLocal)!.seat
+      for (const result of view.blindAuctionResults) {
+        if (result.winnerSeat === viewerSeat) expect(result.ownedCard).toEqual(expect.any(String))
+        else expect(result.ownedCard).toBeUndefined()
+      }
+    }
   })
 
   test('communityCards.pile3 ส่งมาครบ 2 ช่องเสมอ — ใบที่ 2 เป็น "" (placeholder หลังไพ่) จนกว่าจะหงายจริงหลังประมูลรอบสอง', () => {
@@ -161,9 +351,9 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
     const beforeBid = projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, new Map())
     expect(beforeBid.auctionDisplay).toEqual({ faceUpCard: expectedFaceUp })
     engine.submit({ type: 'FACE_UP_BID', actionId: 'bid-p1', actorId: 'p1', amountCrest: 0 }, 3)
-    // หลัง p1 bid แล้ว: auction (ของ p1) เป็น null แต่ auctionDisplay ต้องยังไม่ null เพราะทุกคนต้องเห็นไพ่ประมูลตลอด
+    // หลัง p1 bid แล้ว: auction ของ p1 คงอยู่ในสถานะ locked และ auctionDisplay ยังต้องไม่ null
     const afterBid = projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, new Map())
-    expect(afterBid.auction).toBeNull()
+    expect(afterBid.auction).toMatchObject({ locked: true })
     expect(afterBid.auctionDisplay).toEqual({ faceUpCard: expectedFaceUp })
     // p2 ยังไม่ได้ bid เลย (ไม่ pending สำหรับ auction ของ p1) ก็ต้องเห็น auctionDisplay เหมือนกัน
     const p2View = projectArenaClientSnapshot(engine, composition, connections, 'p2', 10, new Map())
@@ -239,6 +429,31 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
       atmosphere: 'A shadow falls over the table...',
       quote: 'Power is easy to claim. Restraint is harder to prove.',
     })
+  })
+
+  test('Dual Boss ส่ง Lore เหนือ Avatar ตามผู้พูดเฉพาะช่วงปลอด active decision', () => {
+    const dualComposition: ArenaMatchComposition = {
+      queueId: 'q-dual-lore', kind: 'DUAL_BOSS_ENCOUNTER',
+      seats: [
+        { seat: 1, controller: 'HUMAN', playerId: 'p1', role: 'CHALLENGER' },
+        { seat: 2, controller: 'HUMAN', playerId: 'p2', role: 'CHALLENGER' },
+        { seat: 3, controller: 'AI', aiId: 'MONARCH', role: 'BOSS' },
+        { seat: 4, controller: 'AI', aiId: 'SOREN', role: 'BOSS' },
+      ],
+      humanCount: 2, encounterRoll: 0.1, finalizedAt: 0,
+    }
+    const engine = new ArenaMatchEngine('m-dual-lore', dualComposition, createSeededRandom(7), 0)
+    reserveAll(engine, 1)
+    const connections = new ArenaConnectionManager(['p1', 'p2'])
+    expect(projectArenaClientSnapshot(engine, dualComposition, connections, 'p1', 10, new Map()).dualBossLore).toBeNull()
+
+    driveTo(engine, 'REVEAL_PILE_1')
+    const view = projectArenaClientSnapshot(engine, dualComposition, connections, 'p1', 100, new Map())
+    expect(view.dualBossLore).toEqual({
+      id: 'recognition-1', speakerSeat: 3, speaker: 'MONARCH',
+      text: 'Soren Veyl. Exile did not erase your name.',
+    })
+    expect(view.seats.find(seat => seat.seat === 4)?.isBoss).toBe(true)
   })
 
   test('reveal เป็น null นอกช่วง REVEAL_PILE_X', () => {

@@ -34,6 +34,7 @@
 3. **Two Apps, One Database** — Main App + The Arena (Phase 3) ใช้ Supabase DB เดียวกัน
 4. Config-driven ทั้งระบบผ่าน `gameConfig.ts` — ห้าม hardcode ค่า Ante/Pot/Fee ในไฟล์ Tier
 5. Last Boss Tier อยู่ในแอปแยก (The Arena) — ห้ามเอา logic มาปนใน Main App
+6. **Tier S+ Last Boss AI (locked 2026-08-08):** When implementing the playable Tier S+ table/runtime, it MUST use `server/src/arena/sovereign/lastBossAIEngine.ts`. Do not create a replacement Boss AI and do not wire the legacy `server/src/ai/lastBossAI.ts` into Tier S+. Pile 3 must remain Best 5 of 7. The Boss has fixed strength for every challenger: no retry-loss balancing, Full Moon, pity, player-specific, or hidden dynamic difficulty.
 
 ## 🛠️ Tech Stack
 

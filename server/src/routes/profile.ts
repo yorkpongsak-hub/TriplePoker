@@ -13,6 +13,49 @@ const VALID_TIERS = ['initiate', 'adept', 'mastermind', 'highNoble', 'grandmaste
 
 export async function profileRoutes(app: FastifyInstance) {
 
+  // บันทึกเวลาล่าสุดทุกครั้งที่ผู้เล่นเปิดหน้า Profile โดยยืนยันตัวตนและใช้เวลาจากฝั่ง Server
+  app.post('/profile/touch-last-login', async (request, reply) => {
+    const token = request.headers.authorization?.replace('Bearer ', '')
+    if (!token) return reply.status(401).send({ error: 'Unauthorized' })
+
+    const { data: authData, error: authError } = await supabase.auth.getUser(token)
+    if (authError || !authData.user) return reply.status(401).send({ error: 'Invalid token' })
+
+    const lastLoginAt = new Date().toISOString()
+    const { data: updated, error: updateError } = await supabaseAdmin
+      .from('users')
+      .update({ last_login: lastLoginAt })
+      .eq('user_id', authData.user.id)
+      .select('last_login')
+      .maybeSingle()
+
+    if (updateError) return reply.status(500).send({ error: 'DB_ERROR' })
+    if (!updated) return reply.status(404).send({ error: 'USER_NOT_FOUND' })
+    return reply.send({ success: true, lastLoginAt: updated.last_login })
+  })
+
+  app.post<{ Body: { path?: string } }>('/profile/beyond-path', async (request, reply) => {
+    const token = request.headers.authorization?.replace('Bearer ', '')
+    if (!token) return reply.status(401).send({ error: 'Unauthorized' })
+    const { data: authData, error: authError } = await supabase.auth.getUser(token)
+    if (authError || !authData.user) return reply.status(401).send({ error: 'Invalid token' })
+    const path = request.body?.path
+    if (!path || !['CAELUM', 'SOREN', 'MONARCH'].includes(path)) {
+      return reply.status(400).send({ error: 'INVALID_PATH' })
+    }
+    const { data: user, error: readError } = await supabaseAdmin
+      .from('users').select('tier_unlocked_max, beyond_path').eq('user_id', authData.user.id).single()
+    if (readError || !user) return reply.status(404).send({ error: 'USER_NOT_FOUND' })
+    if (user.tier_unlocked_max !== 'grandmaster') return reply.status(403).send({ error: 'TIER_S_REQUIRED' })
+    if (user.beyond_path) return reply.status(409).send({ error: 'PATH_ALREADY_CHOSEN', path: user.beyond_path })
+    const { data: updated, error: updateError } = await supabaseAdmin
+      .from('users').update({ beyond_path: path }).eq('user_id', authData.user.id).is('beyond_path', null)
+      .select('beyond_path').maybeSingle()
+    if (updateError) return reply.status(500).send({ error: 'DB_ERROR' })
+    if (!updated) return reply.status(409).send({ error: 'PATH_ALREADY_CHOSEN' })
+    return reply.send({ success: true, path: updated.beyond_path })
+  })
+
   app.get('/profile/table-skins', async (request, reply) => {
     const token = request.headers.authorization?.replace('Bearer ', '')
     if (!token) return reply.status(401).send({ error: 'Unauthorized' })
@@ -31,7 +74,7 @@ export async function profileRoutes(app: FastifyInstance) {
     const { data: authData, error: authError } = await supabase.auth.getUser(token)
     if (authError || !authData.user) return reply.status(401).send({ error: 'Invalid token' })
     const skinId = request.body?.skinId
-    if (!Number.isInteger(skinId) || skinId! < 1 || skinId! > 4) {
+    if (!Number.isInteger(skinId) || skinId! < 0 || skinId! > 4) {
       return reply.status(400).send({ error: 'INVALID_SKIN' })
     }
     try {

@@ -1,5 +1,5 @@
 import { ArenaConnectionManager } from '../../src/arena/connection/arenaConnectionManager'
-import { buildArenaBotAction } from '../../src/arena/connection/arenaBotTakeover'
+import { buildArenaBotAction, takeoverArrangement } from '../../src/arena/connection/arenaBotTakeover'
 import { ArenaArrangement, bestArenaArrangement } from '../../src/arena/arrangement/arenaArrangement'
 import { ArenaMatchEngine, ArenaMatchSnapshot } from '../../src/arena/match/arenaMatchEngine'
 import { arenaCardKey, ArenaCard, createSeededRandom } from '../../src/arena/cards/arenaDeck'
@@ -78,13 +78,23 @@ describe('Gate 7 - disconnect lifecycle', () => {
     expect(manager.controllerFor('p1')).toBe('HUMAN')
   })
 
-  test('ยังไม่กลับก่อน Game ถัดไป Bot ถูกล็อกจนจบ Match', () => {
+  test('กลับมาใน Game ถัดไปยึดการเล่นคืนได้ ไม่ล็อก Bot จนจบ Match', () => {
     const manager = new ArenaConnectionManager(['p1'])
     manager.disconnect('p1', 0, snapshot())
     manager.observe(8_000, snapshot())
     manager.observe(20_000, snapshot({ gameNumber: 2, phase: 'ARRANGE_1' }))
-    expect(manager.reconnect('p1', 21_000, snapshot({ gameNumber: 2 }))).toBe('BOT_FOR_MATCH')
-    manager.observe(22_000, snapshot({ gameNumber: 3, phase: 'MATCH_RESULT', completed: true }))
+    expect(manager.reconnect('p1', 21_000, snapshot({ gameNumber: 2 }))).toBe('CONNECTED')
+    expect(manager.controllerFor('p1')).toBe('HUMAN')
+  })
+
+  test('later-game reconnect waits only if Bot committed in the current phase', () => {
+    const manager = new ArenaConnectionManager(['p1'])
+    manager.disconnect('p1', 0, snapshot())
+    manager.observe(8_000, snapshot())
+    const current = snapshot({ gameNumber: 2, phase: 'ARRANGE_1' })
+    manager.recordBotAction('p1', current, 'bot-game-2-action')
+    expect(manager.reconnect('p1', 21_000, current)).toBe('BOT_ACTIVE')
+    manager.observe(21_001, snapshot({ gameNumber: 2, phase: 'AUCTION_FACE_UP' }))
     expect(manager.controllerFor('p1')).toBe('HUMAN')
   })
 
@@ -100,6 +110,23 @@ describe('Gate 7 - disconnect lifecycle', () => {
 })
 
 describe('Gate 7 - Bot action bridge', () => {
+  test('human takeover preserves the saved layout and appends a new auction card without optimizing', () => {
+    const saved: ArenaArrangement = {
+      pile1: ['2c', '3c', '4c'],
+      pile2: ['5d', '6d', '7d'],
+      pile3: ['8h', '9h', '10h', 'jh', 'qh'],
+    }
+    expect(takeoverArrangement([...saved.pile1, ...saved.pile2, ...saved.pile3, 'as'], saved)).toEqual({
+      ...saved,
+      pile3: [...saved.pile3, 'as'],
+    })
+  })
+
+  test('human takeover with no draft uses deal order instead of best-hand search', () => {
+    const held = ['2c', '3c', '4c', '5d', '6d', '7d', '8h', '9h', '10h', 'jh', 'qh']
+    expect(takeoverArrangement(held)).toEqual({ pile1: held.slice(0, 3), pile2: held.slice(3, 6), pile3: held.slice(6) })
+  })
+
   test('ใช้ arrangement ล่าสุดและ default Joker Wild Pile 3 / GF Fold', () => {
     expect(buildArenaBotAction(snapshot(), 'p1', { arrangement: dummyArrangement })).toMatchObject({
       type: 'ARRANGE_1', actorId: 'p1', ...dummyArrangement,
@@ -117,21 +144,22 @@ describe('Gate 7 - Bot action bridge', () => {
     for (const actorId of engine.snapshot().pendingActorIds) {
       engine.submit({ type: 'BUY_IN_RESERVED', actionId: `reserve-${actorId}`, actorId }, 1)
     }
+    engine.tick(4_001)
     const manager = new ArenaConnectionManager(['p1', 'p2', 'p3'])
     const before = engine.snapshot()
-    manager.disconnect('p1', 100, before)
-    manager.observe(8_100, engine.snapshot())
+    manager.disconnect('p1', 4_100, before)
+    manager.observe(12_100, engine.snapshot())
     const botAction = buildArenaBotAction(engine.snapshot(), 'p1', { arrangement: arrangementFor(engine, 'p1') })
-    engine.submit(botAction, 8_101)
+    engine.submit(botAction, 12_101)
     manager.recordBotAction('p1', before, botAction.actionId)
-    expect(manager.reconnect('p1', 9_000, before)).toBe('BOT_ACTIVE')
+    expect(manager.reconnect('p1', 13_000, before)).toBe('BOT_ACTIVE')
 
     for (const actorId of engine.snapshot().pendingActorIds) {
-      engine.submit({ type: 'ARRANGE_1', actionId: `arrange-${actorId}`, actorId, ...arrangementFor(engine, actorId) }, 9_001)
+      engine.submit({ type: 'ARRANGE_1', actionId: `arrange-${actorId}`, actorId, ...arrangementFor(engine, actorId) }, 13_001)
     }
-    manager.observe(9_002, engine.snapshot())
+    manager.observe(13_002, engine.snapshot())
     expect(engine.snapshot().phase).toBe('AUCTION_FACE_UP')
     expect(manager.controllerFor('p1')).toBe('HUMAN')
-    expect(before.deadlineAt).toBe(45_001)
+    expect(before.deadlineAt).toBe(49_001)
   })
 })

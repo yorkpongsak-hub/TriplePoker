@@ -15,6 +15,13 @@
       "cwd": "client",
       "port": 8081,
       "autoPort": true
+    },
+    {
+      "name": "client-web-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web", "--port", "8090"],
+      "cwd": "client",
+      "port": 8090
     }
   ]
 }

@@ -30,14 +30,31 @@ export function createArenaDeck(): ArenaCard[] {
 }
 
 export function shuffleArenaDeck(deck: readonly ArenaCard[], random: ArenaRandom = Math.random): ArenaCard[] {
-  const shuffled = [...deck]
+  if (deck.length !== 53 || deck.filter(card => card.kind === 'JOKER').length !== 1) {
+    throw new Error('ARENA_DECK_MUST_CONTAIN_52_STANDARD_CARDS_AND_ONE_JOKER')
+  }
+  const shuffled = deck.filter((card): card is ArenaStandardCard => card.kind === 'STANDARD')
   for (let i = shuffled.length - 1; i > 0; i--) {
     const roll = random()
     if (roll < 0 || roll >= 1) throw new Error('ARENA_RANDOM_OUT_OF_RANGE')
     const j = Math.floor(roll * (i + 1))
     ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
   }
-  return shuffled
+
+  // Joker is never mixed into the 52-card deal. Take the final two shuffled
+  // standard cards and shuffle only those three cards into the two blind
+  // auction slots and Pile 3's hidden second community slot.
+  const hiddenFinal: ArenaCard[] = [shuffled[50], shuffled[51], deck.find(card => card.kind === 'JOKER')!]
+  for (let i = hiddenFinal.length - 1; i > 0; i--) {
+    const roll = random()
+    if (roll < 0 || roll >= 1) throw new Error('ARENA_RANDOM_OUT_OF_RANGE')
+    const j = Math.floor(roll * (i + 1))
+    ;[hiddenFinal[i], hiddenFinal[j]] = [hiddenFinal[j], hiddenFinal[i]]
+  }
+
+  // Preserve dealArenaCards' established positional contract:
+  // 0..48 hands/open community, 49 hidden P3, 50 face-up auction, 51..52 blind.
+  return [...shuffled.slice(0, 49), hiddenFinal[0], shuffled[49], hiddenFinal[1], hiddenFinal[2]]
 }
 
 export function dealArenaCards(deck: readonly ArenaCard[]): ArenaDeal {

@@ -30,7 +30,8 @@ export function useTableSkins() {
   useEffect(() => { reload() }, [reload])
 
   const selectSkin = useCallback(async (skinId: number) => {
-    if (!token || !unlockedSkins.includes(skinId)) return false
+    // Skin 0 is the built-in table and is always selectable by a verified VIP.
+    if (!token || !isVip || (skinId !== 0 && !unlockedSkins.includes(skinId))) return false
     const res = await fetch(`${SERVER_URL}/profile/table-skins/select`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -41,7 +42,7 @@ export function useTableSkins() {
     setActiveSkin(data.activeSkin)
     setUnlockedSkins(data.unlockedSkins ?? unlockedSkins)
     return true
-  }, [token, unlockedSkins])
+  }, [token, isVip, unlockedSkins])
 
   return { unlockedSkins, activeSkin, loading, selectSkin, reload }
 }

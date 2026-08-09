@@ -8,6 +8,7 @@
 // ============================================================
 
 import { Server, Socket } from "socket.io";
+import { SpectatorService } from '../spectator/spectatorService';
 import { dealCards, validateDeal } from "../game/cardEngine";
 import { startMatch, submitArrangement, submitArrangementRound2, resolveContinue, submitAuctionBid, submitDiscard, submitGrandFinaleAction, settleAndEndSoloMatch } from "../game/gameLoop";
 import { startMultiplayerMatch, submitMultiArrangement, markPlayerAFK, resendRoundStartToPlayer, settleAndEndMultiMatch, requestAutoSort } from "../game/gameLoop";
@@ -22,13 +23,13 @@ import {
   buildMonarchRoundSnapshot, submitMonarchArrangement, updateMonarchArrangementDraft, submitMonarchGrandFinaleAction,
   settleAndEndMonarchMatch, clearMonarchDisconnectState, startMonarchArrangementTimer,
 } from "../game/monarchEngine";
-import { supabaseAdmin } from "../config/supabase";
+import { supabase, supabaseAdmin } from "../config/supabase";
 import { TIER_ORDER } from "../game/progressionGate";
 import { registerLobbySocket } from "./lobbySocket";
 import { createTableWithId, setSeat, deleteTable } from "../game/tableRegistry";
 import { createAdeptTable, joinAdeptTable, getTimedOutAdeptTables } from "../game/tableRegistry";
 import {
-  findOrCreateRoomAndJoin, createPrivateRoom, joinRoomLocked, getRoom as getRoomFromRegistry,
+  findOrCreateRoomAndJoin, createNewPublicRoomAndJoin, createPrivateRoom, joinRoomLocked, joinPrivateRoomByPin, isValidRoomPin, toPublicRoom, getRoom as getRoomFromRegistry,
   fillRemainingWithAI, getTimedOutRooms, markInProgress, finalizeBossSeat,
   getRoomsNeedingTimeoutChoice, markAwaitingTimeoutChoice, extendRoomWait,
   getExpiredExtendedRooms, deleteRoomCompletely, fillWithMinion, humanCount,
@@ -37,6 +38,7 @@ import {
   type Tier as RoomTier, type GameRoom,
 } from "../game/roomRegistry";
 import { broadcastTableUpdate } from "./lobbySocket";
+import { registerVipPlusSocket } from './vipPlusSocket';
 
 // แปลง card key string (เช่น "10s", "jh") → Card object — ใช้ร่วมกันทุก handler ที่รับไพ่จาก client
 function toCards(keys: string[]) {
@@ -91,9 +93,22 @@ function clearMatchmakingSocketTracking(roomId: string): void {
 // roomRegistry.joinRoom()) — ห้าม finalizeBossSeat() ซ้ำตรงนี้ เพราะจะ re-roll ทับผลที่ล็อกไว้แล้ว
 // (pity ก็จะผูกกับคนละคนด้วย เพราะ finalizeBossSeat ใช้ human ทั้ง 3 คน ไม่ใช่แค่คนแรก) — เรียกเฉพาะ
 // private room เท่านั้น (ยังใช้ placeholder ตอนสร้างห้อง แล้วมา roll จริงตรงนี้เหมือนเดิมทุกอย่าง)
-async function finalizeAndStartRoom(io: Server, room: GameRoom): Promise<void> {
+async function finalizeAndStartRoom(io: Server, room: GameRoom, spectatorService?: SpectatorService): Promise<void> {
   const finalRoom = (room.tier === 'highNoble' && room.isPrivate) ? await finalizeBossSeat(room) : room;
   await markInProgress(finalRoom.roomId);
+
+  if (finalRoom.liveMode === 'LIVE' && spectatorService) {
+    const boss = finalRoom.seats.find(seat => seat.isBoss)
+    spectatorService.start(finalRoom.roomId, boss?.name)
+    spectatorService.publish(finalRoom.roomId, { type: 'BOSS_REVEALED', bossId: boss?.aiConfigId ?? (boss?.isMonarch ? 'monarch' : 'boss'), bossName: boss?.name ?? 'High Noble Boss' })
+    spectatorService.saveSnapshot(finalRoom.roomId, {
+      tableId: finalRoom.roomId, snapshotAt: Date.now(), tierId: 'A_PLUS',
+      boss: { id: boss?.aiConfigId ?? (boss?.isMonarch ? 'monarch' : 'boss'), name: boss?.name ?? 'High Noble Boss' },
+      players: finalRoom.seats.map((seat, index) => ({ seat: index, displayName: seat.name, avatarUrl: seat.avatarUrl, isAI: seat.type === 'ai' })),
+      round: 0, totalRounds: 5, publicCenterCards: [], publicPiles: [], publicPot: { amount: 0 }, matchStatus: 'BOSS_REVEAL',
+    })
+    io.emit('spectator:tables', spectatorService.list('A_PLUS'))
+  }
 
   if (finalRoom.tier === 'adept') {
     const result = await startMultiplayerMatch(io, finalRoom.roomId, finalRoom.seats, 'adept');
@@ -107,9 +122,15 @@ async function finalizeAndStartRoom(io: Server, room: GameRoom): Promise<void> {
     clearMatchmakingSocketTracking(finalRoom.roomId);
     io.to(finalRoom.roomId).emit("room_ready", { roomId: finalRoom.roomId, seats: finalRoom.seats });
   } else if (finalRoom.tier === 'highNoble') {
+    const result = await startHighNobleMultiMatch(io, finalRoom.roomId, finalRoom.seats);
+    if (!result.ok) {
+      io.to(finalRoom.roomId).emit("room_error", { code: result.reason, message: result.reason });
+      clearMatchmakingSocketTracking(finalRoom.roomId);
+      await deleteRoomCompletely(finalRoom.roomId);
+      return;
+    }
     clearMatchmakingSocketTracking(finalRoom.roomId);
     io.to(finalRoom.roomId).emit("room_ready", { roomId: finalRoom.roomId, seats: finalRoom.seats });
-    await startHighNobleMultiMatch(io, finalRoom.roomId, finalRoom.seats);
   }
 }
 
@@ -117,7 +138,7 @@ async function finalizeAndStartRoom(io: Server, room: GameRoom): Promise<void> {
 // Main Socket Handler — register ที่ server/index.ts
 // ============================================================
 
-export function registerGameSocket(io: Server): void {
+export function registerGameSocket(io: Server, spectatorService?: SpectatorService): void {
 
   // Patch 11: เช็คโต๊ะ Adept ที่หมดเวลา 3 นาทียังไม่ครบ Human ทุก 10 วิ
   setInterval(() => {
@@ -245,7 +266,7 @@ export function registerGameSocket(io: Server): void {
             message: 'Not enough players — this tier requires at least 2 human players.',
           });
         } else if (result.action === 'ai_filled' && result.room.status === 'full') {
-          await finalizeAndStartRoom(io, result.room);
+          await finalizeAndStartRoom(io, result.room, spectatorService);
         }
         // 'noop' — มี join แทรกเข้ามาระหว่าง scan กับตอนนี้พอดี ไม่ต้องทำอะไร
       } catch (err) {
@@ -258,6 +279,7 @@ export function registerGameSocket(io: Server): void {
 
     // Patch 03: ผูก Lobby realtime (subscribe/unsubscribe ต่อ Tier)
     registerLobbySocket(io, socket);
+    registerVipPlusSocket(io, socket);
 
     // ──────────────────────────────────────────────────────────
     // EVENT: player_join_room
@@ -559,16 +581,25 @@ export function registerGameSocket(io: Server): void {
     // Auto-Match: หาห้อง public ที่เปิดอยู่ก่อน ถ้าไม่มีสร้างใหม่
     socket.on("room_auto_match", async (data: {
       tier: RoomTier; userId: string; userName: string; avatarUrl?: string;
+      liveMode?: 'STANDARD' | 'LIVE'; allowLiveTables?: boolean; pin?: string; forceNew?: boolean;
+      accessToken?: string | null;
     }) => {
       const { tier, userId, userName, avatarUrl } = data;
       try {
+        if (data.forceNew || data.liveMode === 'LIVE' || data.pin !== undefined) {
+          const { data: authenticated, error: authError } = await supabase.auth.getUser(data.accessToken ?? '')
+          if (authError || authenticated.user?.id !== userId) {
+            socket.emit('room_error', { code: 'UNAUTHORIZED', message: 'Your session could not be verified. Please sign in again.' })
+            return
+          }
+        }
         // Progression Gate enforcement (Economy Progression Spec v2.0 §9 — Server Authority):
         // อ่าน tier_unlocked_max ตรงๆ (ceiling model เดียวกับ tierUnlockService.ts) ไม่คำนวณสดจาก
         // token_balance ตรงนี้ — กัน balance โตเร็วกว่า Time/Skill Gate แล้วลัดคิวเข้าก่อนเวลา
         // (client lobby.tsx ยังคง lock icon จาก token อย่างเดียวไว้เป็นแค่ preview ก่อนกดเข้าคิวจริง)
         const { data: userRow, error: userErr } = await supabaseAdmin
           .from('users')
-          .select('tier_unlocked_max, display_name, avatar_url')
+          .select('tier_unlocked_max, display_name, avatar_url, vip_status')
           .eq('user_id', userId)
           .single();
         if (userErr || !userRow) {
@@ -586,11 +617,33 @@ export function registerGameSocket(io: Server): void {
           return;
         }
 
+        const wantsLive = data.liveMode === 'LIVE'
+        const isVip = Boolean(userRow.vip_status && userRow.vip_status !== 'none')
+        if (data.forceNew && !isVip) {
+          socket.emit('room_error', { code: 'VIP_REQUIRED', message: 'VIP membership is required to open a dedicated table.' })
+          return
+        }
+        if (wantsLive && (tier !== 'highNoble' || !isVip)) {
+          socket.emit('room_error', { code: tier !== 'highNoble' ? 'LIVE_NOT_ALLOWED' : 'VIP_REQUIRED', message: tier !== 'highNoble' ? 'Live Tables are available only in High Noble.' : 'VIP membership is required to open a Live Table.' })
+          return
+        }
+        // Opted-in players enter the oldest LIVE lane; everyone else stays in STANDARD.
+        const liveMode: 'STANDARD' | 'LIVE' = wantsLive || (tier === 'highNoble' && data.allowLiveTables) ? 'LIVE' : 'STANDARD'
+
+        if (data.pin !== undefined && !isValidRoomPin(data.pin)) {
+          socket.emit('room_error', { code: 'INVALID_PIN', message: 'PIN must contain exactly 4 digits.' })
+          return
+        }
+        if (data.pin !== undefined && !isVip) {
+          socket.emit('room_error', { code: 'VIP_REQUIRED', message: 'VIP membership is required to join a VIP table.' })
+          return
+        }
+
         // Sprint 2 (Boss Monarch 1v1) → Batch 1 Task 2/3 (Monarch v2.2): เช็คก่อนเข้า flow ปกติเลย —
         // เส้นทางเดียวที่จะสุ่มเจอ Monarch ได้ (rollHighNobleBoss() ไม่มีทางคืน Monarch อีกแล้ว) ถ้าติด
         // Monarch ดึง human คนนี้ออกไปโต๊ะ solo ใหม่ทันที ไม่เข้า findOrCreateRoomAndJoin/joinRoom ของ
         // High Noble ปกติเลย — pity ผูกกับ userId ของคนนี้เอง (Batch 1 Task 3)
-        if (tier === 'highNoble' && await rollMonarchEntry(userId)) {
+        if (tier === 'highNoble' && !data.pin && !data.forceNew && await rollMonarchEntry(userId)) {
           const monarchRoomId = `monarch_${userId}_${Date.now()}`;
           const state = await startMonarchMatch(
             io, monarchRoomId, userId,
@@ -598,6 +651,20 @@ export function registerGameSocket(io: Server): void {
             userRow.avatar_url ?? avatarUrl,
           );
           if (state) {
+            if (wantsLive && spectatorService) {
+              // มติลุงเยาะ — สปอยล์ชื่อ Monarch ก่อนคนดู (spectator) ได้เจอบอสจริงเองไม่ได้ ต้องใช้ "Hidden Boss"
+              // แทนทุกจุดที่ broadcast ออกไปนอกโต๊ะ (bossId/id ภายในยังเป็น 'monarch' เดิม กันไม่ให้ logic
+              // จับคู่พัง เปลี่ยนแค่ค่าที่แสดงผลจริง)
+              spectatorService.create({ tableId: monarchRoomId, tierId: 'A_PLUS', tierName: 'High Noble', enabledByUserId: userId })
+              spectatorService.start(monarchRoomId, 'Hidden Boss')
+              spectatorService.publish(monarchRoomId, { type: 'BOSS_REVEALED', bossId: 'monarch', bossName: 'Hidden Boss' })
+              spectatorService.saveSnapshot(monarchRoomId, {
+                tableId: monarchRoomId, snapshotAt: Date.now(), tierId: 'A_PLUS', boss: { id: 'monarch', name: 'Hidden Boss' },
+                players: [{ seat: 0, displayName: userRow.display_name ?? userName }, { seat: 1, displayName: 'Hidden Boss', isAI: true }],
+                round: 0, totalRounds: 5, publicCenterCards: [], publicPiles: [], publicPot: { amount: 0 }, matchStatus: 'BOSS_REVEAL',
+              })
+              io.emit('spectator:tables', spectatorService.list('A_PLUS'))
+            }
             startMonarchRound(io, monarchRoomId);
             // ไม่ join ห้อง/emit round data จาก socket นี้ (matchmaking socket เดิม กำลังจะ
             // disconnect ตอน client navigate) — client ต่อ socket ใหม่แล้ว pull เอาเองผ่าน
@@ -611,27 +678,34 @@ export function registerGameSocket(io: Server): void {
           return;
         }
 
-        const result = await findOrCreateRoomAndJoin(tier, userId, userName, avatarUrl);
+        const result = data.pin
+          ? await joinPrivateRoomByPin(tier, data.pin, userId, userName, avatarUrl)
+          : data.forceNew
+            ? await createNewPublicRoomAndJoin(tier, userId, userName, avatarUrl, liveMode, userId)
+            : await findOrCreateRoomAndJoin(tier, userId, userName, avatarUrl, liveMode, wantsLive ? userId : undefined);
         if (!result.ok || !result.room) {
           // Patch (2026-07-17): แก้ข้อความเป็นภาษาอังกฤษ (canon บังคับ UI/error message ทั้งหมดเป็น
           // อังกฤษ — เจอเป็นภาษาไทยค้างอยู่ระหว่างแก้ A2)
-          socket.emit("room_error", { message: "Could not join the table. Please try again." });
+          socket.emit("room_error", { code: data.pin ? 'PRIVATE_ROOM_NOT_FOUND_OR_PIN_INVALID' : 'ROOM_JOIN_FAILED', message: data.pin ? 'Private table not found or PIN is incorrect.' : 'Could not join the table. Please try again.' });
           return;
         }
         socket.join(result.room.roomId);
         socket.join(userId); // Patch Multiplayer: private card delivery ต่อ user
         trackMatchmakingSocket(socket.id, { userId, roomId: result.room.roomId, tier });
-        socket.emit("room_matched", { room: result.room, seatIndex: result.seatIndex });
-        io.to(result.room.roomId).emit("room_status", { room: result.room });
+        socket.emit("room_matched", { room: toPublicRoom(result.room), seatIndex: result.seatIndex });
+        io.to(result.room.roomId).emit("room_status", { room: toPublicRoom(result.room) });
 
         // Server Activity feed: broadcast เฉพาะห้องที่เพิ่งถูกสร้างจริง (isNew) — ไม่ broadcast
         // ตอนคนที่ 2/3 join ห้องเดิมที่รออยู่แล้ว (ดู findOrCreateRoom ใน roomRegistry.ts)
         if (result.isNew) {
+          if (liveMode === 'LIVE' && spectatorService) {
+            result.room.broadcastId = spectatorService.create({ tableId: result.room.roomId, tierId: 'A_PLUS', tierName: 'High Noble', enabledByUserId: userId })
+          }
           io.emit("server_activity", { kind: "table_open", tier, roomId: result.room.roomId, timestamp: Date.now() });
         }
 
         if (result.room.status === 'full') {
-          await finalizeAndStartRoom(io, result.room);
+          await finalizeAndStartRoom(io, result.room, spectatorService);
         }
       } catch (err: any) {
         socket.emit("room_error", { message: err.message ?? "Something went wrong. Please try again." });
@@ -696,18 +770,35 @@ export function registerGameSocket(io: Server): void {
       }
     });
 
-    // สร้างห้อง Private (VIP+PIN หรือ Free=public no-pin)
+    // Create a PIN-protected room. VIP authority is read from DB, never client flags.
     socket.on("room_create_private", async (data: {
-      tier: RoomTier; userId: string; userName: string; isVip: boolean; pin?: string;
+      tier: RoomTier; userId: string; userName: string; pin?: string; accessToken?: string | null;
     }) => {
-      const { tier, userId, userName, isVip, pin } = data;
+      const { tier, userId, userName, pin } = data;
       try {
-        const room = await createPrivateRoom(tier, userId, userName, isVip, pin);
+        if (!isValidRoomPin(pin)) {
+          socket.emit('room_error', { code: 'INVALID_PIN', message: 'PIN must contain exactly 4 digits.' })
+          return
+        }
+        const { data: authenticated, error: authError } = await supabase.auth.getUser(data.accessToken ?? '')
+        if (authError || authenticated.user?.id !== userId) {
+          socket.emit('room_error', { code: 'UNAUTHORIZED', message: 'Your session could not be verified. Please sign in again.' })
+          return
+        }
+        const { data: user, error } = await supabaseAdmin.from('users').select('vip_status, display_name').eq('user_id', userId).single()
+        const isVip = !error && Boolean(user?.vip_status && user.vip_status !== 'none')
+        if (!isVip) {
+          socket.emit('room_error', { code: 'VIP_REQUIRED', message: 'VIP membership is required to open a private table.' })
+          return
+        }
+        const room = await createPrivateRoom(tier, userId, user?.display_name ?? userName, true, pin);
         socket.join(room.roomId);
-        socket.emit("room_created", { room });
-        io.to(`lobby:${tier}`).emit("lobby:tableUpdate", { tier, room });
+        socket.join(userId)
+        trackMatchmakingSocket(socket.id, { userId, roomId: room.roomId, tier })
+        socket.emit("room_created", { room: toPublicRoom(room) });
+        io.to(room.roomId).emit("room_status", { room: toPublicRoom(room) })
         // Server Activity feed: createPrivateRoom() สร้างห้องใหม่เสมอ ไม่มี branch เจอห้องเดิม
-        io.emit("server_activity", { kind: "table_open", tier, roomId: room.roomId, timestamp: Date.now() });
+        io.emit("server_activity", { kind: "private_table_open", tier, roomId: room.roomId, timestamp: Date.now() });
       } catch (err: any) {
         socket.emit("room_error", { message: err.message ?? "สร้างห้องไม่สำเร็จ" });
       }
@@ -715,19 +806,29 @@ export function registerGameSocket(io: Server): void {
 
     // เข้าห้อง Private ด้วย roomId (+ PIN ถ้ามี)
     socket.on("room_join_private", async (data: {
-      roomId: string; userId: string; userName: string; pin?: string; tier?: RoomTier;
+      roomId: string; userId: string; userName: string; pin?: string; tier?: RoomTier; accessToken?: string | null;
     }) => {
       const { roomId, userId, userName, pin, tier } = data;
+      const { data: authenticated, error: authError } = await supabase.auth.getUser(data.accessToken ?? '')
+      if (authError || authenticated.user?.id !== userId) {
+        socket.emit('room_join_result', { ok: false, reason: 'UNAUTHORIZED' })
+        return
+      }
+      const { data: user, error: userError } = await supabaseAdmin.from('users').select('vip_status').eq('user_id', userId).single()
+      if (userError || !user?.vip_status || user.vip_status === 'none') {
+        socket.emit('room_join_result', { ok: false, reason: 'VIP_REQUIRED' })
+        return
+      }
       const result = await joinRoomLocked(roomId, userId, userName, pin);
-      socket.emit("room_join_result", result);
+      socket.emit("room_join_result", result.ok && result.room ? { ...result, room: toPublicRoom(result.room) } : result);
       if (result.ok && result.room) {
         socket.join(roomId);
         socket.join(userId); // Patch Multiplayer: private card delivery ต่อ user
         trackMatchmakingSocket(socket.id, { userId, roomId, tier: tier ?? result.room.tier });
-        io.to(roomId).emit("room_status", { room: result.room });
+        io.to(roomId).emit("room_status", { room: toPublicRoom(result.room) });
 
         if (result.room.status === 'full') {
-          await finalizeAndStartRoom(io, result.room);
+          await finalizeAndStartRoom(io, result.room, spectatorService);
         }
       }
     });
@@ -735,7 +836,7 @@ export function registerGameSocket(io: Server): void {
     // เช็คสถานะห้องปัจจุบัน (สำหรับ waiting room UI polling/reconnect)
     socket.on("room_get_status", async (data: { roomId: string }) => {
       const room = await getRoomFromRegistry(data.roomId);
-      socket.emit("room_status", { room });
+      socket.emit("room_status", { room: room ? toPublicRoom(room) : null });
     });
 
     // Waiting Timeout Dialog (§4.4/§6.1): ผู้เล่นตอบ dialog

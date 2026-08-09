@@ -133,10 +133,10 @@ const ROOM_ID = 'adept_test_room'
 
 // ที่นั่งจำลองแบบ Adept จริง (Sage เข้ารอ + 2 Human + Bot ตัวที่ 2) — ตรงกับ roomRegistry.ts seat order
 const SEATS = [
-  { type: 'ai' as const, name: 'The Sage', aiConfigId: 'sage' },
+  { type: 'ai' as const, name: 'Veyra', aiConfigId: 'AI_SAGE' },
   { type: 'human' as const, userId: USER_A, name: 'PlayerA', avatarUrl: '🐉' },
   { type: 'human' as const, userId: USER_B, name: 'PlayerB', avatarUrl: '🦊' },
-  { type: 'ai' as const, name: 'The Ghost', aiConfigId: 'ghost' },
+  { type: 'ai' as const, name: 'Kaelith', aiConfigId: 'AI_GHOST' },
 ]
 
 beforeEach(() => {
@@ -150,6 +150,18 @@ beforeEach(() => {
 
 afterEach(() => {
   jest.useRealTimers()
+})
+
+describe('Adept Minion identities', () => {
+  test('shows Minion names while retaining the original AI configs', async () => {
+    const { io } = makeIoMock()
+    await startMultiplayerMatch(io, ROOM_ID, SEATS, 'adept')
+
+    const state: any = getMultiMatchState(ROOM_ID)
+    const bots = state.seatOrder.filter((seat: any) => !seat.isHuman)
+    expect(bots.map((seat: any) => seat.displayName)).toEqual(['Veyra', 'Kaelith'])
+    expect(bots.map((seat: any) => seat.userId)).toEqual(['AI_SAGE', 'AI_GHOST'])
+  })
 })
 
 describe('Adept Grace Period — markPlayerAFK', () => {

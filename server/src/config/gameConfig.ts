@@ -433,19 +433,13 @@ export const gameConfig = {
   // ─── Performance Score (PS) ────────────────────────────────────
   // Active ตั้งแต่ Tier A+ ขึ้นไป (เดิม dormant รอ Arena) — ใช้คัดเลือก "Ascendant Star" ใน Ascendant Tier
   psConfig: {
-    highNobleWin:        5,   // อันดับ 1 ในโต๊ะ High Noble (ชนะ Four Gods)
-    highNobleMonarchWin: 10,  // อันดับ 1 + Boss เป็น Monarch (×2 เสมอ)
-    ascendantWin:        7,
-    ascendantMonarchWin: 14,  // ×2 เสมอ เช่นเดียวกับ A+
-    notWinNonNegative:   2,   // ไม่ชนะ แต่ token สุทธิของเกมนั้นไม่ติดลบ
-    negative:            0,   // token สุทธิติดลบ — ไม่มี PS ติดลบใน Main App
-    monarchMultiplier:   2,   // กฎล็อค: Monarch = x2 ของค่าชนะปกติในระดับตนเสมอ
-    // มติลุงเยาะ 2026-08-08: Grandmaster (Tier S) = ทุกค่าของ High Noble บวก +2 อิสระต่อกัน
-    // (ไม่ใช่ ×2 — highNobleMonarchWin×2=20 แต่ที่นี่คือ 10+2=12 ตั้งใจให้ต่างจากกฎ monarchMultiplier เดิม)
-    grandmasterWin:               7,
-    grandmasterMonarchWin:        12,  // ใช้ทั้ง Monarch และ Soren (บอสหายากของ Arena)
-    grandmasterNotWinNonNegative: 4,
-    grandmasterNegative:          2,
+    // เกณฑ์ใหม่ 2026-08-08: negative / non-negative / defeat boss
+    // Named legendary bosses (Monarch, Soren, Last Boss) add +2 to bossWin.
+    highNoble:  { negative: 0, nonNegative: 1, bossWin: 3 },
+    ascendant:  { negative: 0, nonNegative: 1, bossWin: 3 },
+    grandmaster:{ negative: 0, nonNegative: 2, bossWin: 4 },
+    sovereign:  { negative: 0, nonNegative: 4, bossWin: 6 },
+    legendaryBossBonus: 2,
   },
 
   // ─── XP Rewards (End-of-Match Stats Recording MVP) ────────────

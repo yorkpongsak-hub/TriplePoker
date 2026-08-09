@@ -104,7 +104,7 @@ export default function PlayerProfileScreen() {
             <Text style={s.backTxt}>‹ Back</Text>
           </TouchableOpacity>
           <Text style={s.headerTitle}>PLAYER PROFILE</Text>
-          <View style={{ width: 62 }} />
+          <View style={{ width: 82 }} />
         </View>
 
         <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
@@ -158,7 +158,7 @@ const s = StyleSheet.create({
     paddingTop: 10,
     paddingBottom: 12,
   },
-  backBtn: { ...glassPanel, paddingHorizontal: 12, paddingVertical: 8 },
+  backBtn: { ...glassPanel, width: 82, paddingVertical: 8, alignItems: 'center' },
   backTxt: { color: C.gold, fontSize: 13, fontWeight: '800', ...textOnGlass },
   headerTitle: {
     fontFamily: 'Cinzel_700Bold',

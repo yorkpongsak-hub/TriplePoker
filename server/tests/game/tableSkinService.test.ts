@@ -9,6 +9,10 @@ describe('VIP table skin progression', () => {
     expect(allowedTableSkins('vip', 'initiate')).toEqual([1])
   })
 
+  test('the built-in skin remains separate from progression rewards', () => {
+    expect(allowedTableSkins('vip', 'highNoble')).not.toContain(0)
+  })
+
   test.each([
     ['adept', [1, 2]],
     ['mastermind', [1, 2, 3]],

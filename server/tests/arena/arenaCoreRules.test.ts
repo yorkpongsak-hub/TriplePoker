@@ -27,6 +27,16 @@ describe('Gate 3 - Arena deck 53 cards', () => {
     expect(first).toEqual(second)
     expect(first).not.toEqual(createArenaDeck().map(item => item.id))
   })
+
+  test('Joker อยู่ได้เฉพาะ Blind Auction 2 ใบหรือ Community Pile 3 ใบคว่ำเท่านั้น', () => {
+    for (let seed = 1; seed <= 60; seed++) {
+      const dealt = dealArenaCards(shuffleArenaDeck(createArenaDeck(), createSeededRandom(seed)))
+      expect(dealt.players.flat().some(item => item.kind === 'JOKER')).toBe(false)
+      expect(dealt.auction.faceUp.kind).toBe('STANDARD')
+      expect([...dealt.community.pile1, ...dealt.community.pile2, dealt.community.pile3[0]].some(item => item.kind === 'JOKER')).toBe(false)
+      expect([dealt.community.pile3[1], ...dealt.auction.blind].filter(item => item.kind === 'JOKER')).toHaveLength(1)
+    }
+  })
 })
 
 describe('Gate 3 - Joker rules and Wild evaluator', () => {
@@ -39,7 +49,8 @@ describe('Gate 3 - Joker rules and Wild evaluator', () => {
 
   test('Ante x2 คูณเฉพาะ base ante และต้องมียอดพอ', () => {
     const declaration = declareJoker({ mode: 'ANTE_X2', targetPile: 3, declaredAt: 'now', availableCrest: 12, requiredMatchedAnteCrest: 6 })
-    expect(extraAnteForJoker(declaration, { 1: 3, 2: 3, 3: 6 })).toBe(6)
+    expect(declaration.targetPile).toBe(1)
+    expect(extraAnteForJoker(declaration, { 1: 3, 2: 3, 3: 6 })).toBe(3)
     expect(() => declareJoker({ mode: 'ANTE_X2', targetPile: 3, declaredAt: 'now', availableCrest: 5, requiredMatchedAnteCrest: 6 }))
       .toThrow('INSUFFICIENT_CREST_FOR_ANTE_X2')
     expect(autoLockJoker('timeout')).toEqual({ mode: 'WILD', targetPile: 3, forcedWild: false, declaredAt: 'timeout' })

@@ -55,17 +55,6 @@ export class ArenaConnectionManager {
     if (state.disconnectedAt === null) return this.view(playerId, now)
     const elapsed = now - state.disconnectedAt
 
-    if (state.resumePolicy === 'MATCH_END' || snapshot.gameNumber > state.disconnectedGame) {
-      state.controller = 'BOT'
-      state.resumePolicy = 'MATCH_END'
-      return 'BOT_FOR_MATCH'
-    }
-    if (elapsed >= 30_000) {
-      state.controller = 'BOT'
-      state.resumePolicy = 'NEXT_GAME'
-      state.resumeFromGame = snapshot.gameNumber
-      return 'BOT_UNTIL_NEXT_GAME'
-    }
     const committedHere = state.botCommit?.gameNumber === snapshot.gameNumber && state.botCommit.phase === snapshot.phase
     if (committedHere) {
       state.controller = 'BOT'
@@ -74,6 +63,18 @@ export class ArenaConnectionManager {
       state.resumeFromPhase = snapshot.phase
       return 'BOT_ACTIVE'
     }
+    // A game boundary is already a safe hand-off point. The former policy
+    // promoted this case to BOT_FOR_MATCH and permanently denied reclaim.
+    if (snapshot.gameNumber > state.disconnectedGame) {
+      this.restoreHuman(state)
+      return 'CONNECTED'
+    }
+    if (elapsed >= 30_000) {
+      state.controller = 'BOT'
+      state.resumePolicy = 'NEXT_GAME'
+      state.resumeFromGame = snapshot.gameNumber
+      return 'BOT_UNTIL_NEXT_GAME'
+    }
     this.restoreHuman(state)
     return 'CONNECTED'
   }
@@ -81,10 +82,7 @@ export class ArenaConnectionManager {
   observe(now: number, snapshot: ArenaMatchSnapshot): void {
     for (const state of this.states.values()) {
       if (!state.socketConnected && state.disconnectedAt !== null) {
-        if (snapshot.gameNumber > state.disconnectedGame) {
-          state.controller = 'BOT'
-          state.resumePolicy = 'MATCH_END'
-        } else if (now - state.disconnectedAt >= 8_000 && state.controller !== 'BOT') {
+        if (now - state.disconnectedAt >= 8_000 && state.controller !== 'BOT') {
           state.controller = 'BOT'
           state.botActivatedAt = now
         }

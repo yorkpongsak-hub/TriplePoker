@@ -32,7 +32,7 @@ const C = {
   textDim:     '#7A7A6A',
 }
 
-type LeaderboardType = 'token' | 'ps' | 'winrate'
+type LeaderboardType = 'token' | 'ps' | 'winrate' | 'xp' | 'boss_defeats' | 'all_matrix'
 
 interface LeaderboardEntry {
   rank: number
@@ -46,6 +46,9 @@ const TABS: { key: LeaderboardType; label: string; accent: string }[] = [
   { key: 'token',   label: 'TOKEN',              accent: C.gold },
   { key: 'ps',      label: 'PERFORMANCE SCORE',  accent: C.purple },
   { key: 'winrate', label: 'WIN RATE',           accent: C.green },
+  { key: 'xp', label: 'PLAYER XP', accent: '#60A5FA' },
+  { key: 'boss_defeats', label: 'BOSS DEFEAT', accent: C.red },
+  { key: 'all_matrix', label: 'ALL MATRIX', accent: C.silver },
 ]
 
 function formatValue(type: LeaderboardType, value: number): string {
@@ -56,6 +59,8 @@ function formatValue(type: LeaderboardType, value: number): string {
 function valueColor(type: LeaderboardType): string {
   if (type === 'ps') return C.purple
   if (type === 'winrate') return C.green
+  if (type === 'xp') return '#60A5FA'
+  if (type === 'boss_defeats') return C.red
   return C.gold
 }
 
@@ -152,6 +157,37 @@ export default function StatsScreen() {
     ? lastUpdated.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
     : '—'
 
+  const renderTabRow = (tabs: typeof TABS) => (
+    <View style={s.tabsRow}>
+      {tabs.map(t => {
+        const active = activeTab === t.key
+        return (
+          <TouchableOpacity
+            key={t.key}
+            onPress={() => t.key === 'all_matrix'
+              ? router.push('/(home)/hall-of-fame')
+              : setActiveTab(t.key)}
+            style={[
+              s.tabBtn,
+              active && {
+                borderColor: t.accent,
+                backgroundColor: glassPanelDense.backgroundColor,
+                shadowColor: t.accent,
+                shadowOpacity: 0.7,
+                shadowRadius: 8,
+                shadowOffset: { width: 0, height: 0 },
+                elevation: 6,
+              },
+            ]}
+            activeOpacity={0.8}
+          >
+            <Text style={[s.tabTxt, active && { color: t.accent }]} numberOfLines={1}>{t.label}</Text>
+          </TouchableOpacity>
+        )
+      })}
+    </View>
+  )
+
   return (
     <ThemedBackground isVip={isVip}>
       <View style={s.root}>
@@ -162,40 +198,16 @@ export default function StatsScreen() {
             <Text style={s.backTxt}>‹ Back</Text>
           </TouchableOpacity>
           <View style={{ flex: 1, alignItems: 'center' }}>
-            <Text style={s.headerTitle}>PLAYER STATS</Text>
+            <Text style={s.headerTitle}>RANKING</Text>
             <Text style={s.headerSub}>Last updated: {lastUpdatedLabel}</Text>
           </View>
           {/* spacer เท่าความกว้าง backBtn โดยประมาณ — กัน title เอียงซ้าย */}
-          <View style={{ width: 62 }} />
+          <View style={{ width: 82 }} />
         </View>
 
         {/* ═══════════════ TAB BAR ═══════════════ */}
-        <View style={s.tabsRow}>
-          {TABS.map(t => {
-            const active = activeTab === t.key
-            return (
-              <TouchableOpacity
-                key={t.key}
-                onPress={() => setActiveTab(t.key)}
-                style={[
-                  s.tabBtn,
-                  active && {
-                    borderColor: t.accent,
-                    backgroundColor: glassPanelDense.backgroundColor,
-                    shadowColor: t.accent,
-                    shadowOpacity: 0.7,
-                    shadowRadius: 8,
-                    shadowOffset: { width: 0, height: 0 },
-                    elevation: 6, // Android glow — shadowColor เฉยๆ ไม่พอ
-                  },
-                ]}
-                activeOpacity={0.8}
-              >
-                <Text style={[s.tabTxt, active && { color: t.accent }]} numberOfLines={1}>{t.label}</Text>
-              </TouchableOpacity>
-            )
-          })}
-        </View>
+        {renderTabRow(TABS.slice(0, 3))}
+        {renderTabRow(TABS.slice(3))}
 
         {/* ═══════════════ CONTENT ═══════════════ */}
         <ScrollView
@@ -226,11 +238,7 @@ export default function StatsScreen() {
             ) : entries.length === 0 ? (
               <View style={s.stateBox}>
                 <Text style={s.stateIcon}>📭</Text>
-                <Text style={s.stateTxt}>
-                  {activeTab === 'winrate'
-                    ? 'No players have reached 10 games yet.'
-                    : 'No leaderboard data yet.'}
-                </Text>
+                <Text style={s.stateTxt}>No leaderboard data yet.</Text>
               </View>
             ) : (
               entries.map(entry => (
@@ -259,7 +267,7 @@ const s = StyleSheet.create({
     paddingTop: 10,
     paddingBottom: 12,
   },
-  backBtn: { ...glassPanel, paddingHorizontal: 12, paddingVertical: 8 },
+  backBtn: { ...glassPanel, width: 82, paddingVertical: 8, alignItems: 'center' },
   backTxt: { color: C.gold, fontSize: 13, fontWeight: '800', ...textOnGlass },
   headerTitle: {
     fontFamily: 'Cinzel_700Bold',

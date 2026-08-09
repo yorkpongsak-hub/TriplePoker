@@ -17,6 +17,7 @@
 // ============================================================
 
 import { Server } from 'socket.io'
+import { finishSpectatorBroadcast, publishSpectatorEvent } from '../spectator/spectatorRuntime'
 import { dealCards } from './cardEngine'
 import { evaluateHand, compareHands, handRankLabel, HandResult } from './handEvaluator'
 import { checkFoul, PlayerArrangement, CommunityCards } from './foulChecker'
@@ -147,6 +148,7 @@ export interface HNSeat {
   isHuman: boolean
   name: string
   emoji: string
+  avatarUrl?: string
   personality?: AIPersonality  // เฉพาะ AI seat — สำหรับ Monarch คือบุคลิกที่ล็อคไว้ (client ไม่เห็นค่านี้ เห็นแค่ name="Monarch")
   isMonarch?: boolean          // Monarch Spec v1.3: true เฉพาะที่นั่ง Boss ที่สุ่มโดน Monarch — บุคลิกล็อคครั้งเดียวตอนแจกไพ่ ไม่สลับกลางเกม
   isMinion?: boolean           // LobbyMatchmaking_Spec_v1_0 §6.1: true เฉพาะที่นั่งเติมด้วย Minion (Deadlock "Start Now") — ใช้ greedyArrangement เสมอ
@@ -170,6 +172,7 @@ export interface HNMatchState {
   roundNumber: number
   totalRounds: number
   tokenBalance: Record<string, number>
+  flowPot: [number, number, number]
   buyInAmount: number                    // Escrow Buy-in Spec §2 — เท่ากันทุกคนในแมตช์เดียวกัน
   escrowIds: Record<string, string>      // เฉพาะ human seat — ใช้ settle ตอนจบแมตช์/หลุดกลางเกม
   results: Array<{
@@ -194,6 +197,8 @@ export interface HNMatchState {
   finalPile3?: Record<string, Card[]>
   pendingPile12?: { pile1Winner: string; pile2Winner: string; allArrangements: Record<string, PlayerArrangement>; community: CommunityCards; fouled: Record<string, boolean>; playerIds: string[] }
   grandFinale?: HNGrandFinaleState
+  // Number of played piles already moved from player hands into shared columns.
+  resolvedPileCount?: 0 | 1 | 2 | 3
   // End-of-Match Stats Recording — live tracking ต่อ human seat (userId) ตลอดแมตช์
   bestHandThisMatch?: Record<string, BestHandCandidate>
   tripleSweepThisMatch?: Set<string>
@@ -208,6 +213,71 @@ const hnMatchStates = new Map<string, HNMatchState>()
 
 export function getHNMatchState(roomId: string): HNMatchState | undefined {
   return hnMatchStates.get(roomId)
+}
+
+export interface HNCardZones {
+  stockCount: number
+  communityCount: number
+  auctionCount: number
+  discardCount: number
+  handCounts: Record<string, number>
+  resolvedPileCounts: { pile1: number; pile2: number; pile3: number }
+  totalCards: 52
+}
+
+/** Public, face-agnostic ledger used by every High Noble UI flow. */
+export function buildHNCardZones(state: HNMatchState): HNCardZones {
+  if (!state.cardsMap || !state.community) {
+    return {
+      stockCount: 52, communityCount: 0, auctionCount: 0, discardCount: 0,
+      handCounts: Object.fromEntries(state.seats.map(seat => [seat.id, 0])),
+      resolvedPileCounts: { pile1: 0, pile2: 0, pile3: 0 }, totalCards: 52,
+    }
+  }
+  const cardsMap = state.cardsMap
+  const beforeAuction = state.phase === 'arrangement' || state.phase === 'showdown'
+  const inAuction = state.phase === 'blind_auction' || state.phase === 'auction_done'
+  const resolved = state.resolvedPileCount ?? 0
+  const resolvedPileCounts = {
+    pile1: resolved >= 1 ? state.seats.reduce((n, s) => n + (state.arrangements?.[s.id]?.pile1.length ?? 0), 0) : 0,
+    pile2: resolved >= 2 ? state.seats.reduce((n, s) => n + (state.arrangements?.[s.id]?.pile2.length ?? 0), 0) : 0,
+    pile3: resolved >= 3 ? state.seats.reduce((n, s) => n + (state.arrangements?.[s.id]?.pile3.length ?? 0), 0) : 0,
+  }
+  const handCounts = Object.fromEntries(state.seats.map(seat => {
+    const arr = state.arrangements?.[seat.id]
+    let count = beforeAuction || inAuction
+      ? (cardsMap[seat.id]?.length ?? 0)
+      : arr ? arr.pile1.length + arr.pile2.length + arr.pile3.length : (cardsMap[seat.id]?.length ?? 0)
+    if (arr) {
+      if (resolved >= 1) count -= arr.pile1.length
+      if (resolved >= 2) count -= arr.pile2.length
+      if (resolved >= 3) count -= arr.pile3.length
+    }
+    return [seat.id, Math.max(0, count)]
+  }))
+  const stockCount = beforeAuction ? 2 : 0
+  const auctionCount = inAuction ? 2 : 0
+  const communityCount = 6
+  const visible = stockCount + auctionCount + communityCount
+    + Object.values(handCounts).reduce((a, b) => a + b, 0)
+    + Object.values(resolvedPileCounts).reduce((a, b) => a + b, 0)
+  const discardCount = 52 - visible
+  if (discardCount < 0) throw new Error(`[HN card zones] invalid ledger: ${visible} visible cards`)
+  return { stockCount, communityCount, auctionCount, discardCount, handCounts, resolvedPileCounts, totalCards: 52 }
+}
+
+function emitHNCardZones(io: Server, state: HNMatchState): void {
+  io.to(state.roomId).emit('hn_card_zones', buildHNCardZones(state))
+}
+
+function emitHNTokenFlow(io: Server, state: HNMatchState): void {
+  const stackTotal = Object.values(state.tokenBalance).reduce((sum, value) => sum + value, 0)
+  const potTotal = state.flowPot.reduce((sum, value) => sum + value, 0)
+  const feeRake = state.buyInAmount * state.seats.length - stackTotal - potTotal
+  io.to(state.roomId).emit('token_flow_update', {
+    roomId: state.roomId, tokenBalance: state.tokenBalance, pot: state.flowPot,
+    feeRake, buyIn: state.buyInAmount,
+  })
 }
 
 // ============================================================
@@ -230,7 +300,7 @@ export function buildHNSnapshotForPlayer(state: HNMatchState, userId: string): R
     ? { pile1: state.community.row1.map(cardKey), pile2: state.community.row2.map(cardKey), pile3: state.community.row3.map(cardKey) }
     : null
   const seatsPublic = state.seats.map(s => ({
-    id: s.id, name: s.name, emoji: s.emoji, role: s.role, isHuman: s.isHuman, isVip: s.isVip,
+    id: s.id, name: s.name, emoji: s.emoji, avatarUrl: s.avatarUrl, role: s.role, isHuman: s.isHuman, isVip: s.isVip,
     // personality / isMonarch / isMinion ห้ามส่งเด็ดขาด — ground truth (round_start เดิม) ไม่เคยส่งเช่นกัน
   }))
   const auctionWonCards = state.auctionWonCards
@@ -316,7 +386,11 @@ export function buildHNSnapshotForPlayer(state: HNMatchState, userId: string): R
     auctionWonCards,
     seats: seatsPublic,
     grandFinale,
-    pot: null,             // ยังไม่ wire Token Flow Panel เข้า HNMatchState (pending #7) — ห้ามคำนวณเอง
+    pot: state.flowPot,
+    cardZones: buildHNCardZones(state),
+    feeRake: state.buyInAmount * state.seats.length
+      - Object.values(state.tokenBalance).reduce((sum, value) => sum + value, 0)
+      - state.flowPot.reduce((sum, value) => sum + value, 0),
     timeRemainingMs: null, // state ไม่เก็บ deadline timestamp ไว้เลย (มีแค่ setTimeout handle) — รอ Step 2B/2C
 
     // self-only
@@ -376,7 +450,7 @@ export async function startHighNobleMultiMatch(
   io: Server,
   roomId: string,
   roomSeats: [RoomSeat, RoomSeat, RoomSeat, RoomSeat],
-): Promise<void> {
+): Promise<{ ok: true } | { ok: false; reason: 'INSUFFICIENT_TOKENS' | 'ACTIVE_MATCH_EXISTS' | 'SERVER_ERROR' }> {
   // v1.1 prerequisite: role ต้องผูกกับ rs.isBoss/rs.isMonarch flag ตรงๆ ไม่ใช่ raw array index i อีก
   // ต่อไป (เดิม roles[i] สมมติว่า seat 0 = boss เสมอ — จะพังทันทีถ้า Step 3 ย้าย seat order ของ
   // HighNoble ให้ Human เติมจากหัวแบบ Adept) — หา boss seat จริงจาก flag ก่อน แล้วไล่แจก p4/p1/p2 ให้
@@ -403,7 +477,7 @@ export async function startHighNobleMultiMatch(
     const role: HNSeat['role'] = i === bossIdx ? 'boss' : nonBossRoles[nonBossRoleIdx++]
     if (rs.type === 'human' && rs.userId) {
       const isVip = (vipStatusByUserId[rs.userId] ?? 'none') !== 'none'
-      return { id: rs.userId, role, isHuman: true, name: rs.name, emoji: '👤', isVip }
+      return { id: rs.userId, role, isHuman: true, name: rs.name, emoji: '👤', avatarUrl: rs.avatarUrl, isVip }
     }
     if (role === 'boss') {
       // Batch 1.5 Task 2 (Monarch v2.2 quarantine) — เส้นทางนี้ตายแล้วจริง: rollHighNobleBoss()
@@ -452,8 +526,7 @@ export async function startHighNobleMultiMatch(
     const escrow = await escrowBuyIn(s.id, roomId, 'highNoble')
     if (!escrow.ok) {
       await Promise.all(Object.entries(escrowIds).map(([doneUid, escrowId]) => refundEscrow(doneUid, escrowId, buyInAmount)))
-      io.to(roomId).emit('match_error', { roomId, message: escrow.reason })
-      return
+      return { ok: false, reason: escrow.reason }
     }
     escrowIds[s.id] = escrow.escrowId
     tokenBalance[s.id] = escrow.buyInAmount
@@ -463,17 +536,19 @@ export async function startHighNobleMultiMatch(
   const state: HNMatchState = {
     roomId, seats,
     roundNumber: 1, totalRounds,
-    tokenBalance, buyInAmount, escrowIds,
+    tokenBalance, buyInAmount, escrowIds, flowPot: [0, 0, 0],
     results: [],
     phase: 'waiting',
     submittedArrangement: new Set(),
     submittedAuctionBid: new Set(),
     submittedDiscard: new Set(),
+    resolvedPileCount: 0,
     afkPlayers: {},
   }
   hnMatchStates.set(roomId, state)
 
   await startHNRound(io, roomId)
+  return { ok: true }
 }
 
 function humanSeats(state: HNMatchState): HNSeat[] {
@@ -513,6 +588,7 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
   state.finalPile3 = {}
   state.pendingPile12 = undefined
   state.grandFinale = undefined
+  state.resolvedPileCount = 0
 
   const dealt = dealCards()
   const playerIds = state.seats.map(s => s.id)
@@ -553,7 +629,7 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
   })
 
   const timer = gameConfig.arrangementTimer.highNoble
-  const aiNamesPublic = state.seats.map(s => ({ id: s.id, name: s.name, emoji: s.emoji, role: s.role, isHuman: s.isHuman, isVip: s.isVip }))
+  const aiNamesPublic = state.seats.map(s => ({ id: s.id, name: s.name, emoji: s.emoji, avatarUrl: s.avatarUrl, role: s.role, isHuman: s.isHuman, isVip: s.isVip }))
 
   humanSeats(state).forEach(seat => {
     io.to(seat.id).emit('round_start', {
@@ -570,9 +646,11 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
       seats: aiNamesPublic,
       tokenBalance: state.tokenBalance,
       timer,
+      cardZones: buildHNCardZones(state),
       ...(state.roundNumber === 1 ? { buyInAmount: state.buyInAmount } : {}),
     })
   })
+  publishSpectatorEvent(roomId, { type: 'ROUND_STARTED', round: state.roundNumber, totalRounds: state.totalRounds })
 
   const timeoutId = setTimeout(() => resolveHNArrangementTimeout(io, roomId), timer * 1000)
   ;(state as any)._arrangementTimeoutId = timeoutId
@@ -663,6 +741,7 @@ function startHNBlindAuction(io: Server, roomId: string): void {
   state.phase = 'blind_auction'
   state.submittedAuctionBid = new Set()
   state.auctionBids = {}
+  emitHNCardZones(io, state)
 
   const bidLevels = gameConfig.blindAuction.bidLevels.highNoble
   const decisionMs = gameConfig.blindAuction.decisionTimeMs
@@ -740,7 +819,9 @@ async function resolveHNBlindAuctionTimeout(io: Server, roomId: string): Promise
 
   state.auctionWonCards = auctionWonCards
   state.phase = 'auction_done'
+  emitHNCardZones(io, state)
   io.to(roomId).emit('blind_auction_result', { roomId, results, tokenBalance: state.tokenBalance })
+  emitHNTokenFlow(io, state)
 
   await delay(3000)
   startHNArrangementRound2(io, roomId)
@@ -765,6 +846,7 @@ function startHNArrangementRound2(io: Server, roomId: string): void {
     const config: AIConfig = { id: seat.id, name: seat.name, emoji: seat.emoji, personality: seat.personality! }
     state.arrangements![seat.id] = aiDecideArrangement(config, fullHand, state.community!, state.roundNumber, 'highNoble', 0)
   })
+  emitHNCardZones(io, state)
 
   const r2Timer = gameConfig.arrangementTimer.highNoble
   humanSeats(state).forEach(seat => {
@@ -824,6 +906,7 @@ function startHNDiscardPhase(io: Server, roomId: string): void {
     if (foul.isFoul && foul.reason) state.foulReasons![seat.id] = foul.reason
     state.arrangements![seat.id] = finalArr
   })
+  emitHNCardZones(io, state)
 
   // Patch v1.2 (2026-07-24): ย้ายจาก literal 20000 hardcode มา gameConfig.discardTimer — ค่าเท่าเดิม (20s)
   const discardTimeoutMs = (gameConfig.discardTimer.highNoble ?? 20) * 1000
@@ -868,6 +951,7 @@ export function submitHNDiscard(io: Server, roomId: string, userId: string, keep
 
   state.finalPile3![userId] = newPile3
   state.submittedDiscard.add(userId)
+  emitHNCardZones(io, state)
 
   if (allHumansSubmitted(state, state.submittedDiscard)) {
     if ((state as any)._discardTimeoutId) clearTimeout((state as any)._discardTimeoutId)
@@ -906,12 +990,16 @@ async function resolveHNDiscardComplete(io: Server, roomId: string): Promise<voi
 
   const pile1Winner = resolvePile(1, allArrangements, state.community!, state.foulMap!)
   const hand1 = pile1Winner ? evaluateHand([...allArrangements[pile1Winner].pile1, ...state.community!.row1]) : null
+  state.resolvedPileCount = 1
+  emitHNCardZones(io, state)
   io.to(roomId).emit('pile_reveal', {
     roomId, pileNumber: 1, winner: pile1Winner,
     winnerHandRank: hand1 ? handRankLabel(hand1) : '',
     arrangements: revealWinnerOnly(allArrangements, 1, pile1Winner),
     fouled: state.foulMap, foulReasons: state.foulReasons,
   })
+  publishSpectatorEvent(roomId, { type: 'PILE_REVEALED', pile: 1, publicHands: pile1Winner ? [{ winnerSeat: state.seats.findIndex(s => s.id === pile1Winner), handRank: hand1 ? handRankLabel(hand1) : '' }] : [] })
+  publishSpectatorEvent(roomId, { type: 'PILE_RESULT', pile: 1, winnerSeats: pile1Winner ? [state.seats.findIndex(s => s.id === pile1Winner)] : [] })
   // End-of-Match Stats: เก็บ hand ของ human seat แต่ละคนเอง (ไม่ใช่แค่ผู้ชนะ) ไว้เทียบ best_hands ตอน settle
   humanSeats(state).forEach(seat => {
     if (state.foulMap![seat.id]) return
@@ -922,12 +1010,16 @@ async function resolveHNDiscardComplete(io: Server, roomId: string): Promise<voi
 
   const pile2Winner = resolvePile(2, allArrangements, state.community!, state.foulMap!)
   const hand2 = pile2Winner ? evaluateHand([...allArrangements[pile2Winner].pile2, ...state.community!.row2]) : null
+  state.resolvedPileCount = 2
+  emitHNCardZones(io, state)
   io.to(roomId).emit('pile_reveal', {
     roomId, pileNumber: 2, winner: pile2Winner,
     winnerHandRank: hand2 ? handRankLabel(hand2) : '',
     arrangements: revealWinnerOnly(allArrangements, 2, pile2Winner),
     fouled: state.foulMap, foulReasons: state.foulReasons,
   })
+  publishSpectatorEvent(roomId, { type: 'PILE_REVEALED', pile: 2, publicHands: pile2Winner ? [{ winnerSeat: state.seats.findIndex(s => s.id === pile2Winner), handRank: hand2 ? handRankLabel(hand2) : '' }] : [] })
+  publishSpectatorEvent(roomId, { type: 'PILE_RESULT', pile: 2, winnerSeats: pile2Winner ? [state.seats.findIndex(s => s.id === pile2Winner)] : [] })
   humanSeats(state).forEach(seat => {
     if (state.foulMap![seat.id]) return
     const cards2 = [...allArrangements[seat.id].pile2, ...state.community!.row2]
@@ -1161,6 +1253,8 @@ function applyHNGrandFinaleAction(
     const callAmount = gameConfig.grandFinale.callAmount.highNoble ?? 0
     state.tokenBalance[playerId] = (state.tokenBalance[playerId] ?? 0) - callAmount
     gf.pile3Pot += callAmount
+    state.flowPot[2] += callAmount
+    emitHNTokenFlow(io, state)
     const hand = (state.finalPile3 ?? {})[playerId] ?? []
     const already = gf.revealedCards[playerId] ?? []
     // Human เลือกใบเองได้ (ตรงกับ single-player) — ใช้ถ้าถูกต้อง ไม่งั้น fallback ไป pickHNRevealCard
@@ -1274,7 +1368,11 @@ function finalizeHNGrandFinale(
   allPlayerIds.forEach(id => {
     state.tokenBalance[id] = (state.tokenBalance[id] ?? 0) + (deltas[id] ?? 0)
   })
+  state.flowPot = [0, 0, 0]
+  emitHNTokenFlow(io, state)
 
+  state.resolvedPileCount = 3
+  emitHNCardZones(io, state)
   io.to(roomId).emit('grand_finale_result', {
     roomId, winnerId, burned, pile3Pot,
     winnerRank: null,
@@ -1285,6 +1383,9 @@ function finalizeHNGrandFinale(
     tokenBalance: state.tokenBalance,
     tokenDeltas: deltas,
   })
+  const winnerSeatIndex = winnerId ? state.seats.findIndex(s => s.id === winnerId) : -1
+  publishSpectatorEvent(roomId, { type: 'PILE_RESULT', pile: 3, winnerSeats: winnerSeatIndex >= 0 ? [winnerSeatIndex] : [] })
+  publishSpectatorEvent(roomId, { type: 'SHOWDOWN_RESULTS', results: [{ pile: 1, winnerId: pendingP12?.pile1Winner ?? null }, { pile: 2, winnerId: pendingP12?.pile2Winner ?? null }, { pile: 3, winnerId: winnerId ?? null }] })
 
   const result = { roundNumber: state.roundNumber, pile1Winner: pendingP12?.pile1Winner ?? '', pile2Winner: pendingP12?.pile2Winner ?? '', pile3Winner: winnerId ?? '', tokenDeltas: deltas }
   state.results.push(result)
@@ -1364,11 +1465,13 @@ function finalizeHNGrandFinale(
       await awardPerformanceScore({
         tier: 'highNoble',
         finalWinnerId: isHumanWinner ? finalWinner : null,
-        isMonarchMatch,
+        legendaryBossDefeated: isMonarchMatch && isHumanWinner,
         humanNetDeltas,
       })
 
       io.to(roomId).emit('match_end', { roomId, finalWinner, tokenBalance: state.tokenBalance, results: state.results, totalRounds: state.totalRounds, buyInAmount: state.buyInAmount, finalStackByHuman, newTokenBalances })
+      publishSpectatorEvent(roomId, { type: 'MATCH_FINISHED', winnerSeat: state.seats.findIndex(s => s.id === finalWinner) })
+      finishSpectatorBroadcast(roomId)
       // Server Activity feed: winnerSeat.name ครอบคลุมทั้ง Human/AI/Monarch อยู่แล้ว (HNSeat.name)
       io.emit('server_activity', {
         kind: 'win', tier: 'highNoble',
@@ -1437,6 +1540,7 @@ export function markHNPlayerAFK(io: Server, roomId: string, userId: string): voi
   }
 
   io.to(roomId).emit('player_disconnected_replaced', { roomId, userId, temporary: true, graceSeconds: 60 })
+  publishSpectatorEvent(roomId, { type: 'PLAYER_RECONNECTING', seat: state.seats.findIndex(s => s.id === userId) })
 }
 
 // Grace 60s หมด ไม่มี reconnect — settle escrow จริงตอนนี้เท่านั้น (ย้ายมาจาก disconnect handler เดิม)
@@ -1458,6 +1562,7 @@ export async function finalizeHNAFKReplacement(io: Server, roomId: string, userI
   if (!seat) return
 
   io.to(roomId).emit('player_disconnected_replaced', { roomId, userId, temporary: false, replacementName: seat.name })
+  publishSpectatorEvent(roomId, { type: 'AI_TAKEOVER', seat: state.seats.indexOf(seat) })
 
   // ⚠️ Safety net เพิ่มจากที่ STEP 2B-AUDIT รายงานไว้ (ไม่ใช่ token/settle logic — เป็นความจำเป็นด้าน
   // data-integrity กันเกม crash เท่านั้น): arrangementTimer.highNoble (120s, ใช้ทั้ง arrangement R1 และ

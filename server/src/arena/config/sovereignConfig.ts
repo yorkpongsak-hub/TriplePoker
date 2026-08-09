@@ -32,7 +32,7 @@ export const sovereignConfig = Object.freeze({
   ascendantRequiresHighNoble: true,
   ascendantRequiresMonarchSlayer: false,
   ascendantOncePerAccount: true,
-  targetBossDefenseRate: 0.75,
+  targetBossDefenseRate: 0.80,
 })
 
 export const sovereignEconomyConfig = Object.freeze({

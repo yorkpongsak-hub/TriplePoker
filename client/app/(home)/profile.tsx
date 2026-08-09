@@ -5,7 +5,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   View, Text, TouchableOpacity,
-  StyleSheet, StatusBar, ScrollView, Image,
+  StyleSheet, StatusBar, ScrollView, Image, Alert,
 } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import { router, useFocusEffect } from 'expo-router'
@@ -21,8 +21,12 @@ import ProfilePicturePicker from '../../src/components/profile/ProfilePicturePic
 import SettingsModal from '../../src/components/profile/SettingsModal'
 import { AvatarDisplay, PRESET_AVATARS, AvatarConfig } from '../../src/components/profile/AvatarPicker'
 import { TierUnlockOverlay } from '../../src/components/vfx/TierUnlockOverlay'
+import LegendaryCardVFX from '../../src/components/vfx/LegendaryCardVFX'
+import BeyondPathChoice, { BeyondPath } from '../../src/components/vfx/BeyondPathChoice'
 import MatchHistoryList from '../../src/components/profile/MatchHistoryList'
 import BossStatsPanel from '../../src/components/profile/BossStatsPanel'
+import LorePanel from '../../src/components/profile/LorePanel'
+import MyCollectiblesPanel from '../../src/components/profile/MyCollectiblesPanel'
 import AvatarFrame from '../../src/components/game/AvatarFrame'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
@@ -86,11 +90,27 @@ const VIP_INFO: Record<string, { label: string; color: string } | null> = {
 
 const fmt = (n: number) => n.toLocaleString('en-US')
 
+const formatLastVisited = (value: string | null | undefined) => {
+  if (!value) return 'Not recorded'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Not recorded'
+
+  return date.toLocaleString('en-GB', {
+    timeZone: 'Asia/Bangkok',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
 // Monarch_Spec_v1_3 §4/§5 — Performance Score + Ascendant Gate ปลดล็อคตั้งแต่ Tier A+ (highNoble) ขึ้นไปเท่านั้น
 const ASCENDANT_TOKEN_MIN = 600_000
 const ASCENDANT_TOKEN_MAX = 999_999
 
-type TabKey = 'stats' | 'bosses' | 'history' | 'social'
+type TabKey = 'stats' | 'bosses' | 'history' | 'lore'
 
 export default function ProfileScreen() {
   useBgm() // LobbyMatchmaking_Spec_v1_0 §2 — BGM เล่นต่อเนื่องข้าม Profile/Shop/Lobby/Hall of Fame
@@ -101,16 +121,31 @@ export default function ProfileScreen() {
   const session = useAuthStore(s => s.session) // ใช้แนบ Bearer token ตอน POST /profile/celebrate-tier
   const [activeTab, setActiveTab] = useState<TabKey>('stats')
 
-  // Safety net: token อาจเปลี่ยนนอก flow แมตช์ (admin แก้ DB ตรง, ซื้อ token ใน Shop, ad reward ฯลฯ)
-  // refetch ทุกครั้งที่กลับมาโฟกัสหน้านี้ — debounce 3 วิ กันยิงรัวถ้าสลับหน้าเร็วๆ
-  const lastFocusFetchRef = useRef(0)
+  // บันทึกเวลาเข้า Profile ก่อน แล้วจึง refetch เพื่อให้หน้าจอเห็นค่าล่าสุดจากฐานข้อมูล
   useFocusEffect(
     useCallback(() => {
-      const now = Date.now()
-      if (now - lastFocusFetchRef.current < 3000) return
-      lastFocusFetchRef.current = now
-      refreshProfile()
-    }, [refreshProfile])
+      let isActive = true
+
+      const syncProfileVisit = async () => {
+        const accessToken = session?.access_token
+        if (accessToken) {
+          try {
+            const response = await fetch(`${SERVER_URL}/profile/touch-last-login`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${accessToken}` },
+            })
+            if (!response.ok) console.error('[Profile] last_login update HTTP', response.status)
+          } catch (error) {
+            console.error('[Profile] last_login update failed:', error)
+          }
+        }
+
+        if (isActive) await refreshProfile()
+      }
+
+      void syncProfileVisit()
+      return () => { isActive = false }
+    }, [refreshProfile, session?.access_token])
   )
 
   // ─── Real data จาก authStore (fallback MOCK เผื่อ profile ยังโหลดไม่เสร็จ) ───
@@ -123,6 +158,7 @@ export default function ProfileScreen() {
   // Patch (2026-07-17): ยืนยันแล้วว่า streak_count มีอยู่จริงบน live DB (ลุงเช็ค Table Editor
   // ให้แล้ว) — comment เดิมที่บอกว่าคอลัมน์ไม่มีล้าสมัยไปแล้ว ต่อสายเป็นค่าจริงจาก authStore
   const streakDays  = profile?.streak_count ?? 0
+  const hasSevenDayBadge = profile?.streak_7days_badge ?? false
 
   // Tier คำนวณสดจาก token เสมอ — เลิกอ่าน profile.tier ตรงๆ เพราะคอลัมน์นั้นไม่มี pipeline ไหนอัปเดตจริง
   // (ดูปัญหาเดิม: Top Bar ไม่ตรงกับ Tiers Unlocked) getTierFromToken คืนแค่ 4 tier หลัก ไม่มี crash เพราะ token
@@ -141,12 +177,16 @@ export default function ProfileScreen() {
   const tierInfo = TIER_INFO[tierLetter] ?? TIER_INFO['C']
   const vipInfo  = VIP_INFO[vipStatus]
   const isVip    = vipStatus !== 'none' // VIP Shimmer Effect — ใช้ vip_status ที่มีอยู่แล้ว ไม่สร้าง state/query ใหม่
+  // Batch 2 (VIP-02) — สิทธิ์เข้า VIP Plus ต้องเป็น vip_pro เท่านั้น ห้ามใช้ isVip เดิม (นั่นคือ !== 'none'
+  // กว้างเกินไป จะทำให้ VIP ธรรมดาเห็นปุ่มด้วย) เก็บ selector แยกต่างหากจากของเดิมทั้งหมด
+  const isVipPlusEligible = vipStatus === 'vip_pro'
 
   // ─── Tier Unlock Celebration (Ceiling Model) — เด้ง VFX ที่ Profile ตอนเปิดแอป ───
   // tier_unlocked_max = single source of truth (server เขียนผ่าน checkTierUnlock() ใน settleEscrow)
   // เทียบกับ tier_unlock_celebrated (array ที่เคยฉลองแล้ว) หา tier ที่ยังค้าง — โชว์แค่ tier สูงสุดตัวเดียว
   // แต่ POST mark ครบทุกตัวที่ค้างตอนปิด overlay (เผื่อข้ามหลายชั้นพร้อมกัน)
   const [overlayTier, setOverlayTier] = useState<string | null>(null)
+  const [tierUnlockVfxStage, setTierUnlockVfxStage] = useState<'legendary' | 'original' | 'path'>('legendary')
   // celebratingRef: true ระหว่างโชว์ overlay/รอ POST เสร็จ — กัน useFocusEffect ยิง refreshProfile ซ้ำ
   // แล้ว trigger useEffect ด้านล่างซ้ำก่อน mark celebrated เสร็จ (bug class เดียวกับ lobby.tsx เดิม)
   const celebratingRef = useRef(false)
@@ -161,6 +201,7 @@ export default function ProfileScreen() {
     if (pending.length === 0) return
     celebratingRef.current = true
     pendingCelebrateRef.current = pending
+    setTierUnlockVfxStage('legendary')
     setOverlayTier(pending[pending.length - 1]) // TIER_ORDER เรียงต่ำ→สูงอยู่แล้ว ตัวท้ายคือสูงสุด
   }, [profile])
 
@@ -193,6 +234,27 @@ export default function ProfileScreen() {
       await refreshProfile()
     }
     celebratingRef.current = false
+  }
+
+  const handleOriginalTierUnlockClose = () => {
+    if (overlayTier === 'grandmaster' && !profile?.beyond_path) {
+      setTierUnlockVfxStage('path')
+      return
+    }
+    void handleCloseTierUnlock()
+  }
+
+  const handleChooseBeyondPath = async (path: BeyondPath) => {
+    const accessToken = session?.access_token
+    if (!accessToken) throw new Error('Your session expired. Please sign in again.')
+    const res = await fetch(`${SERVER_URL}/profile/beyond-path`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ path }),
+    })
+    const body = await res.json().catch(() => ({}))
+    if (!res.ok && body?.error !== 'PATH_ALREADY_CHOSEN') throw new Error(body?.error ?? 'Could not save your path.')
+    await handleCloseTierUnlock()
   }
 
   // avatar_url อาจเป็น preset key ใหม่ ('wolf', 'avatar_vip_01' ฯลฯ) หรือ emoji ดิบของเก่า (ก่อนระบบ
@@ -233,9 +295,20 @@ export default function ProfileScreen() {
   }, [comingSoonMsg])
   const handleComingSoon = (label: string) => setComingSoonMsg(`${label} — Coming Soon`)
 
-  const handleLogout = async () => {
+  const confirmLogout = async () => {
     await signOut()
     router.replace('/(auth)/login')
+  }
+
+  const handleLogout = () => {
+    Alert.alert(
+      'Log out?',
+      'Are you sure you want to log out of this account?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Log Out', style: 'destructive', onPress: () => void confirmLogout() },
+      ],
+    )
   }
 
   const handleSettings = () => {
@@ -265,7 +338,19 @@ export default function ProfileScreen() {
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
 
       {/* ─── Tier Unlock Celebration — เด้งตอนเปิดแอปถ้ามี Tier ที่ยังไม่เคยฉลอง ─── */}
-      {overlayTier && <TierUnlockOverlay tier={overlayTier} onClose={handleCloseTierUnlock} />}
+      {overlayTier && tierUnlockVfxStage === 'legendary' && (
+        <LegendaryCardVFX
+          title="TIER UNLOCKED"
+          subtitle={`${TIER_INFO[TIER_KEY_LETTER[overlayTier as TierKey]]?.label ?? overlayTier.toUpperCase()} • TIER ${TIER_KEY_LETTER[overlayTier as TierKey] ?? ''}`}
+          onFinish={() => setTierUnlockVfxStage('original')}
+        />
+      )}
+      {overlayTier && tierUnlockVfxStage === 'original' && (
+        <TierUnlockOverlay tier={overlayTier} onClose={handleOriginalTierUnlockClose} />
+      )}
+      {overlayTier === 'grandmaster' && tierUnlockVfxStage === 'path' && (
+        <BeyondPathChoice onChoose={handleChooseBeyondPath} />
+      )}
 
       {/* ─── Toast: Coming Soon (Friends/Ranking/Legends) — pattern เดียวกับ lobby.tsx ─── */}
       {comingSoonMsg && (
@@ -278,7 +363,7 @@ export default function ProfileScreen() {
 
         {/* ═══════════════ TOP HEADER ═══════════════ */}
         <View style={s.topHeader}>
-          <MenuButton icon="settings" label="Settings" size="xs" onPress={handleSettings} vipShimmer={isVip} />
+          <MenuButton icon="settings" label="Settings" size="sm" onPress={handleSettings} vipShimmer={isVip} />
           <View style={s.playerProfileLabel}>
             <LinearGradient
               colors={[C.goldDark, C.gold]}
@@ -288,7 +373,7 @@ export default function ProfileScreen() {
             />
             <Text style={s.playerProfileLabelText}>Player Profile</Text>
           </View>
-          <MenuButton icon="exit" label="Logout" size="xs" onPress={handleLogout} vipShimmer={isVip} />
+          <MenuButton icon="exit" label="Logout" size="sm" onPress={handleLogout} vipShimmer={isVip} />
         </View>
 
         {/* ═══════════════ HERO PLAYER CARD ═══════════════ */}
@@ -347,8 +432,14 @@ export default function ProfileScreen() {
                   <Text style={[s.vipBadgeText, { color: C.purple }]}>MONARCH SLAYER 👑</Text>
                 </View>
               )}
+              {hasSevenDayBadge && (
+                <View style={[s.vipBadge, { borderColor: '#ff8a3d', backgroundColor: 'rgba(255,138,61,0.14)' }]}>
+                  <Text style={[s.vipBadgeText, { color: '#ffb36b' }]}>SEVEN-DAY FLAME 🔥</Text>
+                </View>
+              )}
             </View>
             <Text style={s.xpLine}>⭐ {fmt(xpNow)} XP</Text>
+            <Text style={s.lastVisited}>Last visited: {formatLastVisited(profile?.last_login)}</Text>
           </View>
         </GoldCard>
 
@@ -372,34 +463,56 @@ export default function ProfileScreen() {
         )}
 
         {/* ═══════════════ ASCENDANT HINT (token 600k-999,999 ผ่าน A+ แต่ยังไม่ชนะ Monarch) ═══════════════ */}
+        {/* มติลุงเยาะ — คนเห็น hint นี้คือคนที่ยังไม่เคยชนะ Monarch มาก่อนเสมอ (เงื่อนไข showAscendantHint) ห้ามสปอยล์ชื่อ */}
         {showAscendantHint && (
           <View style={s.ascendantHint}>
-            <Text style={s.ascendantHintText}>Defeat the Monarch to unlock Ascendant</Text>
+            <Text style={s.ascendantHintText}>Defeat the Hidden Boss to unlock Ascendant</Text>
           </View>
+        )}
+
+        {/* ═══════════════ VIP PLUS ENTRY (Batch 2, VIP-02) — vip_pro เท่านั้น ไม่ render อะไรเลยถ้าไม่ผ่าน ═══════════════ */}
+        {isVipPlusEligible && (
+          <TouchableOpacity style={s.vipPlusEntryBtn} onPress={() => router.push('/game/vipPlus' as any)}>
+            <Text style={s.vipPlusEntryText}>VIP PLUS TABLE</Text>
+            <Text style={s.vipPlusEntrySub}>VIP Pro Exclusive · 3–5 Human Players</Text>
+            {/* มติลุงเยาะ — บรรทัดต่อท้ายบอกว่ากติกา VIP Plus (HOLDEM_G3 ฯลฯ) เป็นส่วนหนึ่งของการทดลอง "Beyond the Rules" */}
+            <Text style={s.vipPlusEntrySub}>Beyond the Rules (Beta test)</Text>
+          </TouchableOpacity>
         )}
 
         {/* ═══════════════ MAIN ACTIONS ═══════════════ */}
         <View style={s.playHeroWrap}>
-          <ActionButton icon="play_royal_flush" label="PLAY" onPress={handlePlay} vipShimmer={isVip} labelStyle={s.playLabel} />
+          <ActionButton
+            icon="play_royal_flush"
+            label={'♠ ♥ ♦ ♣\nPLAY\nTriplePoker : Rise'}
+            onPress={handlePlay}
+            vipShimmer={isVip}
+            labelStyle={s.playLabel}
+          />
         </View>
 
         {/* ═══════════════ TABS (ย้ายขึ้นมาต่อจากปุ่ม Play — ผู้เล่นเห็นสถิติง่ายขึ้น) ═══════════════ */}
         <View style={s.tabsRow}>
           <TabButton label="STATS" active={activeTab === 'stats'} onPress={() => setActiveTab('stats')} />
           <TabButton label="BOSSES" active={activeTab === 'bosses'} onPress={() => setActiveTab('bosses')} />
-          <TabButton label="HISTORY" active={activeTab === 'history'} onPress={() => setActiveTab('history')} />
-          <TabButton label="SOCIAL" active={activeTab === 'social'} onPress={() => setActiveTab('social')} />
+          <TabButton label="VICTORY" active={activeTab === 'history'} onPress={() => setActiveTab('history')} />
+          <TabButton label="LORE" active={activeTab === 'lore'} onPress={() => setActiveTab('lore')} />
         </View>
 
-        {activeTab === 'stats' && <StatsPanel streakDays={streakDays} gamesPlayed={profile?.games_played ?? 0} gamesWon={profile?.games_won ?? 0} bestHands={profile?.best_hands ?? null} />}
+        {activeTab === 'stats' && (
+          <>
+            <StatsPanel streakDays={streakDays} streakShields={profile?.streak_shields ?? 0} gamesPlayed={profile?.games_played ?? 0} gamesWon={profile?.games_won ?? 0} bestHands={profile?.best_hands ?? null} />
+            <MyCollectiblesPanel userId={profile?.user_id ?? authUser?.id ?? ''} />
+          </>
+        )}
         {activeTab === 'bosses' && (
           <BossStatsPanel userId={profile?.user_id ?? authUser?.id ?? ''} />
         )}
         {activeTab === 'history' && (
           <MatchHistoryList userId={profile?.user_id ?? authUser?.id ?? ''} />
         )}
-        {activeTab === 'social' && (
-          <ComingSoonPanel icon="👥" title="SOCIAL" sub="Following & followers are coming in a future update" />
+        {activeTab === 'lore' && (
+          <LorePanel userId={profile?.user_id ?? authUser?.id ?? ''} tierUnlockedMax={profile?.tier_unlocked_max ?? null} monarchVictories={profile?.monarch_victories ?? 0} />
         )}
 
         <View style={s.secondaryRow}>
@@ -446,19 +559,9 @@ function TabButton({ label, active, onPress }: { label: string; active: boolean;
   )
 }
 
-// ── ที่ยังไม่มีระบบหลังบ้านจริง (match history, achievements, bosses conquered, social) ──
-function ComingSoonPanel({ icon, title, sub }: { icon: string; title: string; sub: string }) {
-  return (
-    <GoldCard style={s.comingSoonPanel}>
-      <Text style={s.comingSoonIcon}>{icon}</Text>
-      <Text style={s.comingSoonTitle}>{title}</Text>
-      <Text style={s.comingSoonSub}>{sub}</Text>
-    </GoldCard>
-  )
-}
-
-function StatsPanel({ streakDays, gamesPlayed, gamesWon, bestHands }: {
+function StatsPanel({ streakDays, streakShields, gamesPlayed, gamesWon, bestHands }: {
   streakDays: number
+  streakShields: number
   gamesPlayed: number
   gamesWon: number
   bestHands: Record<string, any> | null
@@ -480,23 +583,27 @@ function StatsPanel({ streakDays, gamesPlayed, gamesWon, bestHands }: {
   return (
     <GoldCard style={s.statsPanel}>
       <StatItem icon="🎯" label="WIN RATE" value={winRate !== null ? `${winRate}%` : '—'} sub={winRate !== null ? `${gamesWon} WINS` : 'NO DATA'} small />
-      <View style={s.vLine} />
+      <View style={s.hLine} />
       <StatItem icon="⚔️" label="MATCHES" value={`${gamesPlayed}`} sub="PLAYED" small />
-      <View style={s.vLine} />
+      <View style={s.hLine} />
       <StatItem icon="♠" label="BEST HAND" value={bestLabel ?? '—'} sub={bestLabel ? 'ALL TIME' : 'NO DATA'} small />
-      <View style={s.vLine} />
-      <StatItem icon="🔥" label="STREAK" value={`${streakDays} Days`} sub="CURRENT" small />
+      <View style={s.hLine} />
+      <StatItem icon="🔥" label="STREAK" value={`${streakDays}/7 Days`} sub={`${streakShields} SHIELD${streakShields === 1 ? '' : 'S'}`} small />
     </GoldCard>
   )
 }
 
 function StatItem({ icon, label, value, sub, small }: { icon: string; label: string; value: string; sub: string; small?: boolean }) {
   return (
-    <View style={s.statItem}>
-      <Text style={s.statIcon}>{icon}</Text>
-      <Text style={s.statLabel}>{label}</Text>
-      <Text style={[s.statValue, small && s.statValueSmall]} numberOfLines={1}>{value}</Text>
-      <Text style={s.statSub}>{sub}</Text>
+    <View style={s.statRow}>
+      <View style={s.statRowLeft}>
+        <Text style={s.statIcon}>{icon}</Text>
+        <Text style={s.statLabel}>{label}</Text>
+      </View>
+      <View style={s.statRowRight}>
+        <Text style={[s.statValue, small && s.statValueSmall]} numberOfLines={1}>{value}</Text>
+        <Text style={s.statSub}>{sub}</Text>
+      </View>
     </View>
   )
 }
@@ -507,7 +614,7 @@ const s = StyleSheet.create({
   scroll: { paddingHorizontal: 14, paddingBottom: 34 },
 
   topHeader: {
-    minHeight: 76, // เดิม 92 — Settings/Logout เล็กลง (size xs=48) เพิ่ม Player Profile label panel ตรงกลาง — Feedback B2
+    minHeight: 92, // Settings/Logout ขยายเป็น size sm=64 ให้กดง่ายขึ้น — Player Profile label หดความกว้างอัตโนมัติ (flex:1)
     backgroundColor: glassPanel.backgroundColor, // เดิมพื้นทึบ C.header — เหลือแค่ backgroundColor เพราะเป็นแถบเต็มขอบจอ (border/radius เดิมของบาร์ไม่แตะ)
     marginHorizontal: -14,
     paddingHorizontal: 20,
@@ -582,6 +689,7 @@ const s = StyleSheet.create({
   },
   vipBadgeText: { fontSize: 9, fontWeight: '900', letterSpacing: 1 },
   xpLine: { color: C.textSec, fontSize: 11, fontWeight: '800' },
+  lastVisited: { color: C.textDim, fontSize: 10, fontWeight: '600', marginTop: 4 },
 
   resourceCard: {
     ...glassPanelDense, // Token/Crown bar — ตัวเลขสำคัญ ใช้กระจกทึบกว่า
@@ -616,8 +724,22 @@ const s = StyleSheet.create({
   ascendantHintText: { color: C.gold, fontSize: 11, fontWeight: '800', letterSpacing: 0.3, textAlign: 'center' },
 
   playHeroWrap: { marginTop: 16 },
+  // Batch 2 (VIP-02) — ปุ่มใหม่ทั้งหมด ไม่แตะ style เดิมของปุ่มอื่น
+  vipPlusEntryBtn: {
+    marginTop: 16,
+    borderWidth: 1.5,
+    borderColor: C.gold,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,215,106,0.08)',
+  },
+  vipPlusEntryText: { fontFamily: 'Cinzel_700Bold', color: C.gold, fontSize: 14, fontWeight: '900', letterSpacing: 1 },
+  vipPlusEntrySub: { color: C.gold, fontSize: 10, marginTop: 3, opacity: 0.85 },
   playLabel: {
     // Feedback B1 — ขยับ "PLAY" ขึ้น 20px + ฟอนต์ใหญ่ขึ้น 25% (16 -> 20) เฉพะปุ่มนี้ ไม่กระทบ ActionButton อื่น (Ready/Auto Sort)
+    // label หลักตอนนี้เป็น 3 บรรทัด "ดอกไพ่ 4 สัญลักษณ์\nPLAY\nTriplePoker : Rise" ทั้งหมดอยู่บล็อกเดียวกัน กึ่งกลาง
+    // เคยลองสีแดง (C.red) ตามคำขอ แต่ไม่เข้ากับปุ่มสีทอง — กลับไปใช้สีทองเดิม (inherit จาก ActionButton styles.label)
     fontSize: 20,
     transform: [{ translateY: -20 }],
   },
@@ -644,25 +766,20 @@ const s = StyleSheet.create({
   tabText: { color: C.textDim, fontSize: 11, fontWeight: '900' },
   tabTextActive: { color: C.gold },
 
-  comingSoonPanel: {
-    borderTopLeftRadius: 0, borderTopRightRadius: 0,
-    padding: 24, alignItems: 'center',
-  },
-  comingSoonIcon: { fontSize: 28, marginBottom: 8, opacity: 0.6 },
-  comingSoonTitle: { color: C.textSec, fontSize: 12, fontWeight: '900', letterSpacing: 1, marginBottom: 4 },
-  comingSoonSub: { color: C.textDim, fontSize: 10, textAlign: 'center' },
-
   statsPanel: {
     borderTopLeftRadius: 0, borderTopRightRadius: 0,
-    paddingVertical: 16, paddingHorizontal: 8,
-    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 4, paddingHorizontal: 14,
+    flexDirection: 'column',
   },
-  statItem: { flex: 1, alignItems: 'center', paddingHorizontal: 2 },
-  statIcon: { fontSize: 18, marginBottom: 4 },
+  hLine: { height: 1, backgroundColor: C.border },
+  statRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10 },
+  statRowLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  statRowRight: { alignItems: 'flex-end' },
+  statIcon: { fontSize: 18 },
   statLabel: { color: C.textSec, fontSize: 8, fontWeight: '900' },
-  statValue: { color: C.textPrimary, fontSize: 16, fontWeight: '900', marginTop: 3, textAlign: 'center' },
+  statValue: { color: C.textPrimary, fontSize: 16, fontWeight: '900', textAlign: 'right' },
   statValueSmall: { fontSize: 11 },
-  statSub: { color: C.textDim, fontSize: 8, fontWeight: '700', marginTop: 4, textAlign: 'center' },
+  statSub: { color: C.textDim, fontSize: 8, fontWeight: '700', marginTop: 2, textAlign: 'right' },
 
   toastBanner: {
     // Feedback B3 — Coming Soon toast, pattern เดียวกับ lobby.tsx

@@ -16,7 +16,9 @@ export function declareJoker(input: DeclareJokerInput): JokerDeclaration {
   if (input.mode === 'ANTE_X2' && input.availableCrest < input.requiredMatchedAnteCrest) {
     throw new Error('INSUFFICIENT_CREST_FOR_ANTE_X2')
   }
-  return { mode: input.mode, targetPile: input.targetPile, forcedWild: false, declaredAt: input.declaredAt }
+  // ANTE_X2 starts with Pile 1 as the priority marker. The match engine moves
+  // targetPile to the first pile actually won by the Joker owner and applies it once.
+  return { mode: input.mode, targetPile: input.mode === 'ANTE_X2' ? 1 : input.targetPile, forcedWild: false, declaredAt: input.declaredAt }
 }
 
 export function autoLockJoker(declaredAt: string): JokerDeclaration {

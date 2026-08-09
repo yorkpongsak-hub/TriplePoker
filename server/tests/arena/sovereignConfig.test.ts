@@ -17,6 +17,7 @@ describe('Arena Gate 10 Sovereign locked configuration', () => {
     expect(sovereignConfig.spectatorDelayMs).toBe(30_000)
     expect(sovereignConfig.maxSpectatorsPerMatch).toBe(100)
     expect(sovereignConfig.immediateStandbyPromotion).toBe(true)
+    expect(sovereignConfig.targetBossDefenseRate).toBe(0.80)
   })
 
   test('Ascendant is a one-time 30-day shortcut without Monarch Slayer', () => {

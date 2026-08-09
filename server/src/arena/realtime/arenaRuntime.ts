@@ -21,9 +21,7 @@ export class ArenaRuntime {
 
   join(player: ArenaHuman, now = Date.now()): JoinArenaQueueResult {
     if (this.playerMatch.has(player.playerId)) return { ok: false, reason: 'ALREADY_JOINED' }
-    const result = this.queue.join(player, now)
-    if (result.ok && result.status === 'MATCHED') this.startMatch(result.match, now)
-    return result
+    return this.queue.join(player, now)
   }
 
   tickQueue(now = Date.now()): ArenaMatchComposition | null {
@@ -38,6 +36,8 @@ export class ArenaRuntime {
   }
 
   activeMatches(): ArenaRuntimeMatch[] { return [...this.matches.values()] }
+
+  waitingHumanIds(): string[] { return this.queue.snapshot().humanIds }
 
   // เรียกหลัง MATCH_RESULT ถูก persist เรียบร้อยแล้ว — เอาออกจากการติดตามไม่ให้ ticker วนไปเรื่อยๆ ตลอดอายุ process
   completeMatch(matchId: string): void {

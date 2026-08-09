@@ -126,7 +126,7 @@ export default function LegendsScreen() {
             <Text style={s.headerSub}>of the Legends</Text>
           </View>
           {/* spacer เท่าความกว้าง backBtn โดยประมาณ -- กัน title เอียงซ้าย */}
-          <View style={{ width: 62 }} />
+          <View style={{ width: 82 }} />
         </View>
 
         <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
@@ -210,7 +210,8 @@ const s = StyleSheet.create({
     paddingTop: 10,
     paddingBottom: 12,
   },
-  backBtn: { ...glassPanelDense, paddingHorizontal: 12, paddingVertical: 8 },
+  // Feedback ลุงเยาะ — บางรุ่นมือถือตัวหนังสือ "Back" โดนตัด เห็นไม่ครบถึงตัว k เพิ่มความกว้างปุ่มอีก ~10% (82 -> 90)
+  backBtn: { ...glassPanelDense, width: 90, paddingVertical: 8, alignItems: 'center' },
   backTxt: { color: C.gold, fontSize: 13, fontWeight: '800', ...textOnGlass },
   headerTitle: {
     fontFamily: 'Cinzel_700Bold',

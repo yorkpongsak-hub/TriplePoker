@@ -30,7 +30,6 @@ export interface ArenaMatchComposition {
 
 export type JoinArenaQueueResult =
   | { ok: true; status: 'WAITING'; humanCount: number }
-  | { ok: true; status: 'MATCHED'; match: ArenaMatchComposition }
   | { ok: false; reason: 'TOKEN_THRESHOLD_NOT_EXCEEDED' | 'ALREADY_JOINED' | 'QUEUE_FULL' | 'QUEUE_FINALIZED' }
 
 const FOUR_GODS: readonly FourGodId[] = ['REAPER', 'CRAG', 'CORTEX', 'CIPHER']
@@ -53,6 +52,7 @@ function aiSeat(seat: ArenaSeatNumber, aiId: ArenaAIId, role: 'BOSS' | 'FILL'): 
 export class ArenaMatchmakingQueue {
   private humans: ArenaHuman[] = []
   private finalized: ArenaMatchComposition | null = null
+  private secondHumanJoinedAt: number | null = null
 
   constructor(
     readonly queueId: string,
@@ -68,28 +68,28 @@ export class ArenaMatchmakingQueue {
     if (this.humans.some(existing => existing.playerId === player.playerId)) return { ok: false, reason: 'ALREADY_JOINED' }
     if (this.humans.length >= 3) return { ok: false, reason: 'QUEUE_FULL' }
     this.humans.push(player)
+    if (this.humans.length === 2) this.secondHumanJoinedAt = now
 
-    const match = this.tryFinalize(now)
-    return match
-      ? { ok: true, status: 'MATCHED', match }
-      : { ok: true, status: 'WAITING', humanCount: this.humans.length }
+    // Queue admission never starts a table. ArenaRuntime.tickQueue() is the only
+    // authority allowed to finalize composition and create a match.
+    return { ok: true, status: 'WAITING', humanCount: this.humans.length }
   }
 
   tryFinalize(now: number): ArenaMatchComposition | null {
     if (this.finalized) return this.finalized
-    const elapsed = now - this.createdAt
     if (this.humans.length < tierSConfig.minimumHumans) return null
-    const fastThree = this.humans.length === tierSConfig.fastBossRollHumanCount && elapsed <= tierSConfig.fastBossRollWindowSeconds * 1_000
-    const twoHumanTimeout = this.humans.length === 2 && elapsed >= tierSConfig.fastBossRollWindowSeconds * 1_000
-    const lateThree = this.humans.length === 3 && elapsed > tierSConfig.fastBossRollWindowSeconds * 1_000
-    if (!fastThree && !twoHumanTimeout && !lateThree) return null
+    const threeHumansReady = this.humans.length === tierSConfig.fastBossRollHumanCount
+    const twoHumanTimeout = this.humans.length === 2
+      && this.secondHumanJoinedAt !== null
+      && now - this.secondHumanJoinedAt >= tierSConfig.thirdHumanWaitSeconds * 1_000
+    if (!threeHumansReady && !twoHumanTimeout) return null
 
     this.finalized = this.buildRegularComposition(now, twoHumanTimeout)
     return this.finalized
   }
 
-  snapshot(): { queueId: string; humanIds: string[]; finalized: boolean } {
-    return { queueId: this.queueId, humanIds: this.humans.map(player => player.playerId), finalized: this.finalized !== null }
+  snapshot(): { queueId: string; humanIds: string[]; finalized: boolean; secondHumanJoinedAt: number | null } {
+    return { queueId: this.queueId, humanIds: this.humans.map(player => player.playerId), finalized: this.finalized !== null, secondHumanJoinedAt: this.secondHumanJoinedAt }
   }
 
   private buildRegularComposition(now: number, dualAllowed: boolean): ArenaMatchComposition {

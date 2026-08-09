@@ -4,7 +4,7 @@
  * The Sage Unicorn Studio Co., Ltd.
  *
  * Events:
- *   client -> server: "lobby:subscribe"   { tier: Tier, userId?: string }
+ *   client -> server: "lobby:subscribe"   { tier: Tier, userId?: string, accessToken?: string }
  *   client -> server: "lobby:unsubscribe" { tier: Tier }
  *   server -> client: "lobby:tables"      { tier: Tier, tables: GameTable[], tierEligibility: Record<string, TierEligibilityEntry> }
  *                                         (snapshot ตอน subscribe — tierEligibility ว่างเปล่าถ้าไม่ส่ง userId มา)
@@ -14,8 +14,9 @@ import { Server, Socket } from 'socket.io';
 import { getOpenTablesByTier, GameTable, Tier } from '../game/tableRegistry';
 import { canUnlockTier, PROGRESSION_TIERS, TIER_ORDER } from '../game/progressionGate';
 import { gameConfig } from '../config/gameConfig';
-import { supabaseAdmin } from '../config/supabase';
+import { supabase, supabaseAdmin } from '../config/supabase';
 import { canAccessGrandmaster } from '../game/tierAuthority';
+import { getVipPlusAccess } from '../game/vipPlusAccess';
 
 const TIER_ROOM = (tier: Tier) => `lobby:${tier}`;
 
@@ -78,19 +79,30 @@ async function buildTierEligibility(userId: string): Promise<Record<string, Tier
 }
 
 export function registerLobbySocket(io: Server, socket: Socket) {
-  socket.on('lobby:subscribe', async ({ tier, userId }: { tier: Tier; userId?: string }) => {
+  socket.on('lobby:subscribe', async ({ tier, userId, accessToken }: { tier: Tier; userId?: string; accessToken?: string | null }) => {
     socket.join(TIER_ROOM(tier));
 
     let tierEligibility: Record<string, TierEligibilityEntry> = {};
-    if (userId) {
+    let vipPlusVisible = false;
+    if (userId && accessToken) {
       try {
-        tierEligibility = await buildTierEligibility(userId);
+        const { data: authenticated, error: authError } = await supabase.auth.getUser(accessToken);
+        if (!authError && authenticated.user?.id === userId) {
+          tierEligibility = await buildTierEligibility(userId);
+          vipPlusVisible = (await getVipPlusAccess(userId)).allowed;
+        }
       } catch (err) {
-        console.error('[LOBBY] Unexpected error building tierEligibility:', err, '| userId:', userId);
+        console.error('[LOBBY] Unexpected error building authenticated Lobby access:', err, '| userId:', userId);
       }
     }
 
-    socket.emit('lobby:tables', { tier, tables: getOpenTablesByTier(tier), tierEligibility });
+    socket.emit('lobby:tables', {
+      tier,
+      tables: getOpenTablesByTier(tier),
+      tierEligibility,
+      // ไม่ส่งรายละเอียด membership หรือเหตุผลปฏิเสธกลับไป ลดข้อมูลที่ client ที่ไม่มีสิทธิ์มองเห็น
+      vipPlusAccess: { visible: vipPlusVisible },
+    });
   });
 
   socket.on('lobby:unsubscribe', ({ tier }: { tier: Tier }) => {

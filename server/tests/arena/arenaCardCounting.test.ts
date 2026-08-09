@@ -40,8 +40,8 @@ function actionFor(engine: ArenaMatchEngine, actorId: string, sequence: number):
     case 'FINAL_ARRANGE': return { ...base, type: 'FINAL_ARRANGE', ...arrangementFor(engine, actorId) }
     case 'JOKER_DECLARE': return { ...base, type: 'JOKER_DECLARE', mode: 'WILD', targetPile: 3, availableCrest: 100 }
     case 'DISCARD': {
-      const held = engine.snapshotDetail().heldCardIds[actorId] ?? []
-      return { ...base, type: 'DISCARD', cardId: held[held.length - 1] }
+      const pile3 = engine.snapshotDetail().lastArrangements[actorId]?.pile3 ?? []
+      return { ...base, type: 'DISCARD', cardId: pile3[pile3.length - 1] }
     }
     case 'FINAL_LOCK': return { ...base, type: 'FINAL_LOCK', ...arrangementFor(engine, actorId) }
     case 'GF_PILE_2': case 'GF_PILE_3_ROUND_1': case 'GF_PILE_3_ROUND_2':

@@ -1,5 +1,5 @@
 import { ArenaMatchEngine, ArenaMatchAction } from '../../src/arena/match/arenaMatchEngine'
-import { bestArenaArrangement } from '../../src/arena/arrangement/arenaArrangement'
+import { bestArenaArrangement, evaluatePileBest } from '../../src/arena/arrangement/arenaArrangement'
 import { arenaCardKey, ArenaCard, createSeededRandom } from '../../src/arena/cards/arenaDeck'
 import { ArenaMatchComposition } from '../../src/arena/matchmaking/arenaMatchmaking'
 
@@ -47,8 +47,8 @@ function actionFor(engine: ArenaMatchEngine, actorId: string, sequence: number):
     case 'FINAL_ARRANGE': return { ...base, type: 'FINAL_ARRANGE', ...arrangementFor(engine, actorId) }
     case 'JOKER_DECLARE': return { ...base, type: 'JOKER_DECLARE', mode: 'WILD', targetPile: 3, availableCrest: 100 }
     case 'DISCARD': {
-      const held = engine.snapshotDetail().heldCardIds[actorId] ?? []
-      return { ...base, type: 'DISCARD', cardId: held[held.length - 1] }
+      const pile3 = engine.snapshotDetail().lastArrangements[actorId]?.pile3 ?? []
+      return { ...base, type: 'DISCARD', cardId: pile3[pile3.length - 1] }
     }
     case 'FINAL_LOCK': return { ...base, type: 'FINAL_LOCK', ...arrangementFor(engine, actorId) }
     case 'GF_PILE_2': case 'GF_PILE_3_ROUND_1': case 'GF_PILE_3_ROUND_2':
@@ -103,7 +103,7 @@ describe('Gate 5 - end-to-end Arena match state machine', () => {
   // ลดจำนวน seed จาก 1,000 เหลือ 6 เพื่อให้ชุดเทสรันจบในเวลาที่สมเหตุสมผล — รวม assertion ของ completion +
   // settlement conservation ไว้ในลูปเดียวกัน (แทนที่จะรัน playMatch ซ้ำสองรอบสำหรับสองเทสแยกกัน)
   test('จำลอง 6 Matches: ทุก Match ต้องจบครบสาม Games และ Settlement conservation คงที่', () => {
-    const startingTotal = 4 * 228 // p1/p2/p3 + AI boss ทั้งหมดเริ่มที่ requiredReservationCrest เท่ากันแล้ว
+    const startingTotal = 4 * 240 // p1/p2/p3 + AI boss ทั้งหมดเริ่มที่ 20 Crown เท่ากันแล้ว
     for (let seed = 1; seed <= 6; seed++) {
       const engine = playMatch(seed)
       expect(engine.snapshot().gameNumber).toBe(3)
@@ -118,13 +118,126 @@ describe('Gate 5 - end-to-end Arena match state machine', () => {
       .toThrow('ARENA_ACTION_WRONG_PHASE')
   })
 
+  test('auction winner ranks pile 3 as Best 5 of 7 and may discard only its final arranged card', () => {
+    const engine = new ArenaMatchEngine('m-pile3-best-seven', composition, createSeededRandom(81), 0)
+    let sequence = 0
+    let now = 1
+    while (engine.snapshot().phase !== 'DISCARD') {
+      const phase = engine.snapshot().phase
+      const actorId = engine.snapshot().pendingActorIds[0]
+      if (!actorId) {
+        now = Math.max(now + 1, engine.snapshot().deadlineAt ?? now + 1)
+        engine.tick(now)
+      } else if (phase === 'AUCTION_FACE_UP') {
+        engine.submit({ type: 'FACE_UP_BID', actionId: `face-${++sequence}`, actorId, amountCrest: actorId === 'p1' ? 3 : 0 }, now++)
+      } else if (phase === 'AUCTION_BLIND') {
+        engine.submit({ type: 'BLIND_BID', actionId: `blind-${++sequence}`, actorId, amountCrest: actorId === 'p2' ? 3 : 0, cardIndex: 0 }, now++)
+      } else {
+        engine.submit(actionFor(engine, actorId, ++sequence), now++)
+      }
+    }
+
+    const winnerId = engine.snapshot().pendingActorIds[0]
+    const pile3 = engine.snapshotDetail().lastArrangements[winnerId].pile3
+    expect(pile3).toHaveLength(6)
+    const deal = engine.currentDeal()!
+    const expected = evaluatePileBest(pile3.slice(0, 5).map(id => engine.cardById(id)!), deal.community.pile3)
+    expect(engine.pileHandFor(winnerId, 3)?.score).toBe(expected.score)
+    expect(() => engine.submit({ type: 'DISCARD', actionId: 'wrong-discard', actorId: winnerId, cardId: pile3[0] }, now))
+      .toThrow('ARENA_DISCARD_MUST_BE_LAST_PILE3_CARD')
+    expect(engine.submit({ type: 'DISCARD', actionId: 'mandatory-discard', actorId: winnerId, cardId: pile3[5] }, now))
+      .toMatchObject({ accepted: true })
+  })
+
+  test('face-up winner cannot submit a blind bid', () => {
+    const engine = new ArenaMatchEngine('m-no-double-auction', composition, createSeededRandom(82), 0)
+    let sequence = 0
+    let now = 1
+    while (engine.snapshot().phase !== 'AUCTION_FACE_UP') {
+      const actorId = engine.snapshot().pendingActorIds[0]
+      if (actorId) engine.submit(actionFor(engine, actorId, ++sequence), now++)
+      else { now = engine.snapshot().deadlineAt!; engine.tick(now) }
+    }
+    for (const actorId of [...engine.snapshot().pendingActorIds]) {
+      engine.submit({ type: 'FACE_UP_BID', actionId: `face-lock-${actorId}`, actorId, amountCrest: actorId === 'p1' ? 3 : 0 }, now++)
+    }
+    expect(engine.snapshot().phase).toBe('AUCTION_FACE_UP_RESULT')
+    engine.tick(engine.snapshot().deadlineAt!)
+    expect(engine.snapshot().phase).toBe('AUCTION_BLIND')
+    expect(engine.snapshot().pendingActorIds).not.toContain('p1')
+    expect(() => engine.submit({ type: 'BLIND_BID', actionId: 'illegal-second-auction', actorId: 'p1', amountCrest: 3, cardIndex: 0 }, now))
+      .toThrow('ARENA_FACE_UP_WINNER_INELIGIBLE_FOR_BLIND_AUCTION')
+  })
+
+  test('ANTE_X2 moves Joker into the immutable discard slot automatically', () => {
+    let engine: ArenaMatchEngine | null = null
+    let jokerBlindIndex: 0 | 1 = 0
+    for (let seed = 1; seed <= 20 && !engine; seed++) {
+      const candidate = new ArenaMatchEngine(`m-joker-discard-${seed}`, composition, createSeededRandom(seed), 0)
+      for (const actorId of [...candidate.snapshot().pendingActorIds]) {
+        candidate.submit({ type: 'BUY_IN_RESERVED', actionId: `reserve-joker-${seed}-${actorId}`, actorId }, 1)
+      }
+      const index = candidate.currentDeal()!.auction.blind.findIndex(card => card.kind === 'JOKER')
+      if (index >= 0) { engine = candidate; jokerBlindIndex = index as 0 | 1 }
+    }
+    expect(engine).not.toBeNull()
+    const match = engine!
+    let sequence = 0
+    let now = 4_001
+    match.tick(now)
+    while (match.snapshot().phase !== 'JOKER_DECLARE') {
+      const actorId = match.snapshot().pendingActorIds[0]
+      if (actorId && match.snapshot().phase === 'AUCTION_FACE_UP') {
+        match.submit({ type: 'FACE_UP_BID', actionId: `joker-face-${++sequence}`, actorId, amountCrest: actorId === 'p1' ? 3 : 0 }, now++)
+      } else if (actorId && match.snapshot().phase === 'AUCTION_BLIND') {
+        match.submit({ type: 'BLIND_BID', actionId: `joker-blind-${++sequence}`, actorId, amountCrest: actorId === 'p2' ? 3 : 0, cardIndex: jokerBlindIndex }, now++)
+      } else if (actorId) match.submit(actionFor(match, actorId, ++sequence), now++)
+      else { now = Math.max(now + 1, match.snapshot().deadlineAt ?? now + 1); match.tick(now) }
+    }
+    const ownerId = match.snapshotDetail().jokerOwnerId!
+    match.submit({ type: 'JOKER_DECLARE', actionId: 'joker-x2', actorId: ownerId, mode: 'ANTE_X2', targetPile: 3, availableCrest: 100 }, now++)
+    expect(match.snapshot().phase).toBe('DISCARD')
+    expect(match.snapshot().pendingActorIds).toContain(ownerId)
+    const pile3 = match.snapshotDetail().lastArrangements[ownerId].pile3
+    expect(pile3[pile3.length - 1]).toBe('JOKER')
+    expect(() => match.submit({ type: 'DISCARD', actionId: 'reject-non-joker', actorId: ownerId, cardId: pile3[0] }, now))
+      .toThrow('ARENA_DISCARD_MUST_BE_LAST_PILE3_CARD')
+    expect(match.submit({ type: 'DISCARD', actionId: 'discard-joker', actorId: ownerId, cardId: 'JOKER' }, now))
+      .toMatchObject({ accepted: true })
+  })
+
+  test('ANTE_X2 applies once to the first pile won by the Joker owner', () => {
+    const engine = new ArenaMatchEngine('m-joker-first-win', composition, createSeededRandom(91), 0)
+    const internal = engine as any
+    internal.jokerOwnerId = 'p1'
+    internal.jokerDeclaration = { mode: 'ANTE_X2', targetPile: 1, forcedWild: false, declaredAt: 'now' }
+
+    internal.maybeApplyJokerAnteX2(1, 'p2')
+    expect(engine.settlementTotals().pots).toEqual({ 1: 0, 2: 0, 3: 0 })
+
+    internal.maybeApplyJokerAnteX2(2, 'p1')
+    expect(engine.settlementTotals().pots).toEqual({ 1: 0, 2: 0, 3: 0 })
+    expect(engine.snapshotDetail().jokerDeclaration?.targetPile).toBe(2)
+
+    internal.maybeApplyJokerAnteX2(3, 'p1')
+    internal.settleJokerAnteX2Bonus()
+    const breakdown = new Map(engine.settlementBreakdown().map(row => [row.playerId, row]))
+    expect(breakdown.get('p1')).toMatchObject({ endingCrest: 249, jokerExtraAnte: 0, winLoss: 9 })
+    for (const actorId of engine.actorIds.filter(id => id !== 'p1')) {
+      expect(breakdown.get(actorId)).toMatchObject({ endingCrest: 237, jokerExtraAnte: 3 })
+    }
+    expect(engine.settlementTotals().conservedTotalCrest).toBe(960)
+    internal.settleJokerAnteX2Bonus()
+    expect(engine.settlementTotals().conservedTotalCrest).toBe(960)
+  })
+
   test('buy-in timeout fail closed ไม่เริ่ม Match โดยไม่มี reserve', () => {
     const engine = new ArenaMatchEngine('m-timeout', composition, createSeededRandom(9), 0)
     expect(() => engine.tick(15_000)).toThrow('ARENA_BUY_IN_RESERVATION_TIMEOUT')
     expect(engine.snapshot().phase).toBe('MATCH_BUY_IN_RESERVE')
   })
 
-  test('เหลือผู้เล่นคนเดียวใน GF Pile 2 ชนะทันทีโดยไม่ต้องเทียบไพ่ (รักษา Fog of War)', () => {
+  test('GF Pile 2 วนครบทุกที่นั่งแล้วผู้เล่นคนเดียวที่เหลือชนะโดยไม่เปิดไพ่ (รักษา Fog of War)', () => {
     const engine = new ArenaMatchEngine('m-solo-gf', composition, createSeededRandom(55), 0)
     let sequence = 0
     let now = 1
@@ -149,6 +262,30 @@ describe('Gate 5 - end-to-end Arena match state machine', () => {
     now = engine.snapshot().deadlineAt!
     engine.tick(now)
     expect(engine.snapshot().phase).toBe('GF_PILE_3_ROUND_1')
+  })
+
+  test('GF Pile 2 วน Call/Fold ครบทีละคนและเริ่ม deadline 15 วินาทีใหม่ทุก turn', () => {
+    const engine = new ArenaMatchEngine('m-gf-sequential', composition, createSeededRandom(56), 0)
+    let sequence = 0
+    let now = 1
+    while (engine.snapshot().phase !== 'GF_PILE_2') {
+      const pending = engine.snapshot().pendingActorIds
+      if (pending.length) engine.submit(actionFor(engine, pending[0], ++sequence), now++)
+      else { now = Math.max(now + 1, engine.snapshot().deadlineAt ?? now + 1); engine.tick(now) }
+    }
+    const expectedOrder = [...engine.snapshotDetail().gfRound!.turnOrder]
+    const seen: string[] = []
+    let previousVersion = engine.snapshot().version
+    while (engine.snapshot().phase === 'GF_PILE_2') {
+      const actorId = engine.snapshot().pendingActorIds[0]
+      seen.push(actorId)
+      const actedAt = now++
+      engine.submit({ type: 'GF_ACTION', actionId: `sequential-${++sequence}`, actorId, decision: 'FOLD' }, actedAt)
+      expect(engine.snapshot().version).toBeGreaterThan(previousVersion)
+      previousVersion = engine.snapshot().version
+      if (engine.snapshot().phase === 'GF_PILE_2') expect(engine.snapshot().deadlineAt).toBe(actedAt + 15_000)
+    }
+    expect(seen).toEqual(expectedOrder)
   })
 
   test('REVEAL_PILE_1 หยุดเกมจริงพร้อมข้อมูลไพ่ผู้ชนะ แล้ว auto-advance ไป GF_PILE_2 เองหลัง deadline หมดโดยไม่ต้องมี action', () => {

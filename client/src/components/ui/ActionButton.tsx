@@ -42,7 +42,7 @@ export function ActionButton({ icon, label, onPress, disabled, variant = 'normal
           <Image source={ACTION_BUTTON_IMAGES[icon]} style={styles.image} resizeMode="contain" />
           {vipShimmer && <ShimmerOverlay />}
           <View style={styles.labelSlot} pointerEvents="none">
-            <Text style={[styles.label, labelStyle]} numberOfLines={1}>{displayLabel}</Text>
+            <Text style={[styles.label, labelStyle]} numberOfLines={3}>{displayLabel}</Text>
           </View>
           {pressed && !interactionDisabled && <View style={styles.pressOverlay} pointerEvents="none" />}
           {isDisabled && <View style={styles.disabledOverlay} pointerEvents="none" />}

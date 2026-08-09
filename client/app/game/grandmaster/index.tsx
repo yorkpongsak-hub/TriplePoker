@@ -23,10 +23,19 @@ function previewSnapshot(mode?: string): ArenaClientSnapshot {
       { seat: 3, playerId: 'boss', displayName: 'Monarch', avatar: '♛', controller: 'AI', isLocal: false, isBoss: true, isCurrentTurn: false, connection: 'CONNECTED', cards: [], cardCount: 11, crownCrest: 300 },
       { seat: 4, playerId: 'p4', displayName: 'Sovereign Fox', avatar: 'owl', controller: 'HUMAN', isLocal: false, isBoss: false, isCurrentTurn: false, connection: 'CONNECTED', cards: [], cardCount: 11, crownCrest: 198 },
     ],
+    cardZones: {
+      stockCount: phase === 'ARRANGE_1' ? 3 : 0,
+      discardCount: 0,
+      auction: { faceUpCard: null, blindCount: phase === 'AUCTION_BLIND' ? 2 : 0 },
+      resolvedPileCounts: { pile1: 0, pile2: phase === 'REVEAL_PILE_2' || phase === 'MATCH_RESULT' ? 12 : 0, pile3: phase === 'MATCH_RESULT' ? 20 : 0 },
+      totalCards: 53,
+    },
     crown: { pile1PotCrest: 12, pile2PotCrest: 15, pile3PotCrest: 24, battleRewardsCrest: 18, tableTotalCrest: 954, localBalanceCrest: 246 },
     communityCards: { pile1: ['ah', '10h'], pile2: ['ks', 'kd'], pile3: ['qc', 'JOKER'] },
     auction: phase === 'AUCTION_BLIND' ? { round: 'BLIND', bidOptionsCrest: [0, 3, 6, 9, 12], locked: false } : null,
     auctionDisplay: phase === 'AUCTION_BLIND' ? { faceUpCard: 'ah' } : null,
+    auctionResult: phase === 'AUCTION_BLIND' ? { round: 'FACE_UP', card: 'ah', winnerSeat: 2, winnerDisplayName: 'Cipher Veil' } : null,
+    blindAuctionResults: [],
     pilesResolved: {
       pile1: phase !== 'ARRANGE_1' && phase !== 'AUCTION_BLIND',
       pile2: phase === 'REVEAL_PILE_2' || phase === 'MATCH_RESULT',
@@ -47,6 +56,7 @@ function previewSnapshot(mode?: string): ArenaClientSnapshot {
       atmosphere: 'A stranger slides into the empty seat...',
       quote: 'Titles are just stories people agree not to question.',
     } : null,
+    dualBossLore: null,
     result: phase === 'MATCH_RESULT' ? {
       title: 'MATCH COMPLETE',
       lines: [
@@ -56,7 +66,7 @@ function previewSnapshot(mode?: string): ArenaClientSnapshot {
         { label: 'Win / Loss', crest: 66 },
       ],
       netCrest: 21,
-      psGained: 7,
+      psGained: 4,
     } : null,
     reveal: phase === 'REVEAL_PILE_2' ? {
       pile: 2, winnerSeat: 2, winnerDisplayName: 'Cipher Veil', handName: 'full_house',
@@ -71,17 +81,31 @@ export default function GrandmasterScreen() {
   const snapshot = useArenaTableStore(state => state.snapshot)
   const applyServerSnapshot = useArenaTableStore(state => state.applyServerSnapshot)
   const live = typeof params.preview !== 'string'
+  const transport = useArenaTransport(live)
   const initial = useMemo(() => {
     const value = previewSnapshot(params.preview)
     if (!live) return value
+    const rosterBySeat = new Map(transport.queueRoster.map(entry => [entry.seat, entry]))
     return {
       ...value, version: 0, phase: 'WAITING_FOR_PLAYERS' as const, gameNumber: 0 as const, phaseEndsAt: null,
-      seats: value.seats.map(seat => ({ ...seat, cards: [], cardCount: 0 })),
+      seats: value.seats.map(seat => {
+        const entry = rosterBySeat.get(seat.seat as 1 | 2 | 4)
+        if (entry) return {
+          ...seat, playerId: entry.playerId, displayName: entry.displayName, avatar: entry.avatar,
+          controller: 'HUMAN' as const, isBoss: false, isLocal: entry.playerId === transport.playerId,
+          isCurrentTurn: false, cards: [], cardCount: 0, crownCrest: 0, isWaiting: false,
+        }
+        // Before the first roster packet, keep the local player visible in
+        // seat 1. Every genuinely unassigned seat, including the future Boss
+        // seat, uses the same animated Waiting state as VIP Plus.
+        if (!transport.queueRoster.length && seat.seat === 1) return { ...seat, displayName: 'You', cards: [], cardCount: 0, isWaiting: false }
+        return { ...seat, playerId: `waiting-seat-${seat.seat}`, displayName: 'Waiting', avatar: '', controller: 'HUMAN' as const, isBoss: false, isLocal: false, isCurrentTurn: false, cards: [], cardCount: 0, crownCrest: 0, isWaiting: true }
+      }),
+      cardZones: { stockCount: 53, discardCount: 0, auction: { faceUpCard: null, blindCount: 0 }, resolvedPileCounts: { pile1: 0, pile2: 0, pile3: 0 }, totalCards: 53 as const },
       communityCards: { pile1: [], pile2: [], pile3: [] },
       crown: { pile1PotCrest: 0, pile2PotCrest: 0, pile3PotCrest: 0, battleRewardsCrest: 0, tableTotalCrest: 0, localBalanceCrest: 0 },
     }
-  }, [params.preview, live])
-  const transport = useArenaTransport(live)
+  }, [params.preview, live, transport.playerId, transport.queueRoster])
 
   useEffect(() => { applyServerSnapshot(initial) }, [initial, applyServerSnapshot])
 

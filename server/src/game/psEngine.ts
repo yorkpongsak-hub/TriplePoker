@@ -12,9 +12,11 @@ import { supabaseAdmin } from '../config/supabase'
 import { gameConfig } from '../config/gameConfig'
 
 export interface AwardPerformanceScoreInput {
-  tier: 'highNoble' | 'ascendant' | 'grandmaster'
+  tier: 'highNoble' | 'ascendant' | 'grandmaster' | 'sovereign'
   finalWinnerId: string | null            // userId ของผู้เล่นอันดับ 1 ในโต๊ะ ถ้าเป็น human — null ถ้า Boss ชนะ
-  isMonarchMatch: boolean
+  legendaryBossDefeated?: boolean        // Monarch, Soren หรือ Last Boss เท่านั้น
+  /** @deprecated compatibility for older callers/tests; use legendaryBossDefeated */
+  isMonarchMatch?: boolean
   humanNetDeltas: Record<string, number>  // userId (human ทุกคนในโต๊ะ) -> net token delta ของทั้งแมตช์ (ก่อนคูณ Monarch)
 }
 
@@ -24,62 +26,31 @@ export async function awardPerformanceScore(input: AwardPerformanceScoreInput): 
   if (userIds.length === 0) return
 
   const cfg = gameConfig.psConfig
-  const winPoints = input.tier === 'grandmaster'
-    ? (input.isMonarchMatch ? cfg.grandmasterMonarchWin : cfg.grandmasterWin)
-    : input.isMonarchMatch
-      ? (input.tier === 'highNoble' ? cfg.highNobleMonarchWin : cfg.ascendantMonarchWin)
-      : (input.tier === 'highNoble' ? cfg.highNobleWin : cfg.ascendantWin)
+  const tierPoints = cfg[input.tier]
+  const legendaryBossDefeated = input.legendaryBossDefeated ?? input.isMonarchMatch ?? false
+  const winPoints = tierPoints.bossWin + (legendaryBossDefeated ? cfg.legendaryBossBonus : 0)
 
-  const currentCareer: Record<string, number> = {}
-  const currentSeason: Record<string, number> = {}
-  try {
-    const { data, error: readErr } = await supabaseAdmin
-      .from('users')
-      .select('user_id, performance_score, ps_season')
-      .in('user_id', userIds)
-    // อ่านค่าเดิมไม่ได้ = ห้ามเขียนต่อเด็ดขาด ไม่งั้น (currentCareer ?? 0) + gained
-    // จะเขียนทับ PS ที่สะสมไว้ให้หายถาวร (คอลัมน์มีจริงแล้ว fallback 0 จึงอันตรายกว่าข้ามรอบ)
-    if (readErr) {
-      console.error('[PS] Read failed, skip award:', readErr, '| userIds:', userIds)
-      return
-    }
-    for (const row of data ?? []) {
-      currentCareer[row.user_id] = row.performance_score ?? 0
-      currentSeason[row.user_id] = row.ps_season ?? 0
-    }
-  } catch (err) {
-    console.error('[PS] Unexpected read error, skip award:', err, '| userIds:', userIds)
-    return
-  }
-
-  const rows = userIds.map(userId => {
+  const awards = userIds.map(userId => {
     const netDelta = input.humanNetDeltas[userId]
-    const notWinNonNegative = input.tier === 'grandmaster' ? cfg.grandmasterNotWinNonNegative : cfg.notWinNonNegative
-    const notWinNegative = input.tier === 'grandmaster' ? cfg.grandmasterNegative : cfg.negative
     const gained = userId === input.finalWinnerId
       ? winPoints
-      : (netDelta >= 0 ? notWinNonNegative : notWinNegative)
-    return {
-      user_id: userId,
-      performance_score: (currentCareer[userId] ?? 0) + gained,
-      ps_season: (currentSeason[userId] ?? 0) + gained,
-    }
+      : (netDelta >= 0 ? tierPoints.nonNegative : tierPoints.negative)
+    return { userId, gained }
   })
 
   try {
-    for (const row of rows) {
-      const { user_id, ...fields } = row
-      const { error } = await supabaseAdmin
-        .from('users')
-        .update(fields)
-        .eq('user_id', user_id)
+    for (const { userId, gained } of awards) {
+      const { error } = await supabaseAdmin.rpc('increment_performance_score', {
+        p_user_id: userId,
+        p_delta: gained,
+      })
       if (error) {
-        console.error('[PS] Update failed:', error, '| user_id:', user_id, '| fields:', JSON.stringify(fields))
+        console.error('[PS] Atomic increment failed:', error, '| user_id:', userId, '| delta:', gained)
       } else {
-        console.log('[PS] OK', user_id, 'career=', fields.performance_score, 'season=', fields.ps_season)
+        console.log('[PS] OK', userId, 'delta=', gained)
       }
     }
   } catch (err) {
-    console.error('[PS] Error updating performance_score/ps_season batch:', err)
+    console.error('[PS] Error incrementing performance_score/ps_season:', err)
   }
 }

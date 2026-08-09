@@ -4,8 +4,9 @@ import { awardPerformanceScore } from '../../game/psEngine'
 import { recordMatchWin } from '../../game/matchWinsService'
 import { resolveArenaBotPolicy } from '../ai/resolveArenaBotPolicy'
 import { bestArenaArrangement } from '../arrangement/arenaArrangement'
-import { buildArenaBotAction } from '../connection/arenaBotTakeover'
-import { tierSEconomyConfig } from '../config/tierSConfig'
+import { arenaCardKey } from '../cards/arenaDeck'
+import { buildArenaBotAction, takeoverArrangement } from '../connection/arenaBotTakeover'
+import { arenaPhaseTimeoutMs, tierSConfig, tierSEconomyConfig } from '../config/tierSConfig'
 import { ArenaCrestLedger } from '../economy/arenaCrestLedger'
 import { ArenaMatchAction } from '../match/arenaMatchEngine'
 import { ArenaSettlementPersistence } from '../settlement/arenaSettlementPersistence'
@@ -46,11 +47,28 @@ export function driveBots(match: ArenaRuntimeMatch, now: number): void {
       return seat.controller === 'AI' || match.connections.controllerFor(actorId) === 'BOT'
     })
     if (!botActorId) return
+    if (['GF_PILE_2', 'GF_PILE_3_ROUND_1', 'GF_PILE_3_ROUND_2'].includes(snapshot.phase)) {
+      const duration = arenaPhaseTimeoutMs[snapshot.phase as 'GF_PILE_2' | 'GF_PILE_3_ROUND_1' | 'GF_PILE_3_ROUND_2']
+      const turnStartedAt = (snapshot.deadlineAt ?? now + duration) - duration
+      // Expose each AI/Boss as CURRENT before it acts, like Mastermind's
+      // grand_finale_turn + thinking delay. Human turns retain the full 15s.
+      if (now - turnStartedAt < 1_500) return
+    }
     try {
       const deal = match.engine.currentDeal()
-      const heldIds = [...(match.engine.snapshotDetail().heldCardIds[botActorId] ?? [])]
-      const arrangement = deal ? bestArenaArrangement(match.engine.heldCardsFor(botActorId), deal.community) : { pile1: [], pile2: [], pile3: [] }
-      const discardCardId = heldIds.at(-1)
+      const detail = match.engine.snapshotDetail()
+      const seat = actorSeat.get(botActorId)!
+      const heldCards = match.engine.heldCardsFor(botActorId)
+      const arrangement = deal
+        ? seat.controller === 'HUMAN'
+          ? takeoverArrangement(heldCards.map(arenaCardKey), detail.lastArrangements[botActorId])
+          : bestArenaArrangement(heldCards, deal.community)
+        : { pile1: [], pile2: [], pile3: [] }
+      // DISCARD is positional in Tier S: only the final card of the latest
+      // server-accepted pile 3 may be discarded. This also picks JOKER after
+      // ANTE_X2 has moved it into the immutable discard slot.
+      const savedPile3 = detail.lastArrangements[botActorId]?.pile3
+      const discardCardId = savedPile3?.[savedPile3.length - 1]
       const policy = resolveArenaBotPolicy(match.engine, match.composition, botActorId)
       const action = buildArenaBotAction(snapshot, botActorId, { arrangement, discardCardId }, policy)
       match.engine.submit(action, now)
@@ -129,7 +147,7 @@ async function persistMatchEndStats(match: ArenaRuntimeMatch): Promise<void> {
   try {
     await awardPerformanceScore({
       tier: 'grandmaster', finalWinnerId: isHumanWinner ? winnerId : null,
-      isMonarchMatch: isRareBoss, humanNetDeltas,
+      legendaryBossDefeated: isHumanWinner && isRareBoss, humanNetDeltas,
     })
   } catch (error) {
     console.error('[Arena] PS award failed:', error)
@@ -138,13 +156,58 @@ async function persistMatchEndStats(match: ArenaRuntimeMatch): Promise<void> {
 
 export function registerArenaSocket(io: Server): void {
   const arena = io.of('/arena')
-  const announceMatch = (composition: ReturnType<ArenaRuntime['tickQueue']>) => {
+  const emitQueueRoster = () => {
+    const seatOrder = [1, 2, 4] as const
+    const roster = runtime.waitingHumanIds().map((playerId, index) => ({
+      seat: seatOrder[index], playerId,
+      displayName: identities.get(playerId)?.displayName ?? 'Grandmaster',
+      avatar: identities.get(playerId)?.avatar ?? '',
+    }))
+    for (const playerId of runtime.waitingHumanIds()) socketsByPlayer.get(playerId)?.emit('arena:queue:roster', roster)
+  }
+  const announceMatch = async (composition: ReturnType<ArenaRuntime['tickQueue']>) => {
     if (!composition) return
+    const humanSeats = composition.seats.filter(seat => seat.controller === 'HUMAN')
+    const match = humanSeats.length ? runtime.matchForPlayer(humanSeats[0].playerId) : null
+    if (!match) return
+
+    // Reservation is server-authoritative. Previously the client had to echo
+    // BUY_IN_RESERVED after arena:matched; losing that event during navigation
+    // left the match stuck until ARENA_BUY_IN_RESERVATION_TIMEOUT.
+    try {
+      const balances = await Promise.all(humanSeats.map(async seat => ({
+        seat,
+        balance: await crestLedger.getBalance(seat.playerId),
+      })))
+      const insufficient = balances.find(entry => entry.balance.totalCrest < tierSEconomyConfig.requiredReservationCrest)
+      if (insufficient) {
+        for (const { seat } of balances) {
+          socketsByPlayer.get(seat.playerId)?.emit('arena:match:cancelled', {
+            reason: 'BUY_IN_BALANCE_CHANGED',
+            playerId: insufficient.seat.playerId,
+          })
+        }
+        runtime.completeMatch(match.engine.matchId)
+        return
+      }
+      const now = Date.now()
+      for (const { seat } of balances) {
+        match.engine.submit({
+          type: 'BUY_IN_RESERVED', actorId: seat.playerId,
+          actionId: `server:reserve:${match.engine.matchId}:${seat.playerId}`,
+        }, now)
+      }
+    } catch (error) {
+      console.error('[Arena] server buy-in reservation failed:', error)
+      for (const seat of humanSeats) socketsByPlayer.get(seat.playerId)?.emit('arena:match:cancelled', { reason: 'BUY_IN_RESERVATION_FAILED' })
+      runtime.completeMatch(match.engine.matchId)
+      return
+    }
+
     for (const seat of composition.seats) {
       if (seat.controller !== 'HUMAN') continue
       const playerSocket = socketsByPlayer.get(seat.playerId)
-      const match = runtime.matchForPlayer(seat.playerId)
-      if (!playerSocket || !match) continue
+      if (!playerSocket) continue
       playerSocket.join(roomName(match.engine.matchId))
       playerSocket.emit('arena:matched', { matchId: match.engine.matchId, composition })
       playerSocket.emit('arena:snapshot', projectArenaClientSnapshot(match.engine, match.composition, match.connections, seat.playerId, Date.now(), identities))
@@ -158,7 +221,7 @@ export function registerArenaSocket(io: Server): void {
     void (async () => {
       try {
         const now = Date.now()
-        announceMatch(runtime.tickQueue(now))
+        await announceMatch(runtime.tickQueue(now))
         for (const match of runtime.activeMatches()) {
           try {
             match.connections.observe(now, match.engine.snapshot())
@@ -168,6 +231,13 @@ export function registerArenaSocket(io: Server): void {
             await persistSettlement(match)
             if (match.engine.snapshot().version !== before) emitProjectedSnapshots(match, now)
           } catch (error) {
+            if (error instanceof Error && error.message === 'ARENA_BUY_IN_RESERVATION_TIMEOUT') {
+              for (const seat of match.composition.seats) {
+                if (seat.controller === 'HUMAN') socketsByPlayer.get(seat.playerId)?.emit('arena:match:cancelled', { reason: error.message })
+              }
+              runtime.completeMatch(match.engine.matchId)
+              continue
+            }
             console.error('[Arena] tick failed:', error)
           }
         }
@@ -198,10 +268,36 @@ export function registerArenaSocket(io: Server): void {
       socket.emit('arena:snapshot', projectArenaClientSnapshot(existing.engine, existing.composition, existing.connections, identity.playerId, Date.now(), identities))
     }
 
-    socket.on('arena:queue:join', () => {
-      const result = runtime.join({ playerId: identity.playerId, tokenBalance: identity.tokenBalance, tierUnlockedMax: identity.tierUnlockedMax, joinedAt: Date.now() })
-      socket.emit('arena:queue:status', result)
-      if (result.ok && result.status === 'MATCHED') announceMatch(result.match)
+    socket.on('arena:queue:join', async () => {
+      try {
+        // The client uses the same connect path for first entry and reconnect.
+        // Make this idempotent so a resumed MATCHED state is not overwritten
+        // by an ALREADY_JOINED error.
+        const activeMatch = runtime.matchForPlayer(identity.playerId)
+        if (activeMatch) {
+          socket.emit('arena:queue:status', { ok: true, status: 'MATCHED', resumed: true })
+          socket.emit('arena:snapshot', projectArenaClientSnapshot(activeMatch.engine, activeMatch.composition, activeMatch.connections, identity.playerId, Date.now(), identities))
+          return
+        }
+        // Check the authoritative Crown/Crest ledger before the player enters
+        // matchmaking. BUY_IN_RESERVED repeats this check to close the race
+        // where the balance changes while the player is waiting in queue.
+        const balance = await crestLedger.getBalance(identity.playerId)
+        if (balance.totalCrest < tierSEconomyConfig.requiredReservationCrest) {
+          socket.emit('arena:queue:status', {
+            ok: false, status: 'INSUFFICIENT_CROWN',
+            requiredCrest: tierSEconomyConfig.requiredReservationCrest,
+            requiredCrown: Math.ceil(tierSEconomyConfig.requiredReservationCrest / tierSConfig.crestPerCrown),
+            balanceCrest: balance.totalCrest,
+          })
+          return
+        }
+        const result = runtime.join({ playerId: identity.playerId, tokenBalance: identity.tokenBalance, tierUnlockedMax: identity.tierUnlockedMax, joinedAt: Date.now() })
+        socket.emit('arena:queue:status', result)
+        if (result.ok && result.status === 'WAITING') emitQueueRoster()
+      } catch (error) {
+        socket.emit('arena:queue:status', { ok: false, status: 'CROWN_BALANCE_CHECK_FAILED' })
+      }
     })
 
     socket.on('arena:snapshot:request', () => {
@@ -228,8 +324,11 @@ export function registerArenaSocket(io: Server): void {
     })
 
     socket.on('disconnect', () => {
+      // An old socket may close after its replacement is already connected.
+      // It must not disconnect the newly active seat.
+      if (socketsByPlayer.get(identity.playerId) !== socket) return
       runtime.disconnect(identity.playerId)
-      if (socketsByPlayer.get(identity.playerId) === socket) socketsByPlayer.delete(identity.playerId)
+      socketsByPlayer.delete(identity.playerId)
       identities.delete(identity.playerId)
     })
   })

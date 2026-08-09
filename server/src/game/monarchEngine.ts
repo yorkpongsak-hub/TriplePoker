@@ -35,6 +35,7 @@ import { rollAndRecordMonarchRelic, MonarchRelicResult } from './monarchSpawn'
 import { computeHNHumanPayout } from './highNobleMultiEngine'
 import { recordMatchStats } from './matchStatsService'
 import { recordBossResult } from './bossStatsService'
+import { awardPerformanceScore } from './psEngine'
 
 // ── Seat & Match State ──────────────────────────────────────
 export interface MonarchSeat {
@@ -1083,6 +1084,16 @@ export async function settleMonarchMatch(io: Server, state: MonarchMatchState): 
   }
 
   const newBalance = await settleEscrow(state.humanUserId, state.escrowId, finalStack)
+
+  // Dedicated Monarch encounters bypass the High Noble multiplayer settlement,
+  // so award PS here using the same central table. A win is Tier A+ bossWin
+  // plus the named-boss bonus; non-wins use the actual pre-multiplier net.
+  await awardPerformanceScore({
+    tier: 'highNoble',
+    finalWinnerId: isHumanWinner ? state.humanUserId : null,
+    legendaryBossDefeated: isHumanWinner,
+    humanNetDeltas: { [state.humanUserId]: netDelta },
+  })
 
   // Boss matches count toward aggregate profile stats, but intentionally do not call
   // recordMatchWin(): Boss results belong in the Bosses tab, never regular History.

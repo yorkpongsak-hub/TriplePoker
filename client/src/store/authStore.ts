@@ -19,11 +19,16 @@ interface UserProfile {
   token_balance: number | null
   crown_balance: number | null
   xp: number | null
+  last_login: string | null
   performance_score: number | null    // Monarch_Spec_v1_3 §4 — Career PS (lifetime, ห้ามรีเซ็ต) active ตั้งแต่ Tier A+ ขึ้นไป
   ps_season: number | null            // Monarch_Spec_v1_3 §4.2 — Season PS (เกณฑ์แข่งขัน/Ascendant Star, รีเซ็ตตาม tournament)
   monarch_victories: number | null    // Monarch_Spec_v1_3 §3/§5 — Badge "Monarch Slayer" (>=1) + เงื่อนไข Ascendant Gate
   tier_unlock_celebrated: string[] | null  // LobbyMatchmaking_Spec_v1_0 §1.3 — Tier ที่เคยแสดง Unlock Celebration แล้ว
+  beyond_path?: 'CAELUM' | 'SOREN' | 'MONARCH' | null
   streak_count: number | null         // matchStatsService.ts อัปเดตทุกจบแมตช์ (Asia/Bangkok) — ยืนยันแล้วว่าคอลัมน์มีจริงบน live DB
+  best_streak_count: number | null
+  streak_shields: number | null
+  streak_7days_badge: boolean | null
   games_played: number | null         // matchStatsService.ts — นับทุกแมตช์ที่จบครบ totalRounds
   games_won: number | null            // เกณฑ์: finalWinner === humanPlayerId (อันดับ 1 ของโต๊ะ)
   best_hands: Record<string, any> | null   // jsonb — hand ที่ดีที่สุดแยกตาม rank
@@ -57,7 +62,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   initAuth: async () => {
     try {
       const { data } = await supabase.auth.getSession()
-      await get().setSession(data.session)
+      let bootSession = data.session
+
+      // ตรวจ refresh token ตอนเริ่มแอป และล้าง session ในเครื่องทันทีเมื่อ token ใช้ไม่ได้
+      if (bootSession) {
+        const refreshed = await supabase.auth.refreshSession(bootSession)
+        if (refreshed.error || !refreshed.data.session) {
+          await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+          bootSession = null
+          useUserStore.getState().logout()
+        } else {
+          bootSession = refreshed.data.session
+        }
+      }
+      await get().setSession(bootSession)
 
       // subscribe ทุก auth state change (login/logout/token refresh)
       onAuthStateChange(async (_event, session) => {
@@ -71,7 +89,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // -> ล้าง session ค้างใน AsyncStorage แล้วบูตแอปแบบ logged-out สะอาดๆ แทนการปล่อย error ค้าง
       const msg = String(e?.message ?? '')
       if (e?.name === 'AuthApiError' || msg.includes('Refresh Token')) {
-        try { await supabase.auth.signOut() } catch {} // signOut บน session เสียอาจ throw ซ้ำ — กลืนทิ้งได้
+        try { await supabase.auth.signOut({ scope: 'local' }) } catch {} // ล้างเฉพาะ session ในเครื่อง ไม่เรียก refresh token ที่เสียซ้ำ
         set({ session: null, user: null, profile: null })
         useUserStore.getState().logout() // canon: ห้าม userId ค้าง/fallback
       }
@@ -102,10 +120,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const { data, error } = await supabase
         .from('users')
-        .select('user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp, performance_score, ps_season, monarch_victories, tier_unlock_celebrated, streak_count, games_played, games_won, best_hands, tier_unlocked_max, iap_token_total')
+        .select('user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp, last_login, performance_score, ps_season, monarch_victories, tier_unlock_celebrated, beyond_path, streak_count, best_streak_count, streak_shields, streak_7days_badge, games_played, games_won, best_hands, tier_unlocked_max, iap_token_total')
         .eq('user_id', user.id)
         .maybeSingle()
       console.log('[authStore] refreshProfile query result:', { data, error, queriedUserId: user.id })
+      if (get().user?.id !== user.id) return // session เปลี่ยนระหว่าง query — ห้าม profile บัญชีเก่าทับบัญชีใหม่
       set({ profile: data as UserProfile | null })
     } catch (e) {
       console.error('[authStore] refreshProfile failed:', e)

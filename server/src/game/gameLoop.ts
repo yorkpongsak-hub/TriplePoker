@@ -2306,7 +2306,8 @@ export async function startMultiplayerMatch(
       return { seat: i, userId: s.userId, displayName: s.name, avatarUrl: s.avatarUrl, isHuman: true, isVip }
     }
     const aiConfig = AI_CONFIGS.find(a => a.id === s.aiConfigId) ?? AI_CONFIGS[0]
-    return { seat: i, userId: aiConfig.id, displayName: aiConfig.name, isHuman: false, emoji: aiConfig.emoji }
+    // ชื่อมาจาก Minion roster ของ room; aiConfigId ยังเป็นตัวเดิม จึงไม่กระทบ AI decision/difficulty
+    return { seat: i, userId: aiConfig.id, displayName: s.name, isHuman: false, emoji: aiConfig.emoji }
   })
 
   const state: MultiMatchState = {

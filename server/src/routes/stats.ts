@@ -9,12 +9,11 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { supabaseAdmin } from '../config/supabase'
 import { redis } from '../config/redis'
 
-type LeaderboardType = 'token' | 'ps' | 'winrate'
+type BaseLeaderboardType = 'token' | 'ps' | 'winrate' | 'xp' | 'boss_defeats'
+type LeaderboardType = BaseLeaderboardType | 'all_matrix'
 
 const CACHE_TTL_SECONDS = 300 // 5 นาที
 const TOP_N = 10
-// winrate: กัน sample เล็ก (เช่น 1/1 = 100%) บิดอันดับ — เกณฑ์ตาม task spec
-const MIN_GAMES_FOR_WINRATE = 10
 
 interface LeaderboardEntry {
   rank: number
@@ -22,10 +21,15 @@ interface LeaderboardEntry {
   display_name: string
   avatar_url: string | null
   value: number
+  metrics?: Partial<Record<BaseLeaderboardType, {
+    rank: number
+    value: number
+  }>>
 }
 
 function cacheKeyFor(type: LeaderboardType): string {
-  return `leaderboard:${type}`
+  // All Matrix v2 มีรายละเอียดอันดับและคะแนนดิบของแต่ละเมตริกซ์
+  return type === 'all_matrix' ? 'leaderboard:all_matrix:v2' : `leaderboard:${type}`
 }
 
 async function queryToken(): Promise<LeaderboardEntry[]> {
@@ -60,13 +64,54 @@ async function queryPS(): Promise<LeaderboardEntry[]> {
   }))
 }
 
+async function queryXP(): Promise<LeaderboardEntry[]> {
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .select('user_id, display_name, avatar_url, xp')
+    .order('xp', { ascending: false })
+    .limit(TOP_N)
+  if (error) throw error
+  return (data ?? []).map((row, i) => ({
+    rank: i + 1,
+    user_id: row.user_id,
+    display_name: row.display_name,
+    avatar_url: row.avatar_url,
+    value: row.xp ?? 0,
+  }))
+}
+
+async function queryBossDefeats(): Promise<LeaderboardEntry[]> {
+  const { data: bossRows, error: bossError } = await supabaseAdmin
+    .from('player_boss_stats')
+    .select('user_id, victories')
+  if (bossError) throw bossError
+
+  const totals = new Map<string, number>()
+  for (const row of bossRows ?? []) {
+    totals.set(row.user_id, (totals.get(row.user_id) ?? 0) + (row.victories ?? 0))
+  }
+  const leaders = [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, TOP_N)
+  if (leaders.length === 0) return []
+
+  const { data: users, error: usersError } = await supabaseAdmin
+    .from('users')
+    .select('user_id, display_name, avatar_url')
+    .in('user_id', leaders.map(([userId]) => userId))
+  if (usersError) throw usersError
+  const usersById = new Map((users ?? []).map(user => [user.user_id, user]))
+
+  return leaders.flatMap(([userId, victories], index) => {
+    const user = usersById.get(userId)
+    return user ? [{ rank: index + 1, user_id: userId, display_name: user.display_name, avatar_url: user.avatar_url, value: victories }] : []
+  })
+}
+
 async function queryWinRate(): Promise<LeaderboardEntry[]> {
   // Supabase query builder ไม่รองรับ order by expression (games_won/games_played) ตรงๆ —
   // ดึงผู้เล่นที่ผ่านเกณฑ์ games_played ก่อน แล้วคำนวณ + sort ฝั่ง server
   const { data, error } = await supabaseAdmin
     .from('users')
     .select('user_id, display_name, avatar_url, games_played, games_won')
-    .gte('games_played', MIN_GAMES_FOR_WINRATE)
   if (error) throw error
 
   return (data ?? [])
@@ -75,11 +120,92 @@ async function queryWinRate(): Promise<LeaderboardEntry[]> {
       display_name: row.display_name,
       avatar_url: row.avatar_url,
       // % ทศนิยม 1 ตำแหน่ง
-      value: Math.round(((row.games_won ?? 0) / row.games_played) * 1000) / 10,
+      value: (row.games_played ?? 0) > 0
+        ? Math.round(((row.games_won ?? 0) / row.games_played) * 1000) / 10
+        : 0,
     }))
     .sort((a, b) => b.value - a.value)
     .slice(0, TOP_N)
     .map((row, i) => ({ rank: i + 1, ...row }))
+}
+
+async function queryBaseLeaderboard(type: BaseLeaderboardType): Promise<LeaderboardEntry[]> {
+  if (type === 'token') return queryToken()
+  if (type === 'ps') return queryPS()
+  if (type === 'winrate') return queryWinRate()
+  if (type === 'xp') return queryXP()
+  return queryBossDefeats()
+}
+
+async function getCachedBaseLeaderboard(type: BaseLeaderboardType): Promise<LeaderboardEntry[]> {
+  const cacheKey = cacheKeyFor(type)
+  try {
+    const cached = await redis.get<LeaderboardEntry[]>(cacheKey)
+    if (cached) return cached
+  } catch (err) {
+    console.error(`[STATS] Redis read error for ${type}:`, err)
+  }
+
+  const entries = await queryBaseLeaderboard(type)
+  try {
+    await redis.set(cacheKey, entries, { ex: CACHE_TTL_SECONDS })
+  } catch (err) {
+    console.error(`[STATS] Redis write error for ${type}:`, err)
+  }
+  return entries
+}
+
+const MATRIX_MAX: Record<BaseLeaderboardType, number> = {
+  ps: 25,
+  winrate: 20,
+  boss_defeats: 20,
+  xp: 20,
+  token: 15,
+}
+
+function matrixPoints(max: number, rank: number): number {
+  if (rank <= 4) return max - (rank - 1)
+  if (rank === 5) return Math.ceil(max / 2)
+  return Math.max(0, Math.ceil(max / 2) - 2)
+}
+
+async function queryAllMatrix(): Promise<LeaderboardEntry[]> {
+  const metricOrder: BaseLeaderboardType[] = ['ps', 'winrate', 'boss_defeats', 'xp', 'token']
+  const leaderboards = await Promise.all(metricOrder.map(type => getCachedBaseLeaderboard(type)))
+  const candidates = new Map<string, LeaderboardEntry & {
+    total: number
+    tie: number[]
+    metrics: Partial<Record<BaseLeaderboardType, { rank: number; value: number }>>
+  }>()
+
+  leaderboards.forEach((entries, metricIndex) => {
+    const type = metricOrder[metricIndex]
+    entries.forEach(entry => {
+      const current = candidates.get(entry.user_id) ?? {
+        ...entry,
+        total: 0,
+        tie: [0, 0, 0, 0, 0],
+        metrics: {},
+      }
+      const points = matrixPoints(MATRIX_MAX[type], entry.rank)
+      current.total += points
+      current.tie[metricIndex] = points
+      current.metrics[type] = { rank: entry.rank, value: entry.value }
+      candidates.set(entry.user_id, current)
+    })
+  })
+
+  return [...candidates.values()]
+    .sort((a, b) => b.total - a.total || b.tie[0] - a.tie[0] || b.tie[1] - a.tie[1] || b.tie[2] - a.tie[2] || b.tie[3] - a.tie[3] || b.tie[4] - a.tie[4])
+    .slice(0, TOP_N)
+    .map((entry, index) => ({
+      rank: index + 1,
+      user_id: entry.user_id,
+      display_name: entry.display_name,
+      avatar_url: entry.avatar_url,
+      value: entry.total,
+      metrics: entry.metrics,
+    }))
 }
 
 export default async function statsRoutes(fastify: FastifyInstance) {
@@ -87,8 +213,8 @@ export default async function statsRoutes(fastify: FastifyInstance) {
     '/stats/leaderboard',
     async (request: FastifyRequest<{ Querystring: { type?: string } }>, reply: FastifyReply) => {
       const type = request.query.type as LeaderboardType | undefined
-      if (type !== 'token' && type !== 'ps' && type !== 'winrate') {
-        return reply.status(400).send({ error: 'INVALID_TYPE', message: 'type must be one of: token, ps, winrate' })
+      if (type !== 'token' && type !== 'ps' && type !== 'winrate' && type !== 'xp' && type !== 'boss_defeats' && type !== 'all_matrix') {
+        return reply.status(400).send({ error: 'INVALID_TYPE', message: 'type must be one of: token, ps, winrate, xp, boss_defeats, all_matrix' })
       }
 
       const cacheKey = cacheKeyFor(type)
@@ -107,9 +233,9 @@ export default async function statsRoutes(fastify: FastifyInstance) {
       // 2) query DB จริง
       let entries: LeaderboardEntry[] = []
       try {
-        if (type === 'token') entries = await queryToken()
-        else if (type === 'ps') entries = await queryPS()
-        else entries = await queryWinRate()
+        entries = type === 'all_matrix'
+          ? await queryAllMatrix()
+          : await queryBaseLeaderboard(type)
       } catch (err) {
         // เผื่อ games_played/games_won ยังไม่มีคอลัมน์ (SQL migration ยังไม่ได้รันบน Supabase) — ตอบ empty list แทน 500
         console.error(`[STATS] Error querying leaderboard type=${type}:`, err)

@@ -1,7 +1,7 @@
 export type ArenaClientPhase =
   | 'WAITING_FOR_PLAYERS' | 'CHECK_FAST_THREE_HUMANS' | 'ROLL_BOSS_ENCOUNTER_OR_WAIT_FOURTH_HUMAN'
-  | 'MATCH_BUY_IN_RESERVE' | 'GAME_START' | 'DEAL' | 'ARRANGE_1'
-  | 'AUCTION_FACE_UP' | 'AUCTION_BLIND' | 'REVEAL_PILE3_COMMUNITY_CARD_2' | 'FINAL_ARRANGE' | 'JOKER_DECLARE'
+  | 'MATCH_BUY_IN_RESERVE' | 'GAME_START' | 'DEAL' | 'DEAL_ANIMATION' | 'ARRANGE_1'
+  | 'AUCTION_FACE_UP' | 'AUCTION_FACE_UP_RESULT' | 'AUCTION_BLIND' | 'AUCTION_BLIND_RESULT' | 'REVEAL_PILE3_COMMUNITY_CARD_2' | 'FINAL_ARRANGE' | 'JOKER_DECLARE'
   | 'DISCARD' | 'FINAL_LOCK' | 'RESOLVE_PILE_1' | 'REVEAL_PILE_1' | 'GF_PILE_2'
   | 'RESOLVE_PILE_2' | 'REVEAL_PILE_2' | 'GF_PILE_3_ROUND_1' | 'GF_PILE_3_ROUND_2'
   | 'RESOLVE_PILE_3' | 'REVEAL_PILE_3' | 'CHECK_SWEEP_JACKPOT' | 'GAME_SETTLEMENT'
@@ -22,9 +22,11 @@ export interface ArenaSeatView {
   isLocal: boolean
   isBoss: boolean
   isCurrentTurn: boolean
+  isWaiting?: boolean
   connection: ArenaConnectionView
   cards: string[]
   cardCount: number
+  arrangedPiles?: { pile1: string[]; pile2: string[]; pile3: string[] } | null
   crownCrest: number
 }
 
@@ -49,22 +51,44 @@ export interface ArenaClientSnapshot {
   gameNumber: 0 | 1 | 2 | 3
   phaseEndsAt: number | null
   seats: ArenaSeatView[]
+  cardZones: {
+    stockCount: number
+    discardCount: number
+    auction: { faceUpCard: string | null; blindCount: number }
+    resolvedPileCounts: { pile1: number; pile2: number; pile3: number }
+    totalCards: 53
+  }
   crown: ArenaCrownView
   communityCards: { pile1: string[]; pile2: string[]; pile3: string[] }
   auction: null | { round: 'FACE_UP' | 'BLIND'; faceUpCard?: string; bidOptionsCrest: number[]; locked: boolean }
   // เห็นได้ทุกคนตลอดช่วงประมูล (ต่างจาก auction ด้านบนที่เห็นเฉพาะคนกำลังบิดตาตัวเอง) — ไพ่ปิด 2 ใบไม่มีข้อมูล
   // ส่งมาเลย (คงหลังไพ่ไว้ตามกฎ Blind Auction) render แค่ backs คงที่ 2 ใบเสมอที่ client
   auctionDisplay: null | { faceUpCard: string }
+  auctionResult: null | { round: 'FACE_UP'; card: string; winnerSeat: 1 | 2 | 3 | 4 | null; winnerDisplayName: string }
+  blindAuctionResults: Array<{ cardIndex: 0 | 1; ownedCard?: string; winnerSeat: 1 | 2 | 3 | 4 | null; winnerDisplayName: string }>
   // true ทันทีที่กองนั้น resolve แล้วคงเป็น true ต่อไปตลอดเกมนั้น
   pilesResolved: { pile1: boolean; pile2: boolean; pile3: boolean }
   joker: null | { canChoose: boolean; anteX2Enabled: boolean; selectedMode?: 'WILD' | 'ANTE_X2'; selectedPile?: 1 | 2 | 3 }
   gf: null | { pile: 2 | 3; round: 1 | 2; localTurn: boolean; callCostCrest: number }
+  gfTable?: null | {
+    pile: 2 | 3
+    round: 1 | 2
+    direction: 'CLOCKWISE' | 'COUNTER_CLOCKWISE'
+    currentSeat: 1 | 2 | 3 | 4 | null
+    players: Array<{ seat: 1 | 2 | 3 | 4; displayName: string; status: 'WAITING' | 'CURRENT' | 'CALLED' | 'FOLDED' | 'SHOWDOWN'; revealedCards: string[] }>
+  }
   bossPresentation: null | {
     bossId: 'MONARCH' | 'SOREN'
     title: string
     subtitle: string
     atmosphere: string
     quote: string
+  }
+  dualBossLore: null | {
+    id: string
+    speakerSeat: 3 | 4
+    speaker: 'MONARCH' | 'SOREN'
+    text: string
   }
   result: null | { title: string; lines: ArenaResultLine[]; netCrest: number; psGained: number }
   reveal: null | {
@@ -82,9 +106,10 @@ export interface ArenaPileArrangement { pile1: string[]; pile2: string[]; pile3:
 
 export type ArenaClientIntent =
   | { type: 'SELECT_CARD'; cardId: string }
+  | ({ type: 'SAVE_ARRANGEMENT_DRAFT' } & ArenaPileArrangement)
   | ({ type: 'SUBMIT_ARRANGEMENT'; stage: 'ARRANGE_1' | 'FINAL_ARRANGE' } & ArenaPileArrangement)
   | { type: 'AUCTION_BID'; round: 'FACE_UP' | 'BLIND'; cardIndex: 0 | 1; amountCrest: 0 | 3 | 6 | 9 | 12 }
   | { type: 'JOKER_DECLARE'; mode: 'WILD' | 'ANTE_X2'; targetPile: 1 | 2 | 3; availableCrest: number }
-  | { type: 'GF_ACTION'; decision: 'CALL' | 'FOLD' }
+  | { type: 'GF_ACTION'; decision: 'CALL' | 'FOLD'; revealCardIds?: string[] }
   | { type: 'DISCARD'; cardId: string }
   | ({ type: 'FINAL_LOCK' } & ArenaPileArrangement)

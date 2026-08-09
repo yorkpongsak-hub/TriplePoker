@@ -32,6 +32,7 @@ describe('driveBots - บอท/AI ต้องเดินเกมได้จ
     }
     expect(engine.snapshot()).toMatchObject({ phase: 'MATCH_RESULT', gameNumber: 3, completed: true })
     expect(ticks).toBeLessThan(200)
+    expect(engine.eventLog().filter(event => event.kind === 'DEFAULT_ACTION' && event.detail?.type === 'DISCARD')).toHaveLength(0)
   })
 
   test('human ที่หลุดจนกลายเป็น bot ถูก driveBots ตอบแทนทันที ไม่ต้องรอ deadline', () => {
@@ -64,5 +65,6 @@ describe('driveBots - บอท/AI ต้องเดินเกมได้จ
     }
     expect(engine.snapshot().completed).toBe(true)
     expect(engine.eventLog().some(event => event.actorId === 'p1' && event.kind === 'ACTION_ACCEPTED')).toBe(true)
+    expect(engine.eventLog().filter(event => event.kind === 'DEFAULT_ACTION' && event.detail?.type === 'DISCARD')).toHaveLength(0)
   })
 })

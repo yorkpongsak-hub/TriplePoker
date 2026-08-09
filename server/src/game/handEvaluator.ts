@@ -100,12 +100,21 @@ function countValues(values: number[]): Record<number, number> {
 
 // คำนวณ score สำหรับเปรียบเทียบ
 function calculateScore(rank: HandRank, values: number[]): number {
+  // A-2-3-4-5 is the lowest straight: Ace counts as 1 for tie-breaking.
+  // Keep Ace high for every other hand (including 10-J-Q-K-A).
+  const isWheelStraight = (rank === 'straight' || rank === 'straight_flush') &&
+    values.includes(14) && values.includes(2) && values.includes(3) &&
+    values.includes(4) && values.includes(5) && !values.includes(6)
+  const scoringValues = isWheelStraight
+    ? values.map(value => value === 14 ? 1 : value)
+    : values
+
   // จัดลำดับ values ให้ถูกต้องตาม rank
   // ไพ่ที่มีความถี่สูงกว่าต้องมาก่อน (pair, trips, quads) แล้วค่อย kicker
   const counts: Record<number, number> = {}
-  for (const v of values) counts[v] = (counts[v] || 0) + 1
+  for (const v of scoringValues) counts[v] = (counts[v] || 0) + 1
 
-  const sorted = [...values].sort((a, b) => {
+  const sorted = [...scoringValues].sort((a, b) => {
     const freqDiff = (counts[b] || 0) - (counts[a] || 0)
     if (freqDiff !== 0) return freqDiff  // เรียงตาม frequency ก่อน
     return b - a  // frequency เท่ากัน → เรียงตาม value

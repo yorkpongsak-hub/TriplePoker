@@ -30,13 +30,13 @@ export async function getTableSkinState(userId: string): Promise<{ unlockedSkins
     .maybeSingle()
   if (preferenceError) throw preferenceError
   const selected = preference?.active_skin ?? 1
-  return { unlockedSkins, activeSkin: unlockedSkins.includes(selected) ? selected : 1 }
+  return { unlockedSkins, activeSkin: selected === 0 || unlockedSkins.includes(selected) ? selected : 1 }
 }
 
 export async function selectTableSkin(userId: string, skinId: number): Promise<{ unlockedSkins: number[]; activeSkin: number }> {
   const state = await getTableSkinState(userId)
   if (state.unlockedSkins.length === 0) throw new Error('VIP_REQUIRED')
-  if (!state.unlockedSkins.includes(skinId)) throw new Error('SKIN_LOCKED')
+  if (skinId !== 0 && !state.unlockedSkins.includes(skinId)) throw new Error('SKIN_LOCKED')
 
   const { error } = await supabaseAdmin.from('user_table_skins').upsert({
     user_id: userId,

@@ -858,12 +858,6 @@ export default function MonarchScreen() {
   const [showTierInfo, setShowTierInfo] = useState(false)
   // Batch 3E Task 5 — Leave confirm modal (ออกกลางเกม = แพ้ตามกลไก disconnect เดิม server ตัดสินเอง
   // ตาม phase จริง ณ ตอนนั้น — ไม่มี logic พิเศษฝั่ง client เลย นอกจาก disconnect socket ตัวเอง)
-  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false)
-  const handleLeaveMatch = () => {
-    setShowLeaveConfirm(false)
-    socketRef.current?.disconnect()
-    router.replace('/lobby')
-  }
   const [uiPhase, setUiPhase] = useState<'dealing' | 'table'>('dealing')
   const [showVictoryVFX, setShowVictoryVFX] = useState(false)
   // Batch 3D-2 Task 2 — เก็บ relicResult ไว้โชว์ popup ต่อจากแสงทอง (mount แล้ว component เองเล่น
@@ -1698,14 +1692,6 @@ export default function MonarchScreen() {
               <Text style={styles.infoBtnText}>i</Text>
             </TouchableOpacity>
           }
-          rightSlot={
-            <TouchableOpacity
-              onPress={() => setShowLeaveConfirm(true)}
-              style={styles.leaveBtn}
-            >
-              <Text style={styles.leaveBtnText}>Leave</Text>
-            </TouchableOpacity>
-          }
         />
       </View>
 
@@ -1741,26 +1727,6 @@ export default function MonarchScreen() {
 
       {/* Batch 3E Task 5 — Leave confirm modal (reuse styles.modalOverlay/modalBox/modalTitle/modalText
           จาก Tier Info modal ด้านบนตรงๆ แค่เพิ่มปุ่มที่ 2 แทนปุ่ม Close เดียว) */}
-      <Modal visible={showLeaveConfirm} transparent animationType="fade" onRequestClose={() => setShowLeaveConfirm(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={styles.modalTitle}>Leave the Table?</Text>
-            <Text style={styles.modalText}>
-              {matchEnd
-                ? 'This match is complete and the result has already been recorded. Return to the Lobby?'
-                : 'Leaving now counts as a defeat. The Monarch does not grant second chances.'}
-            </Text>
-            <View style={styles.leaveConfirmRow}>
-              <TouchableOpacity style={[styles.modalCloseBtn, styles.leaveConfirmStayBtn]} onPress={() => setShowLeaveConfirm(false)}>
-                <Text style={styles.modalCloseBtnText}>{matchEnd ? 'Cancel' : 'Stay'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.modalCloseBtn, styles.leaveConfirmBtn]} onPress={handleLeaveMatch}>
-                <Text style={styles.leaveConfirmBtnText}>Leave</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
 
       {/* After the 2-2-0 acknowledgement the game uses one fixed, full-screen table shell.
           Keeping this as a View (not an opaque ScrollView) lets the Monarch skin remain visible
@@ -2638,15 +2604,6 @@ const styles = StyleSheet.create({
   },
   infoBtnText: { fontSize: 11, color: COLOR.gold, fontWeight: '900' },
   // Batch 3E Task 5 — ปุ่ม Leave ที่ GameTopBar rightSlot (ว่างอยู่เดิม)
-  leaveBtn: {
-    paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8,
-    borderWidth: 1.5, borderColor: COLOR.red, backgroundColor: 'rgba(255,107,107,0.12)',
-  },
-  leaveBtnText: { fontSize: 11, color: COLOR.red, fontWeight: '900', letterSpacing: 0.5 },
-  leaveConfirmRow: { flexDirection: 'row', gap: 10, marginTop: 16 },
-  leaveConfirmStayBtn: { flex: 1, marginTop: 0 },
-  leaveConfirmBtn: { flex: 1, marginTop: 0, backgroundColor: COLOR.red },
-  leaveConfirmBtnText: { color: COLOR.text, fontSize: 15, fontWeight: '700', textAlign: 'center' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center', padding: 24 },
   modalBox: { width: '100%', backgroundColor: COLOR.bgPanel, borderColor: COLOR.gold, borderWidth: 1, borderRadius: 14, padding: 20 },
   modalTitle: { color: COLOR.gold, fontSize: 18, fontWeight: '800', marginBottom: 10 },

@@ -7,6 +7,11 @@ import type { SovereignArchiveResponse, SovereignPublicEventWire, SovereignStatu
 
 const gold = '#F1CD77'
 const panel = 'rgba(14,24,34,0.92)'
+// มติลุงเยาะ — ห้ามแสดงคำว่า "Caelum"/"CAELUM" ที่ไหนในแอปเลย ใช้ "The last boss" แทนตอนแสดงผล — throne_name
+// จริงใน DB/migration ยังเป็น CAELUM เหมือนเดิม (ไม่แตะ) แค่ map ตอน render ทุกจุดที่โชว์ชื่อบอสให้ผู้เล่นเห็น
+function displayThroneName(name?: string | null): string {
+  return !name || name.toUpperCase() === 'CAELUM' ? 'The last boss' : name
+}
 const idempotencyKey = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, char => {
   const value = Math.floor(Math.random() * 16); return (char === 'x' ? value : (value & 3) | 8).toString(16)
 })
@@ -72,7 +77,7 @@ export default function SovereignEventScreen() {
         {tab === 'EVENT' ? <>
           <View style={styles.bossCard}>
             <View style={styles.silhouette}><Text style={styles.crown}>♛</Text></View>
-            <View style={{ flex: 1 }}><Text style={styles.label}>THE LAST BOSS • REIGN #{status?.lastBoss?.reign_number ?? '—'}</Text><Text style={styles.bossName}>{status?.lastBoss?.throne_name ?? 'CAELUM'}</Text><Text style={styles.muted}>ใบหน้าถูกซ่อนไว้จนกว่าจะมีผู้พิชิตคนใหม่</Text></View>
+            <View style={{ flex: 1 }}><Text style={styles.label}>THE LAST BOSS • REIGN #{status?.lastBoss?.reign_number ?? '—'}</Text><Text style={styles.bossName}>{displayThroneName(status?.lastBoss?.throne_name)}</Text><Text style={styles.muted}>ใบหน้าถูกซ่อนไว้จนกว่าจะมีผู้พิชิตคนใหม่</Text></View>
           </View>
 
           {status?.mandatoryRename && <View style={styles.renameCard}>
@@ -107,7 +112,7 @@ export default function SovereignEventScreen() {
           <View style={styles.notice}><Text style={styles.noticeText}>ผู้ชมสูงสุด 100 คนต่อแมตซ์ • ภาพสาธารณะช้ากว่าเกมจริง 30 วินาที • ไม่มีข้อมูลไพ่ลับ</Text></View>
         </> : <>
           <Text style={styles.sectionTitle}>LAST BOSS GRAVEYARD</Text>
-          {archive?.graveyard.map(reign => <View key={reign.id} style={styles.grave}><Text style={styles.reign}>#{reign.reign_number}</Text><View style={{ flex: 1 }}><Text style={styles.bossNameSmall}>{reign.throne_name}</Text><Text style={styles.muted}>{reign.started_at.slice(0,10)} → {reign.ended_at?.slice(0,10) ?? 'ปัจจุบัน'}</Text>{reign.conqueror_name_at_victory && <Text style={styles.history}>พิชิตโดย {reign.conqueror_name_at_victory} • ชื่อใหม่ {reign.conqueror_new_name ?? 'รอการตั้งชื่อ'}</Text>}</View><Text style={styles.state}>{reign.status}</Text></View>)}
+          {archive?.graveyard.map(reign => <View key={reign.id} style={styles.grave}><Text style={styles.reign}>#{reign.reign_number}</Text><View style={{ flex: 1 }}><Text style={styles.bossNameSmall}>{displayThroneName(reign.throne_name)}</Text><Text style={styles.muted}>{reign.started_at.slice(0,10)} → {reign.ended_at?.slice(0,10) ?? 'ปัจจุบัน'}</Text>{reign.conqueror_name_at_victory && <Text style={styles.history}>พิชิตโดย {reign.conqueror_name_at_victory} • ชื่อใหม่ {reign.conqueror_new_name ?? 'รอการตั้งชื่อ'}</Text>}</View><Text style={styles.state}>{reign.status}</Text></View>)}
           <Text style={[styles.sectionTitle, { marginTop: 18 }]}>CYCLE ARCHIVE</Text>
           {archive?.cycles.map(cycle => <View key={cycle.id} style={styles.matchRow}><Text style={styles.matchDay}>{cycle.year_month.slice(0,7)}</Text><Text style={styles.state}>{cycle.status}</Text></View>)}
         </>}

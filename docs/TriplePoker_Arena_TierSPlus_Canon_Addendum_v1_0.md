@@ -194,7 +194,16 @@ The AI:
 - records private operational reason codes and state hashes for audit;
 - uses a committed, auditable RNG seed and a legal deterministic fallback on service failure;
 - retains the same core and personality across throne names;
-- targets approximately 75% throne-defense rate in balance testing, without dynamically forcing outcomes.
+- targets approximately 80% throne-defense rate in balance testing, without dynamically forcing outcomes;
+- never becomes weaker because a challenger has lost before, retried, or met a calendar condition;
+- uses no Full Moon, pity, retry-count, player-specific, or hidden dynamic difficulty handicap.
+
+The canonical server implementation is `server/src/arena/sovereign/lastBossAIEngine.ts`.
+It exhaustively evaluates all 9,240 legal 3-3-5 partitions, uses Best 5 of 7
+for Pile 3, applies Monte Carlo only to information that is genuinely unseen,
+and makes auction and Call/Fold decisions from expected value and pot odds.
+The 80% defense rate is an offline balance target, never a runtime command to
+alter cards, RNG, evaluator results, or a decision for a particular challenger.
 
 ## 13. Standby and Spectator Operations
 

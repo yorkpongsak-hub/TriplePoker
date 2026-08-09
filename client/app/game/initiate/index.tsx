@@ -39,6 +39,7 @@ import { TierInfoModal } from '../../../src/components/game/TierInfoModal'
 import type { TierInfoLabel } from '../../../src/config/tierInfoData'
 import TokenFlowPanel, { PANEL_WIDTH, PANEL_RIGHT } from '../../../src/components/game/TokenFlowPanel'
 import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/game/FlyingCoins'
+import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
 
 // ตำแหน่งที่นั่งเดียวกับ targets ใน startDealAnimation (Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย)
 // ศูนย์กลาง = จุดกำเนิด/ปลายทางของกองกลาง (เหมือนที่ dealAnims ใช้เป็น origin ตอนแจกไพ่)
@@ -192,11 +193,11 @@ const ServerLog = React.memo(({ socket, onMonarchWin }: { socket: Socket | null;
         pushLog('🆕', `New ${(payload.tier ?? '').toUpperCase()} table opened`)
       } else if (payload.kind === 'monarch_spawn') {
         // Sprint 8: Boss Monarch 1v1 — broadcast กว้างตอนโต๊ะเริ่ม (gameSocket.ts room_auto_match)
-        pushLog('👑', 'A Monarch has appeared at the High Noble tables!')
+        pushLog('👑', 'A Hidden Boss has appeared at the High Noble tables!')
       } else if (payload.kind === 'monarch_win') {
         // Sprint 8: broadcast ตอนมีคนพิชิต Monarch ได้ (monarchEngine.ts finalizeMonarchG3) — พิเศษ
         // กว่าการชนะทั่วไป มีการ์ดเลื่อนลงจากขอบบนจอด้วย (ดู MonarchConquestBanner)
-        pushLog('👑', `${payload.winnerName} has conquered the Monarch!`)
+        pushLog('👑', `${payload.winnerName} has conquered the Hidden Boss!`)
         if (payload.winnerName) onMonarchWin?.(payload.winnerName)
       }
     }
@@ -364,7 +365,8 @@ const GameTableLive: React.FC = () => {
 
   // ── Triple Sweep Jackpot VFX — ใครก็ได้ (human/AI) ชนะครบ 3 กอง
   const [jackpotWinner, setJackpotWinner] = useState<string | null>(null)
-  const jackpotTimeoutRef = useRef<any>(null)
+  const [jackpotVfxComplete, setJackpotVfxComplete] = useState(false)
+  const jackpotTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     console.log('[JACKPOT] jackpotWinner state changed ->', jackpotWinner, 'at', Date.now())
   }, [jackpotWinner])
@@ -402,7 +404,7 @@ const GameTableLive: React.FC = () => {
     }))
   ).current
 
-  // ── Jackpot VFX (แยก instance จาก match-end confetti เพราะอาจโชว์พร้อมกันได้ในรอบสุดท้าย)
+  // Legacy jackpot VFX — ใช้เมื่อ P2/P3/P4 หรือ AI เป็นผู้ทำ Triple Sweep เท่านั้น
   const jackpotPulse = useRef(new Animated.Value(0.5)).current
   const jackpotConfettiAnims = useRef(
     Array.from({ length: 20 }, () => ({
@@ -429,31 +431,34 @@ const GameTableLive: React.FC = () => {
     }, 1000)
   }
 
-  // Triple Sweep Jackpot — burst ครั้งเดียว ไม่วนซ้ำ โชว์ไม่เกิน 5 วิ แล้วปิดเอง
+  // P1 uses Legendary Card; every other winner keeps the original jackpot VFX.
   const triggerJackpot = (winnerId: string) => {
     console.log('[JACKPOT] triggerJackpot called, winnerId=', winnerId, 'at', Date.now())
     if (jackpotTimeoutRef.current) clearTimeout(jackpotTimeoutRef.current)
+    setJackpotVfxComplete(false)
     setJackpotWinner(winnerId)
+
+    if (winnerId === PLAYER_ID) return
 
     jackpotPulse.setValue(0.5)
     Animated.sequence([
       Animated.timing(jackpotPulse, { toValue: 1.15, duration: 250, useNativeDriver: false }),
-      Animated.timing(jackpotPulse, { toValue: 1,    duration: 200, useNativeDriver: false }),
+      Animated.timing(jackpotPulse, { toValue: 1, duration: 200, useNativeDriver: false }),
     ]).start()
 
     jackpotConfettiAnims.forEach((a, i) => {
       a.x.setValue(Math.random() * 360 - 30)
       a.y.setValue(-20); a.opacity.setValue(1); a.rotate.setValue(0)
       Animated.parallel([
-        Animated.timing(a.y,       { toValue: 700, duration: 1800 + Math.random() * 1200, delay: i * 40, useNativeDriver: false }),
-        Animated.timing(a.opacity, { toValue: 0,   duration: 2200, delay: i * 40, useNativeDriver: false }),
-        Animated.timing(a.rotate,  { toValue: 720, duration: 1800, delay: i * 40, useNativeDriver: false }),
+        Animated.timing(a.y, { toValue: 700, duration: 1800 + Math.random() * 1200, delay: i * 40, useNativeDriver: false }),
+        Animated.timing(a.opacity, { toValue: 0, duration: 2200, delay: i * 40, useNativeDriver: false }),
+        Animated.timing(a.rotate, { toValue: 720, duration: 1800, delay: i * 40, useNativeDriver: false }),
       ]).start()
     })
 
     jackpotTimeoutRef.current = setTimeout(() => {
-      console.log('[JACKPOT] 5s timeout fired, clearing at', Date.now())
       setJackpotWinner(null)
+      setJackpotVfxComplete(true)
     }, 5000)
   }
 
@@ -462,10 +467,12 @@ const GameTableLive: React.FC = () => {
     const winnersReady = pileWinners[1] && pileWinners[2] && pileWinners[3]
     if (!winnersReady && !hasFoulAll) return
     if (showResult) return // ป้องกัน run ซ้ำ
+    const hasTripleSweep = Boolean(winnersReady && pileWinners[1] === pileWinners[2] && pileWinners[2] === pileWinners[3])
+    if (hasTripleSweep && !jackpotVfxComplete) return
     setShowResult(true)
     startContinueCountdown()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(pileWinners), JSON.stringify(hasFoul)])
+  }, [JSON.stringify(pileWinners), JSON.stringify(hasFoul), jackpotVfxComplete])
 
   // ── Connect Socket (ครั้งเดียว)
   useEffect(() => {
@@ -530,6 +537,7 @@ const GameTableLive: React.FC = () => {
       setAllCards({}); setPileWinners({})
       setHasFoul({}); setFoulReasons({}); setTokenDeltas({})
       setShowResult(false)
+      setJackpotWinner(null); setJackpotVfxComplete(false)
       setHandRanks({})
       setRevealPile(0)
       setActiveShowdownTab(1)
@@ -754,6 +762,10 @@ const GameTableLive: React.FC = () => {
       if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop()
       stopMatchEndAnimations()
       if (jackpotTimeoutRef.current) clearTimeout(jackpotTimeoutRef.current)
+      jackpotPulse.stopAnimation()
+      jackpotConfettiAnims.forEach(a => {
+        a.x.stopAnimation(); a.y.stopAnimation(); a.opacity.stopAnimation(); a.rotate.stopAnimation()
+      })
       socket.disconnect()
     }
   }, [])
@@ -939,11 +951,11 @@ const GameTableLive: React.FC = () => {
 
   // (AIPiles เดิมถูกแทนที่ด้วย BossHandRow กลางแล้ว — ดู src/components/game/BossHandRow.tsx)
 
-  const SideSeat: React.FC<{ rot: '270deg' | '90deg'; aiId: string }> = ({ rot, aiId }) => {
+  const SideSeat: React.FC<{ rot: string; aiId: string; offsetX?: number; offsetY?: number }> = ({ rot, aiId, offsetX = 0, offsetY = 0 }) => {
     const p1 = allCards[aiId]?.[1] ?? []; const p2 = allCards[aiId]?.[2] ?? []; const p3 = allCards[aiId]?.[3] ?? []
     const cards = [...p1, ...p2, ...p3]
     return (
-      <View style={s.sideSeatWrap}>
+      <View style={[s.sideSeatWrap, { transform: [{ translateX: offsetX }, { translateY: offsetY }] }]}>
         <View style={[s.sideSeatInner, { transform: [{ rotate: rot }] }]}>
           {([5, 3, 3] as number[]).map((cnt, pi) => (
             <React.Fragment key={pi}>
@@ -1404,31 +1416,38 @@ const GameTableLive: React.FC = () => {
             </>
           )}
 
-          {/* ── TRIPLE SWEEP JACKPOT VFX — โชว์ไม่เกิน 5 วิ แล้วปิดเอง ── */}
+          {/* ── TRIPLE SWEEP — Legendary สำหรับ P1, VFX เดิมสำหรับผู้เล่นอื่น ── */}
           {jackpotWinner && (() => {
             const isMe = jackpotWinner === PLAYER_ID
             const winAI = aiList.find(a => a.id === jackpotWinner)
             const label = isMe ? myDisplayName : (winAI?.name ?? jackpotWinner)
-            const emoji = isMe ? myAvatarEmoji : (winAI?.emoji ?? '🤖')
+            if (isMe) return (
+              <LegendaryCardVFX
+                title="TRIPLE SWEEP JACKPOT"
+                subtitle={`${label} WON ALL 3 PILES`}
+                extraHoldMs={3000}
+                onFinish={() => {
+                  setJackpotWinner(null)
+                  setJackpotVfxComplete(true)
+                }}
+              />
+            )
+            const emoji = winAI?.emoji ?? '🤖'
             return (
               <View style={[s.overlay, { backgroundColor: 'rgba(0,0,0,0.55)', zIndex: 300 }]} pointerEvents="none">
                 {jackpotConfettiAnims.map((a, i) => {
                   const colors = ['#FFD76A', '#FFC857', '#8DFFB5', '#ff6b6b', '#4d96ff', '#cc5de8']
                   const rotStr = a.rotate.interpolate({ inputRange: [0, 720], outputRange: ['0deg', '720deg'] })
-                  return (
-                    <Animated.View key={i} style={{
-                      position: 'absolute', width: 8, height: 8, borderRadius: 2,
-                      backgroundColor: colors[i % colors.length], zIndex: 301,
-                      transform: [{ translateX: a.x }, { translateY: a.y }, { rotate: rotStr }],
-                      opacity: a.opacity,
-                    }} />
-                  )
+                  return <Animated.View key={i} style={{
+                    position: 'absolute', width: 8, height: 8, borderRadius: 2,
+                    backgroundColor: colors[i % colors.length], zIndex: 301,
+                    transform: [{ translateX: a.x }, { translateY: a.y }, { rotate: rotStr }], opacity: a.opacity,
+                  }} />
                 })}
                 <Animated.Text style={{
-                  transform: [{ scale: jackpotPulse }],
-                  fontSize: 26, fontWeight: '900', color: '#FFD76A', letterSpacing: 1,
-                  textShadowColor: '#ffd700', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 20,
-                  textAlign: 'center',
+                  transform: [{ scale: jackpotPulse }], fontSize: 26, fontWeight: '900', color: '#FFD76A',
+                  letterSpacing: 1, textShadowColor: '#ffd700', textShadowOffset: { width: 0, height: 0 },
+                  textShadowRadius: 20, textAlign: 'center',
                 }}>⚡ TRIPLE SWEEP JACKPOT! ⚡</Animated.Text>
                 <Text style={{ marginTop: 10, fontSize: 16, color: '#8DFFB5', fontWeight: '800' }}>
                   {emoji} {label} won all 3 piles!
@@ -1578,7 +1597,8 @@ const GameTableLive: React.FC = () => {
               <View style={{ marginTop: -6, marginBottom: 60 }}>
                 <AvatarBubble emoji={p2AI?.emoji ?? '👤'} size={36} />
               </View>
-              {p2AI && <SideSeat rot="270deg" aiId={p2AI.id} />}
+              {/* เอียงตาม perspective ขอบผ้าขาวม้าฝั่งซ้าย โดยคงขนาดและระยะซ้อนไพ่เดิม */}
+              {p2AI && <SideSeat rot="273.5deg" aiId={p2AI.id} offsetX={13} offsetY={1} />}
             </View>
 
             <View style={s.commWrap}>
@@ -1601,7 +1621,8 @@ const GameTableLive: React.FC = () => {
               </View>
               {p4AI && (
                 <View style={{ marginLeft: 15 }}>
-                  <SideSeat rot="90deg" aiId={p4AI.id} />
+                  {/* เอียงตาม perspective ขอบผ้าขาวม้าฝั่งขวาแบบสมมาตรกับ P2 */}
+                  <SideSeat rot="86.5deg" aiId={p4AI.id} offsetX={-18} offsetY={1} />
                 </View>
               )}
             </View>

@@ -1,11 +1,12 @@
 import { ArenaPile } from '../contracts/arenaContracts'
 
-export type SettlementReason = 'BOSS_FEE' | 'ANTE' | 'AUCTION' | 'CALL' | 'POT_PAYOUT' | 'BATTLE_REWARD' | 'CROWN_SINK'
+export type SettlementReason = 'ENTRY_FEE' | 'BOSS_FEE' | 'ANTE' | 'AUCTION' | 'CALL' | 'POT_PAYOUT' | 'BATTLE_REWARD' | 'CROWN_SINK'
 
 export interface PlayerResultBreakdown {
   playerId: string
   persisted: boolean
   startingCrest: number
+  entryFee: number
   ante: number
   jokerExtraAnte: number
   auction: number
@@ -21,11 +22,12 @@ export interface PlayerResultBreakdown {
 export type SettlementCommand =
   | { type: 'BOSS_FEE'; commandId: string; playerIds: string[]; feeCrest: number }
   | { type: 'ANTE'; commandId: string; game: 1 | 2 | 3; pile: ArenaPile; playerIds: string[]; baseCrest: number; extraCrest: number }
+  | { type: 'JOKER_ANTE_BONUS'; commandId: string; game: 1 | 2 | 3; pile: ArenaPile; winnerId: string; payerIds: string[]; amountCrest: number }
   | { type: 'AUCTION'; commandId: string; game: 1 | 2 | 3; winnerId: string; amountCrest: number }
   | { type: 'CALL'; commandId: string; game: 1 | 2 | 3; pile: 2 | 3; playerId: string; amountCrest: number }
   | { type: 'PILE_PAYOUT'; commandId: string; game: 1 | 2 | 3; pile: ArenaPile; winnerId: string }
   | { type: 'SWEEP_JACKPOT'; commandId: string; game: 1 | 2 | 3; winnerId: string }
-  | { type: 'END_MATCH'; commandId: string }
+  | { type: 'END_MATCH'; commandId: string; playerIds: string[]; feeCrest: number }
 
 export interface SettlementEntry { userId: string; deltaCrest: number; persisted: boolean }
 export interface SettlementTransaction {
@@ -65,7 +67,7 @@ export class ArenaSettlementEngine {
       safeAmount(balance, 'STARTING_BALANCE', true)
       this.wallets.set(playerId, balance)
       this.breakdowns.set(playerId, {
-        playerId, persisted: account.persisted, startingCrest: balance, ante: 0, jokerExtraAnte: 0, auction: 0,
+        playerId, persisted: account.persisted, startingCrest: balance, entryFee: 0, ante: 0, jokerExtraAnte: 0, auction: 0,
         call: 0, bossFee: 0, battleRewards: 0, sweepJackpot: 0, winLoss: 0,
         netCrest: 0, endingCrest: balance,
       })
@@ -113,10 +115,13 @@ export class ArenaSettlementEngine {
         return this.transaction(command.commandId, 'BOSS_FEE', entries, {}, 0, command.feeCrest * command.playerIds.length)
       }
       case 'ANTE': {
-        safeAmount(command.baseCrest, 'BASE_ANTE')
+        // Joker ANTE_X2 is an extra-only matched ante command: base is already
+        // charged, so baseCrest may be zero while extraCrest must make total > 0.
+        safeAmount(command.baseCrest, 'BASE_ANTE', true)
         safeAmount(command.extraCrest, 'EXTRA_ANTE', true)
         this.uniqueKnown(command.playerIds)
         const total = command.baseCrest + command.extraCrest
+        safeAmount(total, 'TOTAL_ANTE')
         this.ensureFunds(command.playerIds, total)
         const entries = command.playerIds.map(playerId => {
           const current = this.balance(playerId)
@@ -127,6 +132,17 @@ export class ArenaSettlementEngine {
         })
         this.pots[command.pile] += total * command.playerIds.length
         return this.transaction(command.commandId, 'ANTE', entries, { [command.pile]: total * command.playerIds.length }, 0, 0)
+      }
+      case 'JOKER_ANTE_BONUS': {
+        safeAmount(command.amountCrest, 'JOKER_ANTE_BONUS')
+        this.known(command.winnerId)
+        this.uniqueKnown(command.payerIds)
+        if (command.payerIds.includes(command.winnerId)) throw new Error('JOKER_BONUS_WINNER_CANNOT_PAY')
+        this.ensureFunds(command.payerIds, command.amountCrest)
+        const entries = command.payerIds.map(playerId => this.debit(playerId, command.amountCrest, 'jokerExtraAnte'))
+        const reward = command.amountCrest * command.payerIds.length
+        entries.push(this.credit(command.winnerId, reward, 'winLoss'))
+        return this.transaction(command.commandId, 'ANTE', entries, {}, 0, 0)
       }
       case 'AUCTION': {
         safeAmount(command.amountCrest, 'AUCTION_AMOUNT')
@@ -164,16 +180,21 @@ export class ArenaSettlementEngine {
       }
       case 'END_MATCH': {
         if (Object.values(this.pots).some(value => value !== 0)) throw new Error('POTS_MUST_BE_SETTLED_BEFORE_MATCH_END')
+        safeAmount(command.feeCrest, 'ENTRY_FEE')
+        this.uniqueKnown(command.playerIds)
+        this.ensureFunds(command.playerIds, command.feeCrest)
+        const entries = command.playerIds.map(playerId => this.debit(playerId, command.feeCrest, 'entryFee'))
+        const entryFeeSink = command.feeCrest * command.playerIds.length
         const sink = this.battleRewardsCrest
         this.battleRewardsCrest = 0
-        this.crownSinkCrest += sink
+        this.crownSinkCrest += sink + entryFeeSink
         this.ended = true
-        return this.transaction(command.commandId, 'CROWN_SINK', [], {}, -sink, sink)
+        return this.transaction(command.commandId, 'ENTRY_FEE', entries, {}, -sink, sink + entryFeeSink)
       }
     }
   }
 
-  private debit(playerId: string, amount: number, field: 'ante' | 'auction' | 'call' | 'bossFee'): SettlementEntry {
+  private debit(playerId: string, amount: number, field: 'entryFee' | 'ante' | 'jokerExtraAnte' | 'auction' | 'call' | 'bossFee'): SettlementEntry {
     const current = this.balance(playerId)
     if (current < amount) throw new Error('INSUFFICIENT_CREST')
     this.wallets.set(playerId, current - amount)

@@ -65,8 +65,8 @@ function actionFor(engine: ArenaMatchEngine, actorId: string, sequence: number):
     case 'FINAL_ARRANGE': return { ...base, type: 'FINAL_ARRANGE', ...arrangementFor(engine, actorId) }
     case 'JOKER_DECLARE': return { ...base, type: 'JOKER_DECLARE', mode: 'WILD', targetPile: 3, availableCrest: 100 }
     case 'DISCARD': {
-      const held = engine.snapshotDetail().heldCardIds[actorId] ?? []
-      return { ...base, type: 'DISCARD', cardId: held[held.length - 1] }
+      const pile3 = engine.snapshotDetail().lastArrangements[actorId]?.pile3 ?? []
+      return { ...base, type: 'DISCARD', cardId: pile3[pile3.length - 1] }
     }
     case 'FINAL_LOCK': return { ...base, type: 'FINAL_LOCK', ...arrangementFor(engine, actorId) }
     case 'GF_PILE_2': case 'GF_PILE_3_ROUND_1': case 'GF_PILE_3_ROUND_2':
@@ -133,19 +133,19 @@ describe('arenaProjection result.psGained', () => {
       const view = projectArenaClientSnapshot(engine, fourGodsComposition, connections, viewerId, 10, new Map())
       const localBreakdown = breakdown.find(entry => entry.playerId === viewerId)!
       const expected = viewerId === winnerId
-        ? (isRareBoss ? 12 : 7)
-        : (localBreakdown.netCrest >= 0 ? 4 : 2)
+        ? (isRareBoss ? 6 : 4)
+        : (localBreakdown.netCrest >= 0 ? 2 : 0)
       expect(view.result?.psGained).toBe(expected)
     }
   })
 
-  test('psGained ผู้ชนะเจอ Monarch ได้ +12 (ไม่ใช่ +7)', () => {
+  test('psGained ผู้ชนะเจอ Monarch ได้ +6 (+4 และโบนัส +2)', () => {
     const engine = playMatch(11, monarchComposition, 'ps-gained-monarch')
     expect(engine.snapshot().phase).toBe('MATCH_RESULT')
     const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
     const { winnerId, isHumanWinner } = resolveArenaTableWinner(engine, monarchComposition)
     if (!isHumanWinner) return // AI ชนะโต๊ะรอบนี้ — ข้าม (ไม่มี human ให้เช็คค่า win)
     const view = projectArenaClientSnapshot(engine, monarchComposition, connections, winnerId, 10, new Map())
-    expect(view.result?.psGained).toBe(12)
+    expect(view.result?.psGained).toBe(6)
   })
 })

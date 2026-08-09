@@ -10,6 +10,7 @@ import { getReduceMotion, setReduceMotion } from '../../utils/reduceMotion'
 import { TABLE_SKINS, TABLE_SKIN_META } from '../../config/tableSkins'
 import { useTableSkins } from '../../hooks/useTableSkins'
 import { useAuthStore } from '../../store/authStore'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 
 const C = {
   bg:      '#0F2418',
@@ -28,6 +29,9 @@ interface Props {
 
 export default function SettingsModal({ visible, onClose }: Props) {
   const [reduceMotion, setReduceMotionState] = useState(false)
+  const [characterDialogue, setCharacterDialogue] = useState(true)
+  const [selectingSkin, setSelectingSkin] = useState<number | null>(null)
+  const [skinError, setSkinError] = useState<string | null>(null)
   const isVip = useAuthStore(s => (s.profile?.vip_status ?? 'none') !== 'none')
   const { unlockedSkins, activeSkin, loading: skinsLoading, selectSkin } = useTableSkins()
 
@@ -35,12 +39,28 @@ export default function SettingsModal({ visible, onClose }: Props) {
   useEffect(() => {
     if (!visible) return
     getReduceMotion().then(setReduceMotionState)
+    AsyncStorage.getItem('settings.characterDialogue').then(value => setCharacterDialogue(value !== 'false'))
   }, [visible])
 
   const handleToggle = () => {
     const next = !reduceMotion
     setReduceMotionState(next) // optimistic — feel ทันที ไม่ต้องรอ AsyncStorage write
     setReduceMotion(next)
+  }
+
+  const handleDialogueToggle = () => {
+    const next = !characterDialogue
+    setCharacterDialogue(next)
+    void AsyncStorage.setItem('settings.characterDialogue', String(next))
+  }
+
+  const handleSelectSkin = async (skinId: number) => {
+    if (selectingSkin !== null || skinId === activeSkin) return
+    setSelectingSkin(skinId)
+    setSkinError(null)
+    const selected = await selectSkin(skinId)
+    if (!selected) setSkinError('Could not update table skin. Please try again.')
+    setSelectingSkin(null)
   }
 
   return (
@@ -59,6 +79,16 @@ export default function SettingsModal({ visible, onClose }: Props) {
             </View>
           </TouchableOpacity>
 
+          <TouchableOpacity style={styles.row} onPress={handleDialogueToggle} activeOpacity={0.8}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowLabel}>Character Dialogue</Text>
+              <Text style={styles.rowSub}>Lore, reactions and rare table secrets</Text>
+            </View>
+            <View style={[styles.toggleTrack, characterDialogue && styles.toggleTrackOn]}>
+              <View style={[styles.toggleThumb, characterDialogue && styles.toggleThumbOn]} />
+            </View>
+          </TouchableOpacity>
+
           <View style={styles.skinSection}>
             <Text style={styles.sectionTitle}>Table Skin</Text>
             <Text style={styles.sectionSub}>
@@ -66,24 +96,29 @@ export default function SettingsModal({ visible, onClose }: Props) {
             </Text>
             <View style={styles.skinGrid}>
               {TABLE_SKIN_META.map(skin => {
-                const unlocked = unlockedSkins.includes(skin.id)
+                const unlocked = isVip && (skin.id === 0 || unlockedSkins.includes(skin.id))
                 const active = activeSkin === skin.id
                 return (
                   <TouchableOpacity
                     key={skin.id}
-                    disabled={!unlocked || skinsLoading}
-                    onPress={() => { void selectSkin(skin.id) }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${skin.name} table skin${active ? ', active' : ''}`}
+                    disabled={!unlocked || skinsLoading || selectingSkin !== null}
+                    onPress={() => { void handleSelectSkin(skin.id) }}
                     style={[styles.skinCard, active && styles.skinCardActive, !unlocked && styles.skinCardLocked]}
                   >
                     <Image source={TABLE_SKINS[skin.id]} style={styles.skinImage} resizeMode="cover" />
                     {!unlocked && <View style={styles.skinLock}><Text style={styles.skinLockText}>🔒</Text></View>}
                     {active && <Text style={styles.activeBadge}>ACTIVE</Text>}
                     <Text style={styles.skinName} numberOfLines={1}>{skin.name}</Text>
-                    <Text style={styles.skinUnlock}>{unlocked ? 'Unlocked' : skin.unlock}</Text>
+                    <Text style={styles.skinUnlock}>
+                      {selectingSkin === skin.id ? 'Saving…' : active ? 'Using this table' : unlocked ? (skin.id === 0 ? 'Use original table' : 'Unlocked') : skin.unlock}
+                    </Text>
                   </TouchableOpacity>
                 )
               })}
             </View>
+            {skinError && <Text style={styles.skinError}>{skinError}</Text>}
           </View>
 
           <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
@@ -160,6 +195,7 @@ const styles = StyleSheet.create({
   activeBadge: { position: 'absolute', top: 5, right: 5, color: '#081C12', backgroundColor: C.green, borderRadius: 5, paddingHorizontal: 5, paddingVertical: 2, fontSize: 8, fontWeight: '900' },
   skinName: { color: C.text, fontSize: 10, fontWeight: '800', paddingHorizontal: 7, marginTop: 5 },
   skinUnlock: { color: C.textSec, fontSize: 8, paddingHorizontal: 7, marginTop: 2 },
+  skinError: { color: '#FF8A8A', fontSize: 10, marginTop: 9, textAlign: 'center' },
   closeBtn: {
     marginTop: 18,
     alignItems: 'center',

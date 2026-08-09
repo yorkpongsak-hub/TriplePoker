@@ -26,7 +26,7 @@ import {
   TextInput,
 } from 'react-native'
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated'
-import { useFocusEffect } from 'expo-router'
+import { router, useFocusEffect } from 'expo-router'
 import { useAuthStore } from '../../store/authStore'
 import { ThemedBackground } from '../ui/ThemedBackground'
 import { glassPanel, glassPanelDense, textOnGlass } from '../../ui/glassStyles'
@@ -61,21 +61,26 @@ type TabKey = 'items' | 'fun' | 'vip' | 'packs' | 'cosmetics' | 'vault'
 
 // Tier progression lock — Competitive Items ปลดล็อคทีละ Tier (มติลุงเยาะ 2026-07-26)
 // ceiling model เดียวกับ profile.tsx (TIER_ORDER local const): 'D' = ยังไม่เคยปลด Tier ไหนเลย
-type TierKeyLocal = 'initiate' | 'adept' | 'mastermind' | 'highNoble'
+// เพิ่ม 'grandmaster' เข้า union นี้ (2026-08-04, Merch Shop) — เดิมมีแค่ 4 ตัวเพราะ Competitive
+// Items/Crown Vault ไม่เคย gate ถึง Grandmaster มาก่อน ตอนนี้ Merch catalog มีสินค้า Tier Grandmaster ด้วย
+type TierKeyLocal = 'initiate' | 'adept' | 'mastermind' | 'highNoble' | 'grandmaster'
 const CEILING_ORDER = ['D', 'initiate', 'adept', 'mastermind', 'highNoble', 'grandmaster'] as const
 const TIER_LETTER: Record<TierKeyLocal, string> = {
-  initiate:   TIER_CONFIG.initiate.letter,
-  adept:      TIER_CONFIG.adept.letter,
-  mastermind: TIER_CONFIG.mastermind.letter,
-  highNoble:  TIER_CONFIG.high_noble.letter,
+  initiate:    TIER_CONFIG.initiate.letter,
+  adept:       TIER_CONFIG.adept.letter,
+  mastermind:  TIER_CONFIG.mastermind.letter,
+  highNoble:   TIER_CONFIG.high_noble.letter,
+  grandmaster: TIER_CONFIG.grandmaster.letter,
 }
 
+// MVP audit (2026-08-04, มติลุงเยาะ): ตัด ITEMS / FUN / COSMETICS ออกจาก tab bar —
+// ทั้ง 3 แท็บไม่มี engine hook ใช้งานจริงในเกมเลย (gameLoop.ts ไม่มี item logic,
+// FunItems.tsx HUD ไม่เคยถูก import ที่ไหน, shop.ts route ไม่ได้ register ใน index.ts)
+// และ Cosmetics/Bundles เป็น PLACEHOLDER ที่ไม่มี backend เลยตั้งแต่แรก — โค้ด/แคตาล็อก
+// ด้านล่างยังอยู่ครบ ไม่ลบทิ้ง เผื่อทำต่อ v1.1 หลัง engine hook + XP/Leveling เสร็จ
 const TABS: { key: TabKey; label: string }[] = [
-  { key: 'items',      label: 'ITEMS' },
-  { key: 'fun',        label: 'FUN' },
   { key: 'vip',        label: 'VIP' },
   { key: 'packs',      label: 'TOKEN PACKS' },
-  { key: 'cosmetics',  label: 'COSMETICS' },
   { key: 'vault',      label: 'CROWN VAULT' },
 ]
 
@@ -115,7 +120,8 @@ function ascendantStatusLabel(status?: AscendantStatusData): string {
 function ascendantLockLabel(reason?: string): string {
   switch (reason) {
     case 'TOKEN_BELOW_MIN':  return '🔒 Need 600,000 Token'
-    case 'MONARCH_REQUIRED': return '🔒 Defeat the Monarch first'
+    // มติลุงเยาะ — ปุ่มนี้ล็อคอยู่แปลว่าผู้เล่นยังไม่เคยชนะ Monarch มาก่อนแน่นอน ห้ามสปอยล์ชื่อ
+    case 'MONARCH_REQUIRED': return '🔒 Defeat the Hidden Boss first'
     case 'TIER_REQUIRED':    return '🔒 Reach Tier A+ first'
     case 'ALREADY_USED':     return '🔒 Already used'
     default:                 return '🔒 Not Eligible Yet'
@@ -278,7 +284,8 @@ const TOKEN_PACKS: TokenPack[] = [
 interface VipPlan {
   tier: 'vip' | 'vip_pro'
   label: string
-  priceTHB: number
+  priceTHB: number       // ราคา Monthly
+  price3moTHB: number    // ราคา Special แบบ 3 Months
   accent: string
   ribbon?: string
   benefits: string[]
@@ -286,14 +293,16 @@ interface VipPlan {
 
 const VIP_PLANS: VipPlan[] = [
   {
-    tier: 'vip', label: 'VIP', priceTHB: 99, accent: C.silver,
+    tier: 'vip', label: 'VIP', priceTHB: 99, price3moTHB: 259, accent: C.silver,
     benefits: ['No Ads', '+300 Tokens daily', 'All Cosmetics', 'Bag Expansion purchases unlocked', 'VIP Milestone Rewards'],
   },
   {
-    tier: 'vip_pro', label: 'VIP PRO', priceTHB: 159, accent: C.gold, ribbon: 'BEST VALUE',
+    tier: 'vip_pro', label: 'VIP PRO', priceTHB: 199, price3moTHB: 499, accent: C.gold, ribbon: 'BEST VALUE',
     benefits: ['Everything in VIP', '+400 Tokens daily', 'All Competitive Items', 'Grand Master (D30)', 'Exclusive Badge & Avatar Frame'],
   },
 ]
+
+type BillingPeriod = 'monthly' | '3mo'
 
 // ─── Small building blocks ──────────────────────────────────────────────
 
@@ -371,7 +380,7 @@ function VipUpgradeSheet({ visible, onClose, onUpgrade }: { visible: boolean; on
           </View>
           <PressScale onPress={onUpgrade}>
             <View style={s.sheetUpgradeBtn}>
-              <Text style={s.sheetUpgradeTxt}>UPGRADE TO VIP PRO — ฿159/mo</Text>
+              <Text style={s.sheetUpgradeTxt}>UPGRADE TO VIP PRO — ฿{VIP_PLANS[1].priceTHB}/mo</Text>
             </View>
           </PressScale>
           <TouchableOpacity onPress={onClose} style={{ marginTop: 10, alignItems: 'center' }}>
@@ -428,7 +437,7 @@ interface ShopScreenProps {
   initialTab?: TabKey
 }
 
-export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreenProps) {
+export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenProps) {
   const profile = useAuthStore(s => s.profile)
   const refreshProfile = useAuthStore(s => s.refreshProfile)
 
@@ -436,6 +445,7 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
   const [upgradeSheetVisible, setUpgradeSheetVisible] = useState(false)
   const [oddsBox, setOddsBox] = useState<LootBoxDef | null>(null)
   const [toastMsg, setToastMsg] = useState<string | null>(null)
+  const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly')
 
   // refetch token/vip ล่าสุดทุกครั้งที่กลับมาโฟกัสหน้านี้ — pattern เดียวกับ profile.tsx
   useFocusEffect(
@@ -489,9 +499,9 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
     setOddsBox(null)
   }
 
-  const handleSubscribe = (plan: VipPlan) => {
+  const handleSubscribe = (plan: VipPlan, period: BillingPeriod) => {
     // TODO(RevenueCat): ต่อ purchase flow จริงตอน integrate IAP subscription (Sprint 7)
-    handleComingSoon(plan.label)
+    handleComingSoon(`${plan.label} — ${period === 'monthly' ? 'Monthly' : '3 Months'}`)
   }
 
   const handleBuyTokenPack = (pack: TokenPack) => {
@@ -608,14 +618,15 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
 
           <Text style={s.headerTitle}>THE TREASURE VAULT</Text>
 
-          <View style={s.headerRight}>
-            <GlassCard dense style={s.tokenChip}>
-              <Text style={s.tokenChipTxt}>🪙 {fmt(tokenBalance)}</Text>
-            </GlassCard>
-            <TouchableOpacity onPress={() => setActiveTab('packs')} style={s.addBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Text style={s.addBtnTxt}>+</Text>
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity onPress={() => setActiveTab('packs')} style={s.addBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Text style={s.addBtnTxt}>+</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={s.tokenRow}>
+          <GlassCard dense style={s.tokenChip}>
+            <Text style={s.tokenChipTxt}>🪙 {fmt(tokenBalance)}</Text>
+          </GlassCard>
         </View>
 
         {/* ═══════════════ TAB BAR ═══════════════ */}
@@ -631,6 +642,21 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
             </TouchableOpacity>
           ))}
         </View>
+
+        {/* Official Collectibles - ร้านสินค้าจริง จ่ายเงินบาทจริง คนละระบบกับ MERCH tab (จ่ายด้วย
+            Earned Crown ในเกม) ด้านบน ตั้งใจแยก route/ธีมให้ชัดกันผู้เล่นสับสนว่าเป็นร้านเดียวกัน */}
+        <TouchableOpacity
+          onPress={() => router.push('/(home)/collectibles' as any)}
+          activeOpacity={0.85}
+          style={s.collectiblesBanner}
+        >
+          <Text style={s.collectiblesBannerIcon}>🏆</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={s.collectiblesBannerTitle}>Official Collectibles</Text>
+            <Text style={s.collectiblesBannerSub}>Real merchandise. Real prices. Earned achievements.</Text>
+          </View>
+          <Text style={s.collectiblesBannerArrow}>›</Text>
+        </TouchableOpacity>
 
         {/* ═══════════════ CONTENT ═══════════════ */}
         <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
@@ -721,32 +747,57 @@ export default function ShopScreen({ onClose, initialTab = 'items' }: ShopScreen
           {/* ── VIP (comparison cards) ── */}
           {activeTab === 'vip' && (
             <View style={{ gap: 14 }}>
-              {VIP_PLANS.map(plan => (
-                <GlassCard key={plan.tier} style={[s.vipCard, { borderColor: plan.accent }]}>
-                  {plan.ribbon && (
-                    <View style={s.vipRibbon}>
-                      <Text style={s.vipRibbonTxt}>{plan.ribbon}</Text>
-                    </View>
-                  )}
-                  <View style={s.vipHeaderRow}>
-                    <Text style={s.vipCrown}>👑</Text>
-                    <View>
-                      <Text style={[s.vipLabel, { color: plan.accent }]}>{plan.label}</Text>
-                      <Text style={s.vipPrice}>฿{plan.priceTHB} <Text style={s.vipPriceUnit}>/ month</Text></Text>
+              <View style={s.billingToggle}>
+                <PressScale onPress={() => setBillingPeriod('monthly')} style={{ flex: 1 }}>
+                  <View style={[s.billingToggleBtn, billingPeriod === 'monthly' && s.billingToggleBtnActive]}>
+                    <Text style={[s.billingToggleTxt, billingPeriod === 'monthly' && s.billingToggleTxtActive]}>Monthly</Text>
+                  </View>
+                </PressScale>
+                <PressScale onPress={() => setBillingPeriod('3mo')} style={{ flex: 1 }}>
+                  <View style={[s.billingToggleBtn, billingPeriod === '3mo' && s.billingToggleBtnActive]}>
+                    <Text style={[s.billingToggleTxt, billingPeriod === '3mo' && s.billingToggleTxtActive]}>3 Months</Text>
+                    <View style={s.billingSpecialBadge}>
+                      <Text style={s.billingSpecialBadgeTxt}>SPECIAL</Text>
                     </View>
                   </View>
-                  <View style={s.vipBenefits}>
-                    {plan.benefits.map((b, i) => (
-                      <Text key={i} style={s.vipBenefitRow}>✦  {b}</Text>
-                    ))}
-                  </View>
-                  <PressScale onPress={() => handleSubscribe(plan)}>
-                    <View style={[s.subscribeBtn, { backgroundColor: plan.accent }]}>
-                      <Text style={s.subscribeBtnTxt}>SUBSCRIBE</Text>
+                </PressScale>
+              </View>
+              {VIP_PLANS.map(plan => {
+                const isMonthly = billingPeriod === 'monthly'
+                const price = isMonthly ? plan.priceTHB : plan.price3moTHB
+                const unit = isMonthly ? '/ month' : '/ 3 months'
+                const fullPrice3mo = plan.priceTHB * 3
+                const savings = fullPrice3mo - plan.price3moTHB
+                return (
+                  <GlassCard key={plan.tier} style={[s.vipCard, { borderColor: plan.accent }]}>
+                    {plan.ribbon && (
+                      <View style={s.vipRibbon}>
+                        <Text style={s.vipRibbonTxt}>{plan.ribbon}</Text>
+                      </View>
+                    )}
+                    <View style={s.vipHeaderRow}>
+                      <Text style={s.vipCrown}>👑</Text>
+                      <View>
+                        <Text style={[s.vipLabel, { color: plan.accent }]}>{plan.label}</Text>
+                        <Text style={s.vipPrice}>฿{price} <Text style={s.vipPriceUnit}>{unit}</Text></Text>
+                        {!isMonthly && (
+                          <Text style={s.vipSavingsNote}>฿{fullPrice3mo} billed monthly · Save ฿{savings}</Text>
+                        )}
+                      </View>
                     </View>
-                  </PressScale>
-                </GlassCard>
-              ))}
+                    <View style={s.vipBenefits}>
+                      {plan.benefits.map((b, i) => (
+                        <Text key={i} style={s.vipBenefitRow}>✦  {b}</Text>
+                      ))}
+                    </View>
+                    <PressScale onPress={() => handleSubscribe(plan, billingPeriod)}>
+                      <View style={[s.subscribeBtn, { backgroundColor: plan.accent }]}>
+                        <Text style={s.subscribeBtnTxt}>SUBSCRIBE</Text>
+                      </View>
+                    </PressScale>
+                  </GlassCard>
+                )
+              })}
               <Text style={s.iapDisclaimer}>
                 Subscriptions renew monthly via App Store / Google Play. Cancel anytime.
               </Text>
@@ -955,6 +1006,26 @@ function VaultConfirmModal({
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: 'transparent' }, // ThemedBackground ครอบพื้นหลังแล้ว
 
+  // Official Collectibles banner - จงใจใช้สีดำ/ม่วงต่างจาก glassPanel เขียวเดิมทั้งหน้า
+  // ให้รู้สึกว่าเป็นร้านคนละแบบ (ของจริง จ่ายเงินบาทจริง) ไม่ใช่ tab ในร้านเดิม
+  collectiblesBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginHorizontal: 14,
+    marginBottom: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    backgroundColor: 'rgba(20,16,26,0.85)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,215,106,0.45)',
+  },
+  collectiblesBannerIcon: { fontSize: 20 },
+  collectiblesBannerTitle: { color: C.gold, fontSize: 13, fontWeight: '800' },
+  collectiblesBannerSub: { color: C.textDim, fontSize: 10, marginTop: 1 },
+  collectiblesBannerArrow: { color: C.purple, fontSize: 20, fontWeight: '700' },
+
   // Header
   headerRow: {
     flexDirection: 'row',
@@ -966,8 +1037,9 @@ const s = StyleSheet.create({
   },
   backBtn: {
     ...glassPanel,
-    paddingHorizontal: 12,
+    width: 82,
     paddingVertical: 8,
+    alignItems: 'center',
   },
   backTxt: { color: C.gold, fontSize: 13, fontWeight: '800', ...textOnGlass },
   headerTitle: {
@@ -977,7 +1049,7 @@ const s = StyleSheet.create({
     letterSpacing: 1,
     ...textOnGlass,
   },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  tokenRow: { alignItems: 'center', marginBottom: 10 },
   tokenChip: { paddingHorizontal: 10, paddingVertical: 7 },
   tokenChipTxt: { fontFamily: 'JetBrainsMono_600SemiBold', color: C.gold, fontSize: 13 },
   addBtn: {
@@ -1084,6 +1156,14 @@ const s = StyleSheet.create({
   oddsConfirmTxt: { color: C.bg, fontSize: 12, fontWeight: '900' },
 
   // VIP comparison cards
+  billingToggle: { flexDirection: 'row', gap: 8, backgroundColor: C.card, borderRadius: 10, padding: 4, borderWidth: 1, borderColor: C.border },
+  billingToggleBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 9, borderRadius: 8 },
+  billingToggleBtnActive: { backgroundColor: C.card2 },
+  billingToggleTxt: { color: C.textDim, fontSize: 12, fontWeight: '700' },
+  billingToggleTxtActive: { color: C.textPrimary },
+  billingSpecialBadge: { backgroundColor: C.gold, borderRadius: 5, paddingHorizontal: 5, paddingVertical: 1 },
+  billingSpecialBadgeTxt: { color: C.bg, fontSize: 8, fontWeight: '900', letterSpacing: 0.3 },
+  vipSavingsNote: { color: C.green, fontSize: 10, fontWeight: '700', marginTop: 3 },
   vipCard: { padding: 16, borderWidth: 1.5, position: 'relative', overflow: 'hidden' },
   vipRibbon: {
     position: 'absolute', top: 12, right: -30, width: 130,

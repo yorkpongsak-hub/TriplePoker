@@ -47,9 +47,10 @@ const MonarchConquestBanner: React.FC<MonarchConquestBannerProps> = ({ winnerNam
       <View style={[styles.card, { height: cardH }]}>
         <Image source={CARD_ART} style={{ width: cardH - 20, height: cardH - 20 }} resizeMode="contain" />
         <View style={styles.textWrap}>
-          <Text style={styles.title}>👑 MONARCH CONQUERED</Text>
+          {/* มติลุงเยาะ — banner นี้ broadcast ให้ทุกคนทุก Tier เห็น (แม้ยังไม่เคยเจอบอสตัวนี้เอง) ห้ามสปอยล์ชื่อ */}
+          <Text style={styles.title}>👑 HIDDEN BOSS CONQUERED</Text>
           <Text style={styles.winnerName} numberOfLines={1}>{winnerName}</Text>
-          <Text style={styles.subtitle}>has defeated the Boss Monarch</Text>
+          <Text style={styles.subtitle}>has defeated the Hidden Boss</Text>
         </View>
       </View>
     </Animated.View>

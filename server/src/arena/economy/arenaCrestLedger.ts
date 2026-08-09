@@ -3,6 +3,7 @@ import { assertCrest, toTotalCrest } from './crest'
 
 export type ArenaLedgerReason =
   | 'MATCH_RESERVE'
+  | 'ENTRY_FEE'
   | 'ANTE'
   | 'AUCTION'
   | 'CALL'

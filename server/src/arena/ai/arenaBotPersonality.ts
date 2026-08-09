@@ -43,7 +43,7 @@ export function arenaAuctionBid(personality: ArenaPersonality, random: () => num
     case 'phoenix': // กลาง-สูง คงที่ — level คงที่
       return random() < 0.8 ? levels[Math.floor(levels.length * 0.7)] : 0
     case 'black_magic': // กลาง ปรับตาม pot size ในต้นฉบับ — Arena ไม่มีสเกล token balance หลักพันแบบ
-      // Tier ล่างให้เทียบ (Crest ทั้งแมตช์ ~228) เลยลดรูปเป็น level กลางคงที่แทนการปรับตามยอดเงิน
+      // Tier ล่างให้เทียบ (Crest ทั้งแมตช์ ~240) เลยลดรูปเป็น level กลางคงที่แทนการปรับตามยอดเงิน
       return random() < 0.65 ? levels[2] : 0
     case 'jester': // สุ่มทุกครั้ง — สุ่มกว้างกว่า Cipher (เต็ม range ไม่ใช่แค่หัว-ท้าย)
       return random() < 0.7 ? levels[Math.floor(random() * levels.length)] : 0
@@ -101,7 +101,7 @@ export function arenaGfDecision(personality: ArenaPersonality, winrate: number, 
 
 // ไม่มีต้นแบบจาก Tier ล่าง (ไม่มี Joker) — ออกแบบใหม่ตามบุคลิกเดิม: reaper บุก เลือก ANTE_X2 ถ้าจ่ายไหว,
 // crag ระวังตัวเสมอเลือก WILD ปลอดภัย, cortex เลือก ANTE_X2 เฉพาะตอน EV คุ้ม (winrate เป้าหมาย >= 0.6),
-// cipher สุ่ม 50/50 — targetPile ล็อกที่ 3 เสมอ ตรงกับ UI ของผู้เล่นจริงเองที่มีแค่ปุ่ม "…P3" เท่านั้น
+// cipher สุ่ม 50/50 — targetPile เป็น compatibility field; ANTE_X2 จริงใช้กองแรกที่เจ้าของ Joker ชนะ
 // Nine Sentinels ก็ไม่มีต้นแบบเรื่อง Joker เหมือนกัน (ไม่มีใน Mastermind Conquest) — จัดกลุ่มตามบุคลิกเดิม
 // ในตาราง Auction/GF ด้านบน: บุก/ดุ (war_lord, dark_shark, phoenix) เอียงไป ANTE_X2 เหมือน reaper,
 // ระวังตัว (iron_wall, black_magic) เอียงไป WILD เหมือน crag, คำนวณ EV นิ่งๆ (oracle, chivalry) ใช้เกณฑ์

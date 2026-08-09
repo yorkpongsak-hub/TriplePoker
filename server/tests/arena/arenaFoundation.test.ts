@@ -1,5 +1,5 @@
 import { createArenaRoom } from '../../src/arena/rooms/createArenaRoom'
-import { tierSConfig, tierSEconomyConfig } from '../../src/arena/config/tierSConfig'
+import { arenaPhaseTimeoutMs, tierSConfig, tierSEconomyConfig } from '../../src/arena/config/tierSConfig'
 import { splitTotalCrest, toTotalCrest } from '../../src/arena/economy/crest'
 import { checkTierSEligibility } from '../../src/arena/eligibility/tierSEligibility'
 import {
@@ -33,9 +33,15 @@ describe('Arena Gate 1 foundation', () => {
     expect(tierSConfig.unlockTokenExclusive).toBe(1_000_000)
     expect(tierSConfig.tableSkinKey).toBe('boss_monarch')
     expect(tierSConfig.handLayout).toBe('fan')
+    expect(arenaPhaseTimeoutMs.GF_PILE_2).toBe(15_000)
+    expect(arenaPhaseTimeoutMs.GF_PILE_3_ROUND_1).toBe(15_000)
+    expect(arenaPhaseTimeoutMs.GF_PILE_3_ROUND_2).toBe(15_000)
+    expect(arenaPhaseTimeoutMs.ARRANGE_1).toBe(30_000)
+    expect(arenaPhaseTimeoutMs.AUCTION_FACE_UP_RESULT).toBe(3_000)
+    expect(arenaPhaseTimeoutMs.FINAL_ARRANGE).toBe(90_000)
     expect(tierSEconomyConfig.anteCrest).toEqual({ pile1: 3, pile2: 3, pile3: 6 })
     expect(tierSEconomyConfig.entryFeeCrest).toBe(12)
-    expect(tierSEconomyConfig.requiredReservationCrest).toBe(19 * 12)
+    expect(tierSEconomyConfig.requiredReservationCrest).toBe(20 * 12)
   })
 
   test('สร้าง room ใหม่โดยไม่เรียก game loop ของ Tier เดิม', () => {

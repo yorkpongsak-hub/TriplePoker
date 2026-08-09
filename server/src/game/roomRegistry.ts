@@ -47,6 +47,10 @@ export interface GameRoom {
   isPrivate: boolean
   pin?: string
   hostUserId?: string
+  // Spectator MVP: immutable matchmaking lane. LIVE rooms never mix with STANDARD rooms.
+  liveMode?: 'STANDARD' | 'LIVE'
+  liveEnabledByUserId?: string
+  broadcastId?: string
   // LobbyMatchmaking_Spec_v1_0 §4.4/§6.1: waiting timeout เดิม — HighNoble เท่านั้นตอนนี้ (Adept public
   // ย้ายไปใช้ waitStage ด้านล่างแทนแล้วตาม v1.1) — 'waiting' (รอบแรก 3 นาที) จบแล้วถามผู้เล่น
   // ('awaiting_choice') → เลือก "รอต่อ" เข้า 'extended' (2 นาที) → หมดแล้ว เช็ค Human count ก่อน —
@@ -76,6 +80,7 @@ export const WAIT_EXTENSION_MS = gameConfig.matchmakingTimeouts.waitExtensionMs
 const metaKey = (roomId: string) => `room:${roomId}:meta`
 const fullKey = (roomId: string) => `room:${roomId}:full`
 const openSetKey = (tier: Tier) => `rooms:open:${tier}`
+const privateOpenSetKey = (tier: Tier) => `rooms:private-open:${tier}`
 
 const ROOM_TTL_SECONDS = 60 * 30
 
@@ -87,18 +92,20 @@ function aiSeat(idx: number): Seat {
   return { type: 'ai', name: `Minion-${idx + 1}`, joinedAt: Date.now() }
 }
 
-// The Sage — companion bot ตัวแรกของ Adept (ทั้ง private ตอนสร้างห้อง และ public v1.1 ตอน Human คนแรก join)
-function sageSeat(): Seat {
+// Adept ใช้ชื่อ Minion สุ่มจาก roster 25 คน แต่เก็บ aiConfigId เดิมไว้เพื่อไม่เปลี่ยนความเก่ง/บุคลิก AI
+function sageSeat(excludeNames: string[] = []): Seat {
   const sage = AI_CONFIGS.find(a => a.personality === 'sage')!
-  return { type: 'ai', name: sage.name, joinedAt: Date.now(), aiConfigId: sage.id }
+  const minionName = pickRandomMinions(1, excludeNames)[0]
+  return { type: 'ai', name: minionName, joinedAt: Date.now(), aiConfigId: sage.id, isMinion: true }
 }
 
 // Companion bot ตัวที่ 2 ของ Adept (The Ghost หรือ The Reckless สุ่ม 1 ตัว) — private: ตอน human ครบ 2
 // | public v1.2: เติมทันทีตอน human คนที่ 2 join เลย (ไม่มี wait stage รอคนที่ 3 อีกต่อไป — ดู joinRoom())
-function secondAdeptBotSeat(): Seat {
+function secondAdeptBotSeat(excludeNames: string[] = []): Seat {
   const pool = AI_CONFIGS.filter(a => a.personality === 'ghost' || a.personality === 'reckless')
   const pick = pool[Math.floor(Math.random() * pool.length)]
-  return { type: 'ai', name: pick.name, joinedAt: Date.now(), aiConfigId: pick.id }
+  const minionName = pickRandomMinions(1, excludeNames)[0]
+  return { type: 'ai', name: minionName, joinedAt: Date.now(), aiConfigId: pick.id, isMinion: true }
 }
 
 // LobbyMatchmaking_Spec_v1_0 §4.2 (private room เท่านั้น ไม่ถูกแตะโดย v1.1): seat 0 = The Sage ทันที
@@ -193,6 +200,16 @@ async function saveRoom(room: GameRoom): Promise<void> {
   } else {
     await redis.srem(openSetKey(room.tier), room.roomId)
   }
+  if (room.status === 'waiting' && room.isPrivate && room.pin) {
+    await redis.sadd(privateOpenSetKey(room.tier), room.roomId)
+  } else {
+    await redis.srem(privateOpenSetKey(room.tier), room.roomId)
+  }
+}
+
+export function toPublicRoom(room: GameRoom): Omit<GameRoom, 'pin'> {
+  const { pin: _privatePin, ...safeRoom } = room
+  return safeRoom
 }
 
 export async function getRoom(roomId: string): Promise<GameRoom | null> {
@@ -202,20 +219,47 @@ export async function getRoom(roomId: string): Promise<GameRoom | null> {
 }
 
 // §4.1: จับ user ใหม่เข้า "โต๊ะที่รอนานที่สุด" เสมอ — Redis SMEMBERS ไม่การันตีลำดับ ต้องดึงมาเทียบ createdAt เอง
-export async function findOpenRoom(tier: Tier): Promise<GameRoom | null> {
+export async function findOpenRoom(tier: Tier, liveMode: 'STANDARD' | 'LIVE' = 'STANDARD'): Promise<GameRoom | null> {
   const roomIds = await redis.smembers(openSetKey(tier))
   const candidates: GameRoom[] = []
   for (const roomId of roomIds) {
     const room = await getRoom(roomId)
-    if (room && room.status === 'waiting' && !room.isPrivate) candidates.push(room)
+    if (room && room.status === 'waiting' && !room.isPrivate && (room.liveMode ?? 'STANDARD') === liveMode) candidates.push(room)
   }
   if (candidates.length === 0) return null
   return candidates.reduce((oldest, r) => (r.createdAt < oldest.createdAt ? r : oldest))
 }
 
+export function isValidRoomPin(pin: string | undefined): pin is string {
+  return typeof pin === 'string' && /^\d{4}$/.test(pin)
+}
+
+// Unknown and incorrect PINs intentionally produce the same null result.
+export async function findPrivateRoomByPin(tier: Tier, pin: string): Promise<GameRoom | null> {
+  if (!isValidRoomPin(pin)) return null
+  const roomIds = await redis.smembers(privateOpenSetKey(tier))
+  const matches: GameRoom[] = []
+  for (const roomId of roomIds) {
+    const room = await getRoom(roomId)
+    if (room && room.status === 'waiting' && room.isPrivate && room.pin === pin) matches.push(room)
+  }
+  if (matches.length === 0) return null
+  return matches.reduce((oldest, room) => room.createdAt < oldest.createdAt ? room : oldest)
+}
+
+export async function joinPrivateRoomByPin(
+  tier: Tier, pin: string, userId: string, userName: string, avatarUrl?: string,
+): Promise<JoinResult> {
+  return withLock(`matchmaking:${tier}:private:${pin}`, async () => {
+    const room = await findPrivateRoomByPin(tier, pin)
+    if (!room) return { ok: false, reason: 'not_found' }
+    return joinRoom(room.roomId, userId, userName, pin, avatarUrl)
+  })
+}
+
 // ─── สร้างห้องใหม่ — AI seats fix ตาม config ทันที ──────────────
 // (เรียกจาก findOrCreateRoom() เท่านั้น — public room เสมอ, isPrivate default false)
-export async function createRoom(tier: Tier, isPrivate = false): Promise<GameRoom> {
+export async function createRoom(tier: Tier, isPrivate = false, liveMode: 'STANDARD' | 'LIVE' = 'STANDARD', liveEnabledByUserId?: string): Promise<GameRoom> {
   const cfg = TIER_ROOM_CONFIG[tier]
   // Adept/HighNoble public v1.1: ยังไม่เริ่มนับ timer ใดๆ ตอนสร้างห้อง — รอ Human คนแรก join ก่อน (ดู
   // joinRoom()) เพราะ findOrCreateRoomAndJoin() เรียก createRoom() แล้ว join ทันทีในธุรกรรมเดียวกันเสมออยู่แล้ว
@@ -229,6 +273,8 @@ export async function createRoom(tier: Tier, isPrivate = false): Promise<GameRoo
     timeoutAt,
     status: 'waiting',
     isPrivate,
+    liveMode,
+    liveEnabledByUserId,
   }
   await saveRoom(room)
   return room
@@ -236,10 +282,10 @@ export async function createRoom(tier: Tier, isPrivate = false): Promise<GameRoo
 
 // isNew: บอก caller ว่าห้องที่ได้เป็นห้องใหม่ (ไม่มีคนรอ) หรือห้องเดิมที่มีคนอยู่แล้ว —
 // ใช้ตัดสินใจ broadcast "server_activity" (table_open) เฉพาะห้องที่เพิ่งเกิดขึ้นจริง
-export async function findOrCreateRoom(tier: Tier): Promise<{ room: GameRoom; isNew: boolean }> {
-  const open = await findOpenRoom(tier)
+export async function findOrCreateRoom(tier: Tier, liveMode: 'STANDARD' | 'LIVE' = 'STANDARD', liveEnabledByUserId?: string): Promise<{ room: GameRoom; isNew: boolean }> {
+  const open = await findOpenRoom(tier, liveMode)
   if (open) return { room: open, isNew: false }
-  return { room: await createRoom(tier), isNew: true }
+  return { room: await createRoom(tier, false, liveMode, liveEnabledByUserId), isNew: true }
 }
 
 // ─── Distributed lock (Redis SET NX EX) ─────────────────────────
@@ -277,11 +323,23 @@ async function withLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
 // ล็อกต่อ tier ตลอดช่วง find/create + จองที่นั่ง กันสองคำขอชนกันได้ห้องคนละใบ หรือแย่งที่นั่งเดียวกัน
 export async function findOrCreateRoomAndJoin(
   tier: Tier, userId: string, userName: string, avatarUrl?: string,
+  liveMode: 'STANDARD' | 'LIVE' = 'STANDARD', liveEnabledByUserId?: string,
 ): Promise<JoinResult> {
-  return withLock(`matchmaking:${tier}`, async () => {
-    const { room, isNew } = await findOrCreateRoom(tier)
+  return withLock(`matchmaking:${tier}:${liveMode}`, async () => {
+    const { room, isNew } = await findOrCreateRoom(tier, liveMode, liveEnabledByUserId)
     const result = await joinRoom(room.roomId, userId, userName, undefined, avatarUrl)
     return { ...result, isNew }
+  })
+}
+
+export async function createNewPublicRoomAndJoin(
+  tier: Tier, userId: string, userName: string, avatarUrl?: string,
+  liveMode: 'STANDARD' | 'LIVE' = 'STANDARD', liveEnabledByUserId?: string,
+): Promise<JoinResult> {
+  return withLock(`matchmaking:${tier}:${liveMode}`, async () => {
+    const room = await createRoom(tier, false, liveMode, liveEnabledByUserId)
+    const result = await joinRoom(room.roomId, userId, userName, undefined, avatarUrl)
+    return { ...result, isNew: true }
   })
 }
 
@@ -294,7 +352,7 @@ export async function createPrivateRoom(
   pin?: string,
 ): Promise<GameRoom> {
   const vipPin = isVipHost && pin ? pin : undefined
-  if (vipPin && (!/^\d{4}$/.test(vipPin))) {
+  if (vipPin && !isValidRoomPin(vipPin)) {
     throw new Error('PIN ต้องเป็นตัวเลข 4 หลักเท่านั้น')
   }
 
@@ -355,7 +413,7 @@ export async function joinRoom(
   if (room.tier === 'adept' && room.isPrivate) {
     if (humanCount(room) === TIER_ROOM_CONFIG.adept.humanSeatsRequired) {
       const remainingEmpty = room.seats.findIndex(s => s.type === 'empty')
-      if (remainingEmpty !== -1) room.seats[remainingEmpty] = secondAdeptBotSeat()
+      if (remainingEmpty !== -1) room.seats[remainingEmpty] = secondAdeptBotSeat(room.seats.map(s => s.name))
     }
   } else if (room.tier === 'adept' && !room.isPrivate) {
     // LobbyMatchmaking_Spec_v1_2 §Adept public — ล็อคตายตัว 2H+2AI เท่านั้น ไม่มี 3rd-human wait stage
@@ -365,7 +423,7 @@ export async function joinRoom(
     if (hCount === 1) {
       // Human คนแรก join — เติม Sage ที่ seat ว่างสุดท้ายทันที + เริ่ม timer 2 นาทีรอคนที่ 2 (Human>=2 บังคับ)
       const lastEmpty = lastEmptySeatIndex(room.seats)
-      if (lastEmpty !== -1) room.seats[lastEmpty] = sageSeat()
+      if (lastEmpty !== -1) room.seats[lastEmpty] = sageSeat(room.seats.map(s => s.name))
       room.waitStage = 'waiting_2nd'
       room.timeoutAt = Date.now() + gameConfig.matchmakingTimeouts.adept.secondHumanWaitMs
     } else if (hCount === 2) {
@@ -373,7 +431,7 @@ export async function joinRoom(
       // ด้านล่างจะ mark 'full' เอง แล้ว saveRoom() จะเอาห้องนี้ออกจาก openSetKey ทันที — คนที่ 3 ที่มา
       // auto-match ทีหลังจะไม่มีทางเห็น/เข้าห้องนี้ได้อีกเลย ดู findOpenRoom())
       const remainingEmpty = room.seats.findIndex(s => s.type === 'empty')
-      if (remainingEmpty !== -1) room.seats[remainingEmpty] = secondAdeptBotSeat()
+      if (remainingEmpty !== -1) room.seats[remainingEmpty] = secondAdeptBotSeat(room.seats.map(s => s.name))
       room.waitStage = undefined
       room.timeoutAt = null
     }
@@ -515,6 +573,7 @@ export async function deleteRoomCompletely(roomId: string): Promise<void> {
   const room = await getRoom(roomId)
   if (!room) return
   await redis.srem(openSetKey(room.tier), roomId)
+  await redis.srem(privateOpenSetKey(room.tier), roomId)
   await redis.del(metaKey(roomId))
   await redis.del(fullKey(roomId))
 }

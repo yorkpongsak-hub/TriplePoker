@@ -9,10 +9,12 @@ interface FanHandProps {
   width: number
   compact?: boolean
   disabled?: boolean
+  revealedCardIds?: readonly string[]
+  selectedCardIds?: readonly string[]
   onCardPress?: (cardId: string) => void
 }
 
-export default function FanHand({ cards, cardCount, faceUp, width, compact = false, disabled = false, onCardPress }: FanHandProps) {
+export default function FanHand({ cards, cardCount, faceUp, width, compact = false, disabled = false, revealedCardIds = [], selectedCardIds = [], onCardPress }: FanHandProps) {
   const count = Math.max(cards.length, cardCount)
   // 62px = ขนาดเดียวกับ PlayerHandView's FREE_CW (ไพ่ในมือของ Tier อื่นเช่น Mastermind) — เดิมใช้ 44px
   // เล็กกว่ามากจนอ่านยากบนมือถือจริง โดยเฉพาะเมื่อ compact ถูกลดขนาดซ้ำเพราะจอแคบ (ตอนนี้ compact ผูกกับ
@@ -30,6 +32,8 @@ export default function FanHand({ cards, cardCount, faceUp, width, compact = fal
         const angle = count > 1 ? -16 + (32 * index) / (count - 1) : 0
         const lift = Math.abs(angle) * 0.28
         const showFace = faceUp && !!code
+        const revealed = !!code && revealedCardIds.includes(code)
+        const selected = !!code && selectedCardIds.includes(code)
         return (
           <Pressable
             key={`${code ?? 'hidden'}-${index}`}
@@ -41,10 +45,12 @@ export default function FanHand({ cards, cardCount, faceUp, width, compact = fal
                 width: cardWidth,
                 height: cardHeight,
                 left: index * step,
-                top: lift,
+                top: lift - (revealed ? 30 : 0),
                 zIndex: index + 1,
                 transform: [{ rotate: `${angle}deg` }],
               },
+              revealed && styles.revealedCard,
+              selected && !revealed && styles.selectedCard,
             ]}
           >
             {code === 'JOKER'
@@ -64,6 +70,8 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,215,106,0.72)', backgroundColor: '#091808',
     shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 3, shadowOffset: { width: 0, height: 2 }, elevation: 4,
   },
+  revealedCard: { borderWidth: 3, borderColor: '#FF3B30', elevation: 12 },
+  selectedCard: { borderWidth: 3, borderColor: '#8DFFB5', elevation: 12 },
   joker: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#130d1f' },
   jokerText: { color: '#FFD76A', fontWeight: '900', fontSize: 22 },
   jokerStar: { color: '#8DFFB5', fontWeight: '900', fontSize: 14 },

@@ -57,11 +57,11 @@ const GameTopBar: React.FC<GameTopBarProps> = ({
             มติลุงเยาะ 2026-07-26: ย้าย Tier badge มาติด Timer + ย้ายดาวจากข้างชื่อ Tier ไปอยู่ใต้ชื่อ Tier
             แก้ที่ไฟล์กลางจุดเดียว ทุก Tier จึงได้ลำดับเดียวกันหมดตามกติกา "Initiate = ต้นแบบทุก Tier" */}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: leftSlot ? 6 : 50 }}>
+          {!hideRound && <Text style={s.roundText}>R{round}/{totalRounds}</Text>}
           <View style={{ alignItems: 'center', gap: 2 }}>
             {!hideTierName && <View style={s.tierBadge}><Text style={s.tierText}>{tierName}</Text></View>}
             <Text style={s.starsText}>{'★'.repeat(tierStars)}</Text>
           </View>
-          {!hideRound && <Text style={s.roundText}>R{round}/{totalRounds}</Text>}
         </View>
       </View>
 

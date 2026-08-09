@@ -15,6 +15,39 @@ export interface ArenaBotPolicy {
   availableCrest?: number
 }
 
+// A human-seat takeover is a continuity aid, not another competitive AI.
+// Preserve the player's last server-accepted layout and only append newly
+// acquired cards to pile 3. If no layout exists, use deal order. In
+// particular, never search for a stronger arrangement on the player's behalf.
+export function takeoverArrangement(
+  heldCardIds: readonly string[],
+  previous?: ArenaArrangement,
+): ArenaArrangement {
+  const held = new Set(heldCardIds)
+  const used = new Set<string>()
+  const keep = (ids: readonly string[], limit?: number): string[] => {
+    const result: string[] = []
+    for (const id of ids) {
+      if (!held.has(id) || used.has(id) || (limit !== undefined && result.length >= limit)) continue
+      used.add(id)
+      result.push(id)
+    }
+    return result
+  }
+
+  const pile1 = keep(previous?.pile1 ?? heldCardIds, 3)
+  const pile2 = keep(previous?.pile2 ?? heldCardIds, 3)
+  const pile3 = keep(previous?.pile3 ?? heldCardIds)
+  for (const id of heldCardIds) {
+    if (used.has(id)) continue
+    if (pile1.length < 3) pile1.push(id)
+    else if (pile2.length < 3) pile2.push(id)
+    else pile3.push(id)
+    used.add(id)
+  }
+  return { pile1, pile2, pile3 }
+}
+
 export function buildArenaBotAction(
   snapshot: ArenaMatchSnapshot,
   actorId: string,

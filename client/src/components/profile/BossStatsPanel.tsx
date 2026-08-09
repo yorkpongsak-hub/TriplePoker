@@ -63,7 +63,12 @@ export default function BossStatsPanel({ userId }: { userId: string }) {
       </View>
       {visibleBossIds.map(bossId => {
         const stat = records.get(bossId)
-        const meta = BOSS_META[bossId] ?? { name: bossId.replace(/_/g, ' ').toUpperCase(), title: 'BOSS', image: MONARCH_AVATAR }
+        // มติลุงเยาะ — ห้ามสปอยล์ชื่อ Monarch ก่อนผู้เล่นเคย "เจอ" บอสตัวนี้เองอย่างน้อย 1 ครั้ง (encounters
+        // > 0, มี stat แล้ว) — บอสอื่น (Four Gods ฯลฯ) ไม่ใช่บอสลับ โชว์ชื่อจริงได้เสมอไม่ต้องซ่อน
+        const hidden = bossId === 'monarch' && !stat
+        const meta = hidden
+          ? { name: 'HIDDEN BOSS', title: 'UNKNOWN', image: MONARCH_AVATAR }
+          : (BOSS_META[bossId] ?? { name: bossId.replace(/_/g, ' ').toUpperCase(), title: 'BOSS', image: MONARCH_AVATAR })
         const defeated = (stat?.victories ?? 0) > 0
         return (
           <View key={bossId} style={[s.card, defeated && s.cardDefeated]}>

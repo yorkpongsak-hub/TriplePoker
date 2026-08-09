@@ -43,6 +43,10 @@ export interface GFHandViewProps {
   isMyTurn: boolean
   onSelect: (key: string) => void
   cardImages?: Record<string, any>
+
+  // มติลุงเยาะ 2026-08-04: ขยายมุมกางพัดไพ่ (default 1 = ไม่กระทบ Tier ที่ไม่ส่ง prop นี้ — opt-in
+  // เหมือน handFanAngleScale ของ PlayerHandView.tsx) ส่งต่อเข้า vipFanGeometry() ตัวเดียวกัน
+  fanAngleScale?: number
 }
 
 const AView = Animated.createAnimatedComponent(View)
@@ -103,10 +107,11 @@ const GFHandView: React.FC<GFHandViewProps> = ({
   cards, calledKeys, selectedKey, isMyTurn,
   onSelect,
   cardImages = CARD_IMG,
+  fanAngleScale = 1,
 }) => {
   const n = cards.length
   // geometry ชุดเดียวกับ arrangement -- ส่ง cw/ch ของ GF เข้าไป มุมกับ R คงเดิม
-  const { maxAngle, R, containerW, containerH } = vipFanGeometry(n, GF_CW, GF_CH)
+  const { maxAngle, R, containerW, containerH } = vipFanGeometry(n, GF_CW, GF_CH, fanAngleScale)
   const center = n > 1 ? (n - 1) / 2 : 0
   const baseLeft = (containerW - GF_CW) / 2
 

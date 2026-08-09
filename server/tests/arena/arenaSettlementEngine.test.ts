@@ -44,8 +44,13 @@ describe('Gate 6 - Arena settlement and conservation', () => {
     engine.execute({ type: 'PILE_PAYOUT', commandId: 'pay-1', game: 1, pile: 1, winnerId: 'p1' })
     engine.execute({ type: 'PILE_PAYOUT', commandId: 'pay-2', game: 1, pile: 2, winnerId: 'p2' })
     engine.execute({ type: 'PILE_PAYOUT', commandId: 'pay-3', game: 1, pile: 3, winnerId: 'p3' })
-    engine.execute({ type: 'END_MATCH', commandId: 'end' })
-    expect(engine.totals()).toMatchObject({ battleRewardsCrest: 0, crownSinkCrest: 81, pots: { 1: 0, 2: 0, 3: 0 } })
+    const end = engine.execute({ type: 'END_MATCH', commandId: 'end', playerIds: players, feeCrest: 12 })
+    expect(end.transaction).toMatchObject({
+      reason: 'ENTRY_FEE',
+      entries: players.map(userId => ({ userId, deltaCrest: -12, persisted: true })),
+    })
+    expect(engine.resultBreakdown().every(row => row.entryFee === 12)).toBe(true)
+    expect(engine.totals()).toMatchObject({ battleRewardsCrest: 0, crownSinkCrest: 129, pots: { 1: 0, 2: 0, 3: 0 } })
     expect(engine.totals().conservedTotalCrest).toBe(800)
   })
 
@@ -68,7 +73,7 @@ describe('Gate 6 - Arena settlement and conservation', () => {
   test('ห้ามจ่าย Pot ซ้ำและห้ามจบ Match ขณะ Pot ยังไม่เคลียร์', () => {
     const engine = new ArenaSettlementEngine(balances)
     engine.execute({ type: 'ANTE', commandId: 'ante', game: 1, pile: 1, playerIds: players, baseCrest: 3, extraCrest: 0 })
-    expect(() => engine.execute({ type: 'END_MATCH', commandId: 'end-early' })).toThrow('POTS_MUST_BE_SETTLED_BEFORE_MATCH_END')
+    expect(() => engine.execute({ type: 'END_MATCH', commandId: 'end-early', playerIds: players, feeCrest: 12 })).toThrow('POTS_MUST_BE_SETTLED_BEFORE_MATCH_END')
     engine.execute({ type: 'PILE_PAYOUT', commandId: 'pay', game: 1, pile: 1, winnerId: 'p1' })
     expect(() => engine.execute({ type: 'PILE_PAYOUT', commandId: 'pay-again', game: 1, pile: 1, winnerId: 'p1' })).toThrow('PILE_ALREADY_PAID')
   })

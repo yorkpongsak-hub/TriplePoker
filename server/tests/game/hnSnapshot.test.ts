@@ -9,7 +9,7 @@
 import { Card } from '../../src/game/deck'
 import { PlayerArrangement, CommunityCards } from '../../src/game/foulChecker'
 import {
-  HNSeat, HNMatchState, buildHNSnapshotForPlayer, resendHNRoundStartToPlayer,
+  HNSeat, HNMatchState, buildHNCardZones, buildHNSnapshotForPlayer, resendHNRoundStartToPlayer,
 } from '../../src/game/highNobleMultiEngine'
 
 // ─── Card helper — สร้างไพ่ deterministic ล้วนๆ (เทสนี้เทส masking ไม่ใช่ hand evaluation
@@ -23,6 +23,24 @@ function mkCard(): Card {
   cardSeq++
   return { suit, rank, value: 2 } as Card
 }
+
+describe('High Noble card-zone ledger — always 52 cards', () => {
+  test('arrangement keeps 44 hands + 6 community + 2 stock', () => {
+    const zones = buildHNCardZones(makeHNState({ phase: 'arrangement', resolvedPileCount: 0 }))
+    expect(zones).toMatchObject({ stockCount: 2, communityCount: 6, auctionCount: 0, discardCount: 0, totalCards: 52 })
+    expect(Object.values(zones.handCounts).reduce((a, b) => a + b, 0)).toBe(44)
+  })
+
+  test('after pile 2, played columns replace those cards without changing total', () => {
+    const state = makeHNState({ phase: 'fog_of_war', resolvedPileCount: 2 })
+    Object.values(state.arrangements!).forEach(arr => { arr.pile3 = arr.pile3.slice(0, 3) })
+    const zones = buildHNCardZones(state)
+    expect(zones.resolvedPileCounts).toEqual({ pile1: 12, pile2: 12, pile3: 0 })
+    expect(Object.values(zones.handCounts).reduce((a, b) => a + b, 0)).toBe(12)
+    expect(zones.discardCount).toBe(10)
+    expect(zones.communityCount + zones.discardCount + 24 + 12).toBe(52)
+  })
+})
 function mkCards(n: number): Card[] {
   return Array.from({ length: n }, () => mkCard())
 }
@@ -72,6 +90,7 @@ function makeHNState(overrides: Partial<HNMatchState> = {}): HNMatchState {
     roundNumber: 1,
     totalRounds: 5,
     tokenBalance: { [SELF]: 15000, [OPP1]: 15000, [OPP2]: 15000, [BOSS]: 15000 },
+    flowPot: [0, 0, 0],
     buyInAmount: 15000,
     escrowIds: { [SELF]: 'escrow-self-secret', [OPP1]: 'escrow-opp1-secret', [OPP2]: 'escrow-opp2-secret' },
     results: [],

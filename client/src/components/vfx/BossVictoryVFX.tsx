@@ -17,9 +17,10 @@
  *                      / sfx_victory_monarch.mp3 (~5s) → วางที่ client/assets/sounds/
  */
 
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Animated, Dimensions, StyleSheet, Text, View } from 'react-native'
 import { createAudioPlayer, AudioSource } from 'expo-audio'
+import { getReduceMotion } from '../../utils/reduceMotion'
 
 // ── มงกุฎ 3 ระดับ glow ต่อ tier (จาก slice ภาพลุงเยาะ — mapping: แถว1/3/4) ──
 const CROWNS: Record<VictoryTier, any[]> = {
@@ -58,12 +59,13 @@ const TITLE: Record<VictoryTier, string> = {
 const { width: SW, height: SH } = Dimensions.get('window')
 const GOLD = '#FFD76A'
 
-interface Props { tier: VictoryTier; onFinish?: () => void }
+interface Props { tier: VictoryTier; onFinish?: () => void; reduceMotionOverride?: boolean; titleOverride?: string }
 
 const PARTICLES: Record<VictoryTier, number> = { sentinel: 12, god: 20, monarch: 35 }
 const DURATION:  Record<VictoryTier, number> = { sentinel: 2500, god: 3500, monarch: 5000 }
 
-export const BossVictoryVFX: React.FC<Props> = ({ tier, onFinish }) => {
+export const BossVictoryVFX: React.FC<Props> = ({ tier, onFinish, reduceMotionOverride, titleOverride }) => {
+  const [reduceMotion, setReduceMotion] = useState<boolean | null>(reduceMotionOverride ?? null)
   // ── Animated values — เกิดใหม่ทุก mount ของ component ──
   const dim        = useRef(new Animated.Value(0)).current           // ฉากหลังมืด
   const flash      = useRef(new Animated.Value(0)).current           // แสงวาบเต็มจอ
@@ -91,6 +93,19 @@ export const BossVictoryVFX: React.FC<Props> = ({ tier, onFinish }) => {
   const finishTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
+    if (reduceMotionOverride !== undefined) { setReduceMotion(reduceMotionOverride); return }
+    let alive = true
+    void getReduceMotion().then(value => { if (alive) setReduceMotion(value) })
+    return () => { alive = false }
+  }, [reduceMotionOverride])
+
+  useEffect(() => {
+    if (reduceMotion === null) return
+    if (reduceMotion) {
+      dim.setValue(0.65); crownOp.setValue(1); crownGlow3.setValue(1); crownScale.setValue(1); crownY.setValue(0); titleOp.setValue(1); titleScale.setValue(1)
+      finishTimerRef.current = setTimeout(() => onFinish?.(), 1400)
+      return () => { if (finishTimerRef.current) clearTimeout(finishTimerRef.current) }
+    }
     // ── เสียง (no-op ถ้ายังไม่มี asset) ──
     if (SFX_VICTORY[tier]) {
       try { createAudioPlayer(SFX_VICTORY[tier]!).play() } catch {}
@@ -200,9 +215,11 @@ export const BossVictoryVFX: React.FC<Props> = ({ tier, onFinish }) => {
       parts.forEach(p => (p as any)._anim?.stop())
       if (finishTimerRef.current) clearTimeout(finishTimerRef.current)
     }
-  }, [])
+  }, [reduceMotion])
 
   const crowns = CROWNS[tier]
+
+  if (reduceMotion === null) return null
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -213,7 +230,7 @@ export const BossVictoryVFX: React.FC<Props> = ({ tier, onFinish }) => {
 
       <Animated.View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', transform: [{ translateX: shake }] }]}>
         {/* shockwave / รัศมี 2 วง */}
-        {[ring1, ring2].map((r, i) => (
+        {!reduceMotion && [ring1, ring2].map((r, i) => (
           <Animated.View key={i} style={[s.ring, {
             opacity: r.interpolate({ inputRange: [0, 0.15, 1], outputRange: [0, 0.8, 0] }),
             transform: [{ scale: r.interpolate({ inputRange: [0, 1], outputRange: [0.3, tier === 'monarch' ? 3.2 : 2.2] }) },
@@ -232,12 +249,12 @@ export const BossVictoryVFX: React.FC<Props> = ({ tier, onFinish }) => {
         {/* Title */}
         <Animated.Text style={[s.title, tier === 'monarch' && s.titleMonarch,
           { opacity: titleOp, transform: [{ scale: titleScale }] }]}>
-          {TITLE[tier]}
+          {titleOverride ?? TITLE[tier]}
         </Animated.Text>
       </Animated.View>
 
       {/* อนุภาคทอง */}
-      {parts.map((p, i) => (
+      {!reduceMotion && parts.map((p, i) => (
         <Animated.View key={i} style={{
           position: 'absolute', width: p.size, height: p.size, borderRadius: p.size / 4,
           backgroundColor: p.silver && tier === 'monarch' ? '#EDEDF2' : GOLD,
