@@ -13,8 +13,11 @@ export interface VipPlusAccessDecision {
 }
 
 // รับค่า flag เข้ามาโดยตรงเพื่อให้ startup/test ใช้กติกาเดียวกันโดยไม่ผูก global state
-export function isVipPlusFeatureEnabled(value = process.env[VIP_PLUS_FEATURE_FLAG]): boolean {
-  return value === 'true'
+export function isVipPlusFeatureEnabled(value?: string): boolean {
+  const configuredValue = arguments.length === 0
+    ? process.env[VIP_PLUS_FEATURE_FLAG]
+    : value
+  return configuredValue === 'true'
 }
 
 export function evaluateVipPlusAccess(

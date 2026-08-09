@@ -4,6 +4,7 @@ import { ArenaArrangement, bestArenaArrangement } from '../../src/arena/arrangem
 import { ArenaMatchEngine, ArenaMatchSnapshot } from '../../src/arena/match/arenaMatchEngine'
 import { arenaCardKey, ArenaCard, createSeededRandom } from '../../src/arena/cards/arenaDeck'
 import { ArenaMatchComposition } from '../../src/arena/matchmaking/arenaMatchmaking'
+import { arenaPhaseTimeoutMs } from '../../src/arena/config/tierSConfig'
 
 const dummyArrangement: ArenaArrangement = { pile1: ['as'], pile2: ['ks'], pile3: ['qs', 'js', '10s'] }
 
@@ -160,6 +161,6 @@ describe('Gate 7 - Bot action bridge', () => {
     manager.observe(13_002, engine.snapshot())
     expect(engine.snapshot().phase).toBe('AUCTION_FACE_UP')
     expect(manager.controllerFor('p1')).toBe('HUMAN')
-    expect(before.deadlineAt).toBe(49_001)
+    expect(before.deadlineAt).toBe(4_001 + arenaPhaseTimeoutMs.ARRANGE_1)
   })
 })
