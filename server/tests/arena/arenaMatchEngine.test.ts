@@ -118,7 +118,7 @@ describe('Gate 5 - end-to-end Arena match state machine', () => {
       .toThrow('ARENA_ACTION_WRONG_PHASE')
   })
 
-  test('auction winner ranks pile 3 as Best 5 of 7 and may discard only its final arranged card', () => {
+  test('auction winner ranks pile 3 with both community cards and may discard only its final arranged card', () => {
     const engine = new ArenaMatchEngine('m-pile3-best-seven', composition, createSeededRandom(81), 0)
     let sequence = 0
     let now = 1

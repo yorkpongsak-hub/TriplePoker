@@ -27,7 +27,7 @@ const SLIDES = [
       ['FULLY WILD', 'แทนได้ทั้ง Rank และ Suit เพื่อสร้าง Hand ที่ดีที่สุด—แต่ห้าม Five of a Kind'],
       ['ANTE ×2', 'เพิ่ม Ante ของกองที่เลือกเป็นสองเท่า และบังคับคู่แข่ง Match Ante เท่ากัน'],
       ['BEST 5 FROM 7', 'กอง 3 รวมไพ่ที่จัดไว้ 5 ใบกับ Community 2 ใบ แล้วเลือก 5 ใบที่แข็งที่สุดมาคิด Hand Ranking'],
-      ['คิดให้ไกลกว่าเดิม', 'Straight, Flush, Full House หรือ Straight Flush อาจเกิดจากหลาย combination ที่ซ่อนอยู่ใน 7 ใบ'],
+      ['คิดให้ไกลกว่าเดิม', 'กองสุดท้ายเลือกไพ่ในมือที่ดีที่สุด 3 จาก 5 ใบ แล้วรวมไพ่กองกลางทั้ง 2 ใบเสมอ เพื่อสร้าง Straight, Flush, Full House หรือ Straight Flush'],
     ],
     joker: true,
   },

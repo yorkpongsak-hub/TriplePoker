@@ -209,13 +209,13 @@ export class ArenaMatchEngine {
   // ใช้ arrangement ที่ล็อกแล้ว (FINAL_LOCK) ถ้ามี ไม่งั้น fallback ไปที่ arrangement ล่าสุดที่ส่ง (FINAL_ARRANGE)
   // เพราะ Joker declare เกิดก่อน FINAL_LOCK — ให้บอทประเมิน winrate ของกองเป้าหมายได้ทั้งสองจังหวะ
   // ผู้ชนะประมูลมีกอง 3 ชั่วคราว 6 ใบ: ใบสุดท้ายเป็น discard slot บังคับ จึงตัดออกก่อน
-  // และคิดห้าใบแรก + community 2 ใบเป็น Best 5 of 7 ตั้งแต่ FINAL_ARRANGE
+  // และเลือกไพ่ส่วนตัว 3 ใบที่ดีที่สุดร่วมกับ community ทั้ง 2 ใบเสมอ
   pileHandFor(actorId: string, pile: 1 | 2 | 3): ArenaHandResult | null {
     const arrangement = this.lockedArrangements.get(actorId) ?? this.lastArrangement.get(actorId)
     if (!arrangement || !this.deal) return null
     const arrangedPileIds = pile === 1 ? arrangement.pile1 : pile === 2 ? arrangement.pile2 : arrangement.pile3
     // For an auction winner, pile 3's last position is the mandatory discard.
-    // Rank the other five private cards with two community cards: Best 5 of 7.
+    // Choose exactly three of the five private cards and require both community cards.
     const pileIds = pile === 3 && this.auctionWinnerIds.has(actorId) && arrangedPileIds.length === 6
       ? arrangedPileIds.slice(0, 5)
       : arrangedPileIds
@@ -465,7 +465,7 @@ export class ArenaMatchEngine {
     }
     if (this.phase === 'FINAL_ARRANGE' && this.allActorsActed()) {
       // Materialize every pile-3 rank as soon as round-two arrangement closes.
-      // Auction winners are already evaluated as Best 5 of 7 by pileHandFor;
+      // Auction winners are already evaluated with both community cards by pileHandFor;
       // the sixth/final arranged card is reserved for mandatory discard.
       for (const actorId of this.actorIds) {
         if (!this.pileHandFor(actorId, 3)) throw new Error('ARENA_FINAL_ARRANGE_PILE3_RANK_UNAVAILABLE')
@@ -570,7 +570,7 @@ export class ArenaMatchEngine {
       const pileIds = pile === 1 ? arrangement.pile1 : pile === 2 ? arrangement.pile2 : arrangement.pile3
       const community = pile === 1 ? this.deal!.community.pile1 : pile === 2 ? this.deal!.community.pile2 : this.deal!.community.pile3
       const cards = pileIds.map(id => this.dealCardsById.get(id)!)
-      const hand = evaluateArenaHand([...cards, ...community])
+      const hand = evaluatePileBest(cards, community)
       if (!best || compareArenaHands(hand, best) > 0) { best = hand; bestActorId = actorId }
     }
     // Edge case หายาก: ทุกคนที่ยังไม่ Fold ในกองนี้ Foul พร้อมกัน — เลี่ยงปล่อย Pot ค้าง (ทำให้ END_MATCH พัง) ด้วยการเทียบมือจริงไม่สนใจ Foul
@@ -713,7 +713,7 @@ export class ArenaMatchEngine {
   // ไม่มี weight hook ใน bestArenaArrangement ของ Arena (ดูเหตุผลใน arenaArrangement.ts) ผลลัพธ์ใกล้เคียงพอสำหรับวัด strength หยาบๆ
   private computeHandStrength(actorId: string): number {
     const probe = bestArenaArrangement(this.heldCardsFor(actorId), this.deal!.community)
-    const evalPile = (ids: string[], community: ArenaCard[]) => evaluateArenaHand([...ids.map(id => this.dealCardsById.get(id)!), ...community])
+    const evalPile = (ids: string[], community: ArenaCard[]) => evaluatePileBest(ids.map(id => this.dealCardsById.get(id)!), community)
     const h1 = evalPile(probe.pile1, this.deal!.community.pile1)
     const h2 = evalPile(probe.pile2, this.deal!.community.pile2)
     const h3 = evalPile(probe.pile3, this.deal!.community.pile3)

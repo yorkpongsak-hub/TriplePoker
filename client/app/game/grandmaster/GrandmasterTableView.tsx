@@ -764,7 +764,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
           {snapshot.phase === 'DISCARD' && local.isCurrentTurn && piles && (
             <View style={styles.arrangeSheet}>
               <Text style={styles.arrangeTitle}>FINAL HAND · DISCARD</Text>
-              <Text style={styles.arrangeSub}>The last card is marked ×. Tap any card to replace it, then discard. Pile 3 ranks the remaining five cards plus two community cards as Best 5 of 7.</Text>
+              <Text style={styles.arrangeSub}>The last card is marked ×. Tap any card to replace it, then discard. Pile 3 uses the best 3 of your 5 cards together with both community cards.</Text>
               <PlayerHandView
                 piles={piles}
                 selected={null}
