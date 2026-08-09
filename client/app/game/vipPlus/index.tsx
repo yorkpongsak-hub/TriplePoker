@@ -16,6 +16,7 @@ import { TABLE_SKINS } from '../../../src/config/tableSkins'
 import BossVictoryVFX from '../../../src/components/vfx/BossVictoryVFX'
 import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/game/FlyingCoins'
 import { AvatarDisplay, PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
+import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 const TABLE_IMAGE = require('../../../assets/images/table_default.png')
@@ -650,6 +651,7 @@ export default function VipPlusTableScreen() {
   const isMyTurn = game.actingSeat === selfSeat
   return (
     <ImageBackground source={selectedTableImage} style={s.gameRoot} resizeMode="cover">
+      <GameServerStatusLight socketRef={socketRef} />
       <GameTopBar
         tierName="VIP PLUS" tierStars={4} round={game.gameNumber} totalRounds={3}
         isWeb={Platform.OS === 'web'} insetsTop={insets.top} opacity={1}

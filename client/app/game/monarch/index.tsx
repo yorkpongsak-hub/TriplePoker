@@ -33,6 +33,7 @@ import Reanimated, {
   Easing, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withSpring, withTiming,
 } from 'react-native-reanimated'
 import PlayerHandView, { HandCardData } from '../../../src/components/game/PlayerHandView'
+import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
 import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
 import { MINION_AVATAR } from '../../../src/constants/minionAvatars'
 import GameTopBar from '../../../src/components/game/GameTopBar'
@@ -1511,6 +1512,7 @@ export default function MonarchScreen() {
 
   return (
     <ImageBackground source={MONARCH_TABLE_SKIN} resizeMode="cover" style={styles.root}>
+      <GameServerStatusLight socketRef={socketRef} />
       {/* Sprint 6-7 §8.2 — Background overlay ทับพื้นหลังเดิมทั้งจอ ไม่ต้องสร้าง asset ใหม่ */}
       <View style={styles.bgOverlay} pointerEvents="none" />
 

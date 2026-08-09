@@ -9,10 +9,11 @@ import ArenaOverlays from './ArenaOverlays'
 import CrownPanel from './CrownPanel'
 import FanHand from './FanHand'
 import { ArenaClientIntent, ArenaClientSnapshot, ArenaSeatView } from '../../../src/game/grandmaster/arenaClientTypes'
+import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
 
 const MONARCH_TABLE = require('../../../assets/tables/boss_monarch_skin_table.png')
 
-interface Props { snapshot: ArenaClientSnapshot; onIntent: (intent: ArenaClientIntent) => void; transportStatus?: string }
+interface Props { snapshot: ArenaClientSnapshot; onIntent: (intent: ArenaClientIntent) => void; transportStatus?: string; serverOnline?: boolean }
 
 type ArrangingPhase = 'ARRANGE_1' | 'FINAL_ARRANGE' | 'FINAL_LOCK'
 type CallRevealEvent = { id: string; seat: 1 | 2 | 3 | 4; displayName: string; pile: 2 | 3; cards: string[] }
@@ -371,7 +372,7 @@ function restoreSavedPiles(cards: string[], saved?: ArenaSeatView['arrangedPiles
   return [toCards(saved.pile1), toCards(saved.pile2), toCards([...saved.pile3, ...missing])]
 }
 
-export default function GrandmasterTableView({ snapshot, onIntent, transportStatus }: Props) {
+export default function GrandmasterTableView({ snapshot, onIntent, transportStatus, serverOnline = true }: Props) {
   const { width, height } = useWindowDimensions()
   const compact = width < 700 || height < 420
   const [now, setNow] = useState(Date.now())
@@ -640,6 +641,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
 
   return (
     <ImageBackground source={MONARCH_TABLE} resizeMode="cover" style={styles.root}>
+      <GameServerStatusLight online={serverOnline} />
       <View style={styles.darkWash} />
       <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
         {transportStatus && transportStatus !== 'MATCHED' && (

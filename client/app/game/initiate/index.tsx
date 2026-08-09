@@ -33,6 +33,7 @@ import { GuideOverlay } from '../../../src/components/onboarding/GuideOverlay'
 import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
 import PlayerHandView from '../../../src/components/game/PlayerHandView'
 import BossHandRow from '../../../src/components/game/BossHandRow'
+import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
 import GameTopBar from '../../../src/components/game/GameTopBar'
 import MatchEndOverlay from '../../../src/components/game/MatchEndOverlay'
 import { TierInfoModal } from '../../../src/components/game/TierInfoModal'
@@ -1227,6 +1228,7 @@ const GameTableLive: React.FC = () => {
   // =================================================================
   return (
     <View style={[s.root, isWeb && s.webOuter]}>
+      <GameServerStatusLight socketRef={socketRef} />
       <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" />
       <View style={[s.gameContainer, isWeb && s.webFrame]}>
         <View style={s.gameArea}>
