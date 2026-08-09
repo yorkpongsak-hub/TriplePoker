@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, BackHandler, Image, ImageBackground, Platform, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View, ViewStyle } from 'react-native'
+import { Alert, Image, ImageBackground, Platform, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View, ViewStyle } from 'react-native'
 import Animated, { Easing, SharedValue, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated'
 import { router } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -13,6 +13,7 @@ import VipPlusAuctionOverlay from '../../../src/components/game/VipPlusAuctionOv
 import MatchEndOverlay from '../../../src/components/game/MatchEndOverlay'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
 import { useTableSkins } from '../../../src/hooks/useTableSkins'
+import { useConfirmTableExit } from '../../../src/hooks/useConfirmTableExit'
 import { TABLE_SKINS } from '../../../src/config/tableSkins'
 import BossVictoryVFX from '../../../src/components/vfx/BossVictoryVFX'
 import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
@@ -503,21 +504,23 @@ export default function VipPlusTableScreen() {
     setTable(null); setSelfSeat(null); setScreen('BROWSER')
   }
 
-  // Batch 1 (VIP-05 fix, C1) — hardware back / gesture back ระหว่าง Waiting Chamber ต้องปล่อยที่นั่งเสมอ
-  // (BROWSER ยังไม่มีที่นั่งให้ปล่อย ปล่อยให้ default back ทำงานตามปกติ, GAME อยู่นอกขอบเขต Batch นี้
-  // ต้องใช้ FORFEIT เท่านั้นตามระบบเดิม)
-  useEffect(() => {
-    if (Platform.OS !== 'android') return
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (screen === 'WAITING' && table) {
+  // Hardware Back is protected only after the player has taken a seat.
+  // Waiting releases the seat; an active game uses the existing forfeit protocol.
+  useConfirmTableExit({
+    enabled: screen !== 'BROWSER' && !!table,
+    onConfirm: () => {
+      if (!table) return
+      if (screen === 'WAITING') {
         leave()
-        router.back()
-        return true
+      } else {
+        hasLeftRef.current = true
+        socketRef.current?.emit('vip_plus:forfeit', { ...authPayload(), tableId: table.tableId })
+        activeTableIdRef.current = null
+        AsyncStorage.removeItem(ACTIVE_MATCH_KEY).catch(() => {})
       }
-      return false
-    })
-    return () => subscription.remove()
-  }, [screen, table])
+      router.replace('/(home)/lobby' as any)
+    },
+  })
 
   const forfeit = () => {
     if (!table) return
