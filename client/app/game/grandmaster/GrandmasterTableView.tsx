@@ -296,9 +296,10 @@ function CallRevealSpotlight({ event, width }: { event: CallRevealEvent; width: 
     animation.start()
     return () => animation.stop()
   }, [opacity, scale])
-  // Keep the spotlight readable without upscaling the card bitmap so far that
-  // rank/suit details become soft. This is 25% smaller than the former 180/108px range.
-  const cardWidth = Math.min(135, Math.max(81, (width - 72) / Math.max(2, event.cards.length)))
+  // Call-reveal cards intentionally render at half the previous dimensions so
+  // the source bitmap stays crisp instead of being enlarged on high-density screens.
+  const previousCardWidth = Math.min(135, Math.max(81, (width - 72) / Math.max(2, event.cards.length)))
+  const cardWidth = Math.round(previousCardWidth * 0.5)
   const cardHeight = Math.round(cardWidth * 1.44)
   return (
     <View pointerEvents="auto" style={styles.callRevealOverlay}>
@@ -819,8 +820,8 @@ const styles = StyleSheet.create({
   callRevealOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 90, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(2,7,5,0.92)' },
   callRevealTitle: { color: '#FFD76A', fontSize: 20, fontWeight: '900', letterSpacing: 1.2, textAlign: 'center' },
   callRevealSub: { color: '#8DFFB5', fontSize: 10, fontWeight: '900', letterSpacing: 1.5, marginTop: 5, marginBottom: 18 },
-  callRevealCards: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14 },
-  callRevealCard: { borderRadius: 10, borderWidth: 3, borderColor: '#FF3B30', backgroundColor: '#130D1F', shadowColor: '#FFD76A', shadowOpacity: 0.9, shadowRadius: 18, elevation: 20 },
+  callRevealCards: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
+  callRevealCard: { borderRadius: 5, borderWidth: 2, borderColor: '#FF3B30', backgroundColor: '#130D1F', shadowColor: '#FFD76A', shadowOpacity: 0.9, shadowRadius: 9, elevation: 12 },
   awardMessage: { position: 'absolute', top: '31%', paddingHorizontal: 18, paddingVertical: 8, borderRadius: 18, backgroundColor: 'rgba(7,18,11,0.94)', borderWidth: 1, borderColor: '#FFD76A' },
   awardTitle: { color: '#FFD76A', fontSize: 12, fontWeight: '900', letterSpacing: 1, textAlign: 'center' },
   awardCard: { width: 54, height: 78, borderRadius: 6, overflow: 'hidden', borderWidth: 2, borderColor: '#FFD76A', backgroundColor: '#130D1F', shadowColor: '#FFD76A', shadowOpacity: 0.9, shadowRadius: 12, elevation: 15 },
