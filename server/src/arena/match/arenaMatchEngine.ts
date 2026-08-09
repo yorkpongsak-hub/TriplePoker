@@ -618,9 +618,14 @@ export class ArenaMatchEngine {
     return safeCount / contenders.length
   }
 
-  // ถ้าไม่มีผู้ชนะ (ทุกคน Foul กองนี้พร้อมกัน) ปล่อย Pot ไว้ก่อน ไม่จ่าย — เคสหายากมาก ไม่ใช่จุดโฟกัสของรอบนี้
   private payoutPile(pile: ArenaPile, winnerId: string | null): void {
-    if (!winnerId) return
+    if (!winnerId) {
+      this.execSettlement({
+        type: 'PILE_FORFEIT', commandId: `${this.matchId}:g${this.gameNumber}:forfeit:pile${pile}`,
+        game: this.gameNumber as 1 | 2 | 3, pile,
+      })
+      return
+    }
     this.execSettlement({
       type: 'PILE_PAYOUT', commandId: `${this.matchId}:g${this.gameNumber}:payout:pile${pile}`,
       game: this.gameNumber as 1 | 2 | 3, pile, winnerId,

@@ -1085,6 +1085,20 @@ export async function settleMonarchMatch(io: Server, state: MonarchMatchState): 
 
   const newBalance = await settleEscrow(state.humanUserId, state.escrowId, finalStack)
 
+  // Escrow is the authoritative end of the match. Release the in-memory room and
+  // notify the client before optional profile/stat writes so a slow dependency
+  // cannot leave a completed Monarch table stuck in match_end.
+  state.matchEnded = true
+  io.to(state.roomId).emit('monarch_match_end', {
+    roomId: state.roomId,
+    finalStack,
+    tokenBalance: newBalance,
+    isVictory: isHumanWinner,
+    foulReasons: state.foulReasons ?? {},
+    relicResult: relicResult ?? undefined,
+  })
+  monarchMatchStates.delete(state.roomId)
+
   // Dedicated Monarch encounters bypass the High Noble multiplayer settlement,
   // so award PS here using the same central table. A win is Tier A+ bossWin
   // plus the named-boss bonus; non-wins use the actual pre-multiplier net.
@@ -1115,21 +1129,6 @@ export async function settleMonarchMatch(io: Server, state: MonarchMatchState): 
     // Stats must never prevent the already-settled match from reaching the client.
     console.error('[BOSS_STATS] Failed to record Monarch result for', state.humanUserId, err)
   }
-  state.matchEnded = true
-  io.to(state.roomId).emit('monarch_match_end', {
-    roomId: state.roomId,
-    finalStack,
-    tokenBalance: newBalance,
-    isVictory: isHumanWinner,
-    // Batch 3C-2 Task 1: ส่ง foulReasons ไปด้วยเฉยๆ (field อ่านอย่างเดียว ไม่กระทบ finalStack/settlement
-    // ข้างบนเลย) ให้ client โชว์เหตุผลที่แพ้ตรงๆ กัน sudden-death งงว่าโดนโกง
-    foulReasons: state.foulReasons ?? {},
-    // Batch 3D-1 Task 5: ส่ง relicResult ไปด้วยเฉยๆ (field อ่านอย่างเดียว, null ถ้าแพ้หรือ roll พลาด)
-    // ไม่กระทบ finalStack/settlement ข้างบนเลยเช่นกัน — client (3D-2) เอาไปทำ reveal popup ต่อ
-    relicResult: relicResult ?? undefined,
-  })
-  // Sprint 10: เคลียร์ state ออกจาก memory หลังจบแมตช์จริง (เดิมค้างอยู่ตลอดไป ไม่มีใครลบเลย)
-  monarchMatchStates.delete(state.roomId)
 }
 
 // ── Disconnect Handling (Sprint 10) — Monarch เป็นโต๊ะ solo-like (1 human จริง + AI ล้วน) เทียบ

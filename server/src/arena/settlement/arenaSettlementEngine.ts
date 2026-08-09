@@ -26,6 +26,7 @@ export type SettlementCommand =
   | { type: 'AUCTION'; commandId: string; game: 1 | 2 | 3; winnerId: string; amountCrest: number }
   | { type: 'CALL'; commandId: string; game: 1 | 2 | 3; pile: 2 | 3; playerId: string; amountCrest: number }
   | { type: 'PILE_PAYOUT'; commandId: string; game: 1 | 2 | 3; pile: ArenaPile; winnerId: string }
+  | { type: 'PILE_FORFEIT'; commandId: string; game: 1 | 2 | 3; pile: ArenaPile }
   | { type: 'SWEEP_JACKPOT'; commandId: string; game: 1 | 2 | 3; winnerId: string }
   | { type: 'END_MATCH'; commandId: string; playerIds: string[]; feeCrest: number }
 
@@ -166,6 +167,15 @@ export class ArenaSettlementEngine {
         this.pots[command.pile] = 0
         this.pileWinners.set(key, command.winnerId)
         return this.transaction(command.commandId, 'POT_PAYOUT', [entry], { [command.pile]: -amount }, 0, 0)
+      }
+      case 'PILE_FORFEIT': {
+        const key = `${command.game}:${command.pile}`
+        if (this.pileWinners.has(key)) throw new Error('PILE_ALREADY_PAID')
+        const amount = this.pots[command.pile]
+        if (amount <= 0) throw new Error('PILE_POT_EMPTY')
+        this.pots[command.pile] = 0
+        this.crownSinkCrest += amount
+        return this.transaction(command.commandId, 'CROWN_SINK', [], { [command.pile]: -amount }, 0, amount)
       }
       case 'SWEEP_JACKPOT': {
         this.known(command.winnerId)

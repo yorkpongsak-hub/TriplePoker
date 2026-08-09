@@ -78,6 +78,22 @@ describe('Gate 6 - Arena settlement and conservation', () => {
     expect(() => engine.execute({ type: 'PILE_PAYOUT', commandId: 'pay-again', game: 1, pile: 1, winnerId: 'p1' })).toThrow('PILE_ALREADY_PAID')
   })
 
+  test('Pot ที่ทุกคน Fold ต้องเข้า Crown Sink และจบ Match ได้โดยยอดรวมยังสมดุล', () => {
+    const engine = new ArenaSettlementEngine(balances)
+    engine.execute({ type: 'ANTE', commandId: 'ante', game: 1, pile: 2, playerIds: players, baseCrest: 3, extraCrest: 0 })
+    const forfeit = engine.execute({ type: 'PILE_FORFEIT', commandId: 'forfeit', game: 1, pile: 2 })
+
+    expect(forfeit.transaction).toMatchObject({
+      reason: 'CROWN_SINK',
+      entries: [],
+      potDeltaCrest: { 2: -12 },
+      crownSinkDeltaCrest: 12,
+    })
+    expect(engine.totals()).toMatchObject({ pots: { 1: 0, 2: 0, 3: 0 }, crownSinkCrest: 12 })
+    expect(engine.totals().conservedTotalCrest).toBe(800)
+    expect(() => engine.execute({ type: 'END_MATCH', commandId: 'end', playerIds: players, feeCrest: 12 })).not.toThrow()
+  })
+
   test('AI ใช้ virtual wallet เพื่อ conservation แต่ entry ไม่ถูกส่งเข้าบัญชีจริง', () => {
     const engine = new ArenaSettlementEngine({
       human: { balanceCrest: 100, persisted: true },
