@@ -1,5 +1,5 @@
 import React from 'react'
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native'
+import { Image, Pressable, StyleSheet, View } from 'react-native'
 import { CARD_BACK_IMG, CARD_IMG } from '../../../src/components/game/cardAssets'
 
 interface FanHandProps {
@@ -53,9 +53,7 @@ export default function FanHand({ cards, cardCount, faceUp, width, compact = fal
               selected && !revealed && styles.selectedCard,
             ]}
           >
-            {code === 'JOKER'
-              ? <View style={styles.joker}><Text style={styles.jokerText}>J</Text><Text style={styles.jokerStar}>*</Text></View>
-              : <Image source={showFace && CARD_IMG[code] ? CARD_IMG[code] : CARD_BACK_IMG} style={{ width: cardWidth, height: cardHeight }} resizeMode="cover" />}
+            <Image source={showFace && CARD_IMG[code] ? CARD_IMG[code] : CARD_BACK_IMG} style={{ width: cardWidth, height: cardHeight }} resizeMode="cover" />
           </Pressable>
         )
       })}
@@ -72,7 +70,4 @@ const styles = StyleSheet.create({
   },
   revealedCard: { borderWidth: 3, borderColor: '#FF3B30', elevation: 12 },
   selectedCard: { borderWidth: 3, borderColor: '#8DFFB5', elevation: 12 },
-  joker: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#130d1f' },
-  jokerText: { color: '#FFD76A', fontWeight: '900', fontSize: 22 },
-  jokerStar: { color: '#8DFFB5', fontWeight: '900', fontSize: 14 },
 })

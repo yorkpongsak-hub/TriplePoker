@@ -48,7 +48,8 @@ export function useArenaTransport(enabled: boolean) {
     if (!socket || !playerId) return
     const actionId = `${playerId}:${Date.now()}:${actionSequence.current++}`
     const common = { actionId, actorId: playerId }
-    if (intent.type === 'SAVE_ARRANGEMENT_DRAFT') socket.emit('arena:action', { ...common, type: 'ARRANGE_DRAFT', pile1: intent.pile1, pile2: intent.pile2, pile3: intent.pile3 })
+    if (intent.type === 'DUAL_BOSS_INTRO_ACK') socket.emit('arena:action', { ...common, type: 'DUAL_BOSS_INTRO_ACK' })
+    else if (intent.type === 'SAVE_ARRANGEMENT_DRAFT') socket.emit('arena:action', { ...common, type: 'ARRANGE_DRAFT', pile1: intent.pile1, pile2: intent.pile2, pile3: intent.pile3 })
     else if (intent.type === 'SUBMIT_ARRANGEMENT') socket.emit('arena:action', { ...common, type: intent.stage, pile1: intent.pile1, pile2: intent.pile2, pile3: intent.pile3 })
     else if (intent.type === 'AUCTION_BID') socket.emit('arena:action', { ...common, type: intent.round === 'FACE_UP' ? 'FACE_UP_BID' : 'BLIND_BID', amountCrest: intent.amountCrest, cardIndex: intent.cardIndex })
     else if (intent.type === 'JOKER_DECLARE') socket.emit('arena:action', { ...common, ...intent, availableCrest: intent.availableCrest })

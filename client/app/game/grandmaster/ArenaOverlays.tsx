@@ -18,6 +18,12 @@ const BOSS_PORTRAIT: Record<'MONARCH' | 'SOREN', any> = {
   SOREN: require('../../../assets/bosses/boss_soren.png'),
 }
 
+const crownDeltaText = (crest: number) => {
+  const sign = crest > 0 ? '+' : crest < 0 ? '-' : ''
+  const absolute = Math.abs(crest)
+  return `${sign}${Math.floor(absolute / 12)} C ${absolute % 12} Cr`
+}
+
 // พอร์ตแนวคิดจาก client/app/game/monarch/index.tsx's showBossIntro overlay (glow portrait + reveal lines +
 // ปุ่มกดเข้าเกม บล็อกการเล่นจนกว่าจะกด) มาใช้ Reanimated แทน classic Animated ให้ตรงกับ convention ไฟล์นี้
 // (เดียวกับ PileRevealOverlay ด้านบน) — จังหวะ fade เรียง portrait -> title/subtitle -> atmosphere -> quote
@@ -49,7 +55,12 @@ function BossIntroOverlay({ presentation, onDismiss }: { presentation: NonNullab
       <View style={styles.introPortraitWrap}>
         <Animated.View style={[styles.introGlow, glowStyle]} />
         <Animated.View style={portraitStyle}>
-          <Image source={BOSS_PORTRAIT[presentation.bossId]} style={styles.introPortrait} resizeMode="cover" />
+          {presentation.bossId === 'DUAL' ? (
+            <View style={styles.dualIntroPortraits}>
+              <Image source={BOSS_PORTRAIT.MONARCH} style={[styles.introPortrait, styles.dualIntroPortrait]} resizeMode="cover" />
+              <Image source={BOSS_PORTRAIT.SOREN} style={[styles.introPortrait, styles.dualIntroPortrait]} resizeMode="cover" />
+            </View>
+          ) : <Image source={BOSS_PORTRAIT[presentation.bossId]} style={styles.introPortrait} resizeMode="cover" />}
         </Animated.View>
       </View>
       <Animated.View style={titleStyle}>
@@ -59,7 +70,7 @@ function BossIntroOverlay({ presentation, onDismiss }: { presentation: NonNullab
       <Animated.Text style={[styles.introAtmosphere, atmosphereStyle]}>{presentation.atmosphere}</Animated.Text>
       <Animated.Text style={[styles.introQuote, quoteStyle]}>"{presentation.quote}"</Animated.Text>
       <Pressable onPress={onDismiss} hitSlop={10} style={({ pressed }) => [styles.introEnterBtn, pressed && styles.pressed]}>
-        <Text style={styles.introEnterBtnText}>FACE {presentation.title.toUpperCase()}</Text>
+        <Text style={styles.introEnterBtnText}>{presentation.bossId === 'DUAL' ? 'ENTER THE DUAL BOSS TABLE' : `FACE ${presentation.title.toUpperCase()}`}</Text>
       </Pressable>
     </View>
   )
@@ -80,9 +91,7 @@ function RevealCard({ cardKey, blink }: { cardKey: string; blink: boolean }) {
   const animStyle = useAnimatedStyle(() => ({ opacity: opacity.value }))
   return (
     <Animated.View style={[styles.revealCard, blink && styles.revealCardHighlight, animStyle]}>
-      {cardKey === 'JOKER'
-        ? <View style={styles.revealJoker}><Text style={styles.revealJokerText}>J</Text><Text style={styles.revealJokerStar}>*</Text></View>
-        : <Image source={CARD_IMG[cardKey] ?? CARD_BACK_IMG} style={styles.revealCardImage} resizeMode="cover" />}
+      <Image source={CARD_IMG[cardKey] ?? CARD_BACK_IMG} style={styles.revealCardImage} resizeMode="cover" />
     </Animated.View>
   )
 }
@@ -170,7 +179,11 @@ export default function ArenaOverlays({ snapshot, onIntent, selectedGFCardIds = 
       )}
 
       {showBossIntro && (
-        <BossIntroOverlay presentation={snapshot.bossPresentation!} onDismiss={() => setDismissedBossId(snapshot.bossPresentation!.bossId)} />
+        <BossIntroOverlay presentation={snapshot.bossPresentation!} onDismiss={() => {
+          const bossId = snapshot.bossPresentation!.bossId
+          setDismissedBossId(bossId)
+          if (bossId === 'DUAL') onIntent({ type: 'DUAL_BOSS_INTRO_ACK' })
+        }} />
       )}
 
       {snapshot.auction && (
@@ -218,9 +231,9 @@ export default function ArenaOverlays({ snapshot, onIntent, selectedGFCardIds = 
       {snapshot.joker?.canChoose && (
         <View style={styles.centerDialog}>
           <Text style={styles.sheetTitle}>DECLARE JOKER</Text>
-          <Text style={styles.sheetSub}>Wild stays hidden. Ante x2 applies once to the first pile you win.</Text>
+          <Text style={styles.sheetSub}>Wild automatically applies to the pile where you placed the Joker. Ante x2 applies once to the first pile you win.</Text>
           <View style={styles.buttonRow}>
-            <Button label="WILD P3" onPress={() => onIntent({ type: 'JOKER_DECLARE', mode: 'WILD', targetPile: 3, availableCrest: snapshot.crown.localBalanceCrest })} />
+            <Button label={`WILD · PLACED PILE ${snapshot.joker.selectedPile ?? 3}`} onPress={() => onIntent({ type: 'JOKER_DECLARE', mode: 'WILD', targetPile: snapshot.joker?.selectedPile ?? 3, availableCrest: snapshot.crown.localBalanceCrest })} />
             <Button label="ANTE x2 · FIRST WIN" disabled={!snapshot.joker.anteX2Enabled} onPress={() => onIntent({ type: 'JOKER_DECLARE', mode: 'ANTE_X2', targetPile: 1, availableCrest: snapshot.crown.localBalanceCrest })} />
           </View>
         </View>
@@ -229,10 +242,10 @@ export default function ArenaOverlays({ snapshot, onIntent, selectedGFCardIds = 
       {snapshot.gf?.localTurn && (
         <View style={styles.bottomSheet}>
           <Text style={styles.sheetTitle}>GRAND FINALE · PILE {snapshot.gf.pile} · ROUND {snapshot.gf.round}</Text>
-          <Text style={styles.sheetSub}>{snapshot.gf.pile === 3 ? (snapshot.gf.round === 1 ? 'CALL reveals 2 private cards · 4/7 cards visible.' : 'CALL reveals 2 more private cards · 6/7 cards visible.') : ''} Call costs {snapshot.gf.callCostCrest} Crest. No raise.</Text>
-          {snapshot.gf.pile === 3 && <Text style={styles.revealSelection}>SELECT CARDS TO REVEAL · {selectedGFCardIds.length}/{requiredGFSelection}</Text>}
+          <Text style={styles.sheetSub}>{snapshot.gf.pile === 2 ? 'CALL reveals 2 chosen private cards · 4 cards visible.' : (snapshot.gf.round === 1 ? 'CALL reveals 2 private cards · 4/7 cards visible.' : 'CALL reveals 2 more private cards · 6/7 cards visible.')} Call costs {snapshot.gf.callCostCrest} Crest. No raise.</Text>
+          <Text style={styles.revealSelection}>SELECT CARDS TO REVEAL · {selectedGFCardIds.length}/{requiredGFSelection}</Text>
           <View style={styles.buttonRow}>
-            <Button label={gfDecision === 'CALL' ? 'CALL LOCKED' : `CALL ${snapshot.gf.callCostCrest}`} selected={gfDecision === 'CALL'} disabled={gfDecision !== null || (snapshot.gf.pile === 3 && selectedGFCardIds.length !== requiredGFSelection)} onPress={() => { setGfDecision('CALL'); onIntent({ type: 'GF_ACTION', decision: 'CALL', revealCardIds: snapshot.gf?.pile === 3 ? selectedGFCardIds : undefined }) }} />
+            <Button label={gfDecision === 'CALL' ? 'CALL LOCKED' : `CALL ${snapshot.gf.callCostCrest}`} selected={gfDecision === 'CALL'} disabled={gfDecision !== null || selectedGFCardIds.length !== requiredGFSelection} onPress={() => { setGfDecision('CALL'); onIntent({ type: 'GF_ACTION', decision: 'CALL', revealCardIds: selectedGFCardIds }) }} />
             <Button label={gfDecision === 'FOLD' ? 'FOLD LOCKED' : 'FOLD'} danger selected={gfDecision === 'FOLD'} disabled={gfDecision !== null} onPress={() => { setGfDecision('FOLD'); onIntent({ type: 'GF_ACTION', decision: 'FOLD' }) }} />
           </View>
         </View>
@@ -252,8 +265,16 @@ export default function ArenaOverlays({ snapshot, onIntent, selectedGFCardIds = 
               </View>
             ))}
             <View style={styles.netRow}>
-              <Text style={styles.netLabel}>NET CROWN</Text>
-              <Text style={styles.netValue}>{snapshot.result && snapshot.result.netCrest >= 0 ? '+' : ''}{snapshot.result?.netCrest} Cr</Text>
+              <Text style={styles.netLabel}>NET CROWN · PLAY</Text>
+              <Text style={styles.netValue}>{crownDeltaText(snapshot.result?.playNetCrest ?? 0)}</Text>
+            </View>
+            <View style={styles.resultRow}>
+              <Text style={styles.resultLabel}>MATCH FEE</Text>
+              <Text style={styles.resultValue}>{crownDeltaText(-(snapshot.result?.entryFeeCrest ?? 0))}</Text>
+            </View>
+            <View style={styles.netRow}>
+              <Text style={styles.netLabel}>FINAL NET CROWN</Text>
+              <Text style={styles.netValue}>{crownDeltaText(snapshot.result?.netCrest ?? 0)}</Text>
             </View>
             <View style={styles.netRow}>
               <Text style={styles.netLabel}>PS</Text>
@@ -291,6 +312,8 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.9, shadowRadius: 16, shadowOffset: { width: 0, height: 0 }, elevation: 12,
   },
   introPortrait: { width: 180, height: 225, borderRadius: 12, borderWidth: 2, borderColor: '#FFD76A' },
+  dualIntroPortraits: { flexDirection: 'row', gap: 12, alignItems: 'center', justifyContent: 'center' },
+  dualIntroPortrait: { width: 150, height: 188 },
   introTitle: { color: '#FFD76A', fontSize: 24, fontWeight: '900', letterSpacing: 1.5, textAlign: 'center' },
   introSubtitle: { color: '#FFF0B5', fontSize: 12, fontWeight: '900', letterSpacing: 3, textAlign: 'center', marginTop: 2 },
   introAtmosphere: { color: '#C8C4B0', fontSize: 11, fontStyle: 'italic', textAlign: 'center', marginTop: 14 },
@@ -352,8 +375,5 @@ const styles = StyleSheet.create({
   },
   revealCardHighlight: { borderColor: '#FFD76A', borderWidth: 2 },
   revealCardImage: { width: 50, height: 72 },
-  revealJoker: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#130d1f' },
-  revealJokerText: { color: '#FFD76A', fontWeight: '900', fontSize: 18 },
-  revealJokerStar: { color: '#8DFFB5', fontWeight: '900', fontSize: 12 },
   revealPayout: { color: '#8DFFB5', fontSize: 15, fontWeight: '900', textAlign: 'center', marginTop: 14 },
 })

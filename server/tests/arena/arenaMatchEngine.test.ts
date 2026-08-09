@@ -206,6 +206,23 @@ describe('Gate 5 - end-to-end Arena match state machine', () => {
       .toMatchObject({ accepted: true })
   })
 
+  test('WILD ignores the client target and follows the Joker placement in the latest arrangement', () => {
+    const engine = new ArenaMatchEngine('m-wild-placement', composition, createSeededRandom(91), 0)
+    const internal = engine as any
+    internal.phase = 'JOKER_DECLARE'
+    internal.jokerOwnerId = 'p1'
+    internal.lastArrangement.set('p1', {
+      pile1: ['as', 'ks', 'qs'],
+      pile2: ['2s', 'JOKER', '3s'],
+      pile3: ['4s', '5s', '6s', '7s', '8s'],
+    })
+    internal.applyAction({
+      type: 'JOKER_DECLARE', actionId: 'wild-client-lied', actorId: 'p1',
+      mode: 'WILD', targetPile: 3, availableCrest: 100,
+    }, 1)
+    expect(engine.snapshotDetail().jokerDeclaration).toMatchObject({ mode: 'WILD', targetPile: 2 })
+  })
+
   test('ANTE_X2 applies once to the first pile won by the Joker owner', () => {
     const engine = new ArenaMatchEngine('m-joker-first-win', composition, createSeededRandom(91), 0)
     const internal = engine as any
@@ -237,7 +254,7 @@ describe('Gate 5 - end-to-end Arena match state machine', () => {
     expect(engine.snapshot().phase).toBe('MATCH_BUY_IN_RESERVE')
   })
 
-  test('GF Pile 2 วนครบทุกที่นั่งแล้วผู้เล่นคนเดียวที่เหลือชนะโดยไม่เปิดไพ่ (รักษา Fog of War)', () => {
+  test('GF Pile 2 วนครบทุกที่นั่งแล้วเปิดไพ่ผู้ชนะเสมอ แม้คู่แข่ง Fold จนเหลือคนเดียว', () => {
     const engine = new ArenaMatchEngine('m-solo-gf', composition, createSeededRandom(55), 0)
     let sequence = 0
     let now = 1
@@ -253,12 +270,14 @@ describe('Gate 5 - end-to-end Arena match state machine', () => {
       if (!actorId) break
       engine.submit({ type: 'GF_ACTION', actionId: `fold-${actorId}-${++sequence}`, actorId, decision: actorId === stay ? 'CALL' : 'FOLD' }, now++)
     }
-    // ชนะแบบไม่มีใครสู้ไพ่จริง -> ต้องหยุดที่ REVEAL_PILE_2 ก่อน (เกมหยุดจริงเหมือนกันทุกกรณี) แต่ pileReveal
-    // ต้องไม่มีไพ่/handName เลย (รักษา Fog of War แม้เป็นไพ่ของผู้ชนะเอง)
+    // ชนะแบบไม่มีใครสู้ไพ่จริงก็ต้องหยุดและเปิดไพ่ของผู้ชนะให้ทุกคนเห็น
     expect(engine.snapshot().phase).toBe('REVEAL_PILE_2')
     expect(engine.snapshotDetail().pile2WinnerId).toBe(stay)
     const reveal = engine.snapshotDetail().pileReveal
-    expect(reveal).toMatchObject({ pile: 2, winnerId: stay, handRank: null, cards: [], highlightedCards: [] })
+    expect(reveal).toMatchObject({ pile: 2, winnerId: stay })
+    expect(reveal?.handRank).not.toBeNull()
+    expect(reveal?.cards).toHaveLength(5)
+    expect(reveal?.highlightedCards).toHaveLength(5)
     now = engine.snapshot().deadlineAt!
     engine.tick(now)
     expect(engine.snapshot().phase).toBe('GF_PILE_3_ROUND_1')

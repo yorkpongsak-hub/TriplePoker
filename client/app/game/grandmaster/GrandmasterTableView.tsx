@@ -15,6 +15,7 @@ const MONARCH_TABLE = require('../../../assets/tables/boss_monarch_skin_table.pn
 interface Props { snapshot: ArenaClientSnapshot; onIntent: (intent: ArenaClientIntent) => void; transportStatus?: string }
 
 type ArrangingPhase = 'ARRANGE_1' | 'FINAL_ARRANGE' | 'FINAL_LOCK'
+type CallRevealEvent = { id: string; seat: 1 | 2 | 3 | 4; displayName: string; pile: 2 | 3; cards: string[] }
 const ARRANGING_PHASES: ArrangingPhase[] = ['ARRANGE_1', 'FINAL_ARRANGE', 'FINAL_LOCK']
 // ต้องตรงกับ styles.communityCard.height เสมอ — ใช้เลื่อนกองกลางขึ้นบนอีก 1 เท่าของความสูงไพ่กองกลาง
 const COMMUNITY_CARD_HEIGHT = 49
@@ -23,6 +24,9 @@ const COMMUNITY_CARD_HEIGHT = 49
 const STACK_CARD_W = 22
 const STACK_CARD_H = 32
 const RESOLVED_CARD_OVERLAP_STEP = 5
+// Local/P1 cards are 62px wide at a 1.44 ratio (about 89px high).
+// Lift the whole seat block so bottom dialogs remain below the hand.
+const LOCAL_SEAT_LIFT = Math.round(62 * 1.44)
 
 function TightFaceUpStack({ cards }: { cards: string[] }) {
   const cardWidth = 62
@@ -33,9 +37,7 @@ function TightFaceUpStack({ cards }: { cards: string[] }) {
     <View style={{ width: cardWidth + Math.max(0, cards.length - 1) * overlapStep, height: cardHeight }}>
       {cards.map((code, index) => (
         <View key={`${code}-${index}`} style={[styles.parkedCard, { left: index * overlapStep, width: cardWidth, height: cardHeight, zIndex: index + 1 }]}>
-          {code === 'JOKER'
-            ? <View style={styles.parkedJoker}><Text style={styles.parkedJokerText}>J*</Text></View>
-            : <Image source={CARD_IMG[code] ?? CARD_BACK_IMG} style={{ width: cardWidth, height: cardHeight }} resizeMode="cover" />}
+          <Image source={CARD_IMG[code] ?? CARD_BACK_IMG} style={{ width: cardWidth, height: cardHeight }} resizeMode="cover" />
         </View>
       ))}
     </View>
@@ -71,7 +73,7 @@ function PileOneOpeningHand({ piles, width }: { piles: NonNullable<ArenaSeatView
   )
 }
 
-function PileTwoBettingHand({ piles, width, revealedCards }: { piles: NonNullable<ArenaSeatView['arrangedPiles']>; width: number; revealedCards: readonly string[] }) {
+function PileTwoBettingHand({ piles, width, revealedCards, selectedCards, onSelectCard, selectable }: { piles: NonNullable<ArenaSeatView['arrangedPiles']>; width: number; revealedCards: readonly string[]; selectedCards: readonly string[]; onSelectCard: (cardId: string) => void; selectable: boolean }) {
   const progress = useRef(new Animated.Value(0)).current
   useEffect(() => {
     progress.setValue(0)
@@ -82,14 +84,14 @@ function PileTwoBettingHand({ piles, width, revealedCards }: { piles: NonNullabl
 
   const lane = Math.min(width, 420)
   return (
-    <View style={[styles.pileOneOpening, { width: lane }]} pointerEvents="none">
+    <View style={[styles.pileOneOpening, { width: lane }]} pointerEvents="box-none">
       <Animated.View style={[styles.openingPile, {
         transform: [{ translateX: progress.interpolate({ inputRange: [0, 1], outputRange: [lane * 0.38, 0] }) }],
       }]}>
-        <FanHand cards={piles.pile2} cardCount={piles.pile2.length} faceUp width={150} disabled revealedCardIds={revealedCards} />
+        <FanHand cards={piles.pile2} cardCount={piles.pile2.length} faceUp width={150} disabled={!selectable} revealedCardIds={revealedCards} selectedCardIds={selectedCards} onCardPress={onSelectCard} />
         <Text style={styles.openingPileLabel}>PILE 2 · BETTING</Text>
       </Animated.View>
-      <Animated.View style={[styles.openingPile, { transform: [{ translateX: lane * 0.38 }] }]}>
+      <Animated.View pointerEvents="none" style={[styles.openingPile, { transform: [{ translateX: lane * 0.38 }] }]}>
         <TightFaceUpStack cards={piles.pile3} />
         <Text style={styles.parkedPileLabel}>PILE 3</Text>
       </Animated.View>
@@ -260,8 +262,6 @@ function AuctionAwardAnimation({ result, width, height, localSeat, delayMs = 0, 
       <Animated.View style={[styles.awardCard, { opacity, transform: [{ translateX: x }, { translateY: y }, { scale }] }]}>
         {hidden
           ? <Image source={CARD_BACK_IMG} style={styles.awardCardImage} resizeMode="cover" />
-          : result.card === 'JOKER'
-          ? <View style={styles.awardJoker}><Text style={styles.awardJokerText}>JOKER</Text></View>
           : <Image source={CARD_IMG[result.card] ?? CARD_BACK_IMG} style={styles.awardCardImage} resizeMode="cover" />}
       </Animated.View>
     </View>
@@ -283,11 +283,37 @@ function CommunityRevealCard({ code }: { code: string }) {
   return <Animated.View style={[styles.communityRevealGlow, { opacity: glow, transform: [{ scaleX }] }]}>{cardView(code)}</Animated.View>
 }
 
+function CallRevealSpotlight({ event, width }: { event: CallRevealEvent; width: number }) {
+  const opacity = useRef(new Animated.Value(0)).current
+  const scale = useRef(new Animated.Value(0.72)).current
+  useEffect(() => {
+    const animation = Animated.parallel([
+      Animated.timing(opacity, { toValue: 1, duration: 260, useNativeDriver: true }),
+      Animated.spring(scale, { toValue: 1, friction: 7, tension: 65, useNativeDriver: true }),
+    ])
+    animation.start()
+    return () => animation.stop()
+  }, [opacity, scale])
+  // Keep the spotlight readable without upscaling the card bitmap so far that
+  // rank/suit details become soft. This is 25% smaller than the former 180/108px range.
+  const cardWidth = Math.min(135, Math.max(81, (width - 72) / Math.max(2, event.cards.length)))
+  const cardHeight = Math.round(cardWidth * 1.44)
+  return (
+    <View pointerEvents="auto" style={styles.callRevealOverlay}>
+      <Text style={styles.callRevealTitle}>{event.displayName} · CALL</Text>
+      <Text style={styles.callRevealSub}>PILE {event.pile} · REVEALED CARDS</Text>
+      <Animated.View style={[styles.callRevealCards, { opacity, transform: [{ scale }] }]}>
+        {event.cards.map((code, index) => (
+          <Image key={`${event.id}-${code}-${index}`} source={CARD_IMG[code] ?? CARD_BACK_IMG} style={[styles.callRevealCard, { width: cardWidth, height: cardHeight }]} resizeMode="cover" />
+        ))}
+      </Animated.View>
+    </View>
+  )
+}
+
 const cardView = (code: string, hidden = false) => (
   <View key={code} style={styles.communityCard}>
-    {code === 'JOKER'
-      ? <View style={styles.communityJoker}><Text style={styles.communityJokerText}>JOKER</Text></View>
-      : <Image source={!hidden && CARD_IMG[code] ? CARD_IMG[code] : CARD_BACK_IMG} style={styles.communityImage} resizeMode="cover" />}
+    <Image source={!hidden && CARD_IMG[code] ? CARD_IMG[code] : CARD_BACK_IMG} style={styles.communityImage} resizeMode="cover" />
   </View>
 )
 
@@ -362,14 +388,54 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
   const [auctionAwardActive, setAuctionAwardActive] = useState(false)
   const [completedBlindAwards, setCompletedBlindAwards] = useState<Set<string>>(new Set())
   const [selectedGFCardIds, setSelectedGFCardIds] = useState<string[]>([])
+  const [callRevealQueue, setCallRevealQueue] = useState<CallRevealEvent[]>([])
+  const previousGFReveals = useRef<Map<number, string[]>>(new Map())
+  const seenCallRevealEvents = useRef<Set<string>>(new Set())
+
+  useEffect(() => {
+    previousGFReveals.current.clear()
+    seenCallRevealEvents.current.clear()
+    setCallRevealQueue([])
+  }, [snapshot.gameNumber])
+
+  useEffect(() => {
+    if (!snapshot.gfTable) return
+    const additions: CallRevealEvent[] = []
+    snapshot.gfTable.players.forEach(player => {
+      const previous = previousGFReveals.current.get(player.seat) ?? []
+      const added = player.revealedCards.filter(card => !previous.includes(card))
+      previousGFReveals.current.set(player.seat, [...player.revealedCards])
+      // Every Call reveals two cards. The final fifth showdown card is not a
+      // Call reveal and must not create another five-second spotlight.
+      if (added.length !== 2) return
+      const id = `${snapshot.gameNumber}:${snapshot.gfTable!.pile}:${snapshot.gfTable!.round}:${player.seat}:${player.revealedCards.join(',')}`
+      if (seenCallRevealEvents.current.has(id)) return
+      seenCallRevealEvents.current.add(id)
+      additions.push({ id, seat: player.seat, displayName: player.displayName, pile: snapshot.gfTable!.pile, cards: added })
+    })
+    if (additions.length) setCallRevealQueue(current => [...current, ...additions])
+  }, [snapshot.gameNumber, snapshot.gfTable])
+
+  useEffect(() => {
+    if (!callRevealQueue.length) return
+    const timer = setTimeout(() => setCallRevealQueue(current => current.slice(1)), 5_000)
+    return () => clearTimeout(timer)
+  }, [callRevealQueue])
+
+  // A pile-result reveal has priority over the per-Call spotlight. Without
+  // this, the five-second Call overlay can cover the four-second winner panel
+  // completely when the final caller closes the betting round.
+  useEffect(() => {
+    if (snapshot.reveal) setCallRevealQueue([])
+  }, [snapshot.reveal?.pile, snapshot.reveal?.winnerSeat])
 
   const localGFPlayer = snapshot.gfTable?.players.find(player => player.seat === local?.seat)
   const alreadyGFRevealed = localGFPlayer?.revealedCards ?? []
-  const requiredGFSelection = snapshot.gf?.localTurn && snapshot.gf.pile === 3 ? 2 : 0
+  const requiredGFSelection = snapshot.gf?.localTurn && (snapshot.gf.pile === 2 || snapshot.gf.pile === 3) ? 2 : 0
   useEffect(() => { setSelectedGFCardIds([]) }, [snapshot.phase, snapshot.gf?.round, snapshot.gfTable?.currentSeat])
 
   const toggleGFRevealCard = (cardId: string) => {
-    if (!snapshot.gf?.localTurn || snapshot.gf.pile !== 3 || alreadyGFRevealed.includes(cardId)) return
+    if (!snapshot.gf?.localTurn || (snapshot.gf.pile !== 2 && snapshot.gf.pile !== 3) || alreadyGFRevealed.includes(cardId)) return
     setSelectedGFCardIds(current => current.includes(cardId)
       ? current.filter(id => id !== cardId)
       : current.length < requiredGFSelection ? [...current, cardId] : current)
@@ -488,7 +554,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
       const revealedCards = snapshot.gfTable?.players.find(player => player.seat === seat.seat)?.revealedCards ?? []
       return (
         <View style={[styles.seat, styles[placement]]}>
-          <View style={styles.localHandGap}><PileTwoBettingHand piles={seat.arrangedPiles} width={Math.min(width * 0.82, 460)} revealedCards={revealedCards} /></View>
+          <View style={styles.localHandGap}><PileTwoBettingHand piles={seat.arrangedPiles} width={Math.min(width * 0.82, 460)} revealedCards={revealedCards} selectedCards={selectedGFCardIds} onSelectCard={toggleGFRevealCard} selectable={!!snapshot.gf?.localTurn} /></View>
           <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} />
         </View>
       )
@@ -691,6 +757,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
         </View>
       </SafeAreaView>
       {!isDealAnimation && <ArenaOverlays snapshot={auctionAwardActive ? { ...snapshot, auction: null } : snapshot} onIntent={onIntent} selectedGFCardIds={selectedGFCardIds} requiredGFSelection={requiredGFSelection} />}
+      {callRevealQueue[0] && <CallRevealSpotlight event={callRevealQueue[0]} width={width} />}
     </ImageBackground>
   )
 }
@@ -721,12 +788,15 @@ const styles = StyleSheet.create({
   dealCardImage: { width: 25, height: 36 },
   dealingText: { position: 'absolute', top: '55%', color: 'rgba(255,215,106,0.72)', fontSize: 9, fontWeight: '900', letterSpacing: 1.5 },
   awardOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 60, alignItems: 'center', justifyContent: 'center' },
+  callRevealOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 90, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(2,7,5,0.92)' },
+  callRevealTitle: { color: '#FFD76A', fontSize: 20, fontWeight: '900', letterSpacing: 1.2, textAlign: 'center' },
+  callRevealSub: { color: '#8DFFB5', fontSize: 10, fontWeight: '900', letterSpacing: 1.5, marginTop: 5, marginBottom: 18 },
+  callRevealCards: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14 },
+  callRevealCard: { borderRadius: 10, borderWidth: 3, borderColor: '#FF3B30', backgroundColor: '#130D1F', shadowColor: '#FFD76A', shadowOpacity: 0.9, shadowRadius: 18, elevation: 20 },
   awardMessage: { position: 'absolute', top: '31%', paddingHorizontal: 18, paddingVertical: 8, borderRadius: 18, backgroundColor: 'rgba(7,18,11,0.94)', borderWidth: 1, borderColor: '#FFD76A' },
   awardTitle: { color: '#FFD76A', fontSize: 12, fontWeight: '900', letterSpacing: 1, textAlign: 'center' },
   awardCard: { width: 54, height: 78, borderRadius: 6, overflow: 'hidden', borderWidth: 2, borderColor: '#FFD76A', backgroundColor: '#130D1F', shadowColor: '#FFD76A', shadowOpacity: 0.9, shadowRadius: 12, elevation: 15 },
   awardCardImage: { width: 54, height: 78 },
-  awardJoker: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#130D1F' },
-  awardJokerText: { color: '#FFD76A', fontWeight: '900', fontSize: 14 },
   communityRevealGlow: { borderRadius: 6, borderWidth: 2, borderColor: '#FFD76A', shadowColor: '#FFD76A', shadowOpacity: 1, shadowRadius: 14, elevation: 16 },
   stockZone: { position: 'absolute', left: '51%', top: '34%', zIndex: 32, alignItems: 'center' },
   discardZone: { position: 'absolute', right: 8, bottom: '25%', zIndex: 32, alignItems: 'center' },
@@ -735,7 +805,7 @@ const styles = StyleSheet.create({
   crownPosition: { position: 'absolute', left: 8, top: 8, zIndex: 30 },
   seat: { position: 'absolute', alignItems: 'center', zIndex: 10 },
   top: { top: 4, alignSelf: 'center' },
-  bottom: { bottom: -5, alignSelf: 'center' },
+  bottom: { bottom: -5 + LOCAL_SEAT_LIFT, alignSelf: 'center' },
   left: { left: -34, top: '38%' },
   right: { right: -34, top: '38%' },
   rotateLeft: { transform: [{ rotate: '90deg' }], marginTop: 30 },
@@ -746,8 +816,6 @@ const styles = StyleSheet.create({
   openingPile: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
   openingPileLabel: { marginTop: -8, color: '#FFD76A', fontSize: 8, fontWeight: '900', letterSpacing: 1 },
   parkedCard: { position: 'absolute', top: 0, overflow: 'hidden', borderRadius: 5, borderWidth: 1, borderColor: 'rgba(255,215,106,0.72)', backgroundColor: '#091808' },
-  parkedJoker: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#130D1F' },
-  parkedJokerText: { color: '#FFD76A', fontSize: 18, fontWeight: '900' },
   parkedPileLabel: { marginTop: 3, color: '#C8C4B0', fontSize: 7, fontWeight: '900', letterSpacing: 0.8 },
   seatLabel: { minWidth: 108, maxWidth: 145, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 18, backgroundColor: 'rgba(7,18,12,0.9)', borderWidth: 1, borderColor: '#3A5A44', zIndex: 20 },
   seatTurn: { borderColor: '#8DFFB5', shadowColor: '#8DFFB5', shadowOpacity: 0.8, shadowRadius: 8, elevation: 8 },
@@ -769,8 +837,6 @@ const styles = StyleSheet.create({
   cardsRow: { flexDirection: 'row' },
   communityCard: { width: 34, height: 49, marginLeft: -3, borderRadius: 4, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,215,106,0.65)', backgroundColor: '#091808' },
   communityImage: { width: 34, height: 49 },
-  communityJoker: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#160C1E' },
-  communityJokerText: { color: '#FFD76A', fontSize: 7, fontWeight: '900', transform: [{ rotate: '-90deg' }] },
   pot: { color: '#8DFFB5', fontSize: 7, fontWeight: '800', marginTop: 3 },
   pileStackWrap: { marginTop: 6, width: STACK_CARD_W, alignSelf: 'center' },
   pileStackCard: {

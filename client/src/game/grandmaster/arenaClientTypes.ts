@@ -1,6 +1,6 @@
 export type ArenaClientPhase =
   | 'WAITING_FOR_PLAYERS' | 'CHECK_FAST_THREE_HUMANS' | 'ROLL_BOSS_ENCOUNTER_OR_WAIT_FOURTH_HUMAN'
-  | 'MATCH_BUY_IN_RESERVE' | 'GAME_START' | 'DEAL' | 'DEAL_ANIMATION' | 'ARRANGE_1'
+  | 'MATCH_BUY_IN_RESERVE' | 'DUAL_BOSS_INTRO' | 'GAME_START' | 'DEAL' | 'DEAL_ANIMATION' | 'ARRANGE_1'
   | 'AUCTION_FACE_UP' | 'AUCTION_FACE_UP_RESULT' | 'AUCTION_BLIND' | 'AUCTION_BLIND_RESULT' | 'REVEAL_PILE3_COMMUNITY_CARD_2' | 'FINAL_ARRANGE' | 'JOKER_DECLARE'
   | 'DISCARD' | 'FINAL_LOCK' | 'RESOLVE_PILE_1' | 'REVEAL_PILE_1' | 'GF_PILE_2'
   | 'RESOLVE_PILE_2' | 'REVEAL_PILE_2' | 'GF_PILE_3_ROUND_1' | 'GF_PILE_3_ROUND_2'
@@ -78,7 +78,7 @@ export interface ArenaClientSnapshot {
     players: Array<{ seat: 1 | 2 | 3 | 4; displayName: string; status: 'WAITING' | 'CURRENT' | 'CALLED' | 'FOLDED' | 'SHOWDOWN'; revealedCards: string[] }>
   }
   bossPresentation: null | {
-    bossId: 'MONARCH' | 'SOREN'
+    bossId: 'MONARCH' | 'SOREN' | 'DUAL'
     title: string
     subtitle: string
     atmosphere: string
@@ -90,7 +90,7 @@ export interface ArenaClientSnapshot {
     speaker: 'MONARCH' | 'SOREN'
     text: string
   }
-  result: null | { title: string; lines: ArenaResultLine[]; netCrest: number; psGained: number }
+  result: null | { title: string; lines: ArenaResultLine[]; playNetCrest: number; entryFeeCrest: number; netCrest: number; psGained: number }
   reveal: null | {
     pile: 1 | 2 | 3
     winnerSeat: 1 | 2 | 3 | 4 | null
@@ -106,6 +106,7 @@ export interface ArenaPileArrangement { pile1: string[]; pile2: string[]; pile3:
 
 export type ArenaClientIntent =
   | { type: 'SELECT_CARD'; cardId: string }
+  | { type: 'DUAL_BOSS_INTRO_ACK' }
   | ({ type: 'SAVE_ARRANGEMENT_DRAFT' } & ArenaPileArrangement)
   | ({ type: 'SUBMIT_ARRANGEMENT'; stage: 'ARRANGE_1' | 'FINAL_ARRANGE' } & ArenaPileArrangement)
   | { type: 'AUCTION_BID'; round: 'FACE_UP' | 'BLIND'; cardIndex: 0 | 1; amountCrest: 0 | 3 | 6 | 9 | 12 }

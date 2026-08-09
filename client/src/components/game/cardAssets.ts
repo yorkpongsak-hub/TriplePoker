@@ -40,6 +40,8 @@ export const CARD_IMG: Record<string, any> = {
   jc: require('../../../assets/cards/classic/jc.png'), qc: require('../../../assets/cards/classic/qc.png'),
   kc: require('../../../assets/cards/classic/kc.png'),
   JOKER: require('../../../assets/cards/classic/joker.png'),
+  Joker: require('../../../assets/cards/classic/joker.png'),
+  joker: require('../../../assets/cards/classic/joker.png'),
 }
 
 // ── หลังไพ่ (default skin) — ใช้ตอนไพ่คว่ำ ──

@@ -65,6 +65,8 @@ function previewSnapshot(mode?: string): ArenaClientSnapshot {
         { label: 'Boss Fee', crest: -24 }, { label: 'Sweep Jackpot', crest: 42 },
         { label: 'Win / Loss', crest: 66 },
       ],
+      playNetCrest: 33,
+      entryFeeCrest: 12,
       netCrest: 21,
       psGained: 4,
     } : null,

@@ -56,9 +56,9 @@ export interface ArenaClientSnapshotWire {
     pile: 2 | 3; round: 1 | 2; direction: 'CLOCKWISE' | 'COUNTER_CLOCKWISE'; currentSeat: 1 | 2 | 3 | 4 | null
     players: Array<{ seat: 1 | 2 | 3 | 4; displayName: string; status: 'WAITING' | 'CURRENT' | 'CALLED' | 'FOLDED' | 'SHOWDOWN'; revealedCards: string[] }>
   }
-  bossPresentation: null | { bossId: 'MONARCH' | 'SOREN'; title: string; subtitle: string; atmosphere: string; quote: string }
+  bossPresentation: null | { bossId: 'MONARCH' | 'SOREN' | 'DUAL'; title: string; subtitle: string; atmosphere: string; quote: string }
   dualBossLore: null | { id: string; speakerSeat: 3 | 4; speaker: 'MONARCH' | 'SOREN'; text: string }
-  result: null | { title: string; lines: Array<{ label: string; crest: number }>; netCrest: number; psGained: number }
+  result: null | { title: string; lines: Array<{ label: string; crest: number }>; playNetCrest: number; entryFeeCrest: number; netCrest: number; psGained: number }
   reveal: null | {
     pile: 1 | 2 | 3
     winnerSeat: 1 | 2 | 3 | 4 | null
@@ -73,7 +73,7 @@ export interface ArenaClientSnapshotWire {
 // ลำดับ phase ภายในหนึ่งเกม (ไพ่/deal ถูกล้างทุกครั้งที่ gameNumber เปลี่ยน จึงไม่ต้องกังวลข้าม game)
 const PHASE_ORDER: ArenaMatchPhase[] = [
   'WAITING_FOR_PLAYERS', 'CHECK_FAST_THREE_HUMANS', 'ROLL_BOSS_ENCOUNTER_OR_WAIT_FOURTH_HUMAN',
-  'MATCH_BUY_IN_RESERVE', 'GAME_START', 'DEAL', 'DEAL_ANIMATION', 'ARRANGE_1',
+  'MATCH_BUY_IN_RESERVE', 'DUAL_BOSS_INTRO', 'GAME_START', 'DEAL', 'DEAL_ANIMATION', 'ARRANGE_1',
   'AUCTION_FACE_UP', 'AUCTION_FACE_UP_RESULT', 'AUCTION_BLIND', 'AUCTION_BLIND_RESULT', 'REVEAL_PILE3_COMMUNITY_CARD_2',
   'FINAL_ARRANGE', 'JOKER_DECLARE', 'DISCARD', 'FINAL_LOCK',
   'RESOLVE_PILE_1', 'REVEAL_PILE_1', 'GF_PILE_2', 'RESOLVE_PILE_2', 'REVEAL_PILE_2',
@@ -237,7 +237,7 @@ export function projectArenaClientSnapshot(
   if (projectedTotal !== 53) throw new Error(`ARENA_CARD_PROJECTION_NOT_CONSERVED:${projectedTotal}`)
 
   const auction: ArenaClientSnapshotWire['auction'] =
-    deal && (snapshot.phase === 'AUCTION_FACE_UP' || snapshot.phase === 'AUCTION_BLIND')
+    deal && (snapshot.phase === 'AUCTION_FACE_UP' || (snapshot.phase === 'AUCTION_BLIND' && viewerId !== detail.faceUpWinnerId))
       ? { round: snapshot.phase === 'AUCTION_FACE_UP' ? 'FACE_UP' : 'BLIND', faceUpCard: arenaCardKey(deal.auction.faceUp), bidOptionsCrest: [...tierSEconomyConfig.auctionBidOptionsCrest], locked: !viewerPending }
       : null
 
@@ -275,7 +275,15 @@ export function projectArenaClientSnapshot(
 
   const joker: ArenaClientSnapshotWire['joker'] =
     snapshot.phase === 'JOKER_DECLARE' && detail.jokerOwnerId === viewerId && !detail.jokerDeclaration
-      ? { canChoose: true, anteX2Enabled: true }
+      ? {
+          canChoose: true, anteX2Enabled: true,
+          selectedPile: (() => {
+            const arrangement = detail.lastArrangements[viewerId]
+            if (arrangement?.pile1.includes('JOKER')) return 1
+            if (arrangement?.pile2.includes('JOKER')) return 2
+            return 3
+          })(),
+        }
       : null
 
   const gf: ArenaClientSnapshotWire['gf'] =
@@ -319,7 +327,13 @@ export function projectArenaClientSnapshot(
   const bossSeat = composition.seats.find(seat => seat.seat === 3)
   const bossAiId = bossSeat?.controller === 'AI' ? bossSeat.aiId : null
   const bossPresentation: ArenaClientSnapshotWire['bossPresentation'] =
-    snapshot.gameNumber === 1 && snapshot.phase === 'ARRANGE_1' && (bossAiId === 'MONARCH' || bossAiId === 'SOREN')
+    composition.kind === 'DUAL_BOSS_ENCOUNTER' && snapshot.phase === 'DUAL_BOSS_INTRO'
+      ? {
+          bossId: 'DUAL', title: 'THE BROKEN COVENANT', subtitle: 'MONARCH · THE WATCHER  ×  SOREN VEYL · THE FIRST EXILE',
+          atmosphere: 'Two old friends return to the same table—one bound to the crown, the other cast beyond its history.',
+          quote: 'Before the final gate opens, the Watcher and the Exile must play the hand they left unfinished.',
+        }
+      : snapshot.gameNumber === 1 && snapshot.phase === 'ARRANGE_1' && (bossAiId === 'MONARCH' || bossAiId === 'SOREN')
       ? { bossId: bossAiId, ...BOSS_PRESENTATION[bossAiId] }
       : null
 
@@ -348,6 +362,8 @@ export function projectArenaClientSnapshot(
             { label: 'Sweep Jackpot', crest: localBreakdown.sweepJackpot },
             { label: 'Win / Loss', crest: localBreakdown.winLoss },
           ],
+          playNetCrest: localBreakdown.netCrest + localBreakdown.entryFee,
+          entryFeeCrest: localBreakdown.entryFee,
           netCrest: localBreakdown.netCrest,
           psGained,
         }

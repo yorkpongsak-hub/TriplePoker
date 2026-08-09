@@ -38,10 +38,11 @@ export { sovereignConfig, sovereignEconomyConfig } from './sovereignConfig'
 
 export const arenaPhaseTimeoutMs = Object.freeze({
   MATCH_BUY_IN_RESERVE: 15_000,
+  DUAL_BOSS_INTRO: 30_000,
   DEAL_ANIMATION: 4_000,
   ARRANGE_1: 30_000,
   AUCTION_FACE_UP: 12_000,
-  AUCTION_FACE_UP_RESULT: 3_000,
+  AUCTION_FACE_UP_RESULT: 10_000,
   AUCTION_BLIND: 12_000,
   AUCTION_BLIND_RESULT: 4_500,
   REVEAL_PILE3_COMMUNITY_CARD_2: 3_000,
