@@ -55,6 +55,7 @@ export interface ArenaMatchSnapshotDetail {
   gfRound: GFRound | null
   pile3Round1: GFRound | null
   gfRevealedCardIds: Record<string, string[]>
+  lastGFCallReveal: { actionId: string; actorId: string; pile: 2 | 3; round: 1 | 2; cards: string[] } | null
   actedActorIds: string[]
   heldCardIds: Record<string, string[]>
   lastArrangements: Record<string, ArenaArrangement>
@@ -127,6 +128,7 @@ export class ArenaMatchEngine {
   private gfRound: GFRound | null = null
   private pile3Round1: GFRound | null = null
   private gfRevealedCardIds = new Map<string, string[]>()
+  private lastGFCallReveal: ArenaMatchSnapshotDetail['lastGFCallReveal'] = null
   private heldCardIds = new Map<string, Set<string>>()
   private lastArrangement = new Map<string, ArenaArrangement>()
   private lockedArrangements = new Map<string, ArenaArrangement>()
@@ -262,6 +264,7 @@ export class ArenaMatchEngine {
       gfRound: this.gfRound,
       pile3Round1: this.pile3Round1,
       gfRevealedCardIds: Object.fromEntries([...this.gfRevealedCardIds.entries()].map(([id, cards]) => [id, [...cards]])),
+      lastGFCallReveal: this.lastGFCallReveal ? { ...this.lastGFCallReveal, cards: [...this.lastGFCallReveal.cards] } : null,
       actedActorIds: [...this.phaseActions.keys()],
       heldCardIds: Object.fromEntries([...this.heldCardIds.entries()].map(([actorId, ids]) => [actorId, [...ids]])),
       lastArrangements: Object.fromEntries(this.lastArrangement.entries()),
@@ -354,7 +357,12 @@ export class ArenaMatchEngine {
 
   private applyAction(action: ArenaMatchAction, now: number): void {
     if (action.type === 'GF_ACTION') {
-      if (action.decision === 'CALL') this.recordGFRevealedCards(action.actorId, action.revealCardIds)
+      if (action.decision === 'CALL') {
+        const pile = this.gfRound!.pile
+        const round = this.gfRound!.round
+        const cards = this.recordGFRevealedCards(action.actorId, action.revealCardIds)
+        this.lastGFCallReveal = { actionId: action.actionId, actorId: action.actorId, pile, round, cards }
+      }
       else if (action.revealCardIds?.length) throw new Error('ARENA_GF_FOLD_CANNOT_REVEAL_CARDS')
       this.gfRound = recordGFAction(this.gfRound!, action.actorId, action.decision)
       // เก็บสถิติ Call/Fold ของ Human ไว้ให้ Soren ปรับ bias ข้ามเกมในแมตช์เดียวกัน (ดู arenaSorenPersonality.ts)
@@ -680,7 +688,7 @@ export class ArenaMatchEngine {
   private startGame(now: number): void {
     this.gameNumber = (this.gameNumber + 1) as 1 | 2 | 3
     this.deal = null; this.dealCardsById.clear(); this.faceUpWinnerId = null; this.jokerOwnerId = null
-    this.jokerDeclaration = null; this.gfRound = null; this.pile3Round1 = null; this.gfRevealedCardIds.clear(); this.auctionWinnerIds.clear(); this.blindAuctionResults = []
+    this.jokerDeclaration = null; this.gfRound = null; this.pile3Round1 = null; this.gfRevealedCardIds.clear(); this.lastGFCallReveal = null; this.auctionWinnerIds.clear(); this.blindAuctionResults = []
     this.heldCardIds.clear(); this.lastArrangement.clear(); this.lockedArrangements.clear(); this.fouled.clear()
     this.pile1WinnerId = null; this.pile2WinnerId = null; this.pile3WinnerId = null
     this.pile2Revealed = false; this.pile3Revealed = false; this.jokerAnteX2Applied = false
@@ -776,7 +784,7 @@ export class ArenaMatchEngine {
     this.transition('GF_PILE_3_ROUND_2', now, false)
   }
 
-  private recordGFRevealedCards(actorId: string, requested?: readonly string[]): void {
+  private recordGFRevealedCards(actorId: string, requested?: readonly string[]): string[] {
     if (!this.gfRound) throw new Error('ARENA_GF_ROUND_NOT_ACTIVE')
     const pile = this.gfRound.pile
     const locked = this.lockedArrangements.get(actorId)
@@ -790,6 +798,7 @@ export class ArenaMatchEngine {
     if (selected.length !== required || new Set(selected).size !== selected.length) throw new Error('ARENA_GF_REVEAL_CARD_COUNT_INVALID')
     if (selected.some(id => !pileCards.includes(id) || already.includes(id))) throw new Error('ARENA_GF_REVEAL_CARD_INVALID')
     this.gfRevealedCardIds.set(actorId, [...already, ...selected])
+    return selected
   }
 
   private gfPlayers(): GFPlayer[] {

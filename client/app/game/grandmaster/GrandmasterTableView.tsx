@@ -403,32 +403,19 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
     setRoyalFlushPlayer(reveal.winnerDisplayName || (reveal.winnerSeat ? `SEAT ${reveal.winnerSeat}` : 'PLAYER'))
   }, [snapshot.matchId, snapshot.gameNumber, snapshot.reveal])
   const [callRevealQueue, setCallRevealQueue] = useState<CallRevealEvent[]>([])
-  const previousGFReveals = useRef<Map<number, string[]>>(new Map())
   const seenCallRevealEvents = useRef<Set<string>>(new Set())
 
   useEffect(() => {
-    previousGFReveals.current.clear()
     seenCallRevealEvents.current.clear()
     setCallRevealQueue([])
   }, [snapshot.gameNumber])
 
   useEffect(() => {
-    if (!snapshot.gfTable) return
-    const additions: CallRevealEvent[] = []
-    snapshot.gfTable.players.forEach(player => {
-      const previous = previousGFReveals.current.get(player.seat) ?? []
-      const added = player.revealedCards.filter(card => !previous.includes(card))
-      previousGFReveals.current.set(player.seat, [...player.revealedCards])
-      // Every Call reveals two cards. The final fifth showdown card is not a
-      // Call reveal and must not create another five-second spotlight.
-      if (added.length !== 2) return
-      const id = `${snapshot.gameNumber}:${snapshot.gfTable!.pile}:${snapshot.gfTable!.round}:${player.seat}:${player.revealedCards.join(',')}`
-      if (seenCallRevealEvents.current.has(id)) return
-      seenCallRevealEvents.current.add(id)
-      additions.push({ id, seat: player.seat, displayName: player.displayName, pile: snapshot.gfTable!.pile, cards: added })
-    })
-    if (additions.length) setCallRevealQueue(current => [...current, ...additions])
-  }, [snapshot.gameNumber, snapshot.gfTable])
+    const event = snapshot.callReveal
+    if (!event || seenCallRevealEvents.current.has(event.id)) return
+    seenCallRevealEvents.current.add(event.id)
+    setCallRevealQueue(current => [...current, { id: event.id, seat: event.seat, displayName: event.displayName, pile: event.pile, cards: event.cards }])
+  }, [snapshot.gameNumber, snapshot.callReveal])
 
   useEffect(() => {
     if (!callRevealQueue.length) return
@@ -436,12 +423,10 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
     return () => clearTimeout(timer)
   }, [callRevealQueue])
 
-  // A pile-result reveal has priority over the per-Call spotlight. Without
-  // this, the five-second Call overlay can cover the four-second winner panel
-  // completely when the final caller closes the betting round.
-  useEffect(() => {
-    if (snapshot.reveal) setCallRevealQueue([])
-  }, [snapshot.reveal?.pile, snapshot.reveal?.winnerSeat])
+  // A final caller can move the server directly into the pile result. Keep
+  // that result waiting until every public Call reveal has played.
+  const unseenCallReveal = !!snapshot.callReveal && !seenCallRevealEvents.current.has(snapshot.callReveal.id)
+  const deferPileResult = callRevealQueue.length > 0 || unseenCallReveal
 
   const localGFPlayer = snapshot.gfTable?.players.find(player => player.seat === local?.seat)
   const alreadyGFRevealed = localGFPlayer?.revealedCards ?? []
@@ -784,7 +769,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
           )}
         </View>
       </SafeAreaView>
-      {!isDealAnimation && <ArenaOverlays snapshot={auctionAwardActive ? { ...snapshot, auction: null } : snapshot} onIntent={onIntent} selectedGFCardIds={selectedGFCardIds} requiredGFSelection={requiredGFSelection} />}
+      {!isDealAnimation && <ArenaOverlays snapshot={{ ...snapshot, ...(auctionAwardActive ? { auction: null } : {}), ...(deferPileResult ? { reveal: null } : {}) }} onIntent={onIntent} selectedGFCardIds={selectedGFCardIds} requiredGFSelection={requiredGFSelection} />}
       {royalFlushPlayer && <RoyalStraightFlushVFX playerName={royalFlushPlayer} onClose={() => setRoyalFlushPlayer(null)} />}
       {callRevealQueue[0] && <CallRevealSpotlight event={callRevealQueue[0]} width={width} />}
     </ImageBackground>

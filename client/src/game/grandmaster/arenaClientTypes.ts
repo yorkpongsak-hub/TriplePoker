@@ -77,6 +77,7 @@ export interface ArenaClientSnapshot {
     currentSeat: 1 | 2 | 3 | 4 | null
     players: Array<{ seat: 1 | 2 | 3 | 4; displayName: string; status: 'WAITING' | 'CURRENT' | 'CALLED' | 'FOLDED' | 'SHOWDOWN'; revealedCards: string[] }>
   }
+  callReveal?: null | { id: string; seat: 1 | 2 | 3 | 4; displayName: string; pile: 2 | 3; round: 1 | 2; cards: string[] }
   bossPresentation: null | {
     bossId: 'MONARCH' | 'SOREN' | 'DUAL'
     title: string

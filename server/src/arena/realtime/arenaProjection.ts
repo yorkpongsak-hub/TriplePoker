@@ -56,6 +56,7 @@ export interface ArenaClientSnapshotWire {
     pile: 2 | 3; round: 1 | 2; direction: 'CLOCKWISE' | 'COUNTER_CLOCKWISE'; currentSeat: 1 | 2 | 3 | 4 | null
     players: Array<{ seat: 1 | 2 | 3 | 4; displayName: string; status: 'WAITING' | 'CURRENT' | 'CALLED' | 'FOLDED' | 'SHOWDOWN'; revealedCards: string[] }>
   }
+  callReveal: null | { id: string; seat: 1 | 2 | 3 | 4; displayName: string; pile: 2 | 3; round: 1 | 2; cards: string[] }
   bossPresentation: null | { bossId: 'MONARCH' | 'SOREN' | 'DUAL'; title: string; subtitle: string; atmosphere: string; quote: string }
   dualBossLore: null | { id: string; speakerSeat: 3 | 4; speaker: 'MONARCH' | 'SOREN'; text: string }
   result: null | { title: string; lines: Array<{ label: string; crest: number }>; playNetCrest: number; entryFeeCrest: number; netCrest: number; psGained: number }
@@ -324,6 +325,20 @@ export function projectArenaClientSnapshot(
       })()
     : null
 
+  const callReveal: ArenaClientSnapshotWire['callReveal'] = detail.lastGFCallReveal
+    ? (() => {
+        const seat = seats.find(entry => entry.playerId === detail.lastGFCallReveal!.actorId)
+        return seat ? {
+          id: detail.lastGFCallReveal!.actionId,
+          seat: seat.seat,
+          displayName: seat.displayName,
+          pile: detail.lastGFCallReveal!.pile,
+          round: detail.lastGFCallReveal!.round,
+          cards: [...detail.lastGFCallReveal!.cards],
+        } : null
+      })()
+    : null
+
   const bossSeat = composition.seats.find(seat => seat.seat === 3)
   const bossAiId = bossSeat?.controller === 'AI' ? bossSeat.aiId : null
   const bossPresentation: ArenaClientSnapshotWire['bossPresentation'] =
@@ -394,7 +409,7 @@ export function projectArenaClientSnapshot(
       localBalanceCrest: localBreakdown?.endingCrest ?? 0,
     },
     communityCards,
-    auction, auctionDisplay, auctionResult, blindAuctionResults, joker, gf, gfTable, bossPresentation, dualBossLore,
+    auction, auctionDisplay, auctionResult, blindAuctionResults, joker, gf, gfTable, callReveal, bossPresentation, dualBossLore,
     result, reveal, pilesResolved,
   }
 }
