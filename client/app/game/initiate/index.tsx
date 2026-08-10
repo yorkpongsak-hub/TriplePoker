@@ -1379,7 +1379,7 @@ const GameTableLive: React.FC = () => {
           {phase === 'end' && matchResult && (
             <>
               {matchResult.finalWinner === PLAYER_ID && (
-                <View style={StyleSheet.absoluteFill} pointerEvents="none">
+                <View style={[StyleSheet.absoluteFill, { zIndex: 200 }]} pointerEvents="none">
                   {confettiAnims.map((a, i) => {
                     const colors = ['#ff6b6b','#ffd93d','#6bcb77','#4d96ff','#ff922b','#cc5de8']
                     const rotStr = a.rotate.interpolate({ inputRange: [0, 720], outputRange: ['0deg', '720deg'] })
