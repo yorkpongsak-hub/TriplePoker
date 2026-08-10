@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '../config/supabase'
+import { resolveNpcPoolKey, type ResolveNpcPoolContext } from './npcPoolResolver'
 import type {
   AccountRef,
   ApplyTransactionInput,
@@ -142,6 +143,38 @@ export class EconomyService {
       context: params.context,
       createdBy: params.createdBy,
     })
+  }
+
+  /**
+   * Settles the net result of a match between a human player and an AI/NPC seat — resolves the
+   * NPC id to its shared pool (npcPoolResolver.ts) and transfers the net amount accordingly.
+   * `amountToNpc` is signed from the NPC's perspective: positive = the NPC won (human pays in),
+   * negative = the NPC lost (NPC pays out). Mirrors how settleEscrow already only persists a
+   * human's final net stack for a match, not every intermediate hand — the NPC pool only ever
+   * receives/pays the net result at settlement, never a per-match buy-in draw-down (see the
+   * design note in the Central Economy plan: NPC pools start at 0 and only grow from real wins).
+   */
+  async settleNpcMatchResult(params: {
+    idempotencyKey: string
+    humanUserId: string
+    npcId: string
+    npcContext?: ResolveNpcPoolContext
+    currency: Currency
+    amountToNpc: number
+    wallet?: Wallet
+    reason: EconomyReason
+    context?: EconomyContext
+    metadata?: Record<string, unknown>
+    createdBy?: string
+  }): Promise<ApplyTransactionResult> {
+    if (params.amountToNpc === 0) throw new Error('SETTLE_NPC_MATCH_RESULT_AMOUNT_MUST_NOT_BE_ZERO')
+    const poolKey = resolveNpcPoolKey(params.npcId, params.npcContext)
+    const human: AccountRef = { accountType: 'PLAYER', accountId: params.humanUserId }
+    const pool: AccountRef = { accountType: 'NPC_POOL', accountId: poolKey }
+    const context: EconomyContext = { npcGroup: poolKey, ...params.context }
+    return params.amountToNpc > 0
+      ? this.transfer({ ...params, from: human, to: pool, amount: params.amountToNpc, context })
+      : this.transfer({ ...params, from: pool, to: human, amount: -params.amountToNpc, context })
   }
 
   /** Removes currency from an account permanently — decrements active supply, no counterpart credit. */

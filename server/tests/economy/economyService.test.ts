@@ -168,6 +168,56 @@ describe('EconomyService — request shaping and invariants', () => {
       idempotencyKey: 'k1', originalTransactionId: 999, reason: 'ADMIN_CORRECTION', actor: 'admin:york',
     })).rejects.toThrow('ORIGINAL_TRANSACTION_HAS_NO_ENTRIES')
   })
+
+  test('settleNpcMatchResult() — NPC won: human pays in, resolved via npcPoolResolver', async () => {
+    await service.settleNpcMatchResult({
+      idempotencyKey: 'match:m1:settle', humanUserId: 'p1', npcId: 'AI_REAPER',
+      currency: 'TOKEN', amountToNpc: 500, reason: 'MATCH_SETTLEMENT',
+    })
+    const call = gateway.applyCalls[0]
+    expect(call.type).toBe('TRANSFER')
+    expect(call.entries).toEqual([
+      { accountType: 'PLAYER', accountId: 'p1', currency: 'TOKEN', wallet: undefined, amount: -500 },
+      { accountType: 'NPC_POOL', accountId: 'FOUR_GODS_POOL', currency: 'TOKEN', wallet: undefined, amount: 500 },
+    ])
+    expect(call.context).toEqual({ npcGroup: 'FOUR_GODS_POOL' })
+  })
+
+  test('settleNpcMatchResult() — NPC lost: pool pays the human back', async () => {
+    await service.settleNpcMatchResult({
+      idempotencyKey: 'match:m2:settle', humanUserId: 'p1', npcId: 'MONARCH_BOSS',
+      currency: 'TOKEN', amountToNpc: -800, reason: 'MATCH_SETTLEMENT',
+    })
+    const call = gateway.applyCalls[0]
+    expect(call.entries).toEqual([
+      { accountType: 'NPC_POOL', accountId: 'MONARCH_POOL', currency: 'TOKEN', wallet: undefined, amount: -800 },
+      { accountType: 'PLAYER', accountId: 'p1', currency: 'TOKEN', wallet: undefined, amount: 800 },
+    ])
+  })
+
+  test('settleNpcMatchResult() rejects a zero amount', async () => {
+    await expect(service.settleNpcMatchResult({
+      idempotencyKey: 'k1', humanUserId: 'p1', npcId: 'AI_REAPER',
+      currency: 'TOKEN', amountToNpc: 0, reason: 'MATCH_SETTLEMENT',
+    })).rejects.toThrow('SETTLE_NPC_MATCH_RESULT_AMOUNT_MUST_NOT_BE_ZERO')
+  })
+
+  test('settleNpcMatchResult() propagates UnknownNpcIdError for an unmapped npcId', async () => {
+    await expect(service.settleNpcMatchResult({
+      idempotencyKey: 'k1', humanUserId: 'p1', npcId: 'NOT_A_REAL_NPC',
+      currency: 'TOKEN', amountToNpc: 100, reason: 'MATCH_SETTLEMENT',
+    })).rejects.toThrow('UNKNOWN_NPC_ID: NOT_A_REAL_NPC')
+  })
+
+  test('settleNpcMatchResult() routes a Minion-displayed base AI id to MINION_POOL, not BOT_POOL', async () => {
+    await service.settleNpcMatchResult({
+      idempotencyKey: 'k1', humanUserId: 'p1', npcId: 'AI_SAGE', npcContext: { isMinionDisplay: true },
+      currency: 'TOKEN', amountToNpc: 300, reason: 'MATCH_SETTLEMENT',
+    })
+    expect(gateway.applyCalls[0].entries[1]).toEqual(
+      { accountType: 'NPC_POOL', accountId: 'MINION_POOL', currency: 'TOKEN', wallet: undefined, amount: 300 },
+    )
+  })
 })
 
 // ─────────────────────────────────────────────
