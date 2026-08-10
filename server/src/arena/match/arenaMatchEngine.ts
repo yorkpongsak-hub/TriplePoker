@@ -56,6 +56,7 @@ export interface ArenaMatchSnapshotDetail {
   pile3Round1: GFRound | null
   gfRevealedCardIds: Record<string, string[]>
   lastGFCallReveal: { actionId: string; actorId: string; pile: 2 | 3; round: 1 | 2; cards: string[] } | null
+  lastGFAction: { actionId: string; actorId: string; pile: 2 | 3; round: 1 | 2; decision: 'CALL' | 'FOLD'; cards: string[] } | null
   actedActorIds: string[]
   heldCardIds: Record<string, string[]>
   lastArrangements: Record<string, ArenaArrangement>
@@ -106,8 +107,23 @@ function legalJokerLocation(deal: ArenaDeal): boolean {
 }
 
 // Joker ถือเป็นใบอันตรายสุดเสมอ (wild) — ใช้จัดลำดับ "ไพ่ที่คู่ต่อสู้น่าจะได้กรณีเลวร้ายสุด" ใน estimateOpponentSafeRate
-function dangerValue(card: ArenaCard): number {
-  return card.kind === 'JOKER' ? Infinity : card.value
+// 64 samples keeps a synchronous AI decision near the 20-30ms budget while
+// remaining deterministic and substantially smoother than the old 0/1 heuristic.
+const ARENA_EQUITY_SAMPLES = 64
+
+function deterministicRandom(seedText: string): ArenaRandom {
+  let seed = 2166136261
+  for (let index = 0; index < seedText.length; index++) {
+    seed ^= seedText.charCodeAt(index)
+    seed = Math.imul(seed, 16777619)
+  }
+  return () => {
+    seed += 0x6D2B79F5
+    let value = seed
+    value = Math.imul(value ^ (value >>> 15), value | 1)
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61)
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296
+  }
 }
 
 export class ArenaMatchEngine {
@@ -129,6 +145,7 @@ export class ArenaMatchEngine {
   private pile3Round1: GFRound | null = null
   private gfRevealedCardIds = new Map<string, string[]>()
   private lastGFCallReveal: ArenaMatchSnapshotDetail['lastGFCallReveal'] = null
+  private lastGFAction: ArenaMatchSnapshotDetail['lastGFAction'] = null
   private heldCardIds = new Map<string, Set<string>>()
   private lastArrangement = new Map<string, ArenaArrangement>()
   private lockedArrangements = new Map<string, ArenaArrangement>()
@@ -265,6 +282,7 @@ export class ArenaMatchEngine {
       pile3Round1: this.pile3Round1,
       gfRevealedCardIds: Object.fromEntries([...this.gfRevealedCardIds.entries()].map(([id, cards]) => [id, [...cards]])),
       lastGFCallReveal: this.lastGFCallReveal ? { ...this.lastGFCallReveal, cards: [...this.lastGFCallReveal.cards] } : null,
+      lastGFAction: this.lastGFAction ? { ...this.lastGFAction, cards: [...this.lastGFAction.cards] } : null,
       actedActorIds: [...this.phaseActions.keys()],
       heldCardIds: Object.fromEntries([...this.heldCardIds.entries()].map(([actorId, ids]) => [actorId, [...ids]])),
       lastArrangements: Object.fromEntries(this.lastArrangement.entries()),
@@ -357,13 +375,15 @@ export class ArenaMatchEngine {
 
   private applyAction(action: ArenaMatchAction, now: number): void {
     if (action.type === 'GF_ACTION') {
+      const pile = this.gfRound!.pile
+      const round = this.gfRound!.round
+      let cards: string[] = []
       if (action.decision === 'CALL') {
-        const pile = this.gfRound!.pile
-        const round = this.gfRound!.round
-        const cards = this.recordGFRevealedCards(action.actorId, action.revealCardIds)
+        cards = this.recordGFRevealedCards(action.actorId, action.revealCardIds)
         this.lastGFCallReveal = { actionId: action.actionId, actorId: action.actorId, pile, round, cards }
       }
       else if (action.revealCardIds?.length) throw new Error('ARENA_GF_FOLD_CANNOT_REVEAL_CARDS')
+      this.lastGFAction = { actionId: action.actionId, actorId: action.actorId, pile, round, decision: action.decision, cards }
       this.gfRound = recordGFAction(this.gfRound!, action.actorId, action.decision)
       // เก็บสถิติ Call/Fold ของ Human ไว้ให้ Soren ปรับ bias ข้ามเกมในแมตช์เดียวกัน (ดู arenaSorenPersonality.ts)
       if (this.humanActorIds.includes(action.actorId)) this.sorenStats = recordHumanGfDecision(this.sorenStats, action.decision)
@@ -615,31 +635,51 @@ export class ArenaMatchEngine {
     this.heldCardsFor(botActorId).forEach(card => known.add(arenaCardKey(card)))
     ;[...this.deal.community.pile1, ...this.deal.community.pile2, ...this.deal.community.pile3].forEach(card => known.add(arenaCardKey(card)))
     known.add(arenaCardKey(this.deal.auction.faceUp))
-    this.deal.auction.blind.forEach(card => known.add(arenaCardKey(card)))
     if (this.pile1WinnerId) this.lockedArrangements.get(this.pile1WinnerId)?.pile1.forEach(id => known.add(id))
     if (pile === 3 && this.pile2WinnerId && this.pile2Revealed) this.lockedArrangements.get(this.pile2WinnerId)?.pile2.forEach(id => known.add(id))
+
+    const revealedByOpponent = new Map<string, ArenaCard[]>()
+    for (const opponentId of contenders) {
+      const cards = (this.gfRevealedCardIds.get(opponentId) ?? [])
+        .map(id => this.dealCardsById.get(id))
+        .filter((card): card is ArenaCard => !!card)
+      cards.forEach(card => known.add(arenaCardKey(card)))
+      revealedByOpponent.set(opponentId, cards)
+    }
 
     const unseen = [...this.dealCardsById.entries()]
       .filter(([id]) => !known.has(id))
       .map(([, card]) => card)
-      .sort((a, b) => dangerValue(b) - dangerValue(a))
 
     const pileSize = pile === 2 ? 3 : 5
     const community = pile === 2 ? this.deal.community.pile2 : this.deal.community.pile3
-    const worstCaseHand = unseen.length >= pileSize ? evaluatePileBest(unseen.slice(0, pileSize), community) : null
+    const requiredUnknown = contenders.reduce((sum, id) => sum + Math.max(0, pileSize - (revealedByOpponent.get(id)?.length ?? 0)), 0)
+    if (unseen.length < requiredUnknown) return 0.5
+    const publicState = contenders.flatMap(id => [id, ...(this.gfRevealedCardIds.get(id) ?? [])]).join(',')
+    const random = deterministicRandom(`${this.matchId}:${this.gameNumber}:${pile}:${this.gfRound.round}:${botActorId}:${publicState}`)
+    let equity = 0
 
-    let safeCount = 0
-    for (const oppId of contenders) {
-      let threat = worstCaseHand
-      // known lower bound ของคู่แข่งคนนี้เอง (ถ้ากองก่อนหน้าของเขาเปิดเผยจริง) — เอาตัวที่แรงกว่าไปเทียบ
-      const lowerBoundPile: 1 | 2 | null = pile === 2 && oppId === this.pile1WinnerId ? 1 : pile === 3 && oppId === this.pile2WinnerId && this.pile2Revealed ? 2 : null
-      if (lowerBoundPile) {
-        const lowerBound = this.pileHandFor(oppId, lowerBoundPile)
-        if (lowerBound && (!threat || compareArenaHands(lowerBound, threat) > 0)) threat = lowerBound
+    for (let sample = 0; sample < ARENA_EQUITY_SAMPLES; sample++) {
+      const pool = [...unseen]
+      for (let index = 0; index < requiredUnknown; index++) {
+        const swapIndex = index + Math.floor(random() * (pool.length - index))
+        ;[pool[index], pool[swapIndex]] = [pool[swapIndex], pool[index]]
       }
-      if (!threat || compareArenaHands(threat, myHand) <= 0) safeCount++
+      let cursor = 0
+      let beaten = false
+      let ties = 0
+      for (const opponentId of contenders) {
+        const revealed = revealedByOpponent.get(opponentId) ?? []
+        const missing = pileSize - revealed.length
+        const sampledHand = [...revealed, ...pool.slice(cursor, cursor + missing)]
+        cursor += missing
+        const comparison = compareArenaHands(evaluatePileBest(sampledHand, community), myHand)
+        if (comparison > 0) { beaten = true; break }
+        if (comparison === 0) ties++
+      }
+      if (!beaten) equity += 1 / (ties + 1)
     }
-    return safeCount / contenders.length
+    return equity / ARENA_EQUITY_SAMPLES
   }
 
   private payoutPile(pile: ArenaPile, winnerId: string | null): void {
@@ -688,7 +728,7 @@ export class ArenaMatchEngine {
   private startGame(now: number): void {
     this.gameNumber = (this.gameNumber + 1) as 1 | 2 | 3
     this.deal = null; this.dealCardsById.clear(); this.faceUpWinnerId = null; this.jokerOwnerId = null
-    this.jokerDeclaration = null; this.gfRound = null; this.pile3Round1 = null; this.gfRevealedCardIds.clear(); this.lastGFCallReveal = null; this.auctionWinnerIds.clear(); this.blindAuctionResults = []
+    this.jokerDeclaration = null; this.gfRound = null; this.pile3Round1 = null; this.gfRevealedCardIds.clear(); this.lastGFCallReveal = null; this.lastGFAction = null; this.auctionWinnerIds.clear(); this.blindAuctionResults = []
     this.heldCardIds.clear(); this.lastArrangement.clear(); this.lockedArrangements.clear(); this.fouled.clear()
     this.pile1WinnerId = null; this.pile2WinnerId = null; this.pile3WinnerId = null
     this.pile2Revealed = false; this.pile3Revealed = false; this.jokerAnteX2Applied = false

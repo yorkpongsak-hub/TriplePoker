@@ -25,13 +25,13 @@ describe('driveBots - บอท/AI ต้องเดินเกมได้จ
     const match = { engine, connections, composition: allAiComposition }
     let now = 1
     let ticks = 0
-    while (!engine.snapshot().completed && ticks++ < 200) {
+    while (!engine.snapshot().completed && ticks++ < 320) {
       driveBots(match, now)
       engine.tick(now)
       now += 1_000
     }
     expect(engine.snapshot()).toMatchObject({ phase: 'MATCH_RESULT', gameNumber: 3, completed: true })
-    expect(ticks).toBeLessThan(200)
+    expect(ticks).toBeLessThan(320)
     expect(engine.eventLog().filter(event => event.kind === 'DEFAULT_ACTION' && event.detail?.type === 'DISCARD')).toHaveLength(0)
   })
 
@@ -58,7 +58,7 @@ describe('driveBots - บอท/AI ต้องเดินเกมได้จ
     const match = { engine, connections, composition }
     let now = 9_000
     let ticks = 0
-    while (!engine.snapshot().completed && ticks++ < 200) {
+    while (!engine.snapshot().completed && ticks++ < 320) {
       driveBots(match, now)
       engine.tick(now)
       now += 1_000

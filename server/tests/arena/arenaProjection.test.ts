@@ -241,7 +241,18 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
       cards: expect.any(Array),
     })
     expect(view.callReveal?.cards).toHaveLength(2)
+    expect(view.gfAction).toMatchObject({ id: finalActionId, decision: 'CALL', pile: 2, round: 1, cards: view.callReveal?.cards })
     expect(view.reveal?.pile).toBe(2)
+  })
+
+  test('Fold is projected as a visible Grand Finale action without exposing cards', () => {
+    const engine = new ArenaMatchEngine('m-pile2-fold-event', composition, createSeededRandom(37), 0)
+    driveTo(engine, 'GF_PILE_2')
+    const actorId = engine.snapshot().pendingActorIds[0]
+    engine.submit({ type: 'GF_ACTION', actionId: 'p2-visible-fold', actorId, decision: 'FOLD' }, 10)
+    const view = projectArenaClientSnapshot(engine, composition, new ArenaConnectionManager(['p1', 'p2', 'p3']), 'p1', 11, new Map())
+    expect(view.gfAction).toMatchObject({ id: 'p2-visible-fold', decision: 'FOLD', pile: 2, round: 1, cards: [] })
+    expect(view.callReveal?.id).not.toBe('p2-visible-fold')
   })
 
   test('avatar: Human ใช้ preset key จริงจาก identities (fallback ว่างถ้าไม่มีข้อมูล), AI ใช้สัญลักษณ์ตัวอักษรเดิม', () => {

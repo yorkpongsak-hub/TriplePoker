@@ -51,9 +51,9 @@ export function driveBots(match: ArenaRuntimeMatch, now: number): void {
     if (['GF_PILE_2', 'GF_PILE_3_ROUND_1', 'GF_PILE_3_ROUND_2'].includes(snapshot.phase)) {
       const duration = arenaPhaseTimeoutMs[snapshot.phase as 'GF_PILE_2' | 'GF_PILE_3_ROUND_1' | 'GF_PILE_3_ROUND_2']
       const turnStartedAt = (snapshot.deadlineAt ?? now + duration) - duration
-      // Expose each AI/Boss as CURRENT before it acts, like Mastermind's
-      // grand_finale_turn + thinking delay. Human turns retain the full 15s.
-      if (now - turnStartedAt < 1_500) return
+      // Keep the active seat visible long enough to read, matching the
+      // Mastermind Grand Finale rhythm. Human turns retain the full 15s.
+      if (now - turnStartedAt < 3_500) return
     }
     try {
       const deal = match.engine.currentDeal()
