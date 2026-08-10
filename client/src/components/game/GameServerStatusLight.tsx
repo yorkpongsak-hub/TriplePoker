@@ -44,7 +44,7 @@ export default function GameServerStatusLight({ socketRef, online, compact = fal
       pointerEvents="none"
       accessibilityRole="text"
       accessibilityLabel={connected ? 'Game server online' : 'Game server offline'}
-      style={[styles.wrap, { bottom: Math.max(10, insets.bottom + 8) }, compact && styles.wrapCompact]}
+      style={[styles.wrap, { bottom: Math.max(60, insets.bottom + 58) }, compact && styles.wrapCompact]}
     >
       <Animated.View style={[styles.glow, { backgroundColor: color, opacity: pulse, transform: [{ scale: pulse.interpolate({ inputRange: [0.35, 1], outputRange: [0.82, 1.18] }) }] }]} />
       <View style={[styles.dot, { backgroundColor: color, borderColor: connected ? '#B8FFCB' : '#FFC1C1' }]} />
