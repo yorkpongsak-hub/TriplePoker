@@ -34,6 +34,16 @@ async function authenticate(token: unknown): Promise<ArenaIdentity> {
 
 function roomName(matchId: string): string { return `arena:${matchId}` }
 
+// สุ่มค่าคงที่ต่อ "ตา" นั้นๆ ล้วนๆ (deterministic ต่อ input เดิม ไม่ใช่ Math.random() ที่เปลี่ยนทุก tick) ให้
+// AI ระหว่าง GF_PILE_2/3 "คิดนาน" ใกล้เคียง Mastermind's grand_finale_turn (สุ่ม 7-10s จากงบ ~10s) — สเกลตามงบ
+// 15s ของ Arena ไม่ต้องใช้ crypto hash จริง แค่ให้กระจายพอดูเป็นธรรมชาติและเสถียรตลอดตานั้น (คำนวณซ้ำทุก tick
+// จาก input เดิมต้องได้ค่าเดิมเสมอ ไม่งั้นเงื่อนไข now - turnStartedAt < thinkMs จะแกว่ง)
+function stableRangeMs(seed: string, min: number, max: number): number {
+  let hash = 0
+  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0
+  return min + (hash % (max - min))
+}
+
 // บอท/AI ที่ pending ต้องตอบสนองทันที ไม่ใช่รอ applyDefaults() จนหมดเวลา phase timeout
 // arrangement คำนวณจริงจากไพ่ที่ actor นั้นถืออยู่ ณ ขณะนั้น (ไม่ใช่ placeholder อีกต่อไป)
 export function driveBots(match: ArenaRuntimeMatch, now: number): void {
@@ -50,9 +60,11 @@ export function driveBots(match: ArenaRuntimeMatch, now: number): void {
     if (['GF_PILE_2', 'GF_PILE_3_ROUND_1', 'GF_PILE_3_ROUND_2'].includes(snapshot.phase)) {
       const duration = arenaPhaseTimeoutMs[snapshot.phase as 'GF_PILE_2' | 'GF_PILE_3_ROUND_1' | 'GF_PILE_3_ROUND_2']
       const turnStartedAt = (snapshot.deadlineAt ?? now + duration) - duration
-      // Expose each AI/Boss as CURRENT before it acts, like Mastermind's
-      // grand_finale_turn + thinking delay. Human turns retain the full 15s.
-      if (now - turnStartedAt < 1_500) return
+      // Expose each AI/Boss as CURRENT before it acts, like Mastermind's grand_finale_turn + thinking delay
+      // (มติลุงเยาะ: เดิม fix 1500ms สั้นเกิน ดูเหมือนบอทตอบทันที ไม่มีเวลาให้ผู้เล่นเห็น countdown เลย —
+      // ขยับให้ใกล้เคียงสัดส่วนของ Mastermind (สุ่ม 7-10s จากงบ ~10s) สเกลตามงบ 15s ของ Arena)
+      const thinkMs = stableRangeMs(`${match.engine.matchId}:${snapshot.phase}:${botActorId}:${turnStartedAt}`, 8_000, 12_000)
+      if (now - turnStartedAt < thinkMs) return
     }
     try {
       const deal = match.engine.currentDeal()

@@ -589,17 +589,27 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
     const gfRevealedCards = gfPlayer?.revealedCards ?? []
     const gfPileActive = !!snapshot.gfTable
     const gfPrivateCardCount = snapshot.gfTable?.pile === 2 ? 3 : 5
+    // ผู้เล่นอื่นที่ Fold ระหว่างรอบ Call/Fold ที่กำลังเล่นอยู่ (ไม่ใช่ตอนกองจบแล้ว — นั่นคือ ResolvedCardStack
+    // ที่ center board) ต้องเห็นไพ่คว่ำซ้อนกันทันทีที่ที่นั่งเขาเอง บอกว่า "ยอมแพ้รอบนี้แล้ว" ไม่ใช่ FanHand ตามปกติ
+    const gfFolded = gfPileActive && gfPlayer?.status === 'FOLDED'
     const hand = (
       <View style={side && (placement === 'left' ? styles.rotateLeft : styles.rotateRight)}>
-        <FanHand
-          cards={gfPileActive ? gfRevealedCards : visibleCards}
-          cardCount={gfPileActive ? gfPrivateCardCount : visibleCardCount}
-          faceUp={seat.isLocal || gfPileActive}
-          compact={!seat.isLocal}
-          width={seat.isLocal ? Math.min(width * 0.7, 420) : 190}
-          disabled={!seat.isLocal}
-          onCardPress={cardId => onIntent({ type: 'SELECT_CARD', cardId })}
-        />
+        {gfFolded ? (
+          <View style={styles.gfFoldedStack}>
+            <CardBackStack count={gfPrivateCardCount} offset={10} />
+            <Text style={styles.gfFoldedLabel}>FOLDED</Text>
+          </View>
+        ) : (
+          <FanHand
+            cards={gfPileActive ? gfRevealedCards : visibleCards}
+            cardCount={gfPileActive ? gfPrivateCardCount : visibleCardCount}
+            faceUp={seat.isLocal || gfPileActive}
+            compact={!seat.isLocal}
+            width={seat.isLocal ? Math.min(width * 0.7, 420) : 190}
+            disabled={!seat.isLocal}
+            onCardPress={cardId => onIntent({ type: 'SELECT_CARD', cardId })}
+          />
+        )}
       </View>
     )
     // มติลุงเยาะ: ไพ่ในมือ P1 (ตัวเอง) ต้องอยู่เหนือรายชื่อ/Avatar เสมอ ห่างจากขอบล่างไพ่ไม่น้อยกว่า 30px —
@@ -634,7 +644,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
             <Text style={styles.phase}>GAME {snapshot.gameNumber}/3  |  {snapshot.phase.replaceAll('_', ' ')}</Text>
           </View>
           <View style={[styles.timer, seconds !== null && seconds <= 3 && styles.timerDanger]}>
-            <Text style={styles.timerText}>{snapshot.gfTable?.currentSeat ? `S${snapshot.gfTable.currentSeat}` : seconds === null ? '--' : seconds}</Text>
+            <Text style={styles.timerText}>{seconds === null ? '--' : seconds}</Text>
           </View>
         </View>
 
@@ -802,6 +812,8 @@ const styles = StyleSheet.create({
   discardZone: { position: 'absolute', right: 8, bottom: '25%', zIndex: 32, alignItems: 'center' },
   zoneLabel: { color: '#C8C4B0', fontSize: 6, fontWeight: '900', letterSpacing: 0.6, marginBottom: 3 },
   zoneStackCard: { position: 'absolute', left: 0, width: STACK_CARD_W, height: STACK_CARD_H, borderRadius: 3, borderWidth: 1, borderColor: 'rgba(255,215,106,0.45)', backgroundColor: '#091808' },
+  gfFoldedStack: { alignItems: 'center', gap: 3 },
+  gfFoldedLabel: { color: '#FF6B6B', fontSize: 8, fontWeight: '900', letterSpacing: 0.6 },
   crownPosition: { position: 'absolute', left: 8, top: 8, zIndex: 30 },
   seat: { position: 'absolute', alignItems: 'center', zIndex: 10 },
   top: { top: 4, alignSelf: 'center' },
