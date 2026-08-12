@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, BackHandler, Image, ImageBackground, Platform, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View, ViewStyle } from 'react-native'
+import { Alert, Image, ImageBackground, Platform, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View, ViewStyle } from 'react-native'
 import Animated, { Easing, SharedValue, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated'
 import { router } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { io, Socket } from 'socket.io-client'
+import { requestGameResume } from '../../../src/services/gameResumeProtocol'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useAuthStore } from '../../../src/store/authStore'
 import Card, { Suit, Value } from '../../../src/components/game/Card'
@@ -12,10 +13,13 @@ import VipPlusAuctionOverlay from '../../../src/components/game/VipPlusAuctionOv
 import MatchEndOverlay from '../../../src/components/game/MatchEndOverlay'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
 import { useTableSkins } from '../../../src/hooks/useTableSkins'
+import { useConfirmTableExit } from '../../../src/hooks/useConfirmTableExit'
 import { TABLE_SKINS } from '../../../src/config/tableSkins'
 import BossVictoryVFX from '../../../src/components/vfx/BossVictoryVFX'
+import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
 import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/game/FlyingCoins'
 import { AvatarDisplay, PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
+import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 const TABLE_IMAGE = require('../../../assets/images/table_default.png')
@@ -200,6 +204,7 @@ export default function VipPlusTableScreen() {
   const [showPrivateAuctionCard, setShowPrivateAuctionCard] = useState(false)
   const [matchResult, setMatchResult] = useState<MatchResult | null>(null)
   const [showVictoryVfx, setShowVictoryVfx] = useState(false)
+  const [royalFlushPlayer, setRoyalFlushPlayer] = useState<string | null>(null)
   const [hostToast, setHostToast] = useState(false)
   // ใบที่ P1 เลือกไว้ว่าจะหงายตอนกด CALL รอบเดิมพันปัจจุบัน — reset ทุกครั้งที่ถึงตาใหม่/CALL สำเร็จ
   // เป็น array เพราะ G3 รอบแรก (groupRound 1) ต้องหงายมากกว่า 1 ใบ (ดู requiredRevealCount)
@@ -231,7 +236,13 @@ export default function VipPlusTableScreen() {
       const storedTableId = activeTableIdRef.current ?? await AsyncStorage.getItem(ACTIVE_MATCH_KEY)
       if (storedTableId) {
         activeTableIdRef.current = storedTableId
-        socket.emit('vip_plus:resume_match', { ...authPayload(), tableId: storedTableId })
+        const auth = authPayload()
+        requestGameResume(socket, {
+          roomId: storedTableId,
+          userId: auth.userId,
+          accessToken: auth.accessToken,
+          matchType: 'VIP_PLUS',
+        })
       }
     })
     socket.on('vip_plus:tables', (next: WaitingTable[]) => setTables(next))
@@ -328,7 +339,7 @@ export default function VipPlusTableScreen() {
     })
     socket.on('vip_plus:group_settled', (data: {
       gameNumber: number; group: number; winnerSeat: Seat | null; winnerHandName: string | null
-      winningCards: string[]; highlightedCards?: string[]; payout: number; tokenBalance: Partial<Record<Seat, number>>
+      winnerDisplayName?: string | null; winningCards: string[]; highlightedCards?: string[]; payout: number; tokenBalance: Partial<Record<Seat, number>>
     }) => {
       setGame(prev => ({ ...prev, balances: data.tokenBalance }))
       // Feedback ลุงเยาะ (เทสมือถือรอบ 1, ปรับรอบ 3: 10วิ->6วิ) — server หน่วงจริง resultDisplayMs (6 วิ)
@@ -337,6 +348,9 @@ export default function VipPlusTableScreen() {
       // safety net เฉยๆ เผื่อ event ถัดไปมาช้าผิดปกติ — ต้องตรงกับ gameConfig.vipPlus5.resultDisplayMs เสมอ
       // เฉพาะตอนมีผู้ชนะจริง (all-fold ทั้งกอง winnerSeat เป็น null ไม่มีอะไรให้ฉลอง)
       if (data.winnerSeat && data.winnerHandName) {
+        if (String(data.winnerHandName).toLowerCase().replace(/[ _-]/g, '') === 'royalflush') {
+          setRoyalFlushPlayer(data.winnerDisplayName ?? data.winnerSeat)
+        }
         setRoundResultBanner({
           group: data.group, seat: data.winnerSeat, handName: data.winnerHandName, cards: data.winningCards,
           // มติลุงเยาะ (รอบ 10) — fallback เป็น cards ทั้งชุด (blink ทุกใบ) เผื่อ server รุ่นเก่าที่ยังไม่ส่ง
@@ -490,21 +504,23 @@ export default function VipPlusTableScreen() {
     setTable(null); setSelfSeat(null); setScreen('BROWSER')
   }
 
-  // Batch 1 (VIP-05 fix, C1) — hardware back / gesture back ระหว่าง Waiting Chamber ต้องปล่อยที่นั่งเสมอ
-  // (BROWSER ยังไม่มีที่นั่งให้ปล่อย ปล่อยให้ default back ทำงานตามปกติ, GAME อยู่นอกขอบเขต Batch นี้
-  // ต้องใช้ FORFEIT เท่านั้นตามระบบเดิม)
-  useEffect(() => {
-    if (Platform.OS !== 'android') return
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (screen === 'WAITING' && table) {
+  // Hardware Back is protected only after the player has taken a seat.
+  // Waiting releases the seat; an active game uses the existing forfeit protocol.
+  useConfirmTableExit({
+    enabled: screen !== 'BROWSER' && !!table,
+    onConfirm: () => {
+      if (!table) return
+      if (screen === 'WAITING') {
         leave()
-        router.back()
-        return true
+      } else {
+        hasLeftRef.current = true
+        socketRef.current?.emit('vip_plus:forfeit', { ...authPayload(), tableId: table.tableId })
+        activeTableIdRef.current = null
+        AsyncStorage.removeItem(ACTIVE_MATCH_KEY).catch(() => {})
       }
-      return false
-    })
-    return () => subscription.remove()
-  }, [screen, table])
+      router.replace('/(home)/lobby' as any)
+    },
+  })
 
   const forfeit = () => {
     if (!table) return
@@ -650,6 +666,7 @@ export default function VipPlusTableScreen() {
   const isMyTurn = game.actingSeat === selfSeat
   return (
     <ImageBackground source={selectedTableImage} style={s.gameRoot} resizeMode="cover">
+      <GameServerStatusLight socketRef={socketRef} />
       <GameTopBar
         tierName="VIP PLUS" tierStars={4} round={game.gameNumber} totalRounds={3}
         isWeb={Platform.OS === 'web'} insetsTop={insets.top} opacity={1}
@@ -860,6 +877,7 @@ export default function VipPlusTableScreen() {
           <BossVictoryVFX tier="sentinel" titleOverride="MATCH VICTORY" onFinish={() => setShowVictoryVfx(false)} />
         </View>
       )}
+      {royalFlushPlayer && <RoyalStraightFlushVFX playerName={royalFlushPlayer} onClose={() => setRoyalFlushPlayer(null)} />}
     </ImageBackground>
   )
 }

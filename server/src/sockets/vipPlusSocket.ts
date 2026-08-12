@@ -1,4 +1,5 @@
 import { Server, Socket } from 'socket.io'
+import { GAME_RESUME_EVENT, GAME_RESUME_RESULT_EVENT, isGameResumeRequest } from './gameResumeProtocol'
 import { supabase, supabaseAdmin } from '../config/supabase'
 import { gameConfig } from '../config/gameConfig'
 import { getVipPlusAccess } from '../game/vipPlusAccess'
@@ -54,6 +55,24 @@ async function finalEntryRecheck(tableId: string): Promise<void> {
 }
 
 export function registerVipPlusSocket(io: Server, socket: Socket): void {
+  socket.on(GAME_RESUME_EVENT, async (request: unknown) => {
+    if (!isGameResumeRequest(request) || request.matchType !== 'VIP_PLUS') return
+    const profile = await authenticateProfile(request.userId, request.accessToken)
+    if (!profile) {
+      socket.emit(GAME_RESUME_RESULT_EVENT, { ok: false, status: 'UNAUTHORIZED', roomId: request.roomId, matchType: request.matchType })
+      return
+    }
+    const snapshot = buildVipPlusSnapshot(request.roomId, profile.playerId)
+    if (!snapshot) {
+      socket.emit(GAME_RESUME_RESULT_EVENT, { ok: false, status: 'MATCH_NOT_FOUND', roomId: request.roomId, matchType: request.matchType })
+      return
+    }
+    socket.join(request.roomId); socket.join(profile.playerId)
+    vipPlusSocketPlayers.set(socket.id, { playerId: profile.playerId, tableId: request.roomId })
+    markVipPlusConnected(request.roomId, profile.playerId)
+    socket.emit('vip_plus:match_snapshot', snapshot)
+    socket.emit(GAME_RESUME_RESULT_EVENT, { ok: true, status: 'RESUMED', roomId: request.roomId, matchType: request.matchType })
+  })
   attachVipPlusBettingIo(io)
   // Batch 1 (VIP-05 fix) — sweeper ปล่อยที่นั่ง Waiting Chamber ที่หลุดเกิน grace (C2/C7)
   // startSweeper() เป็น idempotent เรียกซ้ำได้ทุก connection โดยไม่สร้าง interval ซ้ำ

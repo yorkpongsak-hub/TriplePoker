@@ -13,7 +13,8 @@ const VALID_TIERS = ['initiate', 'adept', 'mastermind', 'highNoble', 'grandmaste
 
 export async function profileRoutes(app: FastifyInstance) {
 
-  // บันทึกเวลาล่าสุดทุกครั้งที่ผู้เล่นเปิดหน้า Profile โดยยืนยันตัวตนและใช้เวลาจากฝั่ง Server
+  // Record the first game visit of each Bangkok calendar day. The conditional
+  // update is atomic, so multiple devices cannot write repeatedly on the same day.
   app.post('/profile/touch-last-login', async (request, reply) => {
     const token = request.headers.authorization?.replace('Bearer ', '')
     if (!token) return reply.status(401).send({ error: 'Unauthorized' })
@@ -22,16 +23,20 @@ export async function profileRoutes(app: FastifyInstance) {
     if (authError || !authData.user) return reply.status(401).send({ error: 'Invalid token' })
 
     const lastLoginAt = new Date().toISOString()
+    const bangkokNow = new Date(Date.now() + 7 * 60 * 60 * 1000)
+    const bangkokDayStartUtc = new Date(Date.UTC(
+      bangkokNow.getUTCFullYear(), bangkokNow.getUTCMonth(), bangkokNow.getUTCDate(), -7,
+    )).toISOString()
     const { data: updated, error: updateError } = await supabaseAdmin
       .from('users')
       .update({ last_login: lastLoginAt })
       .eq('user_id', authData.user.id)
+      .or(`last_login.is.null,last_login.lt.${bangkokDayStartUtc}`)
       .select('last_login')
       .maybeSingle()
 
     if (updateError) return reply.status(500).send({ error: 'DB_ERROR' })
-    if (!updated) return reply.status(404).send({ error: 'USER_NOT_FOUND' })
-    return reply.send({ success: true, lastLoginAt: updated.last_login })
+    return reply.send({ success: true, updated: !!updated, lastLoginAt: updated?.last_login ?? null })
   })
 
   app.post<{ Body: { path?: string } }>('/profile/beyond-path', async (request, reply) => {

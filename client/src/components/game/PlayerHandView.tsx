@@ -44,6 +44,7 @@ export interface PlayerHandViewProps {
   // มติลุงเยาะ 2026-08-04: ขยายมุมกางพัดไพ่เฉพาะ VIP mode (default 1 = ไม่กระทบ Tier ที่ไม่ส่ง prop
   // นี้เลย — opt-in เหมือน pattern leftSlot ของ GameTopBar) ไม่แตะ Free mode/exposed calc
   handFanAngleScale?: number
+  discardMarked?: { pi: number; ci: number } | null
 }
 
 // ── ค่าคงที่ layout ──
@@ -138,10 +139,10 @@ function computeLayout(screenW: number, pileSizes: number[], target: LayoutTarge
 
 // ── ไพ่ 1 ใบในโหมด Free (แถวตรง overlap) ──
 const FreeCard: React.FC<{
-  code: string; first: boolean; selected: boolean; onPress: () => void
+  code: string; first: boolean; selected: boolean; discardMarked: boolean; onPress: () => void
   cw: number; ch: number; overlapML: number; zIndex: number
   images: Record<string, any>
-}> = ({ code, first, selected, onPress, cw, ch, overlapML, zIndex, images }) => (
+}> = ({ code, first, selected, discardMarked, onPress, cw, ch, overlapML, zIndex, images }) => (
   <Pressable
     onPress={onPress}
     style={[
@@ -155,6 +156,7 @@ const FreeCard: React.FC<{
     {images[code]
       ? <Image source={images[code]} style={{ width: cw, height: ch }} resizeMode="cover" />
       : <Text style={styles.fallbackTxt}>{code}</Text>}
+    {discardMarked && <View pointerEvents="none" style={styles.discardMark}><Text style={styles.discardMarkText}>×</Text></View>}
   </Pressable>
 )
 
@@ -163,11 +165,11 @@ const FreeCard: React.FC<{
 // transform 3 ชั้น (translateY(R) → rotate → translateY(-R)) หมุนรอบจุดหมุนสมมติที่อยู่ R px ใต้ตัวการ์ด
 // เป็นตัวกวาดแต่ละใบออกเป็นพัดจริง (แทน marginLeft คงที่ + rotate รอบจุดศูนย์กลางตัวเองแบบเดิม)
 const FanCard: React.FC<{
-  code: string; selected: boolean; onPress: () => void
+  code: string; selected: boolean; discardMarked: boolean; onPress: () => void
   cw: number; ch: number; zIndex: number
   angleDeg: number; R: number; left: number; top: number
   images: Record<string, any>
-}> = ({ code, selected, onPress, cw, ch, zIndex, angleDeg, R, left, top, images }) => {
+}> = ({ code, selected, discardMarked, onPress, cw, ch, zIndex, angleDeg, R, left, top, images }) => {
   const lift = useSharedValue(0)
   // เด้งขึ้นตอนถูกเลือก (Reanimated v4 — withTiming)
   useEffect(() => {
@@ -204,6 +206,7 @@ const FanCard: React.FC<{
         {images[code]
           ? <Image source={images[code]} style={{ width: cw, height: ch }} resizeMode="cover" />
           : <Text style={styles.fallbackTxt}>{code}</Text>}
+        {discardMarked && <View pointerEvents="none" style={styles.discardMark}><Text style={styles.discardMarkText}>×</Text></View>}
       </Pressable>
     </AspectView>
   )
@@ -217,7 +220,8 @@ const PileColumn: React.FC<{
   cw: number; ch: number; exposed: number
   images: Record<string, any>
   fanAngleScale?: number
-}> = ({ cards, pi, isVip, selected, onCardPress, cw, ch, exposed, images, fanAngleScale = 1 }) => {
+  discardMarked?: { pi: number; ci: number } | null
+}> = ({ cards, pi, isVip, selected, onCardPress, cw, ch, exposed, images, fanAngleScale = 1, discardMarked }) => {
   const n = cards.length
   const center = n > 1 ? (n - 1) / 2 : 0
 
@@ -242,6 +246,7 @@ const PileColumn: React.FC<{
                 key={card.id}
                 code={card.key}
                 selected={isSel}
+                discardMarked={discardMarked?.pi === pi && discardMarked?.ci === ci}
                 onPress={() => onCardPress(pi, ci)}
                 cw={cw} ch={ch} zIndex={ci}
                 angleDeg={angleDeg} R={R}
@@ -268,6 +273,7 @@ const PileColumn: React.FC<{
               code={card.key}
               first={ci === 0}
               selected={isSel}
+              discardMarked={discardMarked?.pi === pi && discardMarked?.ci === ci}
               onPress={() => onCardPress(pi, ci)}
               cw={cw} ch={ch} overlapML={overlapML} zIndex={ci}
               images={images}
@@ -285,6 +291,7 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
   revealedCards,
   cardImages = CARD_IMG,
   handFanAngleScale = 1,
+  discardMarked = null,
 }) => {
   const { width: screenW } = useWindowDimensions()
 
@@ -328,6 +335,7 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
         cw={cw} ch={ch} exposed={exposed}
         images={cardImages}
         fanAngleScale={handFanAngleScale}
+        discardMarked={discardMarked}
       />
     )
 
@@ -359,6 +367,7 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
           onCardPress={onCardPress}
           cw={cw} ch={ch} exposed={exposed}
           images={cardImages}
+          discardMarked={discardMarked}
         />
       ))}
     </View>
@@ -401,6 +410,8 @@ const styles = StyleSheet.create({
   },
   cardSel:    { borderColor: '#6ec87a', borderWidth: 2, transform: [{ translateY: -10 }] },
   cardSelVip: { borderColor: '#6ec87a', borderWidth: 2 }, // เด้งทำผ่าน Reanimated แทน transform static
+  discardMark: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(52,5,5,0.24)' },
+  discardMarkText: { color: '#FF4D4D', fontSize: 42, lineHeight: 44, fontWeight: '900', textShadowColor: '#240000', textShadowRadius: 3 },
   fallbackTxt: { fontSize: 8 },
 })
 

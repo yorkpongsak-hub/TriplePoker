@@ -121,31 +121,13 @@ export default function ProfileScreen() {
   const session = useAuthStore(s => s.session) // ใช้แนบ Bearer token ตอน POST /profile/celebrate-tier
   const [activeTab, setActiveTab] = useState<TabKey>('stats')
 
-  // บันทึกเวลาเข้า Profile ก่อน แล้วจึง refetch เพื่อให้หน้าจอเห็นค่าล่าสุดจากฐานข้อมูล
+  // Profile is read-only for Last visited. Game entry updates it centrally once per day.
   useFocusEffect(
     useCallback(() => {
       let isActive = true
-
-      const syncProfileVisit = async () => {
-        const accessToken = session?.access_token
-        if (accessToken) {
-          try {
-            const response = await fetch(`${SERVER_URL}/profile/touch-last-login`, {
-              method: 'POST',
-              headers: { Authorization: `Bearer ${accessToken}` },
-            })
-            if (!response.ok) console.error('[Profile] last_login update HTTP', response.status)
-          } catch (error) {
-            console.error('[Profile] last_login update failed:', error)
-          }
-        }
-
-        if (isActive) await refreshProfile()
-      }
-
-      void syncProfileVisit()
+      if (isActive) void refreshProfile()
       return () => { isActive = false }
-    }, [refreshProfile, session?.access_token])
+    }, [refreshProfile])
   )
 
   // ─── Real data จาก authStore (fallback MOCK เผื่อ profile ยังโหลดไม่เสร็จ) ───

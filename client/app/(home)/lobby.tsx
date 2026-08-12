@@ -734,8 +734,8 @@ export default function LobbyScreen() {
             <View style={{ gap: 8 }}>
               <TouchableOpacity style={s.enterBtn} onPress={handleEnterGrandmaster}>
                 <Text style={s.enterBtnTxt}>▶ Play (Arena Auto-Match)</Text>
+                <Text style={s.enterBtnSubTxt}>2–3 Human + Boss AI</Text>
               </TouchableOpacity>
-              <Text style={s.arenaMatchComposition}>2-3 Human + Boss AI</Text>
               <Text style={s.detailText}>Required reserve: 20 Crown · Your balance: {profile?.crown_balance ?? 0} Crown</Text>
               <TouchableOpacity style={s.enterBtn} onPress={handleEnterSovereign}>
                 <Text style={s.enterBtnTxt}>♛ Sovereign Monthly Event</Text>
@@ -917,10 +917,10 @@ const s = StyleSheet.create({
 
   enterBtn: { backgroundColor: COLOR.goldPrimary, borderRadius: 8, paddingVertical: 12, alignItems: 'center', marginBottom: 12 },
   enterBtnTxt: { color: COLOR.bgPrimary, fontWeight: '700', fontSize: 13 },
+  enterBtnSubTxt: { color: COLOR.bgPrimary, fontWeight: '700', fontSize: 10, marginTop: 3, opacity: 0.78 },
   tierDetail: { ...glassPanelDense, padding: 14, marginBottom: 10 },
   detailTitle: { color: COLOR.goldPrimary, fontSize: 12, fontWeight: '800', letterSpacing: 0.5 },
   detailText: { color: COLOR.textSecondary, fontSize: 11, lineHeight: 17, marginTop: 6 },
-  arenaMatchComposition: { color: COLOR.goldDark, fontSize: 11, fontWeight: '700', textAlign: 'center', marginTop: -3 },
   liveSetting: { ...glassPanel, padding: 12, marginBottom: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
   privateActions: { flexDirection: 'row', gap: 8, marginBottom: 12 },
   privateBtn: { flex: 1, borderWidth: 1, borderColor: COLOR.goldPrimary, backgroundColor: 'rgba(255,215,106,0.08)', borderRadius: 8, paddingVertical: 10, alignItems: 'center' },

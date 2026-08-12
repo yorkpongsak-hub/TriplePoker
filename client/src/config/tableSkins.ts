@@ -11,5 +11,5 @@ export const TABLE_SKIN_META = [
   { id: 1, name: 'Marble Luxury', unlock: 'VIP membership' },
   { id: 2, name: 'Ancient Stone', unlock: 'Reach Adept' },
   { id: 3, name: 'Cosmic Mystical', unlock: 'Reach Mastermind' },
-  { id: 4, name: 'Bamboo Dynasty', unlock: 'Reach High Noble' },
+  { id: 4, name: 'Grand Hall', unlock: 'Reach High Noble' },
 ] as const

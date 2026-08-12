@@ -1,4 +1,5 @@
 import { Server, Socket } from 'socket.io'
+import { GAME_RESUME_EVENT, GAME_RESUME_RESULT_EVENT, isGameResumeRequest } from '../../sockets/gameResumeProtocol'
 import { supabase, supabaseAdmin } from '../../config/supabase'
 import { awardPerformanceScore } from '../../game/psEngine'
 import { recordMatchWin } from '../../game/matchWinsService'
@@ -50,9 +51,9 @@ export function driveBots(match: ArenaRuntimeMatch, now: number): void {
     if (['GF_PILE_2', 'GF_PILE_3_ROUND_1', 'GF_PILE_3_ROUND_2'].includes(snapshot.phase)) {
       const duration = arenaPhaseTimeoutMs[snapshot.phase as 'GF_PILE_2' | 'GF_PILE_3_ROUND_1' | 'GF_PILE_3_ROUND_2']
       const turnStartedAt = (snapshot.deadlineAt ?? now + duration) - duration
-      // Expose each AI/Boss as CURRENT before it acts, like Mastermind's
-      // grand_finale_turn + thinking delay. Human turns retain the full 15s.
-      if (now - turnStartedAt < 1_500) return
+      // Keep the active seat visible long enough to read, matching the
+      // Mastermind Grand Finale rhythm. Human turns retain the full 15s.
+      if (now - turnStartedAt < 3_500) return
     }
     try {
       const deal = match.engine.currentDeal()
@@ -257,6 +258,21 @@ export function registerArenaSocket(io: Server): void {
 
   arena.on('connection', (socket: Socket<any, any, any, ArenaSocketData>) => {
     const identity = socket.data.identity
+    socket.on(GAME_RESUME_EVENT, (request: unknown) => {
+      if (!isGameResumeRequest(request) || request.matchType !== 'ARENA') return
+      if (request.userId !== identity.playerId) {
+        socket.emit(GAME_RESUME_RESULT_EVENT, { ok: false, status: 'UNAUTHORIZED', roomId: request.roomId, matchType: request.matchType }); return
+      }
+      const match = runtime.matchForPlayer(identity.playerId)
+      if (!match || match.engine.matchId !== request.roomId) {
+        socket.emit(GAME_RESUME_RESULT_EVENT, { ok: false, status: 'MATCH_NOT_FOUND', roomId: request.roomId, matchType: request.matchType }); return
+      }
+      runtime.reconnect(identity.playerId)
+      socket.join(roomName(match.engine.matchId))
+      const snapshot = projectArenaClientSnapshot(match.engine, match.composition, match.connections, identity.playerId, Date.now(), identities)
+      socket.emit('arena:snapshot', snapshot)
+      socket.emit(GAME_RESUME_RESULT_EVENT, { ok: true, status: 'RESUMED', roomId: request.roomId, matchType: request.matchType, serverVersion: match.engine.snapshot().version })
+    })
     socketsByPlayer.set(identity.playerId, socket)
     identities.set(identity.playerId, { displayName: identity.displayName, avatar: identity.avatar })
 

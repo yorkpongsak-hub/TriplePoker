@@ -3,8 +3,9 @@ import { ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 're
 import { router } from 'expo-router'
 import LegendaryCardVFX from '../../src/components/vfx/LegendaryCardVFX'
 import BossVictoryVFX, { VictoryTier } from '../../src/components/vfx/BossVictoryVFX'
+import RoyalStraightFlushVFX from '../../src/components/vfx/RoyalStraightFlushVFX'
 
-type ActiveVfx = 'legendary' | VictoryTier | null
+type ActiveVfx = 'legendary' | 'royal-flush' | VictoryTier | null
 
 /** Development QA harness: trigger every full-screen victory effect without completing a match. */
 export default function VfxQaScreen() {
@@ -23,13 +24,15 @@ export default function VfxQaScreen() {
       <View style={s.setting}><Text style={s.label}>Simulate Reduce Motion</Text><Switch value={reduceMotion} onValueChange={setReduceMotion} /></View>
       <Text style={s.counter}>Completed cleanly: {completed}</Text>
       <QaButton label="Legendary Triple Sweep" color="#E8B94C" onPress={() => setActive('legendary')} />
+      <QaButton label="Royal Straight Flush" color="#FFF0B8" onPress={() => setActive('royal-flush')} />
       <QaButton label="Sentinel Victory" color="#6DD58C" onPress={() => setActive('sentinel')} />
       <QaButton label="Four Gods Victory" color="#6CA8FF" onPress={() => setActive('god')} />
       <QaButton label="Monarch Victory" color="#C68CFF" onPress={() => setActive('monarch')} />
       <QaButton label="Remount Legendary" color="#FF7D7D" onPress={() => { setActive(null); setTimeout(() => setActive('legendary'), 20) }} />
     </ScrollView>
     {active === 'legendary' && <LegendaryCardVFX reduceMotionOverride={reduceMotion} onFinish={finish} />}
-    {active && active !== 'legendary' && <BossVictoryVFX tier={active} reduceMotionOverride={reduceMotion} onFinish={finish} />}
+    {active === 'royal-flush' && <RoyalStraightFlushVFX playerName="VFX TEST PLAYER" reduceMotionOverride={reduceMotion} onClose={finish} />}
+    {active && active !== 'legendary' && active !== 'royal-flush' && <BossVictoryVFX tier={active} reduceMotionOverride={reduceMotion} onFinish={finish} />}
   </View>
 }
 

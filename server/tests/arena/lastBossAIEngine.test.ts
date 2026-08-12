@@ -30,7 +30,7 @@ describe('Tier S+ The Last Boss AI engine', () => {
     expect(checkArenaFoul(result.arrangement, new Map(hand.map(card => [card.id, card])), community).fouled).toBe(false)
   })
 
-  test('Pile 3 is ranked as Best 5 of exactly seven cards', () => {
+  test('Pile 3 chooses three private cards and requires both community cards', () => {
     const privatePile = cards('2_clubs', '3_diamonds', 'Q_spades', 'K_spades', 'A_spades')
     const board = cards('10_spades', 'J_spades')
     const result = evaluatePileBest(privatePile, board)
@@ -38,6 +38,16 @@ describe('Tier S+ The Last Boss AI engine', () => {
     expect(result.rank).toBe('royal_flush')
     expect(result.selectedCardIds).toHaveLength(5)
     expect(result.selectedCardIds).toEqual(expect.arrayContaining(['10_spades', 'J_spades', 'Q_spades', 'K_spades', 'A_spades']))
+  })
+
+  test('Pile 3 cannot ignore weak community cards to use a five-card private Royal Flush', () => {
+    const privatePile = cards('10_spades', 'J_spades', 'Q_spades', 'K_spades', 'A_spades')
+    const board = cards('2_clubs', '7_diamonds')
+    const result = evaluatePileBest(privatePile, board)
+
+    expect(result.rank).not.toBe('royal_flush')
+    expect(result.selectedCardIds).toEqual(expect.arrayContaining(['2_clubs', '7_diamonds']))
+    expect(result.selectedCardIds.filter(id => privatePile.some(card => card.id === id))).toHaveLength(3)
   })
 
   test('mandatory discard lock cannot be changed by the Boss', () => {
