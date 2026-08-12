@@ -24,6 +24,9 @@ import {
 } from './tokenFlow'
 import { getRoom } from './roomRegistry'
 import { recordMatchWin } from './matchWinsService'
+import { economyService } from '../economy/economyService'
+import { resolveNpcPoolKey } from '../economy/npcPoolResolver'
+import type { AccountRef } from '../economy/economyTypes'
 
 // ── Types ────────────────────────────────────────────────────
 export interface RoundResult {
@@ -304,8 +307,18 @@ export async function escrowBuyIn(
 // finalStack = stack ปัจจุบันตอน settle (จบแมตช์ปกติ, หลุด, หรือกด Lobby กลางเกม — Spec §4 ทั้งหมดใช้ path นี้)
 // คืนยอด token_balance ใหม่หลัง write สำเร็จ (null ถ้า error) — ให้ผู้เรียกแนบไปกับ event ที่ส่งผลแมตช์
 // ให้ client แทน ห้าม client คำนวณเองจาก buyin/stack (bug: Profile ค้างยอดเก่าเพราะ client ไม่เคยรู้ยอดจริงหลัง settle)
-export async function settleEscrow(userId: string, escrowId: string, finalStack: number): Promise<number | null> {
+export async function settleEscrow(
+  userId: string, escrowId: string, finalStack: number,
+  // Central Economy Ledger Phase 7 — ให้เฉพาะ Tier ที่ usesLedgerSettlement() คืน true (Initiate ตอนนี้)
+  // caller คำนวณ net ของ human/AI ทุกตัวมาให้พร้อมแล้ว ไม่ต้องคำนวณซ้ำในนี้ — undefined = ทุก Tier อื่น
+  // เดินพาธเดิมทุกประการ ไม่มีการเปลี่ยนแปลงพฤติกรรมเลย
+  ledger?: { tier: string; burnAmount: number; npcNets: Array<{ npcId: string; amount: number }> },
+): Promise<number | null> {
   try {
+    if (ledger && usesLedgerSettlement(ledger.tier)) {
+      return await settleEscrowViaLedger(userId, escrowId, finalStack, ledger)
+    }
+
     // P0: mark escrow + credit wallet ใน transaction เดียว ปิดเคส escrow settled แต่ wallet ไม่ได้เงิน
     const { data, error } = await supabaseAdmin.rpc('settle_match_escrow', {
       p_user_id: userId,
@@ -343,6 +356,81 @@ export async function settleEscrow(userId: string, escrowId: string, finalStack:
     console.error('[ESCROW]', Date.now(), 'Error settling escrow for', userId, err)
     return null
   }
+}
+
+// Central Economy Ledger Phase 7 — เส้นทางใหม่สำหรับ Tier ที่ usesLedgerSettlement() คืน true เท่านั้น
+// แทนที่ settle_match_escrow RPC (ที่หัก/ให้เงินตรงๆ ไม่ผ่าน Ledger เลย) ด้วย:
+//   1) economyService.settleMatchResult() — human + NPC pool ทุกตัวใน transaction เดียว (type BURN)
+//   2) UPDATE match_escrow ตรงๆ (ไม่ผ่าน RPC เดิม) แค่ mark 'settled' — ไม่แตะ token_balance อีกทาง
+//      เพราะ (1) จัดการให้แล้ว กัน human โดนหัก/ได้เงินซ้ำสองทาง (Ledger + RPC เดิม)
+// ⚠️ entry ของ human ต้องเป็น finalStack เต็มจำนวน ไม่ใช่ net (finalStack - buyIn) — buy-in ถูกหักไป
+// แล้วครั้งหนึ่งจาก begin_match_escrow (RPC เดิมที่ไม่แตะ) ถ้าใช้ net จะเท่ากับหักซ้ำ (บั๊กที่เจอจาก
+// เทสจริง 2026-08-12 — human ได้เงินคืนน้อยกว่าที่ควรพอดี 1 buy-in) burnAmount (state.feeRake) ต้องส่ง
+// แยกมาตรงๆ เพราะ entries ไม่ได้ sum เป็น -totalRake อีกต่อไปเมื่อ human ใช้ finalStack เต็ม
+async function settleEscrowViaLedger(
+  userId: string, escrowId: string, finalStack: number,
+  ledger: { tier: string; burnAmount: number; npcNets: Array<{ npcId: string; amount: number }> },
+): Promise<number | null> {
+  const entries: Array<{ account: AccountRef; netAmount: number }> = [
+    { account: { accountType: 'PLAYER' as const, accountId: userId }, netAmount: finalStack },
+    ...ledger.npcNets
+      .filter(n => n.amount !== 0)
+      .map(n => ({
+        account: { accountType: 'NPC_POOL' as const, accountId: resolveNpcPoolKey(n.npcId) },
+        netAmount: n.amount,
+      })),
+  ].filter(e => e.netAmount !== 0)
+
+  if (entries.length > 0) {
+    try {
+      await economyService.settleMatchResult({
+        idempotencyKey: `MATCH_SETTLEMENT:${escrowId}`,
+        currency: 'TOKEN',
+        entries,
+        burnAmount: ledger.burnAmount,
+        reason: 'MATCH_SETTLEMENT',
+        context: { matchId: escrowId, playerId: userId, tier: ledger.tier },
+      })
+    } catch (err) {
+      console.error('[ESCROW]', Date.now(), 'Ledger settleMatchResult failed for', escrowId, err)
+      return null
+    }
+  }
+
+  const { error: updateError } = await supabaseAdmin
+    .from('match_escrow')
+    .update({ status: 'settled', final_stack: finalStack, settled_at: new Date().toISOString() })
+    .eq('escrow_id', escrowId)
+    .eq('status', 'in_match')
+  if (updateError) {
+    console.error('[ESCROW]', Date.now(), 'Ledger settle: match_escrow update failed for', escrowId, updateError)
+    return null
+  }
+
+  const { data: userRow, error: readError } = await supabaseAdmin
+    .from('users')
+    .select('token_balance')
+    .eq('user_id', userId)
+    .single()
+  if (readError || !userRow) {
+    console.error('[ESCROW]', Date.now(), 'Ledger settle: failed to re-read token_balance for', userId, readError)
+    return null
+  }
+  const newBalance = Number(userRow.token_balance)
+  console.log('[ESCROW]', Date.now(), 'Settled via ledger', userId, '| finalStack', finalStack, '| New balance:', newBalance)
+
+  try {
+    await checkTierUnlock(userId, newBalance)
+  } catch (err) {
+    console.error('[TIER_UNLOCK] Unexpected error calling checkTierUnlock:', err, '| userId:', userId)
+  }
+  try {
+    await getAscendantStatus(userId)
+  } catch (err) {
+    console.error('[CROWN-VAULT] Unexpected error calling getAscendantStatus:', err, '| userId:', userId)
+  }
+
+  return newBalance
 }
 
 // Refund เต็มจำนวน — ใช้เฉพาะตอน escrow บาง seat ในกลุ่ม join พร้อมกันล้มเหลว (rollback seat ที่หักไปแล้วก่อนหน้า)
@@ -464,6 +552,13 @@ function getEffectiveAIConfig(state: MatchState, ai: AIConfig): AIConfig {
 type TokenFlowTier = 'initiate' | 'mastermind'
 function usesTokenFlow(tier: string): tier is TokenFlowTier {
   return tier === 'initiate' || tier === 'mastermind'
+}
+
+// Central Economy Ledger Phase 7 Round 1 — เฉพาะ Initiate เท่านั้น ขยายทีละ Tier ตามรอบถัดไป
+// (ห้ามใส่เพิ่มจนกว่าจะทำ Adept/Mastermind/HighNoble/LastBoss ตาม pattern เดียวกันในรอบต่อๆ ไป)
+type LedgerSettlementTier = 'initiate'
+function usesLedgerSettlement(tier: string): tier is LedgerSettlementTier {
+  return tier === 'initiate'
 }
 
 export async function startRound(io: Server, roomId: string): Promise<void> {
@@ -723,7 +818,14 @@ export async function submitArrangement(
     // ── Settle Escrow ครั้งเดียว (Buy-in Spec §4 — จบแมตช์ปกติ) ──
     let newTokenBalance: number | null = null
     if (state.escrowId) {
-      newTokenBalance = await settleEscrow(state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount)
+      newTokenBalance = await settleEscrow(
+        state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount,
+        usesLedgerSettlement(state.tier) ? {
+          tier: state.tier,
+          burnAmount: state.feeRake,
+          npcNets: AI_CONFIGS.map(ai => ({ npcId: ai.id, amount: (state.tokenBalance[ai.id] ?? state.buyInAmount) - state.buyInAmount })),
+        } : undefined,
+      )
     }
     // End-of-Match Stats Recording (games_played/won, xp, streak, best_hands, debt recovery)
     // แทนที่ recordGameResults() เดิม — Initiate ใช้ Simultaneous Showdown, derive จาก state.results ได้ตรงๆ
@@ -2207,7 +2309,7 @@ interface AFKInfo {
   graceTimer: NodeJS.Timeout
 }
 
-interface MultiMatchState {
+export interface MultiMatchState {
   roomId: string
   tier: 'adept'
   humanPlayerIds: string[]
@@ -2506,6 +2608,97 @@ export async function submitMultiArrangement(
   await resolveMultiShowdown(io, roomId)
 }
 
+// Central Economy Ledger Phase 7 Round 2 — Adept normal match-end only (2 Human + 2 AI settle
+// together, ไม่ใช่ทีละคนแบบ settleEscrow เดิม). เหตุผลที่ต้องรวมเป็น transaction เดียว ไม่ใช่เรียก
+// settleEscrowViaLedger ซ้ำต่อ human: (1) ถ้าแนบ AI net เข้าไปกับ human แต่ละคนแยกกัน AI pool จะโดน
+// เครดิตซ้ำสองรอบ (2) ถ้าตัด AI net ออกให้ human settle คนเดียวโดดๆ เงินที่ human แพ้ไปจะถูกนับเป็น burn
+// (ทำลายทิ้ง) แทนที่จะเข้า NPC pool จริงๆ ที่ควรได้ — settleMatchResult() เป็น type BURN เดี่ยว
+// เดินตาม entries ทั้งหมด ต้องมี human+AI ครบในรอบเดียวถึงจะ attribute ถูกที่
+// AI seat ของ Adept แสดงชื่อ Minion เสมอ (roomRegistry.ts's sageSeat()/secondAdeptBotSeat()) จึงส่ง
+// isMinionDisplay:true ให้ resolveNpcPoolKey เข้า MINION_POOL ไม่ใช่ BOT_POOL
+// Scope: เฉพาะจบแมตช์ปกติ (ทุกคนอยู่ครบ) — AFK-finalize/player_leave กลางเกมยังไม่แตะ (ดู plan)
+// ⚠️ entry ของ human ต้องเป็น finalStack เต็มจำนวน ไม่ใช่ net — เหตุผลเดียวกับ settleEscrowViaLedger
+// (buy-in ถูกหักไปแล้วครั้งหนึ่งจาก begin_match_escrow ที่ไม่แตะ ใช้ net จะเท่ากับหักซ้ำ) burnAmount
+// (state.feeRake) ต้องส่งแยกมาตรงๆ เพราะ entries ไม่ได้ sum เป็น -totalRake อีกต่อไป
+export async function settleAdeptMatchViaLedger(state: MultiMatchState): Promise<Record<string, number | null>> {
+  const humanEntries = state.humanPlayerIds.map(uid => ({
+    account: { accountType: 'PLAYER' as const, accountId: uid },
+    netAmount: state.tokenBalance[uid] ?? state.buyInAmount,
+  }))
+  const npcEntries = state.aiPlayerIds
+    .map(aiId => ({ npcId: aiId, amount: (state.tokenBalance[aiId] ?? state.buyInAmount) - state.buyInAmount }))
+    .filter(n => n.amount !== 0)
+    .map(n => ({
+      account: { accountType: 'NPC_POOL' as const, accountId: resolveNpcPoolKey(n.npcId, { isMinionDisplay: true }) },
+      netAmount: n.amount,
+    }))
+  const entries = [...humanEntries, ...npcEntries].filter(e => e.netAmount !== 0)
+
+  if (entries.length > 0) {
+    const idempotencyKey = `MATCH_SETTLEMENT:${Object.values(state.escrowIds).sort().join(':')}`
+    try {
+      await economyService.settleMatchResult({
+        idempotencyKey,
+        currency: 'TOKEN',
+        entries,
+        burnAmount: state.feeRake,
+        reason: 'MATCH_SETTLEMENT',
+        context: { matchId: state.roomId, tier: 'adept' },
+      })
+    } catch (err) {
+      console.error('[ESCROW]', Date.now(), 'Adept ledger settleMatchResult failed for room', state.roomId, err)
+      const failed: Record<string, number | null> = {}
+      state.humanPlayerIds.forEach(uid => { failed[uid] = null })
+      return failed
+    }
+  }
+
+  const results: Record<string, number | null> = {}
+  await Promise.all(state.humanPlayerIds.map(async uid => {
+    const escrowId = state.escrowIds[uid]
+    const finalStack = state.tokenBalance[uid] ?? state.buyInAmount
+    if (!escrowId) { results[uid] = null; return }
+
+    const { error: updateError } = await supabaseAdmin
+      .from('match_escrow')
+      .update({ status: 'settled', final_stack: finalStack, settled_at: new Date().toISOString() })
+      .eq('escrow_id', escrowId)
+      .eq('status', 'in_match')
+    if (updateError) {
+      console.error('[ESCROW]', Date.now(), 'Adept ledger settle: match_escrow update failed for', escrowId, updateError)
+      results[uid] = null
+      return
+    }
+
+    const { data: userRow, error: readError } = await supabaseAdmin
+      .from('users')
+      .select('token_balance')
+      .eq('user_id', uid)
+      .single()
+    if (readError || !userRow) {
+      console.error('[ESCROW]', Date.now(), 'Adept ledger settle: failed to re-read token_balance for', uid, readError)
+      results[uid] = null
+      return
+    }
+    const newBalance = Number(userRow.token_balance)
+    console.log('[ESCROW]', Date.now(), 'Settled via ledger (Adept)', uid, '| finalStack', finalStack, '| New balance:', newBalance)
+    results[uid] = newBalance
+
+    try {
+      await checkTierUnlock(uid, newBalance)
+    } catch (err) {
+      console.error('[TIER_UNLOCK] Unexpected error calling checkTierUnlock:', err, '| userId:', uid)
+    }
+    try {
+      await getAscendantStatus(uid)
+    } catch (err) {
+      console.error('[CROWN-VAULT] Unexpected error calling getAscendantStatus:', err, '| userId:', uid)
+    }
+  }))
+
+  return results
+}
+
 async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
   const state = multiMatchStates.get(roomId)
   if (!state || !state.community) return
@@ -2592,11 +2785,10 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
     state.phase = 'match_end'
     const finalWinner = playerIds.reduce((a, b) => (state.tokenBalance[a] ?? 0) > (state.tokenBalance[b] ?? 0) ? a : b)
 
-    // ── Settle Escrow ครั้งเดียวต่อคน (Buy-in Spec §4 — จบแมตช์ปกติ) ──
-    const newTokenBalances: Record<string, number | null> = {}
-    await Promise.all(state.humanPlayerIds.map(async uid => {
-      newTokenBalances[uid] = await settleEscrow(uid, state.escrowIds[uid], state.tokenBalance[uid] ?? state.buyInAmount)
-    }))
+    // ── Settle Escrow (Buy-in Spec §4 — จบแมตช์ปกติ) — Central Economy Ledger Phase 7 Round 2 ──
+    // human ทุกคน + AI ทุกตัว settle รวม transaction เดียว (ดู settleAdeptMatchViaLedger's comment
+    // ว่าทำไมเรียก settleEscrow ทีละคนแบบเดิมไม่ได้อีกต่อไปสำหรับเส้นทางนี้)
+    const newTokenBalances = await settleAdeptMatchViaLedger(state)
     // End-of-Match Stats Recording — แทนที่ recordGameResults() เดิม — Adept ใช้ Simultaneous Showdown
     // เหมือน Initiate, derive best_hands/triple sweep จาก state.results ได้ตรงๆ ต่อ human ทุกคน
     await recordMatchStats(state.humanPlayerIds.map(uid => {
@@ -2790,7 +2982,14 @@ export async function settleAndEndSoloMatch(roomId: string): Promise<void> {
   const state = matchStates.get(roomId)
   if (!state) return
   if (state.escrowId) {
-    await settleEscrow(state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount)
+    await settleEscrow(
+      state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount,
+      usesLedgerSettlement(state.tier) ? {
+        tier: state.tier,
+        burnAmount: state.feeRake,
+        npcNets: AI_CONFIGS.map(ai => ({ npcId: ai.id, amount: (state.tokenBalance[ai.id] ?? state.buyInAmount) - state.buyInAmount })),
+      } : undefined,
+    )
   }
   matchStates.delete(roomId)
 }

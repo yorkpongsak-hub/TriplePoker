@@ -218,6 +218,64 @@ describe('EconomyService — request shaping and invariants', () => {
       { accountType: 'NPC_POOL', accountId: 'MINION_POOL', currency: 'TOKEN', wallet: undefined, amount: 300 },
     )
   })
+
+  test('settleMatchResult() submits type BURN (not TRANSFER) with one entry per participant, explicit burnAmount', async () => {
+    await service.settleMatchResult({
+      idempotencyKey: 'MATCH_SETTLEMENT:escrow-1',
+      currency: 'TOKEN',
+      entries: [
+        { account: { accountType: 'PLAYER', accountId: 'human-1' }, netAmount: 1264 },
+        { account: { accountType: 'NPC_POOL', accountId: 'BOT_POOL' }, netAmount: -60 },
+        { account: { accountType: 'NPC_POOL', accountId: 'FOUR_GODS_POOL' }, netAmount: -30 },
+      ],
+      burnAmount: 108,
+      reason: 'MATCH_SETTLEMENT',
+      context: { matchId: 'escrow-1', playerId: 'human-1', tier: 'initiate' },
+    })
+    const call = gateway.applyCalls[0]
+    expect(call.type).toBe('BURN')
+    expect(call.burnOverride).toEqual({ token: 108 })
+    expect(call.entries).toEqual([
+      { accountType: 'PLAYER', accountId: 'human-1', currency: 'TOKEN', wallet: undefined, amount: 1264 },
+      { accountType: 'NPC_POOL', accountId: 'BOT_POOL', currency: 'TOKEN', wallet: undefined, amount: -60 },
+      { accountType: 'NPC_POOL', accountId: 'FOUR_GODS_POOL', currency: 'TOKEN', wallet: undefined, amount: -30 },
+    ])
+  })
+
+  test('settleMatchResult() with CREST currency puts burnAmount on the crest side of burnOverride', async () => {
+    await service.settleMatchResult({
+      idempotencyKey: 'k1', currency: 'CREST', reason: 'MATCH_SETTLEMENT', burnAmount: 12,
+      entries: [{ account: { accountType: 'PLAYER', accountId: 'human-1' }, netAmount: 50 }],
+    })
+    expect(gateway.applyCalls[0].burnOverride).toEqual({ crest: 12 })
+  })
+
+  test('settleMatchResult() rejects a negative burnAmount', async () => {
+    await expect(service.settleMatchResult({
+      idempotencyKey: 'k1', currency: 'TOKEN', reason: 'MATCH_SETTLEMENT', burnAmount: -1,
+      entries: [{ account: { accountType: 'PLAYER', accountId: 'human-1' }, netAmount: 50 }],
+    })).rejects.toThrow('BURN_AMOUNT_MUST_NOT_BE_NEGATIVE')
+  })
+
+  test('settleMatchResult() drops zero-net entries before submitting', async () => {
+    await service.settleMatchResult({
+      idempotencyKey: 'k1', currency: 'TOKEN', reason: 'MATCH_SETTLEMENT', burnAmount: 0,
+      entries: [
+        { account: { accountType: 'PLAYER', accountId: 'human-1' }, netAmount: 50 },
+        { account: { accountType: 'NPC_POOL', accountId: 'BOT_POOL' }, netAmount: 0 },
+      ],
+    })
+    expect(gateway.applyCalls[0].entries).toEqual([
+      { accountType: 'PLAYER', accountId: 'human-1', currency: 'TOKEN', wallet: undefined, amount: 50 },
+    ])
+  })
+
+  test('settleMatchResult() with every entry net-zero rejects via the empty-entries guard', async () => {
+    await expect(service.settleMatchResult({
+      idempotencyKey: 'k1', currency: 'TOKEN', reason: 'MATCH_SETTLEMENT', burnAmount: 0,
+      entries: [{ account: { accountType: 'PLAYER', accountId: 'human-1' }, netAmount: 0 }],
+    })).rejects.toThrow('ENTRIES_MUST_NOT_BE_EMPTY')
+  })
 })
 
 // ─────────────────────────────────────────────
@@ -249,8 +307,22 @@ describe('SupabaseEconomyGateway — RPC/query call shape', () => {
       p_metadata: {},
       p_context: {},
       p_created_by: null,
+      p_burn_override: null,
     })
     expect(result).toEqual({ transactionId: 7, replayed: false })
+  })
+
+  test('apply() passes burnOverride through as p_burn_override, defaulting missing sides to 0', async () => {
+    mockRpc.mockResolvedValue({ data: [{ transaction_id: 8, replayed: false }], error: null })
+    const gateway = new SupabaseEconomyGateway()
+    await gateway.apply({
+      idempotencyKey: 'k2', type: 'BURN', reason: 'MATCH_SETTLEMENT',
+      entries: [{ accountType: 'PLAYER', accountId: 'p1', currency: 'TOKEN', amount: 1264 }],
+      burnOverride: { token: 108 },
+    })
+    expect(mockRpc).toHaveBeenCalledWith('economy_apply_transaction', expect.objectContaining({
+      p_burn_override: { token: 108, crest: 0 },
+    }))
   })
 
   test('reconciliation() maps snake_case rows to camelCase', async () => {

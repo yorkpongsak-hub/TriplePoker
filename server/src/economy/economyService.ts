@@ -30,6 +30,9 @@ export class SupabaseEconomyGateway implements EconomyGateway {
       p_metadata: input.metadata ?? {},
       p_context: input.context ?? {},
       p_created_by: input.createdBy ?? null,
+      p_burn_override: input.burnOverride
+        ? { token: input.burnOverride.token ?? 0, crest: input.burnOverride.crest ?? 0 }
+        : null,
     })
     if (error) throw new Error(error.message)
     const row = Array.isArray(data) ? data[0] : data
@@ -124,6 +127,9 @@ export class EconomyService {
     if (input.type === 'REVERSAL' && !input.context?.reversalOfTransactionId) {
       throw new Error('REVERSAL_REQUIRES_REVERSAL_OF_TRANSACTION_ID')
     }
+    if (input.burnOverride && input.type !== 'BURN') {
+      throw new Error('BURN_OVERRIDE_ONLY_VALID_FOR_BURN_TYPE')
+    }
     return this.gateway.apply(input)
   }
 
@@ -175,6 +181,49 @@ export class EconomyService {
     return params.amountToNpc > 0
       ? this.transfer({ ...params, from: human, to: pool, amount: params.amountToNpc, context })
       : this.transfer({ ...params, from: pool, to: human, amount: -params.amountToNpc, context })
+  }
+
+  /**
+   * Settles the net result of a completed match across every participant at once (a human plus
+   * one or more AI/NPC seats) in a single transaction. Submitted as type 'BURN' rather than
+   * 'TRANSFER' because a raked match's entries never sum to zero — but critically, each entry's
+   * `netAmount` must be the amount that actually needs to move into that REAL account, not an
+   * abstract "net game result": for a human this is their full `finalStack` (their buy-in was
+   * already deducted separately by the untouched escrow-start RPC, so crediting only their net
+   * game result would short them by exactly one buy-in — a real bug found via live testing
+   * 2026-08-12), while for an NPC pool (which never had a separate buy-in step) it's their true
+   * win/loss net.
+   *
+   * Because the entries can therefore include an untracked-money-returning component (the human's
+   * buy-in reappearing), BURN's usual implicit `SUM(-amount)` burn calculation would be wrong —
+   * `burnAmount` must be passed explicitly (the caller already knows the true rake from
+   * tokenFlow.ts's own bookkeeping, e.g. `state.feeRake`), decoupling "how much moves into each
+   * account" from "how much was actually burned."
+   */
+  async settleMatchResult(params: {
+    idempotencyKey: string
+    currency: Currency
+    entries: Array<{ account: AccountRef; netAmount: number; wallet?: Wallet }>
+    burnAmount: number
+    reason: EconomyReason
+    context?: EconomyContext
+    metadata?: Record<string, unknown>
+    createdBy?: string
+  }): Promise<ApplyTransactionResult> {
+    if (params.burnAmount < 0) throw new Error('BURN_AMOUNT_MUST_NOT_BE_NEGATIVE')
+    const entries: LedgerEntryInput[] = params.entries
+      .filter(e => e.netAmount !== 0)
+      .map(e => ({ ...e.account, currency: params.currency, wallet: e.wallet, amount: e.netAmount }))
+    return this.apply({
+      idempotencyKey: params.idempotencyKey,
+      type: 'BURN',
+      reason: params.reason,
+      entries,
+      burnOverride: params.currency === 'TOKEN' ? { token: params.burnAmount } : { crest: params.burnAmount },
+      metadata: params.metadata,
+      context: params.context,
+      createdBy: params.createdBy,
+    })
   }
 
   /** Removes currency from an account permanently — decrements active supply, no counterpart credit. */

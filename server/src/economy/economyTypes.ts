@@ -64,6 +64,15 @@ export interface EconomyContext {
   reversalOfTransactionId?: number
 }
 
+// BURN only. When provided, overrides the implicit SUM(-amount)-across-entries burn calculation —
+// needed when an entry set legitimately contains an untracked-money-returning component (e.g.
+// match settlement's escrow buy-in return) that must not itself be counted as burned. Omit for
+// simple burns (e.g. a plain Shop purchase) where the implicit calculation is already correct.
+export interface BurnOverride {
+  token?: number
+  crest?: number
+}
+
 export interface ApplyTransactionInput {
   idempotencyKey: string
   type: TransactionType
@@ -72,6 +81,7 @@ export interface ApplyTransactionInput {
   metadata?: Record<string, unknown>
   context?: EconomyContext
   createdBy?: string
+  burnOverride?: BurnOverride
 }
 
 export interface ApplyTransactionResult {
