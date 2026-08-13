@@ -38,6 +38,9 @@ export type EconomyReason =
   | 'PROMOTION'
   | 'ADMIN_CORRECTION'
   | 'DEBT_CARRY'
+  | 'WELCOME_BONUS'
+  | 'STREAK_BONUS'
+  | 'AD_REWARD'
   | 'OTHER'
 
 export interface AccountRef {
@@ -73,6 +76,11 @@ export interface BurnOverride {
   crest?: number
 }
 
+// BURN only, independent of burnOverride. Needed when a BURN transaction's entries burn one
+// currency and mint another (e.g. a Token->Crown conversion) — TOKEN/CREST are separate economies
+// with separate Genesis/Mint/Burn counters, so both must be bumped correctly in the same call.
+export type MintOverride = BurnOverride
+
 export interface ApplyTransactionInput {
   idempotencyKey: string
   type: TransactionType
@@ -82,6 +90,7 @@ export interface ApplyTransactionInput {
   context?: EconomyContext
   createdBy?: string
   burnOverride?: BurnOverride
+  mintOverride?: MintOverride
 }
 
 export interface ApplyTransactionResult {

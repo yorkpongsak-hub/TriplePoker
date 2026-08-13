@@ -276,6 +276,59 @@ describe('EconomyService — request shaping and invariants', () => {
       entries: [{ account: { accountType: 'PLAYER', accountId: 'human-1' }, netAmount: 0 }],
     })).rejects.toThrow('ENTRIES_MUST_NOT_BE_EMPTY')
   })
+
+  test('apply() rejects mintOverride on a non-BURN type', async () => {
+    await expect(service.apply({
+      idempotencyKey: 'k1', type: 'TRANSFER', reason: 'MATCH_SETTLEMENT',
+      entries: [
+        { accountType: 'PLAYER', accountId: 'p1', currency: 'TOKEN', amount: -100 },
+        { accountType: 'NPC_POOL', accountId: 'BOT_POOL', currency: 'TOKEN', amount: 100 },
+      ],
+      mintOverride: { token: 100 },
+    })).rejects.toThrow('MINT_OVERRIDE_ONLY_VALID_FOR_BURN_TYPE')
+  })
+
+  test('convert() — Token->Crown: one BURN transaction, entries on the same account in both currencies, both overrides set', async () => {
+    await service.convert({
+      idempotencyKey: 'TOKEN_TO_CROWN:p1:nonce1',
+      account: { accountType: 'PLAYER', accountId: 'p1' },
+      from: { currency: 'TOKEN', amount: 50_000 },
+      to: { currency: 'CREST', amount: 120, wallet: 'EARNED' },
+      reason: 'TOKEN_TO_CROWN',
+      actor: 'token_to_crown_exchange',
+    })
+    const call = gateway.applyCalls[0]
+    expect(call.type).toBe('BURN')
+    expect(call.createdBy).toBe('token_to_crown_exchange')
+    expect(call.entries).toEqual([
+      { accountType: 'PLAYER', accountId: 'p1', currency: 'TOKEN', wallet: undefined, amount: -50_000 },
+      { accountType: 'PLAYER', accountId: 'p1', currency: 'CREST', wallet: 'EARNED', amount: 120 },
+    ])
+    expect(call.burnOverride).toEqual({ token: 50_000 })
+    expect(call.mintOverride).toEqual({ crest: 120 })
+  })
+
+  test('convert() rejects non-positive amounts', async () => {
+    await expect(service.convert({
+      idempotencyKey: 'k1', account: { accountType: 'PLAYER', accountId: 'p1' },
+      from: { currency: 'TOKEN', amount: 0 }, to: { currency: 'CREST', amount: 120 },
+      reason: 'TOKEN_TO_CROWN', actor: 'system',
+    })).rejects.toThrow('CONVERT_AMOUNTS_MUST_BE_POSITIVE')
+
+    await expect(service.convert({
+      idempotencyKey: 'k1', account: { accountType: 'PLAYER', accountId: 'p1' },
+      from: { currency: 'TOKEN', amount: 50_000 }, to: { currency: 'CREST', amount: -1 },
+      reason: 'TOKEN_TO_CROWN', actor: 'system',
+    })).rejects.toThrow('CONVERT_AMOUNTS_MUST_BE_POSITIVE')
+  })
+
+  test('convert() rejects converting a currency into itself', async () => {
+    await expect(service.convert({
+      idempotencyKey: 'k1', account: { accountType: 'PLAYER', accountId: 'p1' },
+      from: { currency: 'TOKEN', amount: 100 }, to: { currency: 'TOKEN', amount: 100 },
+      reason: 'TOKEN_TO_CROWN', actor: 'system',
+    })).rejects.toThrow('CONVERT_CURRENCIES_MUST_DIFFER')
+  })
 })
 
 // ─────────────────────────────────────────────
@@ -308,6 +361,7 @@ describe('SupabaseEconomyGateway — RPC/query call shape', () => {
       p_context: {},
       p_created_by: null,
       p_burn_override: null,
+      p_mint_override: null,
     })
     expect(result).toEqual({ transactionId: 7, replayed: false })
   })
@@ -322,6 +376,21 @@ describe('SupabaseEconomyGateway — RPC/query call shape', () => {
     })
     expect(mockRpc).toHaveBeenCalledWith('economy_apply_transaction', expect.objectContaining({
       p_burn_override: { token: 108, crest: 0 },
+      p_mint_override: null,
+    }))
+  })
+
+  test('apply() passes mintOverride through as p_mint_override, defaulting missing sides to 0', async () => {
+    mockRpc.mockResolvedValue({ data: [{ transaction_id: 9, replayed: false }], error: null })
+    const gateway = new SupabaseEconomyGateway()
+    await gateway.apply({
+      idempotencyKey: 'k3', type: 'BURN', reason: 'TOKEN_TO_CROWN',
+      entries: [{ accountType: 'PLAYER', accountId: 'p1', currency: 'CREST', amount: 120 }],
+      mintOverride: { crest: 120 },
+    })
+    expect(mockRpc).toHaveBeenCalledWith('economy_apply_transaction', expect.objectContaining({
+      p_burn_override: null,
+      p_mint_override: { token: 0, crest: 120 },
     }))
   })
 

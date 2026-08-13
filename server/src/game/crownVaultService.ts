@@ -14,6 +14,9 @@ import { gameConfig } from '../config/gameConfig'
 import { TIER_ORDER, TierOrderKey } from './progressionGate'
 import { checkAscendantEligibility, AscendantStatusRecord, AscendantStatusValue } from './ascendantGate'
 import { deductCrown } from '../items/shopAPI'
+import { economyService } from '../economy/economyService'
+import { CREST_PER_CROWN } from '../arena/economy/crest'
+import crypto from 'crypto'
 
 export interface AscendantStatusResult {
   status: AscendantStatusValue
@@ -164,6 +167,10 @@ export interface ExchangeResult {
 }
 
 // Token → Crown Exchange (1 Crown = 5,000 Token ทางเดียว, ปลดล็อกที่ HighNoble ตาม Ascendant_Spec_v1_1 §5)
+// Central Economy Ledger Phase 7 Round 7 (2026-08-13): ย้ายจาก legacy RPC exchange_token_to_crown
+// มาใช้ economyService.convert() แทน — burn TOKEN + mint CREST ในทรานแซคชันเดียวกัน (atomic) ผ่าน
+// Ledger จริง กันไม่ให้ exchange หายไปจาก economy_reconciliation() เหมือนก่อนหน้านี้ — signature/
+// return shape/error code เดิมทุกอย่าง ไม่ต้องแก้ routes/crownVault.ts หรือ client เลย
 export async function exchangeTokenToCrown(userId: string, crownAmount: number): Promise<ExchangeResult> {
   const { data, error } = await supabaseAdmin
     .from('users')
@@ -179,17 +186,30 @@ export async function exchangeTokenToCrown(userId: string, crownAmount: number):
   if (currentIdx < requiredIdx) return { success: false, error: 'TIER_REQUIRED' }
 
   const tokenCost = crownAmount * gameConfig.crownVaultConfig.tokenToCrownRate
+  const crestAmount = crownAmount * CREST_PER_CROWN
 
-  const { data: exchangeData, error: exchangeError } = await supabaseAdmin.rpc('exchange_token_to_crown', {
-    p_user_id: userId,
-    p_crown_amount: crownAmount,
-    p_token_cost: tokenCost,
-  })
-
-  if (exchangeError) {
-    return { success: false, error: exchangeError.message === 'INSUFFICIENT_TOKENS' ? 'INSUFFICIENT_TOKENS' : 'USER_NOT_FOUND' }
+  try {
+    await economyService.convert({
+      idempotencyKey: `TOKEN_TO_CROWN:${userId}:${crypto.randomUUID()}`,
+      account: { accountType: 'PLAYER', accountId: userId },
+      from: { currency: 'TOKEN', amount: tokenCost },
+      to: { currency: 'CREST', amount: crestAmount, wallet: 'EARNED' },
+      reason: 'TOKEN_TO_CROWN',
+      actor: 'token_to_crown_exchange',
+      context: { playerId: userId },
+    })
+  } catch (err: any) {
+    const message = String(err?.message ?? '')
+    return { success: false, error: message.includes('INSUFFICIENT_TOKEN_BALANCE') ? 'INSUFFICIENT_TOKENS' : 'USER_NOT_FOUND' }
   }
 
-  const row = Array.isArray(exchangeData) ? exchangeData[0] : exchangeData
-  return { success: true, newTokenBalance: row.new_token_balance, newCrownBalance: row.new_crown_balance }
+  const { data: userRow, error: readError } = await supabaseAdmin
+    .from('users')
+    .select('token_balance, crown_balance')
+    .eq('user_id', userId)
+    .single()
+
+  if (readError || !userRow) return { success: false, error: 'USER_NOT_FOUND' }
+
+  return { success: true, newTokenBalance: userRow.token_balance, newCrownBalance: userRow.crown_balance }
 }

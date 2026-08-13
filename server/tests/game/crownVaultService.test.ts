@@ -43,6 +43,11 @@ jest.mock('../../src/items/shopAPI', () => ({
   deductCrown: mockDeductCrown,
 }))
 
+const mockConvert = jest.fn()
+jest.mock('../../src/economy/economyService', () => ({
+  economyService: { convert: (...args: unknown[]) => mockConvert(...args) },
+}))
+
 import {
   getAscendantStatus,
   buyAscendantPass,
@@ -59,6 +64,7 @@ beforeEach(() => {
   mockRpc.mockReset()
   mockCheckAscendantEligibility.mockReset()
   mockDeductCrown.mockReset()
+  mockConvert.mockReset()
 })
 
 describe('getAscendantStatus', () => {
@@ -201,25 +207,33 @@ describe('buyArenaPass', () => {
   })
 })
 
-describe('exchangeTokenToCrown', () => {
-  test('ยังไม่ถึง HighNoble → TIER_REQUIRED', async () => {
+describe('exchangeTokenToCrown — Central Economy Ledger Phase 7 Round 7 (economyService.convert)', () => {
+  test('ยังไม่ถึง HighNoble → TIER_REQUIRED, ไม่เรียก convert', async () => {
     responseQueue = [{ data: { tier_unlocked_max: 'mastermind' }, error: null }]
     const result = await exchangeTokenToCrown('u1', 10)
     expect(result).toEqual({ success: false, error: 'TIER_REQUIRED' })
-    expect(mockRpc).not.toHaveBeenCalled()
+    expect(mockConvert).not.toHaveBeenCalled()
   })
 
-  test('ถึง HighNoble แล้ว + token พอ → แลกสำเร็จ atomic', async () => {
-    responseQueue = [{ data: { tier_unlocked_max: 'highNoble' }, error: null }]
-    mockRpc.mockResolvedValue({ data: [{ new_token_balance: 900_000, new_crown_balance: 10 }], error: null })
+  test('ถึง HighNoble แล้ว + token พอ → แลกสำเร็จ atomic ผ่าน Ledger (burn TOKEN + mint CREST wallet EARNED)', async () => {
+    responseQueue = [
+      { data: { tier_unlocked_max: 'highNoble' }, error: null }, // tier check
+      { data: { token_balance: 900_000, crown_balance: 10 }, error: null }, // post-convert re-read
+    ]
+    mockConvert.mockResolvedValue({ transactionId: 1, replayed: false })
     const result = await exchangeTokenToCrown('u1', 10)
     expect(result).toEqual({ success: true, newTokenBalance: 900_000, newCrownBalance: 10 })
-    expect(mockRpc).toHaveBeenCalledWith('exchange_token_to_crown', { p_user_id: 'u1', p_crown_amount: 10, p_token_cost: 50_000 })
+    expect(mockConvert).toHaveBeenCalledWith(expect.objectContaining({
+      account: { accountType: 'PLAYER', accountId: 'u1' },
+      from: { currency: 'TOKEN', amount: 50_000 },
+      to: { currency: 'CREST', amount: 120, wallet: 'EARNED' }, // 10 Crown * 12 Crest/Crown
+      reason: 'TOKEN_TO_CROWN',
+    }))
   })
 
   test('token ไม่พอ → INSUFFICIENT_TOKENS', async () => {
     responseQueue = [{ data: { tier_unlocked_max: 'highNoble' }, error: null }]
-    mockRpc.mockResolvedValue({ data: null, error: { message: 'INSUFFICIENT_TOKENS' } })
+    mockConvert.mockRejectedValue(new Error('INSUFFICIENT_TOKEN_BALANCE'))
     const result = await exchangeTokenToCrown('u1', 999)
     expect(result).toEqual({ success: false, error: 'INSUFFICIENT_TOKENS' })
   })

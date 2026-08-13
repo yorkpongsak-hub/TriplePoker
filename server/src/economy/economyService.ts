@@ -4,6 +4,7 @@ import type {
   AccountRef,
   ApplyTransactionInput,
   ApplyTransactionResult,
+  BurnOverride,
   Currency,
   EconomyContext,
   EconomyReason,
@@ -32,6 +33,9 @@ export class SupabaseEconomyGateway implements EconomyGateway {
       p_created_by: input.createdBy ?? null,
       p_burn_override: input.burnOverride
         ? { token: input.burnOverride.token ?? 0, crest: input.burnOverride.crest ?? 0 }
+        : null,
+      p_mint_override: input.mintOverride
+        ? { token: input.mintOverride.token ?? 0, crest: input.mintOverride.crest ?? 0 }
         : null,
     })
     if (error) throw new Error(error.message)
@@ -130,6 +134,9 @@ export class EconomyService {
     if (input.burnOverride && input.type !== 'BURN') {
       throw new Error('BURN_OVERRIDE_ONLY_VALID_FOR_BURN_TYPE')
     }
+    if (input.mintOverride && input.type !== 'BURN') {
+      throw new Error('MINT_OVERRIDE_ONLY_VALID_FOR_BURN_TYPE')
+    }
     return this.gateway.apply(input)
   }
 
@@ -223,6 +230,46 @@ export class EconomyService {
       metadata: params.metadata,
       context: params.context,
       createdBy: params.createdBy,
+    })
+  }
+
+  /**
+   * Converts one currency into another for the same player, atomically, in a single transaction —
+   * the source currency is burned (destroyed) and the target currency is minted (created). TOKEN
+   * and CREST are governed by fully independent Genesis/Mint/Burn pools, so this is not a
+   * value-preserving transfer — it's a designed sink+faucet pair at whatever rate the caller
+   * supplies (currently only Token->Crown, crownVaultService.ts). Submitted as type 'BURN' with
+   * both burnOverride and mintOverride set, so the whole conversion stays inside one atomic RPC
+   * call — two separate burn()+mint() calls would risk losing money if the second failed after the
+   * first succeeded.
+   */
+  async convert(params: {
+    idempotencyKey: string
+    account: AccountRef
+    from: { currency: Currency; amount: number }
+    to: { currency: Currency; amount: number; wallet?: Wallet }
+    reason: EconomyReason
+    actor: string
+    context?: EconomyContext
+    metadata?: Record<string, unknown>
+  }): Promise<ApplyTransactionResult> {
+    if (params.from.amount <= 0 || params.to.amount <= 0) throw new Error('CONVERT_AMOUNTS_MUST_BE_POSITIVE')
+    if (params.from.currency === params.to.currency) throw new Error('CONVERT_CURRENCIES_MUST_DIFFER')
+    const entries: LedgerEntryInput[] = [
+      { ...params.account, currency: params.from.currency, amount: -params.from.amount },
+      { ...params.account, currency: params.to.currency, wallet: params.to.wallet, amount: params.to.amount },
+    ]
+    const overrideKey = (currency: Currency) => (currency === 'TOKEN' ? 'token' : 'crest') as keyof BurnOverride
+    return this.apply({
+      idempotencyKey: params.idempotencyKey,
+      type: 'BURN',
+      reason: params.reason,
+      entries,
+      burnOverride: { [overrideKey(params.from.currency)]: params.from.amount },
+      mintOverride: { [overrideKey(params.to.currency)]: params.to.amount },
+      metadata: params.metadata,
+      context: params.context,
+      createdBy: params.actor,
     })
   }
 
