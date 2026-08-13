@@ -8,6 +8,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { supabaseAdmin } from '../config/supabase'
 import { redis } from '../config/redis'
+import type { MatchWinTier } from '../game/matchWinsService'
 
 type BaseLeaderboardType = 'token' | 'ps' | 'winrate' | 'xp' | 'boss_defeats'
 type LeaderboardType = BaseLeaderboardType | 'all_matrix'
@@ -169,6 +170,69 @@ function matrixPoints(max: number, rank: number): number {
   return Math.max(0, Math.ceil(max / 2) - 2)
 }
 
+// ─── Top10 (per-Tier match win, มติลุงเยาะ 2026-08-13) ──────────────────────
+// ต่างจาก leaderboard ด้านบนตรงที่ query จาก match_wins (per-match history) ไม่ใช่ users
+// column สะสม — Top10 คือ "ใครทำสถิติโทเคนชนะแมตช์เดียวสูงสุด" ต่อ Tier ไม่ใช่ยอดรวมปัจจุบัน
+const TOP10_TIERS: MatchWinTier[] = ['initiate', 'adept', 'mastermind', 'highNoble']
+const TOP10_CACHE_TTL_SECONDS = 300
+
+interface Top10Entry {
+  rank: number
+  user_id: string
+  display_name: string
+  avatar_url: string | null
+  tokens_won: number
+  won_at: string
+  is_triple_sweep: boolean
+  rank_before: number | null
+  rank_after: number | null
+}
+
+function top10CacheKeyFor(tier: MatchWinTier): string {
+  return `top10:matchwin:${tier}`
+}
+
+async function queryTop10(tier: MatchWinTier): Promise<Top10Entry[]> {
+  const { data, error } = await supabaseAdmin
+    .from('match_wins')
+    .select('user_id, tokens_won, won_at, is_triple_sweep, rank_before, rank_after')
+    .eq('tier', tier)
+    .order('tokens_won', { ascending: false })
+  if (error) throw error
+
+  // เก็บแถวแรกที่เจอของแต่ละ user_id เท่านั้น (= personal best เพราะ sort desc แล้ว)
+  const bestRowByUser = new Map<string, NonNullable<typeof data>[number]>()
+  for (const row of data ?? []) {
+    if (!bestRowByUser.has(row.user_id)) bestRowByUser.set(row.user_id, row)
+  }
+  const top10 = [...bestRowByUser.values()].slice(0, TOP_N)
+  if (top10.length === 0) return []
+
+  const { data: users, error: usersError } = await supabaseAdmin
+    .from('users')
+    .select('user_id, display_name, avatar_url')
+    .in('user_id', top10.map(row => row.user_id))
+  if (usersError) throw usersError
+  const usersById = new Map((users ?? []).map(user => [user.user_id, user]))
+
+  return top10.flatMap((row, index) => {
+    const user = usersById.get(row.user_id)
+    return user
+      ? [{
+          rank: index + 1,
+          user_id: row.user_id,
+          display_name: user.display_name,
+          avatar_url: user.avatar_url,
+          tokens_won: row.tokens_won,
+          won_at: row.won_at,
+          is_triple_sweep: row.is_triple_sweep,
+          rank_before: row.rank_before,
+          rank_after: row.rank_after,
+        }]
+      : []
+  })
+}
+
 async function queryAllMatrix(): Promise<LeaderboardEntry[]> {
   const metricOrder: BaseLeaderboardType[] = ['ps', 'winrate', 'boss_defeats', 'xp', 'token']
   const leaderboards = await Promise.all(metricOrder.map(type => getCachedBaseLeaderboard(type)))
@@ -257,6 +321,51 @@ export default async function statsRoutes(fastify: FastifyInstance) {
       }
 
       return reply.send({ success: true, type, entries, cached: false, updatedAt: new Date().toISOString() })
+    }
+  )
+
+  // GET /stats/top10?tier=initiate|adept|mastermind|highNoble — มติลุงเยาะ 2026-08-13
+  // Top 10 ต่อ Tier จัดจาก personal-best tokens_won ของผู้เล่นแต่ละคน — rank_before/rank_after
+  // มาจาก match_wins ตรงๆ (คำนวณครั้งเดียวตอน INSERT ใน matchWinsService.ts ไม่ใช่คำนวณสดที่นี่)
+  fastify.get<{ Querystring: { tier?: string } }>(
+    '/stats/top10',
+    async (request: FastifyRequest<{ Querystring: { tier?: string } }>, reply: FastifyReply) => {
+      const tier = request.query.tier as MatchWinTier | undefined
+      if (!tier || !TOP10_TIERS.includes(tier)) {
+        return reply.status(400).send({ error: 'INVALID_TIER', message: 'tier must be one of: initiate, adept, mastermind, highNoble' })
+      }
+
+      const cacheKey = top10CacheKeyFor(tier)
+      try {
+        const cached = await redis.get<Top10Entry[]>(cacheKey)
+        if (cached) {
+          return reply.send({ success: true, tier, entries: cached, cached: true })
+        }
+      } catch (err) {
+        console.error('[STATS] Redis read error for top10:', err)
+      }
+
+      let entries: Top10Entry[] = []
+      try {
+        entries = await queryTop10(tier)
+      } catch (err) {
+        console.error(`[STATS] Error querying top10 tier=${tier}:`, err)
+        return reply.send({
+          success: true,
+          tier,
+          entries: [],
+          cached: false,
+          note: 'Top10 data unavailable — check that match_wins.rank_before/rank_after columns exist.',
+        })
+      }
+
+      try {
+        await redis.set(cacheKey, entries, { ex: TOP10_CACHE_TTL_SECONDS })
+      } catch (err) {
+        console.error('[STATS] Redis write error for top10:', err)
+      }
+
+      return reply.send({ success: true, tier, entries, cached: false })
     }
   )
 
