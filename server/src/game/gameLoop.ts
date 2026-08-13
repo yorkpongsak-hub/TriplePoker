@@ -905,6 +905,9 @@ export async function submitArrangement(
       totalRounds: state.totalRounds,
       buyInAmount: state.buyInAmount,
       newTokenBalance,
+      bestHandThisMatch: initiateBestHand
+        ? { label: handRankLabel(initiateBestHand.hand), pile: initiateBestHand.pile, won: initiateBestHand.won }
+        : null,
       ...(state.tier === 'initiate' ? { feeRakeBurned: state.feeRake } : {}),
     })
     // Server Activity feed: broadcast ให้ทุก client เห็น ไม่ใช่แค่คนในห้องนี้
@@ -2248,6 +2251,9 @@ function finalizeGrandFinale(
         allSentinelsConquered,
         buyInAmount: state.buyInAmount,
         newTokenBalance,
+        bestHandThisMatch: state.bestHandThisMatch
+          ? { label: handRankLabel(state.bestHandThisMatch.hand), pile: state.bestHandThisMatch.pile, won: state.bestHandThisMatch.won }
+          : null,
         ...(usesTokenFlow(state.tier) ? { feeRakeBurned: state.feeRake } : {}),
       })
       // Server Activity feed: เฉพาะ Mastermind (ห้ามปนกับ lastBoss — Last Boss อยู่แอปแยก The Arena)
@@ -2846,9 +2852,11 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
     }))
 
     // Match Win History (มติลุงเยาะ 2026-07-26) — finalWinner อาจเป็น AI ก็ได้ (playerIds รวม AI 2 ตัว) เช็ค isHuman ก่อนเสมอ
+    // bestHand ของผู้ชนะคำนวณแบบ unconditional (ไม่ผูกกับ isHuman) เพราะ match_end ด้านล่างต้องใช้ส่งให้
+    // Post-Match Victory Screen เห็นไพ่ชุดที่ดีที่สุดของผู้ชนะเสมอ ไม่ใช่แค่ตอนบันทึก match_wins
     const winnerSeatInfo = state.seatOrder.find(s => s.userId === finalWinner)
+    const { bestHand: winnerBestHand, tripleSweep: winnerTripleSweep } = deriveBestHandFromResults(state.results, finalWinner)
     if (winnerSeatInfo?.isHuman) {
-      const { bestHand: winnerBestHand, tripleSweep: winnerTripleSweep } = deriveBestHandFromResults(state.results, finalWinner)
       await recordMatchWin({
         userId: finalWinner,
         tier: 'adept',
@@ -2872,6 +2880,9 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
       buyInAmount: state.buyInAmount,
       newTokenBalances,
       feeRakeBurned: state.feeRake,
+      bestHandThisMatch: winnerBestHand
+        ? { label: handRankLabel(winnerBestHand.hand), pile: winnerBestHand.pile, won: winnerBestHand.won }
+        : null,
     })
     // Server Activity feed: seatOrder เก็บ displayName ของทุกที่นั่งไว้อยู่แล้ว (snapshot ตอนเริ่มแมตช์)
     io.emit('server_activity', {

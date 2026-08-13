@@ -18,6 +18,8 @@ export interface ArenaSeatView {
   // Human: preset avatar key (resolve ผ่าน AvatarDisplay/PRESET_AVATARS) อาจว่างถ้ายังไม่ตั้งค่า
   // AI (Boss/Sentinel/Minion): สัญลักษณ์ตัวอักษรเดิม ('♛'/'♠')
   avatar: string
+  // Human เท่านั้น (AI ไม่มี vip_status จริง) — ใช้โชว์กรอบทอง VIP หน้าที่นั่ง เหมือน Adept/High Noble
+  isVip: boolean
   controller: 'HUMAN' | 'AI'
   isLocal: boolean
   isBoss: boolean

@@ -344,7 +344,7 @@ function SeatLabel({ seat, turnSeconds }: { seat: ArenaSeatView; turnSeconds?: n
   return (
     <View style={[styles.seatLabel, seat.isCurrentTurn && styles.seatTurn, seat.isBoss && styles.bossLabel]}>
       {seat.controller === 'HUMAN'
-        ? <AvatarDisplay config={{ type: 'preset', presetKey: seat.avatar, initial: seat.displayName, frameKey: 'default' }} size={28} showFrame />
+        ? <AvatarDisplay config={{ type: 'preset', presetKey: seat.avatar, initial: seat.displayName, frameKey: seat.isVip ? 'gold' : 'default' }} size={28} showFrame={seat.isVip} />
         : <Text style={styles.avatar}>{seat.avatar}</Text>}
       <View>
         <Text numberOfLines={1} style={styles.seatName}>{seat.displayName}</Text>

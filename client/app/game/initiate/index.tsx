@@ -40,6 +40,7 @@ import type { TierInfoLabel } from '../../../src/config/tierInfoData'
 import TokenFlowPanel, { PANEL_WIDTH, PANEL_RIGHT } from '../../../src/components/game/TokenFlowPanel'
 import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/game/FlyingCoins'
 import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
+import AvatarFrame from '../../../src/components/game/AvatarFrame'
 
 // ตำแหน่งที่นั่งเดียวกับ targets ใน startDealAnimation (Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย)
 // ศูนย์กลาง = จุดกำเนิด/ปลายทางของกองกลาง (เหมือนที่ dealAnims ใช้เป็น origin ตอนแจกไพ่)
@@ -250,6 +251,7 @@ const GameTableLive: React.FC = () => {
   const insets = useSafeAreaInsets()
   const isWeb  = Platform.OS === 'web'
   const socketRef = useRef<Socket | null>(null)
+  const matchStartRef = useRef(Date.now())
   const authUserId = useUserStore(s => s.userId)
   const usingDevFakeId = !authUserId && !!DEV_FAKE_USER_ID
   const PLAYER_ID = authUserId || DEV_FAKE_USER_ID || ''
@@ -1410,7 +1412,22 @@ const GameTableLive: React.FC = () => {
                       isSelf: pid === PLAYER_ID,
                     }
                   })}
-                onBackToLobby={() => router.replace('/(home)/lobby')}
+                onBackToLobby={() => {
+                  if (matchResult.finalWinner === PLAYER_ID) {
+                    const tokensWon = (tokenBalance[PLAYER_ID] ?? 0) - (matchResult.buyInAmount ?? buyInAmount)
+                    router.replace({
+                      pathname: '/(home)/victory',
+                      params: {
+                        tier: 'initiate',
+                        tokensWon: String(tokensWon),
+                        matchDurationSec: String(Math.max(0, Math.round((Date.now() - matchStartRef.current) / 1000))),
+                        ...(matchResult.bestHandThisMatch?.label ? { bestHandLabel: matchResult.bestHandThisMatch.label } : {}),
+                      },
+                    } as any)
+                  } else {
+                    router.replace('/(home)/lobby')
+                  }
+                }}
                 insetsBottom={insets.bottom}
               />
             </>
@@ -1659,7 +1676,10 @@ const GameTableLive: React.FC = () => {
           {/* USER AVATAR — มุมล่างซ้าย — Feedback C2: ใช้ myAvatarEmoji/myDisplayName จริงแทน hardcode */}
           {/* P1 HUD ย้ายลงชิดขอบล่าง — pointerEvents none เพื่อไม่บังปุ่ม actionBar */}
           <View style={{ position: 'absolute', bottom: Math.max(insets.bottom, 4), left: 10, zIndex: 3, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1, flexDirection: 'row', alignItems: 'center', gap: 6 }} pointerEvents="none">
-            <AvatarBubble emoji={myAvatarEmoji} image={myAvatarImage} size={40} />
+            {/* กรอบทอง VIP — เหมือน Adept/High Noble (isVip ? AvatarFrame : AvatarBubble เฉย ๆ) */}
+            {isVip
+              ? <AvatarFrame size={40}><AvatarBubble emoji={myAvatarEmoji} image={myAvatarImage} size={40} /></AvatarFrame>
+              : <AvatarBubble emoji={myAvatarEmoji} image={myAvatarImage} size={40} />}
             <View>
               <Text style={s.userNameTag} numberOfLines={1}>{myDisplayName}</Text>
               <Text style={s.seatToken}>🪙 {fmtToken(tokenBalance[PLAYER_ID])}</Text>

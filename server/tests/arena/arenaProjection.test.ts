@@ -125,7 +125,7 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
     const engine = new ArenaMatchEngine('m1', composition, createSeededRandom(1), 0)
     reserveAll(engine, 1)
     const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
-    const identities = new Map([['p1', { displayName: 'Alice', avatar: 'wolf' }], ['p2', { displayName: 'Bob', avatar: '' }], ['p3', { displayName: 'Cara', avatar: '' }]])
+    const identities = new Map([['p1', { displayName: 'Alice', avatar: 'wolf', isVip: false }], ['p2', { displayName: 'Bob', avatar: '', isVip: false }], ['p3', { displayName: 'Cara', avatar: '', isVip: false }]])
     const view = projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, identities)
     expect(view.phase).toBe('ARRANGE_1')
     const local = view.seats.find(seat => seat.playerId === 'p1')!
@@ -223,7 +223,7 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
   test('avatar: Human ใช้ preset key จริงจาก identities (fallback ว่างถ้าไม่มีข้อมูล), AI ใช้สัญลักษณ์ตัวอักษรเดิม', () => {
     const engine = new ArenaMatchEngine('m1b', composition, createSeededRandom(1), 0)
     const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
-    const identities = new Map([['p1', { displayName: 'Alice', avatar: 'wolf' }]]) // p2/p3 ไม่มีข้อมูล avatar เลย
+    const identities = new Map([['p1', { displayName: 'Alice', avatar: 'wolf', isVip: false }]]) // p2/p3 ไม่มีข้อมูล avatar เลย
     const view = projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, identities)
     const p1 = view.seats.find(seat => seat.playerId === 'p1')!
     const p2 = view.seats.find(seat => seat.playerId === 'p2')!
@@ -241,7 +241,7 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
     }
     expect(engine.snapshot().phase).toBe('AUCTION_FACE_UP')
     const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
-    const identities = new Map<string, { displayName: string; avatar: string }>()
+    const identities = new Map<string, { displayName: string; avatar: string; isVip: boolean }>()
     const beforeBid = projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, identities)
     expect(beforeBid.auction).not.toBeNull()
     engine.submit({ type: 'FACE_UP_BID', actionId: 'bid-p1', actorId: 'p1', amountCrest: 12 }, 3)

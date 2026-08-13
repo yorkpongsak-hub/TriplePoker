@@ -1563,7 +1563,14 @@ function finalizeHNGrandFinale(
         humanNetDeltas,
       })
 
-      io.to(roomId).emit('match_end', { roomId, finalWinner, tokenBalance: state.tokenBalance, results: state.results, totalRounds: state.totalRounds, buyInAmount: state.buyInAmount, finalStackByHuman, newTokenBalances })
+      const winnerBestHand = state.bestHandThisMatch?.[finalWinner]
+      io.to(roomId).emit('match_end', {
+        roomId, finalWinner, tokenBalance: state.tokenBalance, results: state.results, totalRounds: state.totalRounds,
+        buyInAmount: state.buyInAmount, finalStackByHuman, newTokenBalances,
+        bestHandThisMatch: winnerBestHand
+          ? { label: handRankLabel(winnerBestHand.hand), pile: winnerBestHand.pile, won: winnerBestHand.won }
+          : null,
+      })
       publishSpectatorEvent(roomId, { type: 'MATCH_FINISHED', winnerSeat: state.seats.findIndex(s => s.id === finalWinner) })
       finishSpectatorBroadcast(roomId)
       // Server Activity feed: winnerSeat.name ครอบคลุมทั้ง Human/AI/Monarch อยู่แล้ว (HNSeat.name)

@@ -96,6 +96,7 @@ export interface VipPlusMatchState {
   // มติลุงเยาะ — Avatar หน้าชื่อผู้เล่นทุกที่นั่งในเกม (mirror displayNameBySeat) null = Blank seat หรือ
   // ผู้เล่นไม่เคยตั้ง avatar เลย ให้ client fallback เป็น emoji default
   avatarUrlBySeat: Record<VipPlusSeat, string | null>
+  isVipBySeat: Record<VipPlusSeat, boolean>
   seatStatus: Record<VipPlusSeat, 'CONNECTED' | 'DISCONNECTED' | 'FORFEITED' | 'BLANK'>
   hands: Record<string, Card[]>
   center: VipPlusCenterCards
@@ -295,6 +296,7 @@ export async function startVipPlusMatch(
   const playerBySeat = {} as Record<VipPlusSeat, string>
   const displayNameBySeat = {} as Record<VipPlusSeat, string>
   const avatarUrlBySeat = {} as Record<VipPlusSeat, string | null>
+  const isVipBySeat = {} as Record<VipPlusSeat, boolean>
   const hands: Record<string, Card[]> = {}
   const humanSeats: VipPlusSeat[] = []
   const blankSeats: VipPlusSeat[] = []
@@ -304,6 +306,7 @@ export async function startVipPlusMatch(
     playerBySeat[seat] = playerId
     displayNameBySeat[seat] = occupant?.displayName ?? 'Blank'
     avatarUrlBySeat[seat] = occupant?.avatarUrl ?? null
+    isVipBySeat[seat] = occupant?.isVip ?? false
     if (occupant) humanSeats.push(seat)
     else blankSeats.push(seat)
     hands[playerId] = deal.handsBySeat[seat]
@@ -320,6 +323,7 @@ export async function startVipPlusMatch(
     blankSeats,
     displayNameBySeat,
     avatarUrlBySeat,
+    isVipBySeat,
     seatStatus: Object.fromEntries(VIP_PLUS_SEATS.map(seat => [seat, blankSeats.includes(seat) ? 'BLANK' : 'CONNECTED'])) as VipPlusMatchState['seatStatus'],
     hands,
     center: deal.center,
@@ -355,7 +359,7 @@ export async function startVipPlusMatch(
     phase: state.phase,
     deadlineAt: state.deadlineAt,
     center: visibleVipPlusCenterKeys(state),
-    seats: VIP_PLUS_SEATS.map(seat => ({ seat, displayName: state.displayNameBySeat[seat], avatarUrl: state.avatarUrlBySeat[seat], status: state.seatStatus[seat], isBlank: state.blankSeats.includes(seat) })),
+    seats: VIP_PLUS_SEATS.map(seat => ({ seat, displayName: state.displayNameBySeat[seat], avatarUrl: state.avatarUrlBySeat[seat], isVip: state.isVipBySeat[seat], status: state.seatStatus[seat], isBlank: state.blankSeats.includes(seat) })),
     wager: state.wager,
     pot: state.pot,
     // Feedback ลุงเยาะ — บั๊กที่ลุงเจอจริง: เล่น HOLDEM_G3 เกมแรก มือดันมี G3 5 ใบ (ต้องมีแค่ 2) ต้นเหตุคือ
@@ -505,7 +509,7 @@ export function buildVipPlusSnapshot(roomId: string, playerId: string) {
     // Feedback ลุงเยาะ (เทสมือถือรอบ 2) — เผื่อ client reconnect กลางแมตช์โดยไม่เคยผ่าน Waiting Chamber
     // เลย (ไม่มี table state เดิมให้ใช้) ต้องมีค่าจริงจาก state ตรงๆ ไม่ต้องพึ่ง default
     centerRuleset: state.centerRuleset, foulRuleEnabled: state.foulRuleEnabled,
-    seats: VIP_PLUS_SEATS.map(seat => ({ seat, displayName: state.displayNameBySeat[seat], avatarUrl: state.avatarUrlBySeat[seat], status: state.seatStatus[seat], isBlank: state.blankSeats.includes(seat) })),
+    seats: VIP_PLUS_SEATS.map(seat => ({ seat, displayName: state.displayNameBySeat[seat], avatarUrl: state.avatarUrlBySeat[seat], isVip: state.isVipBySeat[seat], status: state.seatStatus[seat], isBlank: state.blankSeats.includes(seat) })),
     center: visibleVipPlusCenterKeys(state),
     hand: state.hands[playerId].map(vipPlusCardKey),
     arrangement: ownArrangement ? Object.fromEntries(Object.entries(ownArrangement).map(([group, cards]) => [group, cards.map(vipPlusCardKey)])) : null,
@@ -1171,7 +1175,7 @@ function emitVipPlusGameStarted(state: VipPlusMatchState): void {
     phase: state.phase,
     deadlineAt: state.deadlineAt,
     center: visibleVipPlusCenterKeys(state),
-    seats: VIP_PLUS_SEATS.map(seat => ({ seat, displayName: state.displayNameBySeat[seat], avatarUrl: state.avatarUrlBySeat[seat], status: state.seatStatus[seat], isBlank: state.blankSeats.includes(seat) })),
+    seats: VIP_PLUS_SEATS.map(seat => ({ seat, displayName: state.displayNameBySeat[seat], avatarUrl: state.avatarUrlBySeat[seat], isVip: state.isVipBySeat[seat], status: state.seatStatus[seat], isBlank: state.blankSeats.includes(seat) })),
     wager: state.wager,
     pot: state.pot,
     // Feedback ลุงเยาะ (เทสมือถือรอบ 2) — ส่งซ้ำทุกเกม (ไม่ใช่แค่ตอนเริ่มแมตช์) เผื่อ client รีเฟรช/reconnect

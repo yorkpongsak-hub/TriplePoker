@@ -65,7 +65,7 @@ interface WaitingTable {
   wager: Wager
   // Batch 1 (VIP-05 fix, C4/C5) — host โอนได้แล้ว ไม่ใช่ H1 เสมอไปอีกต่อไป
   hostSeat: Seat
-  seats: Array<{ seat: Seat; displayName: string; avatarUrl?: string | null; confirmed: boolean; connected: boolean }>
+  seats: Array<{ seat: Seat; displayName: string; avatarUrl?: string | null; isVip?: boolean; confirmed: boolean; connected: boolean }>
   requiredPlayers: 5
   minimumPlayers: 3
   canHostStart: boolean
@@ -80,7 +80,7 @@ interface GameView {
   phase: 'INITIAL_ARRANGE' | 'BETTING' | 'BLIND_AUCTION' | 'REARRANGE'
   deadlineAt: number
   center: { g1: string[]; g2: string[]; g3: string[] }
-  seats: Array<{ seat: Seat; displayName: string; avatarUrl?: string | null; status?: 'CONNECTED' | 'DISCONNECTED' | 'FORFEITED' | 'BLANK'; isBlank?: boolean }>
+  seats: Array<{ seat: Seat; displayName: string; avatarUrl?: string | null; isVip?: boolean; status?: 'CONNECTED' | 'DISCONNECTED' | 'FORFEITED' | 'BLANK'; isBlank?: boolean }>
   wager: Wager | null
   hand: string[]
   arrangement: Arrangement
@@ -631,7 +631,7 @@ export default function VipPlusTableScreen() {
       <View style={s.waitingSeats}>
         {SEATS.map(seat => {
           const player = table.seats.find(candidate => candidate.seat === seat)
-          return <SeatTile key={seat} seat={seat} name={player?.displayName} avatarUrl={player?.avatarUrl} confirmed={player?.confirmed} isSelf={seat === selfSeat} connected={player?.connected} />
+          return <SeatTile key={seat} seat={seat} name={player?.displayName} avatarUrl={player?.avatarUrl} isVip={player?.isVip} confirmed={player?.confirmed} isSelf={seat === selfSeat} connected={player?.connected} />
         })}
       </View>
       <View style={s.terms}>
@@ -741,7 +741,7 @@ export default function VipPlusTableScreen() {
           const hiddenCount = Math.max(0, groupPileSize(game.group, game.centerRuleset) - revealedForGroup.length)
           return (
             <View key={seat} style={[s.remoteSeat, remoteSeatPosition(index, game.phase === 'BETTING')]}>
-              <SeatBubble seat={seat} name={game.seats.find(p => p.seat === seat)?.displayName} avatarUrl={game.seats.find(p => p.seat === seat)?.avatarUrl} status={game.seats.find(p => p.seat === seat)?.status} isBlank={game.seats.find(p => p.seat === seat)?.isBlank} active={game.actingSeat === seat} folded={game.folded[seat] === game.group} balance={game.balances[seat]} centerRuleset={game.centerRuleset} />
+              <SeatBubble seat={seat} name={game.seats.find(p => p.seat === seat)?.displayName} avatarUrl={game.seats.find(p => p.seat === seat)?.avatarUrl} isVip={game.seats.find(p => p.seat === seat)?.isVip} status={game.seats.find(p => p.seat === seat)?.status} isBlank={game.seats.find(p => p.seat === seat)?.isBlank} active={game.actingSeat === seat} folded={game.folded[seat] === game.group} balance={game.balances[seat]} centerRuleset={game.centerRuleset} />
               {game.phase === 'BETTING' && !game.seats.find(p => p.seat === seat)?.isBlank && (
                 // Feedback ลุงเยาะ (เทสมือถือ) — ที่นั่ง P4 (บนขวา, remoteSeatPosition index 1) ไพ่หงาย
                 // ขยับขวาอีกครึ่งความกว้างไพ่ (OPP_CW/2) กันไปทับกับ container ไพ่กองกลาง
@@ -773,7 +773,7 @@ export default function VipPlusTableScreen() {
         </View>
       </View>
       <View style={s.localZone}>
-        <SeatBubble seat={selfSeat ?? 'H1'} name="YOU" avatarUrl={selfSeat ? game.seats.find(p => p.seat === selfSeat)?.avatarUrl : undefined} status={selfSeat ? game.seats.find(p => p.seat === selfSeat)?.status : undefined} active={isMyTurn} folded={selfSeat ? game.folded[selfSeat] === game.group : false} balance={selfSeat ? game.balances[selfSeat] : undefined} centerRuleset={game.centerRuleset} />
+        <SeatBubble seat={selfSeat ?? 'H1'} name="YOU" avatarUrl={selfSeat ? game.seats.find(p => p.seat === selfSeat)?.avatarUrl : undefined} isVip={selfSeat ? game.seats.find(p => p.seat === selfSeat)?.isVip : undefined} status={selfSeat ? game.seats.find(p => p.seat === selfSeat)?.status : undefined} active={isMyTurn} folded={selfSeat ? game.folded[selfSeat] === game.group : false} balance={selfSeat ? game.balances[selfSeat] : undefined} centerRuleset={game.centerRuleset} />
         {(game.phase === 'INITIAL_ARRANGE' || game.phase === 'REARRANGE') && (
           <>
             <ArrangementEditor hand={game.hand} arrangement={game.arrangement} disabled={game.locked} centerRuleset={game.centerRuleset} revealedBoardCount={game.center.g3.length} onChange={arrangement => setGame(prev => ({ ...prev, arrangement }))} />
@@ -869,7 +869,7 @@ function WagerOption({ option, disabled, onPress }: { option: OptionId; disabled
   return <TouchableOpacity style={[s.option, disabled && s.disabled]} disabled={disabled} onPress={onPress}><Text style={s.optionTier}>{label}</Text><Text style={s.optionMeta}>Lower-tier wager</Text><Text style={s.optionAction}>SELECT</Text></TouchableOpacity>
 }
 
-function SeatTile({ seat, name, avatarUrl, confirmed, isSelf, connected }: { seat: Seat; name?: string; avatarUrl?: string | null; confirmed?: boolean; isSelf?: boolean; connected?: boolean }) {
+function SeatTile({ seat, name, avatarUrl, isVip, confirmed, isSelf, connected }: { seat: Seat; name?: string; avatarUrl?: string | null; isVip?: boolean; confirmed?: boolean; isSelf?: boolean; connected?: boolean }) {
   // Batch 1 (VIP-05 fix, C2/C3) — offline เฉพาะที่นั่งมีคนแล้วแต่หลุดสัญญาณ ยังไม่หมด grace
   const offline = !!name && connected === false
   // Batch 2 (VIP-04) — จุดวิ่งเฉพาะที่นั่งว่างจริงๆ (ไม่มีชื่อเลย) ที่นั่ง NOT CONFIRMED/OFFLINE คงเดิม
@@ -877,7 +877,7 @@ function SeatTile({ seat, name, avatarUrl, confirmed, isSelf, connected }: { sea
   return (
     <View style={[s.seatTile, isSelf && s.selfSeat, s.seatTileRow]}>
       {/* มติลุงเยาะ — Avatar หน้าชื่อผู้เล่นทุกที่นั่ง (ที่นั่งว่างไม่โชว์ ไม่มีใครให้แสดง) */}
-      {!isEmpty && <VipPlusPlayerAvatar value={avatarUrl} size={36} />}
+      {!isEmpty && <VipPlusPlayerAvatar value={avatarUrl} size={36} isVip={isVip} />}
       <View style={s.seatTileInfo}>
         <Text style={s.seatId}>{seat}{isSelf ? ' / YOU' : ''}</Text>
         <Text style={s.seatName}>{name ?? 'OPEN SEAT'}</Text>
@@ -893,16 +893,17 @@ function SeatTile({ seat, name, avatarUrl, confirmed, isSelf, connected }: { sea
 // มติลุงเยาะ — Avatar หน้าชื่อผู้เล่นพร้อมกรอบ (mirror pattern เดียวกับ monarch/index.tsx's
 // MonarchPlayerAvatar เป๊ะ) value = preset key (resolve ผ่าน PRESET_AVATARS + AvatarDisplay ที่มีกรอบ
 // ในตัวอยู่แล้ว) หรือ http(s)/data URL จริง หรือ emoji ดิบ — null/undefined fallback เป็นอิโมจิ default
-function VipPlusPlayerAvatar({ value, size }: { value?: string | null; size: number }) {
+function VipPlusPlayerAvatar({ value, size, isVip = false }: { value?: string | null; size: number; isVip?: boolean }) {
   const preset = value ? PRESET_AVATARS.find(item => item.key === value) : undefined
   if (preset) {
-    return <AvatarDisplay config={{ type: 'preset', presetKey: preset.key, frameKey: 'default' }} size={size} showFrame />
+    return <AvatarDisplay config={{ type: 'preset', presetKey: preset.key, frameKey: isVip ? 'gold' : 'default' }} size={size} showFrame={isVip} />
   }
+  const borderColor = isVip ? '#c9a84c' : '#2A4A34'
   if (value && /^(https?:|data:)/i.test(value)) {
-    return <Image source={{ uri: value }} style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 1.5, borderColor: '#c9a84c' }} resizeMode="cover" />
+    return <Image source={{ uri: value }} style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 1.5, borderColor }} resizeMode="cover" />
   }
   return (
-    <View style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 1.5, borderColor: '#c9a84c', backgroundColor: '#132019', alignItems: 'center', justifyContent: 'center' }}>
+    <View style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 1.5, borderColor, backgroundColor: '#132019', alignItems: 'center', justifyContent: 'center' }}>
       <Text style={{ fontSize: Math.round(size * 0.52) }}>{value || '🧑'}</Text>
     </View>
   )
@@ -957,13 +958,13 @@ function FloatingDeltaText({ amount, point }: { amount: number; point: Point }) 
   )
 }
 
-function SeatBubble({ seat, name, avatarUrl, status, isBlank, active, folded, balance, centerRuleset }: { seat: Seat; name?: string; avatarUrl?: string | null; status?: 'CONNECTED' | 'DISCONNECTED' | 'FORFEITED' | 'BLANK'; isBlank?: boolean; active: boolean; folded: boolean; balance?: number; centerRuleset: CenterRuleset }) {
+function SeatBubble({ seat, name, avatarUrl, isVip, status, isBlank, active, folded, balance, centerRuleset }: { seat: Seat; name?: string; avatarUrl?: string | null; isVip?: boolean; status?: 'CONNECTED' | 'DISCONNECTED' | 'FORFEITED' | 'BLANK'; isBlank?: boolean; active: boolean; folded: boolean; balance?: number; centerRuleset: CenterRuleset }) {
   const blank = isBlank || status === 'BLANK'
   return <View style={[s.bubble, active && s.bubbleActive, (folded || status === 'FORFEITED' || blank) && s.bubbleFolded]}>
     <Text style={s.bubbleSeat}>{seat}</Text>
     {/* มติลุงเยาะ — Avatar หน้าชื่อผู้เล่นในเกม (ที่นั่ง Blank ไม่มีคนจริง ไม่ต้องโชว์) */}
     <View style={s.bubbleNameRow}>
-      {!blank && <VipPlusPlayerAvatar value={avatarUrl} size={16} />}
+      {!blank && <VipPlusPlayerAvatar value={avatarUrl} size={16} isVip={isVip} />}
       <Text style={s.bubbleName} numberOfLines={1}>{blank ? 'BLANK' : name ?? 'PLAYER'}</Text>
     </View>
     {blank ? <BlankHand centerRuleset={centerRuleset} /> : balance !== undefined && <Text style={s.bubbleStack}>{balance.toLocaleString('en-US')} T</Text>}

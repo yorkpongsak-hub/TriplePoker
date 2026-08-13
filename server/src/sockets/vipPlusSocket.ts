@@ -13,7 +13,7 @@ import { attachVipPlusBettingIo, buildVipPlusSnapshot, forfeitVipPlusMatch, getV
 // มติลุงเยาะ — เพิ่ม avatarUrl ให้ Avatar หน้าชื่อผู้เล่นทุกที่นั่ง (Waiting Chamber + ในเกม) ตาม pattern
 // เดียวกับ Monarch (monarch/index.tsx's MonarchPlayerAvatar) — avatar_url เก็บ preset key/emoji/URL จริง
 // (ชื่อ column ทำให้เข้าใจผิดว่าเป็น URL เสมอ แต่จริงๆ resolve หลายแบบฝั่ง client)
-type AuthenticatedProfile = { playerId: string; displayName: string; tokenBalance: number; avatarUrl: string | null }
+type AuthenticatedProfile = { playerId: string; displayName: string; tokenBalance: number; avatarUrl: string | null; isVip: boolean }
 const vipPlusSocketPlayers = new Map<string, { playerId: string; tableId: string }>()
 
 async function authenticateProfile(userId: string, accessToken?: string | null): Promise<AuthenticatedProfile | null> {
@@ -23,7 +23,7 @@ async function authenticateProfile(userId: string, accessToken?: string | null):
 
   const { data: profile, error: profileError } = await supabaseAdmin
     .from('users')
-    .select('display_name, token_balance, avatar_url')
+    .select('display_name, token_balance, avatar_url, vip_status')
     .eq('user_id', userId)
     .single()
   if (profileError || !profile) return null
@@ -32,6 +32,7 @@ async function authenticateProfile(userId: string, accessToken?: string | null):
     displayName: profile.display_name ?? 'Player',
     tokenBalance: profile.token_balance ?? 0,
     avatarUrl: profile.avatar_url ?? null,
+    isVip: (profile.vip_status ?? 'none') !== 'none',
   }
 }
 

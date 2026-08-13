@@ -37,6 +37,7 @@ import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets
 import { MINION_AVATAR } from '../../../src/constants/minionAvatars'
 import GameTopBar from '../../../src/components/game/GameTopBar'
 import { AvatarDisplay, PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
+import { useAuthStore } from '../../../src/store/authStore'
 import BossVictoryVFX from '../../../src/components/vfx/BossVictoryVFX'
 import { getReduceMotion } from '../../../src/utils/reduceMotion'
 // Batch 4 — SFX layer เท่านั้น ห้าม import bgmService (ไม่มี BGM ในโต๊ะเกมทุก Tier ตาม canon)
@@ -47,16 +48,20 @@ const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 const bossAvatarImg = require('../../../assets/bosses/boss_Monarch_avatar.png')
 const MONARCH_TABLE_SKIN = require('../../../assets/tables/boss_monarch_skin_table.png')
 
+// Monarch เป็น 1v1 (Human คนเดียวเสมอ ไม่มี human คนอื่น) — อ่าน vip_status ของ session ตรงๆ ในนี้ได้เลย
+// ไม่ต้องส่งผ่าน prop จาก caller ทั้ง 4 จุด (ต่างจาก Adept/High Noble/VIP Plus ที่มีหลาย seat จริง)
 function MonarchPlayerAvatar({ value, size }: { value?: string; size: number }) {
+  const isVip = useAuthStore(s => (s.profile?.vip_status ?? 'none') !== 'none')
   const preset = value ? PRESET_AVATARS.find(item => item.key === value) : undefined
   if (preset) {
-    return <AvatarDisplay config={{ type: 'preset', presetKey: preset.key, frameKey: 'default' }} size={size} showFrame={false} />
+    return <AvatarDisplay config={{ type: 'preset', presetKey: preset.key, frameKey: isVip ? 'gold' : 'default' }} size={size} showFrame={isVip} />
   }
+  const borderColor = isVip ? '#FFD76A' : '#2A4A34'
   if (value && /^(https?:|data:)/i.test(value)) {
-    return <Image source={{ uri: value }} style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 1.5, borderColor: '#FFD76A' }} resizeMode="cover" />
+    return <Image source={{ uri: value }} style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 1.5, borderColor }} resizeMode="cover" />
   }
   return (
-    <View style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 1.5, borderColor: '#FFD76A', backgroundColor: '#132019', alignItems: 'center', justifyContent: 'center' }}>
+    <View style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 1.5, borderColor, backgroundColor: '#132019', alignItems: 'center', justifyContent: 'center' }}>
       <Text style={{ fontSize: Math.round(size * 0.52) }}>{value || '🧑'}</Text>
     </View>
   )

@@ -305,6 +305,7 @@ const GameTableLive: React.FC = () => {
   const insets = useSafeAreaInsets()
   const isWeb  = Platform.OS === 'web'
   const socketRef = useRef<Socket | null>(null)
+  const matchStartRef = useRef(Date.now())
   // Patch Multiplayer: roomId/userId มาจาก matchmaking ที่ lobby.tsx (room_auto_match -> room_ready) — ไม่ hardcode อีกต่อไป
   const params   = useLocalSearchParams<{ roomId?: string; userId?: string }>()
   const authUserId = useUserStore(s => s.userId)
@@ -2525,7 +2526,23 @@ const GameTableLive: React.FC = () => {
                       isSelf: pid === PLAYER_ID,
                     }
                   })}
-                onBackToLobby={() => router.push('/lobby')}
+                onBackToLobby={() => {
+                  if (matchResult.finalWinner === PLAYER_ID) {
+                    const returnedAmount = matchResult.finalStackByHuman?.[PLAYER_ID] ?? tokenBalance[PLAYER_ID] ?? 0
+                    const tokensWon = returnedAmount - (matchResult.buyInAmount ?? buyInAmount)
+                    router.replace({
+                      pathname: '/(home)/victory',
+                      params: {
+                        tier: 'highNoble',
+                        tokensWon: String(tokensWon),
+                        matchDurationSec: String(Math.max(0, Math.round((Date.now() - matchStartRef.current) / 1000))),
+                        ...(matchResult.bestHandThisMatch?.label ? { bestHandLabel: matchResult.bestHandThisMatch.label } : {}),
+                      },
+                    } as any)
+                  } else {
+                    router.push('/lobby')
+                  }
+                }}
                 insetsBottom={insets.bottom}
               />
             </>

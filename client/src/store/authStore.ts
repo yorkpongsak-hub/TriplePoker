@@ -134,7 +134,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   signOut: async () => {
     // Patch: signOut บน session ที่เสียแล้วจะ throw "Invalid Refresh Token" ซ้ำ -> ห่อไว้ให้ logout สำเร็จเสมอ
-    try { await supabase.auth.signOut() } catch (e) { console.warn('[authStore] signOut error (ignored):', e) }
+    // Patch 2026-08-13: ลุงเยาะรายงานว่ากดปุ่ม Logout แล้วไม่มีอะไรเกิดขึ้น — supabase.auth.signOut() เป็น
+    // network call ที่ไม่มี timeout ในตัว ถ้าค้าง (ไม่ resolve/reject) โค้ดจะหยุดอยู่ตรง await นี้ตลอดไป
+    // ทำให้ set({session:null,...}) ด้านล่างไม่เคยรัน — Logout ต้องเคลียร์ session ในเครื่องได้เสมอไม่ว่า
+    // เครือข่ายจะเป็นยังไง จึงใส่เพดานเวลา 5 วิ แล้วเดินหน้าเคลียร์ local state ต่อโดยไม่รอ network call ค้าง
+    try {
+      await Promise.race([
+        supabase.auth.signOut(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('SIGN_OUT_TIMEOUT')), 5000)),
+      ])
+    } catch (e) { console.warn('[authStore] signOut error/timeout (ignored):', e) }
     set({ session: null, user: null, profile: null })
     useUserStore.getState().logout()
   },

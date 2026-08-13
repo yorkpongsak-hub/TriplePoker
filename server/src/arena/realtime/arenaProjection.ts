@@ -13,6 +13,8 @@ export interface ArenaSeatViewWire {
   // Human: preset avatar key (จาก PRESET_AVATARS ฝั่ง client, resolve ผ่าน AvatarDisplay) อาจว่างถ้ายังไม่ตั้งค่า
   // AI (Boss/Sentinel/Minion): สัญลักษณ์ตัวอักษรเดิม ('♛'/'♠') ไม่มี preset จริงให้ resolve
   avatar: string
+  // Human เท่านั้น (AI ไม่มี vip_status จริง) — ใช้โชว์กรอบทอง VIP หน้าที่นั่ง เหมือน Adept/High Noble
+  isVip: boolean
   controller: 'HUMAN' | 'AI'
   isLocal: boolean
   isBoss: boolean
@@ -149,7 +151,7 @@ export function projectArenaClientSnapshot(
   connections: ArenaConnectionManager,
   viewerId: string,
   now: number,
-  identities: ReadonlyMap<string, { displayName: string; avatar: string }>,
+  identities: ReadonlyMap<string, { displayName: string; avatar: string; isVip: boolean }>,
 ): ArenaClientSnapshotWire {
   const snapshot = engine.snapshot()
   const detail = engine.snapshotDetail()
@@ -188,9 +190,10 @@ export function projectArenaClientSnapshot(
     const avatar = seatAssignment.controller === 'HUMAN'
       ? identities.get(actorId)?.avatar ?? ''
       : seatAssignment.role === 'BOSS' ? '♛' : '♠'
+    const isVip = seatAssignment.controller === 'HUMAN' && (identities.get(actorId)?.isVip ?? false)
     const connection: ArenaConnectionView = seatAssignment.controller === 'HUMAN' ? connections.view(actorId, now) : 'CONNECTED'
     return {
-      seat: seatAssignment.seat, playerId: actorId, displayName, avatar, controller: seatAssignment.controller,
+      seat: seatAssignment.seat, playerId: actorId, displayName, avatar, isVip, controller: seatAssignment.controller,
       isLocal, isBoss: seatAssignment.role === 'BOSS' || seatAssignment.role === 'HUMAN_BOSS', isCurrentTurn: snapshot.pendingActorIds.includes(actorId),
       connection, cards: isLocal ? hand.map(arenaCardKey) : [], cardCount: hand.length,
       arrangedPiles: isLocal && lockedArrangement ? {

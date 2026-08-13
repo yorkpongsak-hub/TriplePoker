@@ -273,6 +273,7 @@ const GameTableLive: React.FC = () => {
   const insets = useSafeAreaInsets()
   const isWeb  = Platform.OS === 'web'
   const socketRef = useRef<Socket | null>(null)
+  const matchStartRef = useRef(Date.now())
   const authUserId = useUserStore(s => s.userId)
   const usingDevFakeId = !authUserId && !!DEV_FAKE_USER_ID
   const PLAYER_ID = authUserId || DEV_FAKE_USER_ID || ''
@@ -2449,7 +2450,22 @@ const GameTableLive: React.FC = () => {
                   })}
                 /* ไม่มี Rematch (Spec §5.1 No Rematch — มติลุงเยาะ 2026-07-25: จบเกมต้องกลับ Lobby
                    ทุกครั้ง เพราะ Buy-in ล็อคตั้งแต่ต้นเกม เล่นต่อ = ต้อง escrow ก้อนใหม่จากหน้า Lobby) */
-                onBackToLobby={() => router.push('/lobby')}
+                onBackToLobby={() => {
+                  if (matchResult.finalWinner === PLAYER_ID) {
+                    const tokensWon = (tokenBalance[PLAYER_ID] ?? 0) - (matchResult.buyInAmount ?? buyInAmount)
+                    router.replace({
+                      pathname: '/(home)/victory',
+                      params: {
+                        tier: 'mastermind',
+                        tokensWon: String(tokensWon),
+                        matchDurationSec: String(Math.max(0, Math.round((Date.now() - matchStartRef.current) / 1000))),
+                        ...(matchResult.bestHandThisMatch?.label ? { bestHandLabel: matchResult.bestHandThisMatch.label } : {}),
+                      },
+                    } as any)
+                  } else {
+                    router.push('/lobby')
+                  }
+                }}
                 insetsBottom={insets.bottom}
               />
             </>
@@ -2780,10 +2796,13 @@ const GameTableLive: React.FC = () => {
           {/* USER AVATAR — มุมล่างซ้าย (ซ่อนตอน Grand Finale เพราะ Overlay มี Avatar P1 แล้ว) — Feedback C2: ใช้ myAvatarEmoji/myDisplayName จริง */}
           {/* P1 HUD ย้ายลงชิดขอบล่าง — pointerEvents none เพื่อไม่บังปุ่ม actionBar */}
           <View style={{ position: 'absolute', bottom: Math.max(insets.bottom, 4), left: 10, zIndex: 3, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 /* Patch 2026-07-19: คงตำแหน่ง P1 HUD เดิมตลอดรวม Grand Finale (มติลุงเยาะ) */, flexDirection: 'row', alignItems: 'center', gap: 6 }} pointerEvents="none">
-            {/* Gold Radiance + Active Turn Pulse - reuse gfTurnPlayerId ตัวเดียวกับ SeatHeader ไม่สร้าง state ใหม่ */}
-            <AvatarFrame size={40} active={phase === 'grand_finale' && gfTurnPlayerId === PLAYER_ID}>
-              <AvatarBubble emoji={myAvatarEmoji} image={myAvatarImage} size={40} />
-            </AvatarFrame>
+            {/* กรอบทอง VIP (isVip ? AvatarFrame : AvatarBubble เฉย ๆ — เหมือน Adept/High Noble) + Active
+                Turn Pulse - reuse gfTurnPlayerId ตัวเดียวกับ SeatHeader ไม่สร้าง state ใหม่ */}
+            {isVip
+              ? <AvatarFrame size={40} active={phase === 'grand_finale' && gfTurnPlayerId === PLAYER_ID}>
+                  <AvatarBubble emoji={myAvatarEmoji} image={myAvatarImage} size={40} />
+                </AvatarFrame>
+              : <AvatarBubble emoji={myAvatarEmoji} image={myAvatarImage} size={40} />}
             <View>
               <Text style={s.userNameTag} numberOfLines={1}>{myDisplayName}</Text>
               {/* Patch 2026-07-18: ยอดโทเคนคงเหลือใต้ชื่อ (pattern Initiate) */}

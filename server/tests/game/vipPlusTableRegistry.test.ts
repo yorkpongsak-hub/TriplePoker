@@ -105,7 +105,7 @@ describe('VIP Plus Gate 3 table registry', () => {
     const payload = registry.toPublic(table)
     expect(JSON.stringify(payload)).not.toContain('p1')
     // มติลุงเยาะ — เพิ่ม avatarUrl (Avatar หน้าชื่อผู้เล่น) เข้า public seat payload แล้ว
-    expect(payload.seats).toEqual([{ seat: 'H1', displayName: 'Player 1', avatarUrl: null, confirmed: false, connected: true }])
+    expect(payload.seats).toEqual([{ seat: 'H1', displayName: 'Player 1', avatarUrl: null, isVip: false, confirmed: false, connected: true }])
   })
 
   // Batch 1 (VIP-05 fix, C4) — เปลี่ยนพฤติกรรมเดิม: host leave ตอนยังมีคนเหลือ ต้องโอน host ไม่ใช่ลบโต๊ะ

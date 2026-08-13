@@ -254,6 +254,7 @@ const GameTableLive: React.FC = () => {
   const insets = useSafeAreaInsets()
   const isWeb  = Platform.OS === 'web'
   const socketRef = useRef<Socket | null>(null)
+  const matchStartRef = useRef(Date.now())
 
   // Patch Multiplayer: roomId/userId มาจาก Lobby (auto-match) ผ่าน route params
   const params = useLocalSearchParams<{ roomId?: string; userId?: string }>()
@@ -1009,7 +1010,20 @@ const GameTableLive: React.FC = () => {
 
   const handleBackToLobby = () => {
     stopMatchEndAnimations()
-    router.push('/lobby')
+    if (matchResult?.finalWinner === PLAYER_ID) {
+      const tokensWon = (tokenBalance[PLAYER_ID] ?? 0) - (matchResult.buyInAmount ?? buyInAmount)
+      router.replace({
+        pathname: '/(home)/victory',
+        params: {
+          tier: 'adept',
+          tokensWon: String(tokensWon),
+          matchDurationSec: String(Math.max(0, Math.round((Date.now() - matchStartRef.current) / 1000))),
+          ...(matchResult.bestHandThisMatch?.label ? { bestHandLabel: matchResult.bestHandThisMatch.label } : {}),
+        },
+      } as any)
+    } else {
+      router.push('/lobby')
+    }
   }
 
   // ── Sub-components

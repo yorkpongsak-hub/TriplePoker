@@ -24,10 +24,10 @@ function previewSnapshot(mode?: string): ArenaClientSnapshot {
     matchId: 'grandmaster-preview', version: 1, phase, gameNumber: 1,
     phaseEndsAt: Date.now() + 30_000,
     seats: [
-      { seat: 1, playerId: 'local', displayName: 'Grandmaster', avatar: 'wolf', controller: 'HUMAN', isLocal: true, isBoss: false, isCurrentTurn: phase.includes('GF'), connection: mode === 'reconnect' ? 'RECONNECTING' : 'CONNECTED', cards, cardCount: 11, crownCrest: 246 },
-      { seat: 2, playerId: 'p2', displayName: 'Cipher Veil', avatar: 'fox', controller: 'HUMAN', isLocal: false, isBoss: false, isCurrentTurn: false, connection: 'CONNECTED', cards: [], cardCount: 11, crownCrest: 210 },
-      { seat: 3, playerId: 'boss', displayName: 'Monarch', avatar: '♛', controller: 'AI', isLocal: false, isBoss: true, isCurrentTurn: false, connection: 'CONNECTED', cards: [], cardCount: 11, crownCrest: 300 },
-      { seat: 4, playerId: 'p4', displayName: 'Sovereign Fox', avatar: 'owl', controller: 'HUMAN', isLocal: false, isBoss: false, isCurrentTurn: false, connection: 'CONNECTED', cards: [], cardCount: 11, crownCrest: 198 },
+      { seat: 1, playerId: 'local', displayName: 'Grandmaster', avatar: 'wolf', isVip: false, controller: 'HUMAN', isLocal: true, isBoss: false, isCurrentTurn: phase.includes('GF'), connection: mode === 'reconnect' ? 'RECONNECTING' : 'CONNECTED', cards, cardCount: 11, crownCrest: 246 },
+      { seat: 2, playerId: 'p2', displayName: 'Cipher Veil', avatar: 'fox', isVip: false, controller: 'HUMAN', isLocal: false, isBoss: false, isCurrentTurn: false, connection: 'CONNECTED', cards: [], cardCount: 11, crownCrest: 210 },
+      { seat: 3, playerId: 'boss', displayName: 'Monarch', avatar: '♛', isVip: false, controller: 'AI', isLocal: false, isBoss: true, isCurrentTurn: false, connection: 'CONNECTED', cards: [], cardCount: 11, crownCrest: 300 },
+      { seat: 4, playerId: 'p4', displayName: 'Sovereign Fox', avatar: 'owl', isVip: false, controller: 'HUMAN', isLocal: false, isBoss: false, isCurrentTurn: false, connection: 'CONNECTED', cards: [], cardCount: 11, crownCrest: 198 },
     ],
     cardZones: {
       stockCount: phase === 'ARRANGE_1' ? 3 : 0,
