@@ -25,6 +25,11 @@ jest.mock('../../src/utils/nameValidator', () => ({
   validateDisplayName: mockValidateDisplayName,
 }))
 
+const mockGrantWelcomeBonusIfNeeded = jest.fn()
+jest.mock('../../src/game/welcomeBonusService', () => ({
+  grantWelcomeBonusIfNeeded: (...args: unknown[]) => mockGrantWelcomeBonusIfNeeded(...args),
+}))
+
 import Fastify, { FastifyInstance } from 'fastify'
 import { authRoutes } from '../../src/routes/auth'
 
@@ -45,6 +50,7 @@ beforeEach(() => {
   mockUpdate.mockClear()
   mockFrom.mockClear()
   mockValidateDisplayName.mockReset()
+  mockGrantWelcomeBonusIfNeeded.mockReset().mockResolvedValue(undefined)
 })
 
 describe('POST /auth/register', () => {
@@ -166,6 +172,37 @@ describe('POST /auth/register', () => {
     expect(mockFrom).toHaveBeenCalledWith('users')
     expect(mockUpdate).toHaveBeenCalledWith({ display_name: 'Regular Player' })
     expect(mockEq).toHaveBeenCalledWith('user_id', AUTH_USER.id)
+
+    // Welcome Bonus — Central Economy Ledger Phase 7 Round 8 (2026-08-13)
+    expect(mockGrantWelcomeBonusIfNeeded).toHaveBeenCalledWith(AUTH_USER.id)
+    await app.close()
+  })
+})
+
+describe('POST /auth/guest-init — Guest Play (มติลุงเยาะ 2026-08-13)', () => {
+  test('ไม่มี Authorization header → 401, ไม่เรียก grantWelcomeBonusIfNeeded', async () => {
+    const app = await buildApp()
+    const res = await app.inject({ method: 'POST', url: '/auth/guest-init' })
+    expect(res.statusCode).toBe(401)
+    expect(mockGrantWelcomeBonusIfNeeded).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  test('token ไม่ valid → 401', async () => {
+    mockGetUser.mockResolvedValueOnce({ data: { user: null }, error: { message: 'bad token' } })
+    const app = await buildApp()
+    const res = await app.inject({ method: 'POST', url: '/auth/guest-init', headers: { authorization: 'Bearer bad-token' } })
+    expect(res.statusCode).toBe(401)
+    await app.close()
+  })
+
+  test('token valid (session anonymous ใหม่) → 200 + เรียก grantWelcomeBonusIfNeeded ด้วย user_id', async () => {
+    mockGetUser.mockResolvedValueOnce({ data: { user: AUTH_USER }, error: null })
+    const app = await buildApp()
+    const res = await app.inject({ method: 'POST', url: '/auth/guest-init', headers: { authorization: 'Bearer good-token' } })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ success: true })
+    expect(mockGrantWelcomeBonusIfNeeded).toHaveBeenCalledWith(AUTH_USER.id)
     await app.close()
   })
 })

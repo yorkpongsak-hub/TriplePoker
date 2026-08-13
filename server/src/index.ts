@@ -7,6 +7,7 @@ import statsRoutes from './routes/stats'
 import crownVaultRoutes from './routes/crownVault'
 import merchRoutes from './routes/merch'
 import sovereignRoutes from './routes/sovereign'
+import rewardsRoutes from './routes/rewards'
 import { startSovereignLifecycleRuntime } from './arena/sovereign/sovereignLifecycleRuntime'
 import { registerGameSocket } from './sockets/gameSocket'
 import { registerArenaSocket } from './arena/realtime/arenaSocket'
@@ -36,6 +37,7 @@ app.register(statsRoutes)
 app.register(crownVaultRoutes)
 app.register(merchRoutes)
 app.register(sovereignRoutes)
+app.register(rewardsRoutes)
 
 // Health check
 app.get('/health', async () => ({

@@ -15,6 +15,7 @@
 import { supabaseAdmin } from '../config/supabase'
 import { gameConfig } from '../config/gameConfig'
 import { HandResult, handRankLabel } from './handEvaluator'
+import { economyService } from '../economy/economyService'
 
 export type StatsTier = 'initiate' | 'adept' | 'mastermind' | 'highNoble'
 
@@ -206,6 +207,8 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
   const todayStr = getBangkokDateString(now)
   const nowISO = now.toISOString()
 
+  const streakRewards: Array<{ userId: string; tokenReward: number }> = []
+
   const rows = valid.map(p => {
     const prev = current[p.userId] ?? {
       token_balance: 0, vip_status: 'none', games_played: 0, games_won: 0, xp: 0,
@@ -236,6 +239,9 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
       streakShieldsBeforeReward, prev.streak_7days_badge, todayStr,
     )
     newXp += streak.xpReward
+    if (streak.tokenReward > 0) {
+      streakRewards.push({ userId: p.userId, tokenReward: streak.tokenReward })
+    }
 
     // 6) best_hands (jsonb, key = tier) — replace เฉพาะ key ของ tier นี้ถ้า score สูงกว่าเดิม
     let newBestHands = prev.best_hands ?? {}
@@ -260,7 +266,7 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
 
     return {
       user_id: p.userId,
-      token_balance: newTokenBalance + streak.tokenReward,
+      token_balance: newTokenBalance,
       debt_amount: newDebtAmount,
       games_played: newGamesPlayed,
       games_won: newGamesWon,
@@ -289,5 +295,25 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
     }
   } catch (err) {
     console.error('[MATCH_STATS] Unexpected error during upsert:', err, '| payload:', JSON.stringify(rows))
+  }
+
+  // Daily Streak Bonus — Central Economy Ledger Phase 7 Round 8 (2026-08-13). Separated from the
+  // combined stats .update() above (which still writes games_played/xp/best_hands/debt_amount
+  // directly, unchanged) so the token portion is ledger-tracked. One mint per player, isolated in
+  // its own try/catch so one failure doesn't affect the others — idempotency key is deterministic
+  // per user per day, doubling as an "at most once per day" safety net.
+  for (const { userId, tokenReward } of streakRewards) {
+    try {
+      await economyService.mint({
+        idempotencyKey: `STREAK_BONUS:${userId}:${todayStr}`,
+        to: { accountType: 'PLAYER', accountId: userId },
+        currency: 'TOKEN',
+        amount: tokenReward,
+        reason: 'STREAK_BONUS',
+        actor: 'daily_play_streak_system',
+      })
+    } catch (err) {
+      console.error('[MATCH_STATS] Streak Bonus mint failed for', userId, err)
+    }
   }
 }

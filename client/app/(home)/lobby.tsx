@@ -5,7 +5,7 @@
  * The Sage Unicorn Studio Co., Ltd.
  */
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Image, Platform, Modal, Switch, TextInput, useWindowDimensions } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Image, Platform, Modal, Switch, TextInput, useWindowDimensions, Alert } from 'react-native';
 import { io, Socket } from 'socket.io-client';
 import { useUserStore } from '../../src/store/userStore';
 import { router } from 'expo-router';
@@ -18,6 +18,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { BUY_IN, BuyInTier, AD_RESCUE_AMOUNT } from '../../src/config/buyInConfig'
 import { Tier, TIER_CONFIG, isEligible, meetsLastBossCondition } from '../../src/config/tierConfig'
 import { ActiveTableSummary } from '../../src/types/spectator.types'
+import { watchAd } from '../../src/services/adRewards'
 
 const studioLogo = require('../../assets/images/sage_unicorn_logo_transparent.png');
 
@@ -297,11 +298,22 @@ export default function LobbyScreen() {
     pendingEnterRef.current = null;
   };
 
-  const handleWatchAd = () => {
-    // TODO: ต่อ AdMob rewarded ad จริง — ดูจบแล้วเรียก server endpoint ให้เครดิต +AD_RESCUE_AMOUNT แล้ว refreshProfile()
+  // TODO: ต่อ AdMob rewarded ad SDK จริง — ตอนนี้เป็นปุ่มทดสอบชั่วคราว (มติลุงเยาะ 2026-08-13) เรียก
+  // endpoint ให้เครดิตทันทีแทนการรอดูโฆษณาจริง จนกว่าจะมีบัญชี AdMob/Ad Unit ID มาต่อ SDK จริง
+  const handleWatchAd = async () => {
     setInsufficientTier(null);
     pendingEnterRef.current = null;
-    handleComingSoon('Watch Ad');
+    const result = await watchAd(accessToken);
+    if (result.ok === false) {
+      if (result.reason === 'cooldown') {
+        const minutes = Math.ceil(result.retryAfterSeconds / 60);
+        Alert.alert('Ad Cooldown', `Watch another ad in about ${minutes} min.`);
+      } else {
+        Alert.alert('Watch Ad', 'Something went wrong. Please try again.');
+      }
+      return;
+    }
+    Alert.alert('Ad Reward', `+${result.tokensAwarded} Token`);
   };
 
   const handleBuyTokensNav = () => {
@@ -701,7 +713,7 @@ export default function LobbyScreen() {
       <View style={s.menuBar}>
         <MenuButton icon="shop" label="Shop" size="sm" onPress={handleShopNav} vipShimmer={isVip} />
         <MenuButton icon="hall_of_fame" label="Hall of Fame" size="sm" onPress={() => router.push('/(home)/hall-of-fame')} vipShimmer={isVip} />
-        <MenuButton icon="friends" label="Friends" size="sm" onPress={() => handleComingSoon('Friends')} vipShimmer={isVip} />
+        <MenuButton icon="friends" label="Top10" size="sm" onPress={() => router.push('/(home)/top10')} vipShimmer={isVip} />
         <MenuButton icon="ranking" label="Ranking" size="sm" onPress={() => router.push('/(home)/stats')} vipShimmer={isVip} />
       </View>
 

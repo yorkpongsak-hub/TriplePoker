@@ -53,6 +53,7 @@ export const gameConfig = {
       min: 50,                  // Token ต่ำสุดจากการดู Ad เมื่อ Token < 100
       max: 100,                 // Token สูงสุดจากการดู Ad เมื่อ Token < 100
     },
+    adRewardCooldownHours: 1,   // ดู Ad รับรางวัลได้ทุกกี่ชั่วโมง (Redis SET NX EX cooldown lock)
     loginBonus: {
       free: 200,                // +200 Token เมื่อดูโฆษณาครั้งแรกของวัน
       vip:  300,                // +300 Token อัตโนมัติสำหรับ VIP
