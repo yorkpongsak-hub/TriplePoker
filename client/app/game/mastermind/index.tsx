@@ -6,7 +6,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Alert, Animated, Image, ImageBackground, Platform, ScrollView, StatusBar, StyleSheet,
+  Alert, Animated, BackHandler, Image, ImageBackground, Platform, ScrollView, StatusBar, StyleSheet,
   Text, TouchableOpacity, View,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -308,6 +308,10 @@ const GameTableLive: React.FC = () => {
 
   // ── Game state
   const [phase, setPhase]             = useState<'dealing'|'arrangement'|'arrangement_2'|'countdown'|'showdown'|'fog_of_war'|'blind_auction'|'auction_done'|'discard'|'discard_done'|'grand_finale'|'grand_finale_done'|'result'|'end'>('dealing')
+  // Connection status — pattern เดียวกับ highNoble/index.tsx:345-350 (adept มี pattern เดียวกันแต่วาง
+  // ตำแหน่ง overlay แย่กว่า ใช้ highNoble เป็นต้นแบบ)
+  const [isReconnecting, setIsReconnecting] = useState(false)
+  const [connectionError, setConnectionError] = useState<string | null>(null)
   const [dealDone, setDealDone]         = useState(false)
   const [dealCount, setDealCount]       = useState(0)
   const [roundNumber, setRoundNumber] = useState(1)
@@ -560,18 +564,45 @@ const GameTableLive: React.FC = () => {
       console.warn('[game] Using DEV_FAKE_USER_ID for PLAYER_ID:', PLAYER_ID)
     }
 
-    const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: false })
+    // Connection status: reconnection:true (เดิม false) ให้ disconnect/connect_error หมุน retry จริง
+    // pattern เดียวกับ highNoble/adept (ดู isReconnecting/connectionError ด้านบน)
+    const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: true, reconnectionAttempts: 5, reconnectionDelay: 1000 })
     socketRef.current = socket
 
     let matchStarted = false
+    let disconnectAlertShown = false
     socket.on('connect', () => {
-      if (matchStarted) return
+      setIsReconnecting(false)
+      setConnectionError(null)
+      if (matchStarted) {
+        // Reconnect หลังเคยเริ่มแมตช์ไปแล้ว — solo tier (Initiate/Mastermind) ไม่มี grace period เลย
+        // (gameSocket.ts's disconnect handler เรียก settleAndEndSoloMatch ทันทีตอน disconnect แรก ไม่รอ
+        // reconnect เหมือน Adept/High Noble) แปลว่าแมตช์ถูกปิด+settle ไปแน่นอนแล้ว เดินเกมต่อไม่ได้จริง
+        // — เด้งกลับ Lobby พร้อมแจ้งเหตุแทนปล่อยจอค้าง (มติลุงเยาะ 2026-08-13)
+        if (disconnectAlertShown) return
+        disconnectAlertShown = true
+        Alert.alert(
+          'Connection Lost',
+          'Your connection was interrupted and this match was settled with your last known stack. Returning to the Lobby.',
+          [{ text: 'OK', onPress: () => router.replace('/(home)/lobby') }],
+        )
+        return
+      }
       matchStarted = true
       // token ไม่ส่งจาก client (server-authoritative — escrowBuyIn คิดจาก users.token_balance สดเท่านั้น)
       // (player_join_room ถูกตัดออก — dead path เดิม: client ไม่เคย listen 'player_joined'/'arrangement_start'
       // ที่มันคืนมา แถมยังสร้างตาราง tableRegistry ซ้ำด้วย roomId เดิมอีกชั้น start_match ด้านล่างทำ
       // socket.join(roomId) ให้อยู่แล้วเหมือนกัน — pattern เดียวกับ initiate Phase 2.2)
       socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'mastermind', bossId })
+    })
+
+    // Connection status: pattern เดียวกับ highNoble/index.tsx:649-673
+    socket.on('connect_error', (err: any) => {
+      setConnectionError(err?.message || 'Cannot reach the game server.')
+    })
+    socket.on('disconnect', (reason: string) => {
+      if (reason === 'io client disconnect') return
+      setIsReconnecting(true)
     })
 
     // Buy-in Spec §4 safety net — server ปฏิเสธเข้าโต๊ะเพราะ token ไม่พอ (ปกติ Lobby เช็คไว้ก่อนแล้ว)
@@ -1150,6 +1181,35 @@ const GameTableLive: React.FC = () => {
     }
   }, [])
 
+  // Android hardware back — ยืนยันก่อนออกโต๊ะกลางเกม (มติลุงเยาะ 2026-08-13, pattern เดียวกับ
+  // vipPlus/index.tsx's WAITING-screen back handler แต่ครอบคลุมกลางแมตช์ด้วย — ไม่มี Tier ไหนเคยมี
+  // จริงมาก่อน ExitTableButton.tsx เดิมเป็น dead code ไม่มีไฟล์ไหนเรียกใช้) phase==='end' = แมตช์
+  // settle เรียบร้อยแล้วฝั่ง server ผ่าน MatchEndOverlay ปกติ (ห้องถูกลบไปแล้ว) ปล่อย default back
+  // ทำงานตรงๆ ไม่ต้องถาม/ไม่ต้องยิง player_leave ซ้ำ
+  useEffect(() => {
+    if (Platform.OS !== 'android') return
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (phase === 'end') return false
+      Alert.alert(
+        'Leave this table?',
+        'Leaving during an active match counts as a forfeit. Your current stack will be settled and returned.',
+        [
+          { text: 'Stay', style: 'cancel' },
+          {
+            text: 'Leave Table',
+            style: 'destructive',
+            onPress: () => {
+              socketRef.current?.emit('player_leave', { roomId: ROOM_ID, playerId: PLAYER_ID })
+              router.replace('/(home)/lobby')
+            },
+          },
+        ],
+      )
+      return true
+    })
+    return () => subscription.remove()
+  }, [phase, ROOM_ID, PLAYER_ID])
+
   // ── Deal Animation
   // Patch 2026-07-17: composite ref เก็บ Animated.parallel ไว้เรียก .stop() (พอร์ต pattern จาก Adept)
   const dealAnimCompositeRef = useRef<Animated.CompositeAnimation | null>(null)
@@ -1472,22 +1532,11 @@ const GameTableLive: React.FC = () => {
     const GAP_USER_OR_AI = isHuman ? OVERLAP : GF_GAP
     const calledKeys = gfRevealedCards[playerId] ?? []
     const finalRev = gfFinalReveals[playerId] ?? []
-    // Round 2 จบ → หงายครบ 3 ใบ
-    if (finalRev.length === 3) {
-      return (
-        <View style={{ flexDirection: 'row', gap: GAP_USER_OR_AI, alignSelf: 'center' }}>
-          {finalRev.map((k, i) => (
-            <View key={i} style={{
-              width: CW_USER_OR_AI, height: CH_USER_OR_AI, borderRadius: 4, overflow: 'hidden',
-              borderWidth: 1.5, borderColor: '#FFD76A',
-            }}>
-              {CARD_IMG[k] && <Image source={CARD_IMG[k]} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />}
-            </View>
-          ))}
-        </View>
-      )
-    }
     // P1 (Human) เห็นไพ่ตัวเอง 3 ใบ — ใบที่ Call ย้ายไปอยู่ขวาเสมอ (รองรับหลายใบที่หงายในรอบ 1+2)
+    // Patch 2026-08-13 (มติลุงเยาะ): ตัด top-level finalRev branch ที่เคยอยู่ตรงนี้ออกสำหรับ Human —
+    // ไพ่ตัวเองเห็นหน้าอยู่แล้วตลอดผ่าน branch ด้านล่าง (CARD_IMG[c.key] โชว์ตรงๆ ไม่สนใจ called status)
+    // เดิม finalRev snap ไป layout แถวเรียบ (gap:OVERLAP) ทับ SCATTER_SLOTS ที่กำลังแสดงอยู่ ทำให้ไพ่
+    // "กระโดด" ตำแหน่งตอนจบรอบทั้งที่ไม่มีอะไรเปลี่ยนจริง — ตัดออกทั้งหมด ให้ SCATTER_SLOTS คงอยู่ยาว
     if (isHuman) {
       const rawCards = piles[2] ?? []
       // Patch: ใบที่ Call แล้วย้ายไปอยู่ขวาสุด (เรียงตามลำดับที่หงาย)
@@ -1582,13 +1631,35 @@ const GameTableLive: React.FC = () => {
     }
     // AI: 3 ใบหลัง — ใบที่ Call หงายแทน (right-most อันดับสุดท้าย, รองรับหลายใบจากรอบ 1+2)
     // ถ้า Call 1 ใบ → ใบที่ 3 หงาย, 2 ใบ → ใบที่ 2-3 หงาย
-    const numRevealed = Math.min(calledKeys.length, 3)
+    // Patch 2026-08-13 (มติลุงเยาะ): Fold แล้ว → คว่ำไพ่ทั้ง 3 ใบ ซ้อนทับชิดกันเหลือเห็น ≤10% ของ
+    // ความกว้างไพ่ต่อใบ แยก layout ออกจากปกติทั้งหมด (ไม่สนใจ calledKeys/finalRev อีกต่อไป)
+    if (gfFoldedPlayers.includes(playerId)) {
+      const FOLD_ML = -(GF_CW * 0.9) // เหลือเห็น 10% ของความกว้างไพ่ (GF_CW=50 -> เห็น 5px/ใบ)
+      return (
+        <View style={{ flexDirection: 'row', alignSelf: 'center' }}>
+          {[0, 1, 2].map(i => (
+            <View key={i} style={{
+              width: GF_CW, height: GF_CH, borderRadius: 4, overflow: 'hidden',
+              borderWidth: 1, borderColor: 'rgba(201,168,76,0.4)',
+              marginLeft: i === 0 ? 0 : FOLD_ML,
+            }}>
+              <Image source={cardBackImg} style={{ width: GF_CW, height: GF_CH }} resizeMode="cover" />
+            </View>
+          ))}
+        </View>
+      )
+    }
+    // Round 2 จบ (finalRev ครบ 3 ใบ) → นับเป็น "หงายครบ" ใน layout/ตำแหน่งเดียวกับตอน Call ปกติเป๊ะ
+    // (ไม่ snap ไป layout แถวแยกอีกต่อไป — มติลุงเยาะ 2026-08-13: หงายตำแหน่งเดิมตอนเล่น ไม่ห่างๆ)
+    const isFinal = finalRev.length === 3
+    const revealSource = isFinal ? finalRev : calledKeys
+    const numRevealed = isFinal ? 3 : Math.min(calledKeys.length, 3)
     return (
       <View style={{ flexDirection: 'row', alignSelf: 'center' }}>
         {[0, 1, 2].map(i => {
           // slot i = 2 คือใบขวาสุด, i = 1 ใบกลาง (หงายลำดับ 2), i = 0 ซ้ายสุด
-          const revealIdx = i - (3 - numRevealed) // index ใน calledKeys array (เรียงจากซ้ายไปขวา)
-          const isCalledSlot = revealIdx >= 0 && revealIdx < calledKeys.length
+          const revealIdx = i - (3 - numRevealed) // index ใน revealSource array (เรียงจากซ้ายไปขวา)
+          const isCalledSlot = revealIdx >= 0 && revealIdx < numRevealed
           const ml = i === 0 ? 0 : GAP_USER_OR_AI
           return (
             <View key={i} style={{
@@ -1602,7 +1673,7 @@ const GameTableLive: React.FC = () => {
               transform: [{ translateY: isCalledSlot ? 10 : 0 }],
             }}>
               {isCalledSlot
-                ? <Image source={CARD_IMG[calledKeys[revealIdx]]} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />
+                ? <Image source={CARD_IMG[revealSource[revealIdx]]} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />
                 : <Image source={cardBackImg} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />
               }
             </View>
@@ -1610,7 +1681,7 @@ const GameTableLive: React.FC = () => {
         })}
       </View>
     )
-  }, [gfRevealedCards, gfFinalReveals, piles, phase, gfTurnPlayerId, gfSelectedCardKey, isVip, setGfSelectedCardKey])
+  }, [gfRevealedCards, gfFinalReveals, gfFoldedPlayers, piles, phase, gfTurnPlayerId, gfSelectedCardKey, isVip, setGfSelectedCardKey])
 
   const renderCard = (key: string | undefined, w: number, h: number, ml: number = 0, elKey?: string) => {
     if (key && CARD_IMG[key]) {
@@ -2485,6 +2556,19 @@ const GameTableLive: React.FC = () => {
           {burnToast && (
             <View style={s.burnToast} pointerEvents="none">
               <Text style={s.burnToastText}>{burnToast}</Text>
+            </View>
+          )}
+
+          {/* Connection status — ลอยทับทุก phase (ไม่ผูกเงื่อนไข phase ใดๆ) ตำแหน่งเดียวกับ
+              highNoble/index.tsx:2024-2040 */}
+          {connectionError && (
+            <View style={{ position: 'absolute', top: 12, alignSelf: 'center', zIndex: 999, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: 'rgba(255,107,107,0.15)', borderWidth: 1, borderColor: 'rgba(255,107,107,0.4)', borderRadius: 10 }}>
+              <Text style={{ color: '#FF6B6B', fontSize: 11, textAlign: 'center' }}>Connection failed. Please check your network and try again.</Text>
+            </View>
+          )}
+          {isReconnecting && (
+            <View style={{ position: 'absolute', top: 12, alignSelf: 'center', zIndex: 999, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: 'rgba(255,199,87,0.15)', borderWidth: 1, borderColor: 'rgba(255,199,87,0.5)', borderRadius: 10 }}>
+              <Text style={{ color: '#FFC857', fontSize: 12, fontWeight: '700', textAlign: 'center' }}>Reconnecting...</Text>
             </View>
           )}
 

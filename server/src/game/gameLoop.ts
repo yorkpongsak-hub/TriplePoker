@@ -25,7 +25,7 @@ import {
 import { getRoom } from './roomRegistry'
 import { recordMatchWin } from './matchWinsService'
 import { economyService } from '../economy/economyService'
-import { resolveNpcPoolKey } from '../economy/npcPoolResolver'
+import { resolveNpcPoolKey, type ResolveNpcPoolContext } from '../economy/npcPoolResolver'
 import type { AccountRef } from '../economy/economyTypes'
 
 // ── Types ────────────────────────────────────────────────────
@@ -312,7 +312,7 @@ export async function settleEscrow(
   // Central Economy Ledger Phase 7 — ให้เฉพาะ Tier ที่ usesLedgerSettlement() คืน true (Initiate ตอนนี้)
   // caller คำนวณ net ของ human/AI ทุกตัวมาให้พร้อมแล้ว ไม่ต้องคำนวณซ้ำในนี้ — undefined = ทุก Tier อื่น
   // เดินพาธเดิมทุกประการ ไม่มีการเปลี่ยนแปลงพฤติกรรมเลย
-  ledger?: { tier: string; burnAmount: number; npcNets: Array<{ npcId: string; amount: number }> },
+  ledger?: { tier: string; burnAmount: number; npcNets: Array<{ npcId: string; amount: number; npcContext?: ResolveNpcPoolContext }> },
 ): Promise<number | null> {
   try {
     if (ledger && usesLedgerSettlement(ledger.tier)) {
@@ -369,14 +369,14 @@ export async function settleEscrow(
 // แยกมาตรงๆ เพราะ entries ไม่ได้ sum เป็น -totalRake อีกต่อไปเมื่อ human ใช้ finalStack เต็ม
 async function settleEscrowViaLedger(
   userId: string, escrowId: string, finalStack: number,
-  ledger: { tier: string; burnAmount: number; npcNets: Array<{ npcId: string; amount: number }> },
+  ledger: { tier: string; burnAmount: number; npcNets: Array<{ npcId: string; amount: number; npcContext?: ResolveNpcPoolContext }> },
 ): Promise<number | null> {
   const entries: Array<{ account: AccountRef; netAmount: number }> = [
     { account: { accountType: 'PLAYER' as const, accountId: userId }, netAmount: finalStack },
     ...ledger.npcNets
       .filter(n => n.amount !== 0)
       .map(n => ({
-        account: { accountType: 'NPC_POOL' as const, accountId: resolveNpcPoolKey(n.npcId) },
+        account: { accountType: 'NPC_POOL' as const, accountId: resolveNpcPoolKey(n.npcId, n.npcContext) },
         netAmount: n.amount,
       })),
   ].filter(e => e.netAmount !== 0)
@@ -541,6 +541,18 @@ function getEffectiveAIConfig(state: MatchState, ai: AIConfig): AIConfig {
   return ai
 }
 
+// Central Economy Ledger Phase 7 Round 3 — คืน npcId/context ที่ถูกต้องสำหรับ resolveNpcPoolKey()
+// ต่อที่นั่ง AI หนึ่งตัว ใช้ getEffectiveAIConfig() ตัวเดียวกับ display เพื่อไม่ให้ logic สอง (แสดงผล vs
+// pool routing) หลุด sync กัน — ที่นั่ง Boss ของ Mastermind ได้ id ของ Sentinel จริง (เข้า
+// NINE_SENTINELS_POOL), ที่นั่ง Minion (P2/P4) ได้ isMinionDisplay:true (เข้า MINION_POOL), ส่วน
+// Initiate (ไม่มี _bossOverride/_minionOverrides เลย) ได้ผลลัพธ์เดิมทุกประการ (ai.id, ไม่มี context)
+export function resolveMatchStateNpcRouting(state: MatchState, ai: AIConfig): { npcId: string; npcContext?: ResolveNpcPoolContext } {
+  const npcId = getEffectiveAIConfig(state, ai).id
+  const minionOverrides = (state as any)._minionOverrides as Record<string, unknown> | undefined
+  const isMinion = state.tier === 'mastermind' && !!minionOverrides?.[ai.id]
+  return { npcId, npcContext: isMinion ? { isMinionDisplay: true } : undefined }
+}
+
 // ============================================================
 // startRound — เริ่ม Round ใหม่
 // ============================================================
@@ -554,11 +566,37 @@ function usesTokenFlow(tier: string): tier is TokenFlowTier {
   return tier === 'initiate' || tier === 'mastermind'
 }
 
-// Central Economy Ledger Phase 7 Round 1 — เฉพาะ Initiate เท่านั้น ขยายทีละ Tier ตามรอบถัดไป
-// (ห้ามใส่เพิ่มจนกว่าจะทำ Adept/Mastermind/HighNoble/LastBoss ตาม pattern เดียวกันในรอบต่อๆ ไป)
-type LedgerSettlementTier = 'initiate'
-function usesLedgerSettlement(tier: string): tier is LedgerSettlementTier {
-  return tier === 'initiate'
+// Central Economy Ledger Phase 7 — เฉพาะ Tier ที่ผ่าน settleEscrow()/matchStates (single-player)
+// เท่านั้น ขยายทีละ Tier ตามรอบถัดไป (Round 1: Initiate, Round 3: Mastermind) — Adept ไม่ผ่าน gate
+// นี้เลยเพราะอยู่คนละ engine (MultiMatchState, ดู settleAdeptMatchViaLedger) ห้ามใส่ highNoble/lastBoss
+// เพิ่มจนกว่าจะทำรอบของมันเอง (ดู plan — finalizeGrandFinale()'s settle call ใช้ร่วมกับ 2 tier นี้ด้วย)
+type LedgerSettlementTier = 'initiate' | 'mastermind'
+export function usesLedgerSettlement(tier: string): tier is LedgerSettlementTier {
+  return tier === 'initiate' || tier === 'mastermind'
+}
+
+// Central Economy Ledger — สร้าง ledger param ให้ settleEscrow() ตัวเดียวใช้ร่วมกันทุกจุดที่จบแมตช์
+// solo (finalizeGrandFinale, settleAndEndSoloMatch, player_leave ใน gameSocket.ts) กัน pattern
+// AI_CONFIGS.map(...) หลุดตกหล่นไปจุดใดจุดหนึ่ง (เจอมาแล้วจริง 2026-08-13 — usesLedgerSettlement เอง
+// เคยแก้แค่ type ไม่ได้แก้ runtime logic ทำให้ Mastermind หลุด path เดิมอยู่พักหนึ่งกว่าจะจับได้จาก
+// economy_reconciliation() diff สด — มีจุดเดียวให้แก้ ลดความเสี่ยงเกิดซ้ำ)
+// ⚠️ ต้องบวก state.pot เข้า burnAmount ด้วยเสมอ (เจอบั๊กจริง 2026-08-13 อีกตัว — ออกกลางรอบตอน Ante
+// เก็บเข้า pot ไปแล้วแต่รอบยังไม่ resolve เงินก้อนนั้นไม่อยู่ใน tokenBalance ของใครเลย ถ้าไม่ burn
+// จะหายจาก actual_supply เงียบๆ ไม่ถูกนับที่ไหน) ตอนจบเกมปกติ pot การันตีเป็น [0,0,0] เสมอ (settleRound/
+// settleMastermindRound reset ทุกครั้งหลัง settle — tokenFlow.ts:40) บวก 0 เข้าไปเลยไม่กระทบพาธปกติ
+export function buildSoloLedgerArg(state: MatchState): {
+  tier: string; burnAmount: number; npcNets: Array<{ npcId: string; amount: number; npcContext?: ResolveNpcPoolContext }>
+} | undefined {
+  if (!usesLedgerSettlement(state.tier)) return undefined
+  const residualPot = state.pot[0] + state.pot[1] + state.pot[2]
+  return {
+    tier: state.tier,
+    burnAmount: state.feeRake + residualPot,
+    npcNets: AI_CONFIGS.map(ai => ({
+      ...resolveMatchStateNpcRouting(state, ai),
+      amount: (state.tokenBalance[ai.id] ?? state.buyInAmount) - state.buyInAmount,
+    })),
+  }
 }
 
 export async function startRound(io: Server, roomId: string): Promise<void> {
@@ -2122,10 +2160,15 @@ function finalizeGrandFinale(
       const finalWinner = allPlayerIds.reduce((a, b) =>
         (state.tokenBalance[a] ?? 0) > (state.tokenBalance[b] ?? 0) ? a : b
       )
-      // ── Settle Escrow ครั้งเดียว (Buy-in Spec §4 — จบแมตช์ปกติ) ──
+      // ── Settle Escrow ครั้งเดียว (Buy-in Spec §4 — จบแมตช์ปกติ) — Central Economy Ledger Phase 7
+      // Round 3 — จุดนี้ใช้ร่วมกับ highNoble/lastBoss ด้วย (ผ่าน startGrandFinale()) usesLedgerSettlement
+      // คืน true เฉพาะ mastermind เท่านั้นตอนนี้ 2 tier นั้นเลยเดินพาธเดิมทุกประการไม่มีอะไรเปลี่ยน ──
       let newTokenBalance: number | null = null
       if (state.escrowId) {
-        newTokenBalance = await settleEscrow(state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount)
+        newTokenBalance = await settleEscrow(
+          state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount,
+          buildSoloLedgerArg(state),
+        )
       }
       // End-of-Match Stats Recording — แทนที่ recordGameResults() เดิม — Mastermind ใช้ Sequential Showdown
       // (Fog of War/Auction/Grand Finale) ดังนั้น bestHandThisMatch/tripleSweepThisMatch ต้องมาจาก live
@@ -2984,11 +3027,7 @@ export async function settleAndEndSoloMatch(roomId: string): Promise<void> {
   if (state.escrowId) {
     await settleEscrow(
       state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount,
-      usesLedgerSettlement(state.tier) ? {
-        tier: state.tier,
-        burnAmount: state.feeRake,
-        npcNets: AI_CONFIGS.map(ai => ({ npcId: ai.id, amount: (state.tokenBalance[ai.id] ?? state.buyInAmount) - state.buyInAmount })),
-      } : undefined,
+      buildSoloLedgerArg(state),
     )
   }
   matchStates.delete(roomId)

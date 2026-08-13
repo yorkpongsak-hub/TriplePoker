@@ -1,6 +1,6 @@
 // Config แยกของ Arena เพื่อไม่ให้ค่าใหม่กระทบ gameConfig ของ Tier เดิม
 export const tierSConfig = Object.freeze({
-  featureEnabled: false,
+  featureEnabled: true,
   tierKey: 'grandmaster' as const,
   unlockTokenExclusive: 1_000_000,
   matchGames: 3,
@@ -27,7 +27,6 @@ export const tierSEconomyConfig = Object.freeze({
   auctionBidOptionsCrest: Object.freeze([0, 3, 6, 9, 12] as const),
   callCostCrest: 3,
   entryFeeCrest: 12,
-  bossFeeCrest: Object.freeze({ aiBoss: 24, humanBoss: 48 }),
   maximumVariableMatchCostCrest: 216,
   // 20 Crown exactly. The extra 12-Crest buffer keeps Human and AI starting
   // balances round and makes Crown Panel conservation easy to audit.

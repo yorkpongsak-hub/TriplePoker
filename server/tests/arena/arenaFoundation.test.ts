@@ -28,8 +28,8 @@ class MemoryGateway implements ArenaLedgerGateway {
 }
 
 describe('Arena Gate 1 foundation', () => {
-  test('config ใช้ค่าที่ล็อกและปิด feature ไว้ก่อน', () => {
-    expect(tierSConfig.featureEnabled).toBe(false)
+  test('config ใช้ค่าที่ล็อกและเปิด feature แล้ว (มติลุงเยาะ 2026-08-13 — เปิดให้เทสจริง)', () => {
+    expect(tierSConfig.featureEnabled).toBe(true)
     expect(tierSConfig.unlockTokenExclusive).toBe(1_000_000)
     expect(tierSConfig.tableSkinKey).toBe('boss_monarch')
     expect(tierSConfig.handLayout).toBe('fan')

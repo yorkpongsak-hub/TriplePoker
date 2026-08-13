@@ -358,7 +358,6 @@ export function projectArenaClientSnapshot(
             { label: 'Joker Extra Ante', crest: -localBreakdown.jokerExtraAnte },
             { label: 'Auction', crest: -localBreakdown.auction },
             { label: 'Call', crest: -localBreakdown.call },
-            { label: 'Boss Fee', crest: -localBreakdown.bossFee },
             { label: 'Sweep Jackpot', crest: localBreakdown.sweepJackpot },
             { label: 'Win / Loss', crest: localBreakdown.winLoss },
           ],

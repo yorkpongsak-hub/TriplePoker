@@ -142,7 +142,6 @@ export class ArenaMatchEngine {
   private jokerAnteX2Applied = false
   private jokerAnteX2WinningPile: ArenaPile | null = null
   private jokerAnteX2Settled = false
-  private bossFeeCharged = false
   private lockedBossPersonality: ArenaPersonality | null = null
   private sorenStats: SorenMatchStats = { humanCalls: 0, humanFolds: 0 }
   private readonly settlement: ArenaSettlementEngine
@@ -669,18 +668,7 @@ export class ArenaMatchEngine {
     this.pile1WinnerId = null; this.pile2WinnerId = null; this.pile3WinnerId = null
     this.pile2Revealed = false; this.pile3Revealed = false; this.jokerAnteX2Applied = false
     this.jokerAnteX2WinningPile = null; this.jokerAnteX2Settled = false
-    if (!this.bossFeeCharged) { this.chargeBossFee(); this.bossFeeCharged = true }
     this.transition('DEAL', now)
-  }
-
-  private chargeBossFee(): void {
-    const bossSeat = this.composition.seats.find(seat => seat.seat === 3)
-    if (!bossSeat) return
-    const feeCrest = bossSeat.controller === 'HUMAN' ? tierSEconomyConfig.bossFeeCrest.humanBoss : tierSEconomyConfig.bossFeeCrest.aiBoss
-    const bossActorId = bossSeat.controller === 'HUMAN' ? bossSeat.playerId : `ai:${bossSeat.aiId}:seat${bossSeat.seat}`
-    const payerIds = this.humanActorIds.filter(id => id !== bossActorId)
-    if (!payerIds.length) return
-    this.execSettlement({ type: 'BOSS_FEE', commandId: `${this.matchId}:bossfee`, playerIds: payerIds, feeCrest })
   }
 
   // พอร์ตกลไก "ล็อกบุคลิกตามความแข็งไพ่ตอนแจกเกม 1" จาก server/src/game/monarchEngine.ts:307-319, 374-388

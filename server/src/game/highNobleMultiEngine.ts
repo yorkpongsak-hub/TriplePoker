@@ -21,7 +21,7 @@ import { finishSpectatorBroadcast, publishSpectatorEvent } from '../spectator/sp
 import { dealCards } from './cardEngine'
 import { evaluateHand, compareHands, handRankLabel, HandResult } from './handEvaluator'
 import { checkFoul, PlayerArrangement, CommunityCards } from './foulChecker'
-import { aiDecideArrangement, AIConfig, AIPersonality, FOUR_GODS, greedyArrangement, pickRandomMinions } from './aiEngine'
+import { aiDecideArrangement, AIConfig, AIPersonality, AI_CONFIGS, FOUR_GODS, greedyArrangement, pickRandomMinions } from './aiEngine'
 import { Card } from './deck'
 import { gameConfig } from '../config/gameConfig'
 import { supabaseAdmin } from '../config/supabase'
@@ -32,6 +32,11 @@ import { recordMonarchVictory } from './monarchSpawn'
 import { awardPerformanceScore } from './psEngine'
 import { recordMatchStats, BestHandCandidate } from './matchStatsService'
 import { recordMatchWin } from './matchWinsService'
+import { checkTierUnlock } from './tierUnlockService'
+import { getAscendantStatus } from './crownVaultService'
+import { economyService } from '../economy/economyService'
+import { resolveNpcPoolKey, type ResolveNpcPoolContext } from '../economy/npcPoolResolver'
+import type { AccountRef } from '../economy/economyTypes'
 
 // ── Local copies of small pure helpers (ตั้งใจ duplicate จาก gameLoop.ts แทนการ import
 //    เพื่อไม่ให้ engine ใหม่นี้ผูกกับการแก้ไขไฟล์เดิมในอนาคต — ของเดิมพิสูจน์แล้วว่าถูกต้อง) ──
@@ -153,6 +158,11 @@ export interface HNSeat {
   isMonarch?: boolean          // Monarch Spec v1.3: true เฉพาะที่นั่ง Boss ที่สุ่มโดน Monarch — บุคลิกล็อคครั้งเดียวตอนแจกไพ่ ไม่สลับกลางเกม
   isMinion?: boolean           // LobbyMatchmaking_Spec_v1_0 §6.1: true เฉพาะที่นั่งเติมด้วย Minion (Deadlock "Start Now") — ใช้ greedyArrangement เสมอ
   isVip?: boolean              // เฉพาะ Human (มติลุงเยาะ 2026-07-26) — Gold Radiance frame ทุกที่นั่ง ไม่ใช่แค่ P1
+  // Central Economy Ledger Phase 7 Round 4 — id จริงของ AI_CONFIGS/FOUR_GODS ที่นั่งนี้ผูกอยู่ (เดิม
+  // `id` ของ AI seat เป็นแค่ 'AI_BOSS'/'AI_FILL_n' ที่ resolveNpcPoolKey() ไม่รู้จัก) เฉพาะ AI seat
+  // เท่านั้น — Boss ใช้ id ของ FOUR_GODS ตรงๆ (routing ไม่สนใจ isMinionDisplay), Filler/Minion ใช้ id
+  // ของ AI_CONFIGS ที่ personality ตรงกัน (routing ผ่าน isMinionDisplay:true เข้า MINION_POOL)
+  aiConfigId?: string
 }
 
 interface HNGrandFinaleState {
@@ -498,22 +508,27 @@ export async function startHighNobleMultiMatch(
           'fallback เป็น Four Gods ปกติ ต้องตามหาต้นเหตุด่วน seat:', JSON.stringify(rs),
         )
         const fallbackGod = FOUR_GODS.find(g => g.id === rs.aiConfigId) ?? FOUR_GODS[0]
-        return { id: 'AI_BOSS', role, isHuman: false, name: fallbackGod.name, emoji: fallbackGod.emoji, personality: fallbackGod.personality }
+        return { id: 'AI_BOSS', role, isHuman: false, name: fallbackGod.name, emoji: fallbackGod.emoji, personality: fallbackGod.personality, aiConfigId: fallbackGod.id }
       }
       const god = FOUR_GODS.find(g => g.id === rs.aiConfigId) ?? FOUR_GODS[0]
-      return { id: 'AI_BOSS', role, isHuman: false, name: god.name, emoji: god.emoji, personality: god.personality }
+      return { id: 'AI_BOSS', role, isHuman: false, name: god.name, emoji: god.emoji, personality: god.personality, aiConfigId: god.id }
     }
     // LobbyMatchmaking_Spec_v1_0 §6.1: Deadlock "Start Now" เติมที่นั่งด้วย Minion (roomRegistry.fillWithMinion
     // ตั้งชื่อจริงไว้แล้วใน rs.name) — personality สุ่มอิสระ 1 ใน 3 (แยกจากชื่อ แบบเดียวกับ Mastermind Phase 3)
     // ใช้ greedyArrangement เสมอตอนจัดไพ่ (ดู startHNRound ด้านล่าง) ไม่ผ่าน arrangeByPersonality
     if (rs.isMinion) {
       const p = FILLER_PERSONALITIES[Math.floor(Math.random() * FILLER_PERSONALITIES.length)]
-      return { id: `AI_FILL_${i}`, role, isHuman: false, name: rs.name, emoji: '🤖', personality: p, isMinion: true }
+      // Central Economy Ledger Phase 7 Round 4 — Filler personality มาจาก 3 ตัวเดียวกับ AI_CONFIGS
+      // (sage/reckless/ghost) เก็บ id จริงไว้ resolve pool ตอน settle (เข้า MINION_POOL เหมือน Adept/
+      // Mastermind's Minion — ดู resolveHNSeatNpcRouting ด้านล่าง)
+      const realConfig = AI_CONFIGS.find(c => c.personality === p) ?? AI_CONFIGS[0]
+      return { id: `AI_FILL_${i}`, role, isHuman: false, name: rs.name, emoji: '🤖', personality: p, isMinion: true, aiConfigId: realConfig.id }
     }
     // Fallback AI filler (เผื่อ path อื่นในอนาคตที่ยังไม่ผ่าน fillWithMinion) — ของเดิม Sage/Reckless/Ghost วน index
     const p = FILLER_PERSONALITIES[fillerIdx % FILLER_PERSONALITIES.length]
     fillerIdx++
-    return { id: `AI_FILL_${i}`, role, isHuman: false, name: FILLER_NAMES[p].name, emoji: FILLER_NAMES[p].emoji, personality: p }
+    const realConfig = AI_CONFIGS.find(c => c.personality === p) ?? AI_CONFIGS[0]
+    return { id: `AI_FILL_${i}`, role, isHuman: false, name: FILLER_NAMES[p].name, emoji: FILLER_NAMES[p].emoji, personality: p, aiConfigId: realConfig.id }
   }) as [HNSeat, HNSeat, HNSeat, HNSeat]
 
   const totalRounds = 5
@@ -571,6 +586,15 @@ function isHNPlayerAFK(state: HNMatchState, userId: string): boolean {
 // ไปใช้ตรงๆ แทน — แก้ตรงนี้ที่เดียวแล้วเปลี่ยนทั้ง 2 จุดให้เรียกฟังก์ชันนี้แทน (ดูด้านล่าง)
 function bossSeat(state: HNMatchState): HNSeat {
   return state.seats.find(s => s.role === 'boss')!
+}
+
+// Central Economy Ledger Phase 7 Round 4 — คืน npcId/context ที่ถูกต้องสำหรับ resolveNpcPoolKey()
+// ต่อที่นั่ง AI หนึ่งตัว (Boss หรือ Filler/Minion) ใช้ seat.aiConfigId ตัวเดียวกับที่ตอนนี้เก็บไว้แล้ว
+// ตั้งแต่ startHighNobleMultiMatch() (ทุก branch ของการสร้าง AI seat เซ็ตค่านี้ครบแล้ว) — Boss ไม่ผ่าน
+// isMinionDisplay (FOUR_GODS ids ไม่สนใจ context นี้อยู่แล้ว ดู npcPoolResolver.ts) ส่วน Filler/Minion
+// ผ่าน isMinionDisplay:true เข้า MINION_POOL เหมือน Adept/Mastermind's Minion seat ทุกประการ
+function resolveHNSeatNpcRouting(seat: HNSeat): { npcId: string; npcContext?: ResolveNpcPoolContext } {
+  return { npcId: seat.aiConfigId ?? seat.id, npcContext: seat.role === 'boss' ? undefined : { isMinionDisplay: true } }
 }
 
 // ============================================================
@@ -1309,6 +1333,77 @@ function resolveHNGrandFinaleShowdown(io: Server, roomId: string, stillIn: strin
   return bestId
 }
 
+// Central Economy Ledger Phase 7 Round 4 — settle แมตช์ High Noble ครั้งเดียวในธุรกรรมเดียว (human ทุก
+// คน + Boss/Filler ทุกตัว) แบบเดียวกับ settleAdeptMatchViaLedger ใน gameLoop.ts (Round 2) — เหตุผล
+// เดียวกัน: settle แยกต่อคนจะนับ net ของ AI ซ้ำหรือนับผิดที่ (ดู comment ยาวใน gameLoop.ts's
+// settleEscrowViaLedger เรื่อง finalStack ต้องเต็มจำนวน ไม่ใช่ net — บั๊กที่เจอจริงรอบ Initiate)
+// ⚠️ burnAmount คำนวณผ่าน conservation แทนการอ่าน field สะสม (ไม่มี state.feeRake ใน HNMatchState เลย
+// — HN ยังใช้ calcDeltas() เดิม ไม่ได้ย้ายมาใช้ tokenFlow.ts) ทุก token ที่ไม่อยู่ใน stack ของใครและไม่ค้าง
+// ใน flowPot ต้องถูก rake ไปแล้วระหว่างทาง — พิสูจน์ถูกต้องด้วย conservation เดียวกับ buildSoloLedgerArg
+// (state.pot ของ gameLoop.ts) ข้อดี: ไม่ต้องแตะ calcDeltas()/payout math เดิมที่ QA ผ่านแล้วเลยสักบรรทัด
+export async function settleHNMatchViaLedger(
+  state: HNMatchState, finalStackByHuman: Record<string, number>,
+): Promise<Record<string, number | null>> {
+  const humans = humanSeats(state)
+  const totalBuyIn = state.buyInAmount * state.seats.length
+  const totalStacks = state.seats.reduce((sum, s) => sum + (state.tokenBalance[s.id] ?? state.buyInAmount), 0)
+  const residualPot = state.flowPot[0] + state.flowPot[1] + state.flowPot[2]
+  const burnAmount = totalBuyIn - totalStacks - residualPot
+
+  const entries: Array<{ account: AccountRef; netAmount: number }> = [
+    ...humans.map(s => ({ account: { accountType: 'PLAYER' as const, accountId: s.id }, netAmount: finalStackByHuman[s.id] })),
+    ...aiSeats(state).map(s => {
+      const { npcId, npcContext } = resolveHNSeatNpcRouting(s)
+      return { account: { accountType: 'NPC_POOL' as const, accountId: resolveNpcPoolKey(npcId, npcContext) }, netAmount: (state.tokenBalance[s.id] ?? state.buyInAmount) - state.buyInAmount }
+    }),
+  ].filter(e => e.netAmount !== 0)
+
+  if (entries.length > 0) {
+    try {
+      await economyService.settleMatchResult({
+        idempotencyKey: `MATCH_SETTLEMENT:${Object.values(state.escrowIds).sort().join(':')}`,
+        currency: 'TOKEN',
+        entries,
+        burnAmount,
+        reason: 'MATCH_SETTLEMENT',
+        context: { matchId: state.roomId, tier: 'highNoble' },
+      })
+    } catch (err) {
+      console.error('[HIGHNOBLE]', Date.now(), 'Ledger settleMatchResult failed for', state.roomId, err)
+      return Object.fromEntries(humans.map(s => [s.id, null]))
+    }
+  }
+
+  const results: Record<string, number | null> = {}
+  await Promise.all(humans.map(async s => {
+    const escrowId = state.escrowIds[s.id]
+    if (!escrowId) { results[s.id] = null; return }
+    const { error: updateError } = await supabaseAdmin
+      .from('match_escrow')
+      .update({ status: 'settled', final_stack: finalStackByHuman[s.id], settled_at: new Date().toISOString() })
+      .eq('escrow_id', escrowId)
+      .eq('status', 'in_match')
+    if (updateError) {
+      console.error('[HIGHNOBLE]', Date.now(), 'Ledger settle: match_escrow update failed for', escrowId, updateError)
+      results[s.id] = null
+      return
+    }
+    const { data: userRow, error: readError } = await supabaseAdmin
+      .from('users').select('token_balance').eq('user_id', s.id).single()
+    if (readError || !userRow) {
+      console.error('[HIGHNOBLE]', Date.now(), 'Ledger settle: failed to re-read token_balance for', s.id, readError)
+      results[s.id] = null
+      return
+    }
+    const newBalance = Number(userRow.token_balance)
+    console.log('[HIGHNOBLE]', Date.now(), 'Settled via ledger', s.id, '| finalStack', finalStackByHuman[s.id], '| New balance:', newBalance)
+    try { await checkTierUnlock(s.id, newBalance) } catch (err) { console.error('[TIER_UNLOCK] Unexpected error calling checkTierUnlock:', err, '| userId:', s.id) }
+    try { await getAscendantStatus(s.id) } catch (err) { console.error('[CROWN-VAULT] Unexpected error calling getAscendantStatus:', err, '| userId:', s.id) }
+    results[s.id] = newBalance
+  }))
+  return results
+}
+
 function finalizeHNGrandFinale(
   io: Server, roomId: string, winnerId: string | null, pile3Pot: number, foulPlayers: string[], burned: boolean,
 ): void {
@@ -1420,16 +1515,15 @@ function finalizeHNGrandFinale(
       // Buy-in Spec §6: client ResultPanel ต้องโชว์ยอด "Returned" จริงที่เข้า DB — ถ้าใช้ state.tokenBalance ตรงๆ
       // จะผิดเฉพาะเคส Monarch ×2 (payout ถูกคูณแล้วก่อน settle แต่ state.tokenBalance ไม่เคยถูกเขียนทับ)
       const finalStackByHuman: Record<string, number> = {}
-      const newTokenBalances: Record<string, number | null> = {}
-      await Promise.all(humanSeats(state).map(async s => {
+      humanSeats(state).forEach(s => {
         const netDelta = (state.tokenBalance[s.id] ?? state.buyInAmount) - state.buyInAmount
         humanNetDeltas[s.id] = netDelta
         const payout = computeHNHumanPayout(netDelta, isMonarchMatch && isHumanWinner && s.id === finalWinner, gameConfig.monarchConfig.potMultiplier)
-        const escrowId = state.escrowIds[s.id]
-        const finalStack = state.buyInAmount + payout
-        finalStackByHuman[s.id] = finalStack
-        if (escrowId) newTokenBalances[s.id] = await settleEscrow(s.id, escrowId, finalStack)
-      }))
+        finalStackByHuman[s.id] = state.buyInAmount + payout
+      })
+      // Central Economy Ledger Phase 7 Round 4 — ธุรกรรมเดียวครอบทั้งแมตช์ (human ทุกคน + Boss/Filler)
+      // แทนที่ settleEscrow() ต่อคนเดิม (ดู settleHNMatchViaLedger ด้านบน)
+      const newTokenBalances = await settleHNMatchViaLedger(state, finalStackByHuman)
       // End-of-Match Stats Recording — แทนที่ recordGameResults() เดิม (games_played/won รวมเข้า xp/streak/
       // best_hands/debt recovery เป็น UPDATE เดียวต่อคน) — ไม่แตะ awardPerformanceScore() ด้านล่าง ยังคงแยก
       // ต่างหากเหมือนเดิมทุกกรณี (เทสผ่านแล้ว ห้าม duplicate formula)

@@ -109,10 +109,12 @@ describe('settleEscrow — Central Economy Ledger path (Initiate, Phase 7 Round 
     expect(result).toBeNull()
   })
 
-  test('a non-initiate tier ignores the ledger param and falls back to the old settle_match_escrow RPC', async () => {
+  test('a tier not on the ledger allowlist ignores the ledger param and falls back to the old settle_match_escrow RPC', async () => {
+    // Phase 7 Round 3: 'mastermind' joined the ledger allowlist alongside 'initiate' — use 'highNoble'
+    // here instead, still untouched by any round so far, to prove the fallback still works for it.
     mockRpc.mockResolvedValueOnce({ data: 999, error: null })
     const result = await settleEscrow('human-1', 'escrow-5', 500, {
-      tier: 'mastermind', burnAmount: 10, npcNets: [{ npcId: 'AI_SAGE', amount: -100 }],
+      tier: 'highNoble', burnAmount: 10, npcNets: [{ npcId: 'AI_SAGE', amount: -100 }],
     })
     expect(mockSettleMatchResult).not.toHaveBeenCalled()
     expect(mockRpc).toHaveBeenCalledWith('settle_match_escrow', {

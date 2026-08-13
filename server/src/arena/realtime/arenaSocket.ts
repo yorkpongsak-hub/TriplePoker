@@ -101,17 +101,12 @@ function emitProjectedSnapshots(match: ArenaRuntimeMatch, now: number): void {
   }
 }
 
-// ยิง SettlementTransaction ที่เพิ่งเกิดขึ้นจริงเข้า Supabase (ทีละรายการ, idempotent ผ่าน commandId)
-// ถ้าแมตช์จบแล้วให้ persist match log ครั้งเดียวแล้วเลิกติดตามใน runtime กัน ticker วนไปเรื่อยๆ ตลอดอายุ process
+// Central Economy Ledger Phase 7 Round 6 (มติลุงเยาะ 2026-08-13): ไม่ persist ทีละ SettlementTransaction
+// เข้า arena_apply_crest_batch (RPC เดิม) ต่อ action อีกต่อไป — ธุรกรรมเดี่ยวไม่ balance ในตัวเอง เงินไป
+// ค้าง pot ที่ Ledger ใหม่ไม่รู้จัก ยังคง drain ทิ้งกัน queue โตไม่จำกัด แค่ไม่ยิงเข้า RPC เดิมแล้ว — settle
+// จริงครั้งเดียวตอนจบแมตช์ผ่าน persistMatchSettlementViaLedger() แทน (ดูเหตุผลเต็มที่ฟังก์ชันนั้น)
 async function persistSettlement(match: ArenaRuntimeMatch): Promise<void> {
-  const transactions = match.engine.drainSettlementTransactions()
-  for (const transaction of transactions) {
-    try {
-      await settlementPersistence.persistTransaction(match.engine.matchId, transaction)
-    } catch (error) {
-      console.error('[Arena] settlement persist failed:', error)
-    }
-  }
+  match.engine.drainSettlementTransactions()
   const snapshot = match.engine.snapshot()
   if (snapshot.completed && !finalizedMatchIds.has(match.engine.matchId)) {
     finalizedMatchIds.add(match.engine.matchId)
@@ -119,6 +114,17 @@ async function persistSettlement(match: ArenaRuntimeMatch): Promise<void> {
       await settlementPersistence.persistMatchLog(match.engine.matchId, match.engine.eventLog(), { breakdown: match.engine.settlementBreakdown() })
     } catch (error) {
       console.error('[Arena] match log persist failed:', error)
+    }
+    try {
+      const aiIdByActorId: Record<string, string> = {}
+      match.composition.seats.forEach((seat, i) => {
+        if (seat.controller !== 'HUMAN') aiIdByActorId[match.engine.actorIds[i]] = seat.aiId
+      })
+      await settlementPersistence.persistMatchSettlementViaLedger(
+        match.engine.matchId, match.engine.settlementBreakdown(), match.engine.settlementTotals().crownSinkCrest, aiIdByActorId,
+      )
+    } catch (error) {
+      console.error('[Arena] ledger settlement failed:', error)
     }
     await persistMatchEndStats(match)
     runtime.completeMatch(match.engine.matchId)

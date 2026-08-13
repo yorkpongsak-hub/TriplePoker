@@ -2049,12 +2049,22 @@ const GameTableLive: React.FC = () => {
               <Text style={{ color: '#D6B65E', fontSize: 9 }}>STOCK · {cardZones.stockCount}</Text>
               {Array.from({ length: cardZones.stockCount }).map((_, i) => <Image key={i} source={cardBackImg} style={{ position: 'absolute', top: 12 + i * 2, width: 30, height: 42 }} />)}
             </View>
-            <View style={{ position: 'absolute', bottom: 116, right: 12, alignItems: 'center', zIndex: 18 }}>
-              <Text style={{ color: '#D6B65E', fontSize: 9 }}>DISCARD · {cardZones.discardCount}</Text>
-              {Array.from({ length: cardZones.discardCount }).map((_, i) => <Image key={i} source={cardBackImg} style={{ position: 'absolute', top: 12 + i * 2, width: 30, height: 42 }} />)}
-            </View>
+            {/* มติลุงเยาะ 2026-08-13 (แก้เพิ่มหลังเห็นภาพจริง — เดิมย้ายแค่กอง 3 ตามที่เลือกไว้ก่อนหน้า แต่
+                Pile1/2 ยังลอยเป็น 2 คอลัมน์กลางจอทั้งหงาย+คว่ำ): ตอน Grand Finale ย้ายไพ่ที่เล่นไปแล้วทั้ง
+                3 กอง (ไม่ใช่แค่กอง 3) ไปรวมกับ DISCARD มุมล่างขวาแทน คว่ำล้วนทุกใบ ไม่มีคอลัมน์กลางจอเหลือเลย */}
+            {(() => {
+              const inGf = phase === 'grand_finale' || phase === 'grand_finale_done'
+              const { pile1, pile2, pile3 } = cardZones.resolvedPileCounts
+              const discardCount = cardZones.discardCount + (inGf ? pile1 + pile2 + pile3 : 0)
+              return (
+                <View style={{ position: 'absolute', bottom: 116, right: 12, alignItems: 'center', zIndex: 18 }}>
+                  <Text style={{ color: '#D6B65E', fontSize: 9 }}>DISCARD · {discardCount}</Text>
+                  {Array.from({ length: discardCount }).map((_, i) => <Image key={i} source={cardBackImg} style={{ position: 'absolute', top: 12 + i * 2, width: 30, height: 42 }} />)}
+                </View>
+              )
+            })()}
             <View style={{ position: 'absolute', left: '35%', right: '35%', top: '34%', flexDirection: 'row', justifyContent: 'space-between', zIndex: 17 }}>
-              {([cardZones.resolvedPileCounts.pile1, cardZones.resolvedPileCounts.pile2, cardZones.resolvedPileCounts.pile3] as number[]).map((count, pileIdx) => {
+              {(phase === 'grand_finale' || phase === 'grand_finale_done') ? null : ([cardZones.resolvedPileCounts.pile1, cardZones.resolvedPileCounts.pile2, cardZones.resolvedPileCounts.pile3] as number[]).map((count, pileIdx) => {
                 const revealed = allCards[pileWinners[pileIdx + 1]]?.[pileIdx + 1] ?? []
                 return <View key={pileIdx} style={{ alignItems: 'center' }}>
                   <Text style={{ color: '#D6B65E', fontSize: 8 }}>PLAYED {pileIdx + 1} · {count}</Text>
@@ -2708,8 +2718,9 @@ const GameTableLive: React.FC = () => {
             </View>
 
             <View style={s.commWrap}>
-              {/* Patch: ตอน Fog of War — โชว์ไพ่ชุดที่ชนะ Pile1+2 (รวม Community 5 ใบ) ให้จำ ก่อน Auction */}
-              {false && phase === 'fog_of_war' && (
+              {/* Patch: ตอน Fog of War — โชว์ไพ่ชุดที่ชนะ Pile1+2 (รวม Community 5 ใบ) ให้จำ ก่อน Auction
+                  (มติลุงเยาะ 2026-08-13: เปิดใช้ตาม pattern Mastermind — เดิม false && ปิดไว้เฉยๆ) */}
+              {phase === 'fog_of_war' && (
                 <Animated.View style={{ marginBottom: -8, alignItems: 'center', marginLeft: 15 /* Patch 2026-07-19: จูนรอบ 2 ตาม Mastermind */, opacity: pileFadeAnim }}>
                   {([1, 2] as const).map(pNum => {
                     const winnerId = pileWinners[pNum]
@@ -2749,8 +2760,9 @@ const GameTableLive: React.FC = () => {
                   </View>
                 </View>
               )}
-              {/* Pile 1 & 2 แถวเดียวกัน — ซ่อนทั้งแถวตอน Fog of War เหลือแค่ Pile 3 */}
-              {phase !== 'dealing' && (
+              {/* Pile 1 & 2 แถวเดียวกัน — ซ่อนทั้งแถวตอน Fog of War เหลือแค่ Pile 3 (มติลุงเยาะ 2026-08-13:
+                  ตรงกับ pattern Mastermind — เดิม High Noble โชว์ค้างแม้ fog_of_war ก็ตาม) */}
+              {phase !== 'dealing' && phase !== 'fog_of_war' && (
                 <View style={{ flexDirection: 'row', gap: 6, marginBottom: 4 }}>
                   <CommRow pileNum={1} k1={comm.p1[0]} k2={comm.p1[1]} />
                   {/* Patch 2026-07-18: ถอด wrapper marginLeft 25 เดิมออก ให้ตรง Initiate/Adept/Mastermind */}

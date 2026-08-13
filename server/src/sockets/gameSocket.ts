@@ -10,7 +10,7 @@
 import { Server, Socket } from "socket.io";
 import { SpectatorService } from '../spectator/spectatorService';
 import { dealCards, validateDeal } from "../game/cardEngine";
-import { startMatch, submitArrangement, submitArrangementRound2, resolveContinue, submitAuctionBid, submitDiscard, submitGrandFinaleAction, settleAndEndSoloMatch } from "../game/gameLoop";
+import { startMatch, submitArrangement, submitArrangementRound2, resolveContinue, submitAuctionBid, submitDiscard, submitGrandFinaleAction, settleAndEndSoloMatch, buildSoloLedgerArg } from "../game/gameLoop";
 import { startMultiplayerMatch, submitMultiArrangement, markPlayerAFK, resendRoundStartToPlayer, settleAndEndMultiMatch, requestAutoSort } from "../game/gameLoop";
 import { getMatchState, getMultiMatchState, settleEscrow } from "../game/gameLoop";
 import {
@@ -427,7 +427,15 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
       const hnState = getHNMatchState(roomId);
       let newTokenBalance: number | null = null;
       if (soloState?.escrowId) {
-        newTokenBalance = await settleEscrow(soloState.humanPlayerId, soloState.escrowId, soloState.tokenBalance[soloState.humanPlayerId] ?? soloState.buyInAmount);
+        // Central Economy Ledger — เดิมจุดนี้ settle ไม่ผ่าน Ledger เลย (เจอบั๊กจริง 2026-08-13 ตอนจะ
+        // ต่อปุ่ม Back ยืนยันออกโต๊ะ Mastermind: เงินของ AI/Boss หายจาก Ledger ทุกครั้งที่กด Back
+        // ออกกลางเกม ซ้ำรอยบั๊กเดิมของ usesLedgerSettlement) แก้ให้ผ่าน buildSoloLedgerArg() เดียวกับ
+        // finalizeGrandFinale/settleAndEndSoloMatch — Initiate/Mastermind เท่านั้นที่ได้ผลต่าง ส่วน
+        // tier อื่นคืน undefined เดินพาธเดิมทุกประการ (ไม่มีอะไรเปลี่ยน)
+        newTokenBalance = await settleEscrow(
+          soloState.humanPlayerId, soloState.escrowId, soloState.tokenBalance[soloState.humanPlayerId] ?? soloState.buyInAmount,
+          buildSoloLedgerArg(soloState),
+        );
         deleteTable(roomId);
       } else if (multiState) {
         // A3/A4 (Bug A fix, 2026-07-17): settle escrow ให้ Human "ทุกคน" ในห้อง ไม่ใช่แค่ playerId ที่

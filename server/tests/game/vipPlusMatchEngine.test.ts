@@ -20,6 +20,8 @@ import {
   submitVipPlusRearrangement,
   validateVipPlusArrangement,
   vipPlusCardKey,
+  type VipPlusMatchState,
+  type VipPlusRankingRow,
 } from '../../src/game/vipPlusMatchEngine'
 import { VIP_PLUS_ENTRY_TERMS_VERSION, VipPlusTableRegistry, vipPlusTableRegistry } from '../../src/game/vipPlusTableRegistry'
 
@@ -254,7 +256,11 @@ describe('VIP Plus Gate 4 deal and arrangement engine', () => {
     if (!result.ok) throw new Error(result.reason)
     const settled: string[] = []
     const final = await finalizeVipPlusMatch(result.state, {
-      settle: async (playerId: string) => { settled.push(playerId); return 10_000 },
+      settleMatch: async (_state: VipPlusMatchState, rankings: VipPlusRankingRow[]) => {
+        const out: Record<string, number> = {}
+        for (const row of rankings) { settled.push(row.playerId); out[row.seat] = 10_000 }
+        return out
+      },
       persist: async () => undefined,
       recordStats: async () => undefined,
     } as any)
@@ -402,7 +408,8 @@ describe('VIP Plus Gate 4 deal and arrangement engine', () => {
     const expectedFee = Math.floor(preNetToken * 0.10)
 
     const final = await finalizeVipPlusMatch(state, {
-      settle: async (_playerId, _escrowId, finalStack) => finalStack,
+      settleMatch: async (_state: VipPlusMatchState, rankings: VipPlusRankingRow[]) =>
+        Object.fromEntries(rankings.map(row => [row.seat, row.finalStack])) as Record<string, number | null>,
       persist: async () => undefined,
       recordStats: async () => undefined,
     })
@@ -431,7 +438,8 @@ describe('VIP Plus Gate 4 deal and arrangement engine', () => {
 
     const recorded: Array<{ userId: string; tier: string; won: boolean; isTripleSweep: boolean }> = []
     await finalizeVipPlusMatch(state, {
-      settle: async (_playerId, _escrowId, finalStack) => finalStack,
+      settleMatch: async (_state: VipPlusMatchState, rankings: VipPlusRankingRow[]) =>
+        Object.fromEntries(rankings.map(row => [row.seat, row.finalStack])) as Record<string, number | null>,
       persist: async () => undefined,
       recordStats: async (inputs: any) => { recorded.push(...inputs) },
     })
@@ -589,7 +597,11 @@ describe('VIP Plus Gate 4 deal and arrangement engine', () => {
     const settled: string[] = []
     const persisted: string[] = []
     const dependencies = {
-      settle: async (playerId: string, _escrowId: string, finalStack: number) => { settled.push(playerId); return finalStack + 10_000 },
+      settleMatch: async (_state: VipPlusMatchState, rankings: VipPlusRankingRow[]) => {
+        const out: Record<string, number> = {}
+        for (const row of rankings) { settled.push(row.playerId); out[row.seat] = row.finalStack + 10_000 }
+        return out
+      },
       persist: async (match: any) => { persisted.push(match.roomId) },
       recordStats: async () => undefined,
     }
@@ -754,7 +766,8 @@ describe('VIP Plus — table registry release on match completion', () => {
     // registry ถูกปล่อยจริงตอนแมตช์จบ ไม่ใช่วัดกลไกเดินเกม ดู "settles all four rounds..." ด้านบนสำหรับ
     // เทสที่คุมกลไกเดินเกมจริงอยู่แล้ว)
     await finalizeVipPlusMatch(started.state, {
-      settle: async (_playerId, _escrowId, finalStack) => finalStack,
+      settleMatch: async (_state: VipPlusMatchState, rankings: VipPlusRankingRow[]) =>
+        Object.fromEntries(rankings.map(row => [row.seat, row.finalStack])) as Record<string, number | null>,
       persist: async () => undefined,
       recordStats: async () => undefined,
     })

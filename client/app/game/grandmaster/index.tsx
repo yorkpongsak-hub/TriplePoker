@@ -68,7 +68,7 @@ function previewSnapshot(mode?: string): ArenaClientSnapshot {
       lines: [
         { label: 'Ante', crest: -36 }, { label: 'Joker Extra Ante', crest: -6 },
         { label: 'Auction', crest: -12 }, { label: 'Call', crest: -9 },
-        { label: 'Boss Fee', crest: -24 }, { label: 'Sweep Jackpot', crest: 42 },
+        { label: 'Sweep Jackpot', crest: 42 },
         { label: 'Win / Loss', crest: 66 },
       ],
       playNetCrest: 33,

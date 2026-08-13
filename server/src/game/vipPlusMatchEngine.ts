@@ -1,10 +1,14 @@
 import { Server } from 'socket.io'
 import { Card, createDeck, shuffleDeck } from './deck'
 import { compareHands, evaluateHand, HandResult, handRankLabel } from './handEvaluator'
-import { escrowBuyIn, refundEscrow, settleEscrow } from './gameLoop'
+import { escrowBuyIn, refundEscrow } from './gameLoop'
 import { recordMatchStats } from './matchStatsService'
 import { supabaseAdmin } from '../config/supabase'
 import { gameConfig } from '../config/gameConfig'
+import { checkTierUnlock } from './tierUnlockService'
+import { getAscendantStatus } from './crownVaultService'
+import { economyService } from '../economy/economyService'
+import type { AccountRef } from '../economy/economyTypes'
 import {
   getVipPlusActionOrder,
   getVipPlusAuctionCardCount,
@@ -976,10 +980,73 @@ async function persistVipPlusResult(state: VipPlusMatchState, result: ReturnType
   if (error) console.error('[VIP_PLUS] result persistence failed:', error)
 }
 
+// Central Economy Ledger Phase 7 Round 5 — settle ทั้งแมตช์ในธุรกรรมเดียว (human ทุกคนที่เล่นจริง เท่านั้น
+// — Blank seat ไม่มี escrow ไม่มี real playerId ไม่เข้ามาถึงจุดนี้อยู่แล้วเพราะ rankVipPlusMatch() วนแค่
+// state.humanSeats) แบบเดียวกับ settleAdeptMatchViaLedger/settleHNMatchViaLedger — เหตุผลเดียวกัน: settle
+// แยกต่อคนจะไม่มีทางแยก "รวมเงินที่ระบบเก็บไปจริง" ออกจากผลรวม net ของทุกคนได้ถูกต้อง
+// ⚠️ ไม่มี NPC_POOL entry เลยรอบนี้ (VIP Plus เป็น Human-only ล้วน ไม่มี AI/Boss ร่วมเศรษฐกิจ) burnAmount
+// ต้องรวม state.auctionBurn เข้ากับ state.feeRake ด้วยเสมอ — auctionBurn เป็นคนละ bucket แยกจาก feeRake
+// ไม่เคยถูกรวมเข้าไปที่ไหนเลย ถ้าลืมจุดนี้เงินประมูลจะหายจาก actual_supply เงียบๆ (บั๊กคลาสเดียวกับ
+// state.pot ของ Mastermind ที่เจอมาก่อนหน้านี้ในรอบเดียวกันของโปรเจค)
+export async function settleVipPlusMatchViaLedger(
+  state: VipPlusMatchState, rankings: VipPlusRankingRow[],
+): Promise<Record<VipPlusSeat, number | null>> {
+  const burnAmount = state.feeRake + state.auctionBurn
+  const entries: Array<{ account: AccountRef; netAmount: number }> = rankings
+    .map(row => ({ account: { accountType: 'PLAYER' as const, accountId: row.playerId }, netAmount: row.finalStack }))
+    .filter(e => e.netAmount !== 0)
+
+  if (entries.length > 0) {
+    try {
+      await economyService.settleMatchResult({
+        idempotencyKey: `MATCH_SETTLEMENT:${Object.values(state.escrowIds).sort().join(':')}`,
+        currency: 'TOKEN',
+        entries,
+        burnAmount,
+        reason: 'MATCH_SETTLEMENT',
+        context: { matchId: state.roomId, tier: 'vipPlus' },
+        metadata: { bettingTier: state.wager.bettingTier },
+      })
+    } catch (err) {
+      console.error('[VIP_PLUS]', Date.now(), 'Ledger settleMatchResult failed for', state.roomId, err)
+      return Object.fromEntries(rankings.map(row => [row.seat, null])) as Record<VipPlusSeat, number | null>
+    }
+  }
+
+  const results = {} as Record<VipPlusSeat, number | null>
+  await Promise.all(rankings.map(async row => {
+    const escrowId = state.escrowIds[row.playerId]
+    if (!escrowId) { results[row.seat] = null; return }
+    const { error: updateError } = await supabaseAdmin
+      .from('match_escrow')
+      .update({ status: 'settled', final_stack: row.finalStack, settled_at: new Date().toISOString() })
+      .eq('escrow_id', escrowId)
+      .eq('status', 'in_match')
+    if (updateError) {
+      console.error('[VIP_PLUS]', Date.now(), 'Ledger settle: match_escrow update failed for', escrowId, updateError)
+      results[row.seat] = null
+      return
+    }
+    const { data: userRow, error: readError } = await supabaseAdmin
+      .from('users').select('token_balance').eq('user_id', row.playerId).single()
+    if (readError || !userRow) {
+      console.error('[VIP_PLUS]', Date.now(), 'Ledger settle: failed to re-read token_balance for', row.playerId, readError)
+      results[row.seat] = null
+      return
+    }
+    const newBalance = Number(userRow.token_balance)
+    console.log('[VIP_PLUS]', Date.now(), 'Settled via ledger', row.playerId, '| finalStack', row.finalStack, '| New balance:', newBalance)
+    try { await checkTierUnlock(row.playerId, newBalance) } catch (err) { console.error('[TIER_UNLOCK] Unexpected error calling checkTierUnlock:', err, '| userId:', row.playerId) }
+    try { await getAscendantStatus(row.playerId) } catch (err) { console.error('[CROWN-VAULT] Unexpected error calling getAscendantStatus:', err, '| userId:', row.playerId) }
+    results[row.seat] = newBalance
+  }))
+  return results
+}
+
 export async function finalizeVipPlusMatch(
   state: VipPlusMatchState,
   dependencies: {
-    settle?: typeof settleEscrow
+    settleMatch?: typeof settleVipPlusMatchViaLedger
     persist?: (state: VipPlusMatchState, result: ReturnType<typeof rankVipPlusMatch>) => Promise<void>
     recordStats?: typeof recordMatchStats
   } = {},
@@ -1009,14 +1076,14 @@ export async function finalizeVipPlusMatch(
   }
   const profitFeeTotal = result.rankings.reduce((sum, row) => sum + row.profitFee, 0)
   state.matchResult = result
-  const settle = dependencies.settle ?? settleEscrow
-  const walletBalances = Object.fromEntries(await Promise.all(result.rankings.map(async row => {
-    try { return [row.seat, await settle(row.playerId, state.escrowIds[row.playerId], row.finalStack)] as const }
-    catch (error) {
-      console.error('[VIP_PLUS] escrow settlement failed:', row.playerId, error)
-      return [row.seat, null] as const
-    }
-  })))
+  const settleMatch = dependencies.settleMatch ?? settleVipPlusMatchViaLedger
+  let walletBalances: Record<VipPlusSeat, number | null>
+  try {
+    walletBalances = await settleMatch(state, result.rankings)
+  } catch (error) {
+    console.error('[VIP_PLUS] ledger settlement threw:', error)
+    walletBalances = Object.fromEntries(result.rankings.map(row => [row.seat, null])) as Record<VipPlusSeat, number | null>
+  }
   try { await (dependencies.persist ?? persistVipPlusResult)(state, result) }
   catch (error) { console.error('[VIP_PLUS] result persistence threw:', error) }
   // มติลุงเยาะ — จบแมตช์ต้องอัพเดทสถิติผู้เล่น (games_played/games_won/xp/daily streak/best_hands) เหมือน
