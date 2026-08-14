@@ -5,10 +5,10 @@
  * The Sage Unicorn Studio Co., Ltd.
  */
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Image, Platform, Modal, Switch, TextInput, useWindowDimensions, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Image, Platform, Modal, Switch, TextInput, useWindowDimensions } from 'react-native';
 import { io, Socket } from 'socket.io-client';
 import { useUserStore } from '../../src/store/userStore';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useBgm, fadeOutBgm } from '../../src/services/bgmService'
 import { useAuthStore } from '../../src/store/authStore'
 import { MenuButton } from '../../src/components/ui/MenuButton'
@@ -18,7 +18,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { BUY_IN, BuyInTier, AD_RESCUE_AMOUNT } from '../../src/config/buyInConfig'
 import { Tier, TIER_CONFIG, isEligible, meetsLastBossCondition } from '../../src/config/tierConfig'
 import { ActiveTableSummary } from '../../src/types/spectator.types'
-import { watchAd } from '../../src/services/adRewards'
 
 const studioLogo = require('../../assets/images/sage_unicorn_logo_transparent.png');
 
@@ -63,6 +62,11 @@ const formatMMSS = (totalSeconds: number): string => {
 export default function LobbyScreen() {
   useBgm(); // LobbyMatchmaking_Spec_v1_0 §2 — BGM เล่นต่อเนื่องข้าม Profile/Shop/Lobby/Hall of Fame
   const [selected, setSelected] = useState<Selection | null>(null);
+
+  // Ad Gate ก่อนเข้าเล่น (มติลุงเยาะ 2026-08-14) — สมาชิกฟรีต้องดูโฆษณาก่อนเข้า Solo/Multiplayer/
+  // Grandmaster เสมอ (VIP ผ่านได้เลย) resume action หลังดูจบผ่าน query param 'autoEnter' แทนการพึ่ง ref
+  // ในหน่วยความจำ (router.push ไปหน้า /watch-ad เป็นการ navigate จริง ไม่ใช่ modal ในหน้าเดิม)
+  const adGateParams = useLocalSearchParams<{ autoEnter?: string }>();
 
   // จัดปุ่ม Profile (header) ให้ตรงแนว x กับปุ่ม Shop (menuBar ด้านล่าง) — menuBar ใช้ justifyContent:'space-evenly'
   // กับปุ่มขนาด sm (64px) 4 ปุ่ม จึงคำนวณ gap ซ้ายสุดของ Shop ด้วยสูตรเดียวกัน แทนเลขตายตัว กันพังเวลาจอกว้างไม่เท่ากัน
@@ -300,20 +304,12 @@ export default function LobbyScreen() {
 
   // TODO: ต่อ AdMob rewarded ad SDK จริง — ตอนนี้เป็นปุ่มทดสอบชั่วคราว (มติลุงเยาะ 2026-08-13) เรียก
   // endpoint ให้เครดิตทันทีแทนการรอดูโฆษณาจริง จนกว่าจะมีบัญชี AdMob/Ad Unit ID มาต่อ SDK จริง
-  const handleWatchAd = async () => {
+  // Patch 2026-08-14: เชื่อมเข้าหน้า /watch-ad กลาง (มี RoyalStraightFlushVFX) แทน Alert เดิม —
+  // ทุกจุดที่ดูโฆษณาในแอปใช้หน้าเดียวกันหมด (ยกเลิก pending auto-enter table เหมือนพฤติกรรมเดิม)
+  const handleWatchAd = () => {
     setInsufficientTier(null);
     pendingEnterRef.current = null;
-    const result = await watchAd(accessToken);
-    if (result.ok === false) {
-      if (result.reason === 'cooldown') {
-        const minutes = Math.ceil(result.retryAfterSeconds / 60);
-        Alert.alert('Ad Cooldown', `Watch another ad in about ${minutes} min.`);
-      } else {
-        Alert.alert('Watch Ad', 'Something went wrong. Please try again.');
-      }
-      return;
-    }
-    Alert.alert('Ad Reward', `+${result.tokensAwarded} Token`);
+    router.push({ pathname: '/(home)/watch-ad', params: { returnTo: '/(home)/lobby' } } as any);
   };
 
   const handleBuyTokensNav = () => {
@@ -423,6 +419,34 @@ export default function LobbyScreen() {
 
   const handleAutoMatchAdept = () => handleAutoMatch('adept');
   const handleEnterHighNoble = () => isVip ? setShowLiveDialog(true) : handleAutoMatch('highNoble');
+
+  // ── Ad Gate ก่อนเข้าเล่น (มติลุงเยาะ 2026-08-14) ──────────────────────────
+  // สมาชิกฟรีต้องดูโฆษณา (RoyalStraightFlushVFX ผ่านหน้า /watch-ad กลาง, mode=gate ไม่มีรางวัล) ให้
+  // จบก่อนถึงจะเข้า Solo/Multiplayer/Grandmaster ได้ VIP ข้ามได้เลย — ad-gate เกิด "ก่อน" runBuyInGate
+  // เสมอ (เช็คโทเคนพอ/ไม่พอทำหลังดูโฆษณาจบ) เพื่อให้ resume ง่าย: แค่จำว่าปุ่มไหนถูกกด แล้วเรียก
+  // handler เดิมซ้ำอีกทีหลังกลับมาจากหน้าโฆษณา ไม่ต้องพึ่ง ref ในหน่วยความจำที่อาจหายไปตอน navigate จริง
+  const AD_GATE_RESUME_ACTIONS: Record<string, () => void> = {
+    initiate: () => runBuyInGate('initiate', handleEnterInitiate),
+    mastermind: () => runBuyInGate('mastermind', handleEnterMastermind),
+    adept: () => runBuyInGate('adept', handleAutoMatchAdept),
+    high_noble: () => runBuyInGate('high_noble', handleEnterHighNoble),
+    grandmaster: handleEnterGrandmaster,
+  };
+
+  const requireAdGate = (actionKey: keyof typeof AD_GATE_RESUME_ACTIONS) => {
+    if (isVip) { AD_GATE_RESUME_ACTIONS[actionKey](); return; }
+    router.push({ pathname: '/(home)/watch-ad', params: { returnTo: `/(home)/lobby?autoEnter=${actionKey}`, mode: 'gate' } } as any);
+  };
+
+  // กลับมาจากหน้าโฆษณาแล้ว (query param 'autoEnter') — เรียก action เดิมต่อทันที แล้วเคลียร์ param
+  // กันเรียกซ้ำถ้า component re-render โดยไม่ได้ navigate ใหม่จริง
+  useEffect(() => {
+    const key = adGateParams.autoEnter;
+    if (!key || !(key in AD_GATE_RESUME_ACTIONS)) return;
+    router.setParams({ autoEnter: undefined } as any);
+    AD_GATE_RESUME_ACTIONS[key]();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adGateParams.autoEnter]);
 
   const openPrivateDialog = (mode: 'CREATE' | 'JOIN', tier: MatchmakingTier) => {
     setRoomPin('');
@@ -731,20 +755,20 @@ export default function LobbyScreen() {
           <Text style={s.sectionTitle}>{sectionTitle}</Text>
 
           {selected === 'initiate' && (
-            <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('initiate', handleEnterInitiate)}>
+            <TouchableOpacity style={s.enterBtn} onPress={() => requireAdGate('initiate')}>
               <Text style={s.enterBtnTxt}>▶ Play (Create Your Table)</Text>
             </TouchableOpacity>
           )}
 
           {selected === 'mastermind' && (
-            <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('mastermind', handleEnterMastermind)}>
+            <TouchableOpacity style={s.enterBtn} onPress={() => requireAdGate('mastermind')}>
               <Text style={s.enterBtnTxt}>▶ Play (Conquest Mode: 9 Sentinels)</Text>
             </TouchableOpacity>
           )}
 
           {selected === 'grandmaster' && (
             <View style={{ gap: 8 }}>
-              <TouchableOpacity style={s.enterBtn} onPress={handleEnterGrandmaster}>
+              <TouchableOpacity style={s.enterBtn} onPress={() => requireAdGate('grandmaster')}>
                 <Text style={s.enterBtnTxt}>▶ Play (Arena Auto-Match)</Text>
               </TouchableOpacity>
               <Text style={s.arenaMatchComposition}>2-3 Human + Boss AI</Text>
@@ -762,7 +786,7 @@ export default function LobbyScreen() {
                 {/* มติลุงเยาะ — ห้ามสปอยล์ชื่อ Monarch ก่อนผู้เล่นได้เจอจริง (card นี้เห็นได้ตั้งแต่ยังไม่ต่อคิวเลย) */}
                 <Text style={s.detailText}>Ante: 250 / 500 / 1,000{`\n`}Players: 3 Humans + Boss AI{`\n`}Boss Encounter: Four Gods / Hidden Boss{`\n`}Auto-Sort Fee: 50%</Text>
               </View>
-              <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('high_noble', handleEnterHighNoble)}>
+              <TouchableOpacity style={s.enterBtn} onPress={() => requireAdGate('high_noble')}>
                 <Text style={s.enterBtnTxt}>ENTER HIGH NOBLE</Text>
               </TouchableOpacity>
               <View style={s.liveSetting}><View style={{ flex: 1 }}><Text style={s.detailTitle}>Allow matching into Live Tables</Text><Text style={s.detailText}>Default OFF · public cards only · 30s delay</Text></View><Switch value={allowLiveTables} onValueChange={toggleAllowLive} trackColor={{ true: COLOR.red }} /></View>
@@ -775,7 +799,7 @@ export default function LobbyScreen() {
 
           {selected === 'adept' && mmStatus === 'idle' && (
             <>
-              <TouchableOpacity style={s.enterBtn} onPress={() => runBuyInGate('adept', handleAutoMatchAdept)}>
+              <TouchableOpacity style={s.enterBtn} onPress={() => requireAdGate('adept')}>
                 <Text style={s.enterBtnTxt}>▶ Play (Auto-Match 2 Human + AI)</Text>
               </TouchableOpacity>
               <View style={s.privateActions}>

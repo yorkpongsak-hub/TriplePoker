@@ -74,6 +74,12 @@ export const gameConfig = {
       maxShields: 2,
       day7ShieldBonus: 1,
     },
+    // Streak Milestone Bonus (มติลุงเยาะ 2026-08-14) — แยกจาก playStreak.rewards ข้างบนโดยสิ้นเชิง
+    // (XP ต่อวันยังแจกอัตโนมัติเหมือนเดิมทุกประการ ไม่แตะ) แทนที่เฉพาะ TOKEN ที่เคยแจกอัตโนมัติทุกวัน
+    // ด้วยระบบใหม่: milestone วันที่ 3/5/7 เท่านั้น (วันที่ 1 ไม่มีรางวัล) ต้องกด Claim เองที่หน้า
+    // /streak (สมาชิกฟรีดูโฆษณาก่อน VIP ข้ามได้) — เช็คสิทธิ์ผ่าน getClaimableStreakMilestone() ใน
+    // matchStatsService.ts เทียบกับ users.streak_claimed_milestone (รีเซ็ตเป็น 0 เองตอนวนรอบใหม่)
+    streakMilestoneRewards: { 3: 300, 5: 500, 7: 1000 } as Record<number, number>,
   },
 
   // ─── Token Pot ───────────────────────────────────────────────

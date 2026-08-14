@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity, Image,
-  StyleSheet, Platform, StatusBar, ScrollView, ActivityIndicator, Dimensions,
+  StyleSheet, Platform, StatusBar, ScrollView, ActivityIndicator, Dimensions, Alert,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
@@ -63,11 +63,20 @@ export default function SetupProfileScreen() {
   const [isExistingMember, setIsExistingMember] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Guest Play (มติลุงเยาะ 2026-08-14) — guest (Anonymous Sign-In) ที่มาตั้งชื่อจากหน้านี้ ยังไม่มี
+  // email/password ผูกกับบัญชีเลย session.user.is_anonymous จะยังเป็น true ต่อไปแม้ตั้งชื่อแล้ว —
+  // เพิ่มช่อง Email/Password เป็น "ตัวเลือก" เฉพาะ guest เท่านั้น ถ้ากรอกจะแปลง anonymous -> บัญชี
+  // ถาวรจริงผ่าน supabase.auth.updateUser() ถ้าเว้นว่างไว้ก็ข้ามได้ (ข้อมูลอยู่แค่เครื่องนี้เครื่องเดียว)
+  const [isAnonymous, setIsAnonymous] = useState(false)
+  const [guestEmail, setGuestEmail] = useState('')
+  const [guestPassword, setGuestPassword] = useState('')
+
   // โหลดค่าเดิม (ถ้าเคยตั้งแล้วกลับมาแก้)
   useEffect(() => {
     (async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) return
+      setIsAnonymous(session.user.is_anonymous === true)
       const { data } = await supabase
         .from('users')
         .select('display_name, avatar_url, vip_status')
@@ -90,10 +99,33 @@ export default function SetupProfileScreen() {
     const patternErr = validateNamePattern(displayName)
     if (patternErr) { setError(patternErr); return }
 
+    // 1b) Guest email/password — ตัวเลือก แต่ถ้าเริ่มกรอกอันใดอันหนึ่งต้องกรอกให้ครบทั้งคู่
+    const wantsAccountLink = guestEmail.trim().length > 0 || guestPassword.length > 0
+    if (isAnonymous && wantsAccountLink) {
+      if (!guestEmail.trim() || !/^\S+@\S+\.\S+$/.test(guestEmail.trim())) {
+        setError('Please enter a valid email address')
+        return
+      }
+      if (guestPassword.length < 6) {
+        setError('Password must be at least 6 characters')
+        return
+      }
+    }
+
     setIsSaving(true)
     try {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { setError('Session expired. Please sign in again.'); return }
+
+      // 1c) ผูก email/password เข้าบัญชี anonymous ให้เป็นบัญชีถาวรจริง — ทำก่อนขั้นตอนอื่นเสมอ กัน
+      // ครึ่งๆ กลางๆ (ตั้งชื่อสำเร็จแต่ link บัญชีไม่สำเร็จ) ทำให้ผู้เล่นเข้าใจผิดว่าบัญชีปลอดภัยแล้ว
+      if (isAnonymous && wantsAccountLink) {
+        const { error: linkErr } = await supabase.auth.updateUser({
+          email: guestEmail.trim(),
+          password: guestPassword,
+        })
+        if (linkErr) { setError(linkErr.message); return }
+      }
 
       // 2) เช็คชื่อซ้ำใน DB (case-insensitive, ยกเว้นชื่อเดิมของตัวเอง) — คนละเรื่องกับ 3-layer
       // name protection ด้านล่าง (bosses/graveyard/reserved_names ไม่เช็ค uniqueness กับผู้เล่นทั่วไป)
@@ -138,6 +170,19 @@ export default function SetupProfileScreen() {
         '| authStore user.id before refresh:', useAuthStore.getState().user?.id ?? null)
       await refreshProfile()
       console.log('[setup-profile] profile after refresh:', useAuthStore.getState().profile)
+
+      // Guest Play — บอกผู้เล่นให้ไปกดยืนยันอีเมล (Supabase ส่ง confirmation link ให้แล้วตอน
+      // updateUser ด้านบน — บัญชียังนับเป็น anonymous จนกว่าจะกดยืนยัน แต่ progress ที่ทำไว้
+      // ไม่หายเพราะผูกกับ user_id เดิม ไม่ใช่บัญชีใหม่)
+      if (isAnonymous && wantsAccountLink) {
+        await new Promise<void>(resolve => {
+          Alert.alert(
+            'Check your email',
+            `We sent a confirmation link to ${guestEmail.trim()}. Tap it to finish securing your account.`,
+            [{ text: 'OK', onPress: () => resolve() }],
+          )
+        })
+      }
 
       // ผู้เล่นใหม่ (ยังไม่เคยดู Onboarding) -- ไปหน้า Onboarding ก่อน แล้วค่อยเข้าหน้าหลัก
       // Patch 2026-07-18: สมาชิกเก่า (มีชื่อใน DB อยู่แล้ว) ข้าม Onboarding เสมอ — flag ฝั่งเครื่อง
@@ -197,6 +242,36 @@ export default function SetupProfileScreen() {
           <Text style={styles.ruleText}>• Letters, numbers, Thai, _ and -</Text>
           <Text style={styles.ruleText}>• No offensive or reserved names</Text>
         </View>
+
+        {/* ─── Guest Play — Save Account (optional, guest เท่านั้น) ─── */}
+        {isAnonymous && (
+          <>
+            <Text style={styles.sectionLabel}>SAVE YOUR ACCOUNT (OPTIONAL)</Text>
+            <Text style={styles.guestHint}>
+              Add an email &amp; password so you can log back in on any device — skip this to keep
+              playing as a guest on this device only.
+            </Text>
+            <TextInput
+              style={styles.guestInput}
+              placeholder="Email"
+              placeholderTextColor={C.textDim}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="email-address"
+              value={guestEmail}
+              onChangeText={(t) => { setGuestEmail(t); setError(null) }}
+            />
+            <TextInput
+              style={styles.guestInput}
+              placeholder="Password (min 6 characters)"
+              placeholderTextColor={C.textDim}
+              autoCapitalize="none"
+              secureTextEntry
+              value={guestPassword}
+              onChangeText={(t) => { setGuestPassword(t); setError(null) }}
+            />
+          </>
+        )}
 
         {error && (
           <View style={styles.errorBox}>
@@ -318,6 +393,26 @@ const styles = StyleSheet.create({
     gap:             3,
   },
   ruleText: { color: C.textSec, fontSize: 11 },
+
+  // Guest Play — Save Account (optional)
+  guestHint: {
+    color:        C.textSec,
+    fontSize:     11,
+    lineHeight:   16,
+    marginBottom: 10,
+  },
+  guestInput: {
+    backgroundColor:   C.card,
+    borderRadius:      10,
+    borderWidth:       1.5,
+    borderColor:       C.border,
+    paddingHorizontal: 14,
+    paddingVertical:   12,
+    color:             C.textPrimary,
+    fontSize:          14,
+    marginBottom:      10,
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } as any : {}),
+  },
 
   // Preview
   previewLabel: {

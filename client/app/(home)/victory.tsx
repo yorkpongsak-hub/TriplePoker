@@ -1,9 +1,12 @@
 // app/(home)/victory.tsx
 // Post-Match Victory Screen — shown only to the match's #1 finisher, right after "back to lobby"
-// (มติลุงเยาะ 2026-08-13). Flow: Victory (VFX + stats) -> Ad step (skippable) -> that Tier's Top10.
-// A single shared route parameterized by ?tier=, mirroring top10.tsx's own precedent — this is a
-// tier-agnostic post-game summary, not a gameplay screen, so CLAUDE.md's "no dynamic [tier] route"
-// rule (which governs the game tables themselves) does not apply here.
+// (มติลุงเยาะ 2026-08-13). Flow: Victory (VFX + stats) -> Ad screen (skippable, shared /watch-ad
+// route) -> that Tier's Top10. A single shared route parameterized by ?tier=, mirroring top10.tsx's
+// own precedent — this is a tier-agnostic post-game summary, not a gameplay screen, so CLAUDE.md's
+// "no dynamic [tier] route" rule (which governs the game tables themselves) does not apply here.
+//
+// Patch 2026-08-14 (มติลุงเยาะ): เดิมมีขั้นตอนโฆษณาในตัวเอง (step 'ad') — ย้ายไปใช้หน้า /watch-ad
+// กลาง (มี RoyalStraightFlushVFX placeholder) แทน ให้ทุกจุดที่ดูโฆษณาในแอปเห็น VFX เดียวกันหมด
 // The Sage Unicorn Studio Co., Ltd.
 
 import React, { useEffect, useState } from 'react'
@@ -12,7 +15,6 @@ import { Image } from 'expo-image'
 import { router, useLocalSearchParams } from 'expo-router'
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated'
 import { useAuthStore } from '../../src/store/authStore'
-import { watchAd } from '../../src/services/adRewards'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 const tokenDropGif = require('../../assets/fx/token_drop.gif')
@@ -54,15 +56,11 @@ export default function VictoryScreen() {
   const matchDurationSec = Number(params.matchDurationSec ?? 0)
   const bestHandLabel = params.bestHandLabel && params.bestHandLabel !== 'null' ? params.bestHandLabel : null
 
-  const accessToken = useAuthStore(s => s.session?.access_token ?? null)
   const isGuest = useAuthStore(s => s.session?.user?.is_anonymous === true)
 
-  const [step, setStep] = useState<'victory' | 'ad'>('victory')
   const [loaded, setLoaded] = useState(false)
   const [percentile, setPercentile] = useState<number>(0)
   const [xp, setXp] = useState<number>(0)
-  const [adBusy, setAdBusy] = useState(false)
-  const [adMsg, setAdMsg] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -130,20 +128,7 @@ export default function VictoryScreen() {
   const statsStyle = useAnimatedStyle(() => ({ opacity: statsOpacity.value }))
   const buttonStyle = useAnimatedStyle(() => ({ opacity: buttonOpacity.value }))
 
-  const goToTop10 = () => router.replace(`/(home)/top10?tier=${tier}` as any)
-
-  const handleWatchAdPress = async () => {
-    setAdBusy(true)
-    const result = await watchAd(accessToken)
-    setAdBusy(false)
-    if (result.ok === false) {
-      setAdMsg(result.reason === 'cooldown' ? `Try again in ~${Math.ceil(result.retryAfterSeconds / 60)} min` : 'Something went wrong.')
-      setTimeout(goToTop10, 1200)
-      return
-    }
-    setAdMsg(`+${result.tokensAwarded} Token!`)
-    setTimeout(goToTop10, 1200)
-  }
+  const goToWatchAd = () => router.push({ pathname: '/(home)/watch-ad', params: { returnTo: `/(home)/top10?tier=${tier}` } } as any)
 
   if (!loaded) {
     return (
@@ -156,54 +141,34 @@ export default function VictoryScreen() {
   return (
     <Animated.View style={[s.scrim, scrimStyle]}>
       <View style={s.center}>
-        {step === 'victory' ? (
-          <>
-            <Animated.View style={vfxStyle}>
-              <Image source={tokenDropGif} style={s.vfxGif} contentFit="contain" autoplay />
-            </Animated.View>
+        <Animated.View style={vfxStyle}>
+          <Image source={tokenDropGif} style={s.vfxGif} contentFit="contain" autoplay />
+        </Animated.View>
 
-            <Animated.Text style={[s.headline, headlineStyle]}>ชัยชนะอันสมบูรณ์แบบ!</Animated.Text>
+        <Animated.Text style={[s.headline, headlineStyle]}>PERFECT VICTORY!</Animated.Text>
 
-            <Animated.View style={[s.statsCard, statsStyle]}>
-              <Text style={s.statsLine}>
-                {'⏱'} {formatDuration(matchDurationSec)}{'   '}
-                <Text style={{ color: C.green }}>+{tokensWon.toLocaleString('en-US')} Token</Text>
-                {bestHandLabel ? <>{'   🂡 '}{bestHandLabel}</> : null}
-              </Text>
-              <Text style={s.percentileLine}>ชนะผู้เล่น {percentile}% ของโต๊ะนี้!</Text>
-              <Text style={s.xpLine}>XP สะสม: {xp.toLocaleString('en-US')}</Text>
-            </Animated.View>
+        <Animated.View style={[s.statsCard, statsStyle]}>
+          <Text style={s.statsLine}>
+            {'⏱'} {formatDuration(matchDurationSec)}{'   '}
+            <Text style={{ color: C.green }}>+{tokensWon.toLocaleString('en-US')} Token</Text>
+            {bestHandLabel ? <>{'   🂡 '}{bestHandLabel}</> : null}
+          </Text>
+          <Text style={s.percentileLine}>Beat {percentile}% of players at this table!</Text>
+          <Text style={s.xpLine}>Total XP: {xp.toLocaleString('en-US')}</Text>
+        </Animated.View>
 
-            <Animated.View style={buttonStyle}>
-              <TouchableOpacity style={s.button} onPress={() => setStep('ad')} activeOpacity={0.85}>
-                <Text style={s.buttonText}>ต่อไป</Text>
-              </TouchableOpacity>
-              {isGuest && (
-                // Guest Play (มติลุงเยาะ 2026-08-13) — เชิญชวนสมัครสมาชิกหลังทำผลงานได้ดี (ชนะ)
-                // เป็นแค่คำเชิญ ไม่บังคับ — เล่นต่อแบบ guest ได้เรื่อยๆ ถ้ายังไม่อยากสมัคร
-                <TouchableOpacity style={s.registerButton} onPress={() => router.push('/(auth)/setup-profile')} activeOpacity={0.7}>
-                  <Text style={s.registerButtonText}>ลงทะเบียนเพื่อบันทึกสถิติการเล่น</Text>
-                </TouchableOpacity>
-              )}
-            </Animated.View>
-          </>
-        ) : (
-          <>
-            <Text style={s.adTitle}>รับโทเคนเพิ่มด้วยการดูโฆษณา</Text>
-            {adMsg ? (
-              <Text style={s.adMsg}>{adMsg}</Text>
-            ) : (
-              <>
-                <TouchableOpacity style={s.button} onPress={handleWatchAdPress} activeOpacity={0.85} disabled={adBusy}>
-                  {adBusy ? <ActivityIndicator color={C.bgDark} /> : <Text style={s.buttonText}>ดูโฆษณา</Text>}
-                </TouchableOpacity>
-                <TouchableOpacity style={s.skipButton} onPress={goToTop10} activeOpacity={0.7} disabled={adBusy}>
-                  <Text style={s.skipButtonText}>ข้าม</Text>
-                </TouchableOpacity>
-              </>
-            )}
-          </>
-        )}
+        <Animated.View style={buttonStyle}>
+          <TouchableOpacity style={s.button} onPress={goToWatchAd} activeOpacity={0.85}>
+            <Text style={s.buttonText}>CONTINUE</Text>
+          </TouchableOpacity>
+          {isGuest && (
+            // Guest Play (มติลุงเยาะ 2026-08-13) — เชิญชวนสมัครสมาชิกหลังทำผลงานได้ดี (ชนะ)
+            // เป็นแค่คำเชิญ ไม่บังคับ — เล่นต่อแบบ guest ได้เรื่อยๆ ถ้ายังไม่อยากสมัคร
+            <TouchableOpacity style={s.registerButton} onPress={() => router.push('/(auth)/setup-profile')} activeOpacity={0.7}>
+              <Text style={s.registerButtonText}>Register to save your progress</Text>
+            </TouchableOpacity>
+          )}
+        </Animated.View>
       </View>
     </Animated.View>
   )
@@ -260,16 +225,4 @@ const s = StyleSheet.create({
 
   registerButton: { marginTop: 14, paddingVertical: 8, paddingHorizontal: 16 },
   registerButtonText: { color: C.green, fontSize: 12, fontWeight: '700', textAlign: 'center', textDecorationLine: 'underline' },
-
-  adTitle: {
-    fontFamily: 'Cinzel_700Bold',
-    color: C.text,
-    fontSize: 18,
-    fontWeight: '800',
-    textAlign: 'center',
-    marginBottom: 24,
-  },
-  adMsg: { color: C.gold, fontSize: 16, fontWeight: '800', textAlign: 'center' },
-  skipButton: { marginTop: 16, paddingVertical: 8, paddingHorizontal: 16 },
-  skipButtonText: { color: C.textSec, fontSize: 13, fontWeight: '700', textDecorationLine: 'underline' },
 })

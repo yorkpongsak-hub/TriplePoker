@@ -953,20 +953,26 @@ const GameTableLive: React.FC = () => {
 
   // (AIPiles เดิมถูกแทนที่ด้วย BossHandRow กลางแล้ว — ดู src/components/game/BossHandRow.tsx)
 
-  const SideSeat: React.FC<{ rot: string; aiId: string; offsetX?: number; offsetY?: number }> = ({ rot, aiId, offsetX = 0, offsetY = 0 }) => {
+  // Patch 2026-08-14: P2/P4 กลับมาเป็นแนวดิ่งธรรมดา — เดิมเอียง 2.5D ตามมุมผ้าขาวม้า (ทำไว้ใช้ในอีก
+  // แอป ลืมแก้ตอน port มา) โต๊ะแรกสุดที่ผู้เล่นเจอควรเป็น layout พื้นฐานที่สุดก่อน ไม่มีการเอียง/หมุน
+  const SideSeat: React.FC<{ aiId: string; offsetX?: number; offsetY?: number }> = ({ aiId, offsetX = 0, offsetY = 0 }) => {
     const p1 = allCards[aiId]?.[1] ?? []; const p2 = allCards[aiId]?.[2] ?? []; const p3 = allCards[aiId]?.[3] ?? []
     const cards = [...p1, ...p2, ...p3]
     return (
       <View style={[s.sideSeatWrap, { transform: [{ translateX: offsetX }, { translateY: offsetY }] }]}>
-        <View style={[s.sideSeatInner, { transform: [{ rotate: rot }] }]}>
+        <View style={s.sideSeatInner}>
           {([5, 3, 3] as number[]).map((cnt, pi) => (
             <React.Fragment key={pi}>
-              {pi > 0 && <View style={{ width: 4 }} />}
-              <View style={{ flexDirection: 'row' }}>
+              {pi > 0 && <View style={{ height: 4 }} />}
+              <View style={{ flexDirection: 'column', alignItems: 'center' }}>
                 {Array.from({ length: cnt }).map((_, ci) => {
                   const idx = pi === 0 ? ci : pi === 1 ? 3 + ci : 6 + ci
                   const cardKey = cards[idx]
-                  return renderCard(cardKey, 25, 36, ci === 0 ? 0 : -18, `${aiId}-${pi}-${ci}-${cardKey ?? 'back'}`)
+                  return (
+                    <View key={`${aiId}-${pi}-${ci}-${cardKey ?? 'back'}`} style={{ marginTop: ci === 0 ? 0 : -26 }}>
+                      {renderCard(cardKey, 25, 36)}
+                    </View>
+                  )
                 })}
               </View>
             </React.Fragment>
@@ -1381,7 +1387,7 @@ const GameTableLive: React.FC = () => {
           {phase === 'end' && matchResult && (
             <>
               {matchResult.finalWinner === PLAYER_ID && (
-                <View style={StyleSheet.absoluteFill} pointerEvents="none">
+                <View style={[StyleSheet.absoluteFill, { zIndex: 200 }]} pointerEvents="none">
                   {confettiAnims.map((a, i) => {
                     const colors = ['#ff6b6b','#ffd93d','#6bcb77','#4d96ff','#ff922b','#cc5de8']
                     const rotStr = a.rotate.interpolate({ inputRange: [0, 720], outputRange: ['0deg', '720deg'] })
@@ -1614,8 +1620,7 @@ const GameTableLive: React.FC = () => {
               <View style={{ marginTop: -6, marginBottom: 60 }}>
                 <AvatarBubble emoji={p2AI?.emoji ?? '👤'} size={36} />
               </View>
-              {/* เอียงตาม perspective ขอบผ้าขาวม้าฝั่งซ้าย โดยคงขนาดและระยะซ้อนไพ่เดิม */}
-              {p2AI && <SideSeat rot="273.5deg" aiId={p2AI.id} offsetX={13} offsetY={1} />}
+              {p2AI && <SideSeat aiId={p2AI.id} offsetX={0} offsetY={1} />}
             </View>
 
             <View style={s.commWrap}>
@@ -1636,12 +1641,7 @@ const GameTableLive: React.FC = () => {
               <View style={{ marginTop: -6, marginBottom: 60 }}>
                 <AvatarBubble emoji={p4AI?.emoji ?? '👤'} size={36} />
               </View>
-              {p4AI && (
-                <View style={{ marginLeft: 15 }}>
-                  {/* เอียงตาม perspective ขอบผ้าขาวม้าฝั่งขวาแบบสมมาตรกับ P2 */}
-                  <SideSeat rot="86.5deg" aiId={p4AI.id} offsetX={-18} offsetY={1} />
-                </View>
-              )}
+              {p4AI && <SideSeat aiId={p4AI.id} offsetX={0} offsetY={1} />}
             </View>
           </View>
 
@@ -1761,7 +1761,7 @@ const s = StyleSheet.create({
   // Patch 2026-07-18: ยอดโทเคนคงเหลือใต้ชื่อทุกที่นั่ง — ทองธีมหลัก, JetBrains Mono ตามมาตรฐานตัวเลข
   seatToken:     { fontSize: 9, color: '#FFD76A', fontFamily: 'JetBrainsMono_600SemiBold', textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
   sideSeatWrap:  { flex: 1, width: SIDE_COL_W, overflow: 'visible', justifyContent: 'flex-start', alignItems: 'center' },
-  sideSeatInner: { flexDirection: 'row', alignItems: 'center' },
+  sideSeatInner: { flexDirection: 'column', alignItems: 'center' },
 
   commWrap:    { flex: 1, paddingLeft: 4, paddingRight: 18, alignItems: 'flex-start', justifyContent: 'center', marginTop: 40 /* Patch 2026-07-18: เลื่อนกองกลางทั้ง 3 กองลง 40px — ใช้พื้นที่ว่างกลางจอ */, zIndex: 2 },
   auctionLbl:  { fontSize: 7, color: 'rgba(160,80,220,.55)', letterSpacing: 1, textTransform: 'uppercase' },

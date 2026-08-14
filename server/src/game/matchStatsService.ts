@@ -15,7 +15,6 @@
 import { supabaseAdmin } from '../config/supabase'
 import { gameConfig } from '../config/gameConfig'
 import { HandResult, handRankLabel } from './handEvaluator'
-import { economyService } from '../economy/economyService'
 
 export type StatsTier = 'initiate' | 'adept' | 'mastermind' | 'highNoble'
 
@@ -40,7 +39,8 @@ export interface MatchStatsPlayerInput {
 const BLOCKED_USER_IDS = new Set(['Human1'])
 
 // ─── Helper: วันที่ปัจจุบันโซนเวลา Asia/Bangkok เสมอ (ห้ามใช้ UTC ตรงๆ) ───
-function getBangkokDateString(d: Date): string {
+// export ไว้ให้ routes/profile.ts's claim-streak-reward ใช้ idempotency key วันเดียวกันกับที่นี่
+export function getBangkokDateString(d: Date): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit',
   }).formatToParts(d)
@@ -112,6 +112,19 @@ export function computeDailyPlayStreak(
   }
 }
 
+// ─── Streak Milestone Bonus (มติลุงเยาะ 2026-08-14) ───────────────────────────
+// เฉพาะวันที่ 3/5/7 ของ cycle เดียวกับ computeDailyPlayStreak ด้านบน (วันที่ 1 ไม่มีรางวัล) — ต้องกด
+// Claim เองที่หน้า /streak เท่านั้น (routes/profile.ts's POST /profile/claim-streak-reward) ไม่ใช่แจก
+// อัตโนมัติเหมือน tokenReward ด้านบน — ฟังก์ชันนี้เป็น pure function ใช้ทั้งสองฝั่ง (recordMatchStats
+// เอาไว้เช็คว่าต้อง reset streak_claimed_milestone ไหม, claim endpoint เอาไว้เช็คสิทธิ์การ claim จริง)
+export const STREAK_MILESTONES = [3, 5, 7] as const
+
+/** milestone สูงสุดที่ถึงแล้วแต่ยังไม่เคย claim ใน cycle ปัจจุบัน — null ถ้าไม่มีอะไรให้ claim */
+export function getClaimableStreakMilestone(streakCount: number, claimedMilestone: number): number | null {
+  const eligible = STREAK_MILESTONES.filter(day => streakCount >= day && day > claimedMilestone)
+  return eligible.length > 0 ? Math.max(...eligible) : null
+}
+
 // ─── Helper: Debt Recovery — คืน token_balance สุดท้าย + debt_amount ที่ต้องตั้ง ───
 function computeDebtRecovery(
   tier: StatsTier, isVip: boolean, tokenBalance: number,
@@ -157,6 +170,7 @@ interface CurrentUserRow {
   streak_shields: number
   best_streak_count: number
   streak_7days_badge: boolean
+  streak_claimed_milestone: number
 }
 
 // บันทึกผลจบเกมของผู้เล่น human ทุกคนในแมตช์นี้ — เรียกจากจุด match_end ปกติเท่านั้น (จบครบ totalRounds)
@@ -176,7 +190,7 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
   try {
     const { data, error: readErr } = await supabaseAdmin
       .from('users')
-      .select('user_id, token_balance, vip_status, games_played, games_won, xp, best_hands, debt_amount, streak_count, last_played_date, streak_shields, best_streak_count, streak_7days_badge')
+      .select('user_id, token_balance, vip_status, games_played, games_won, xp, best_hands, debt_amount, streak_count, last_played_date, streak_shields, best_streak_count, streak_7days_badge, streak_claimed_milestone')
       .in('user_id', userIds)
     if (readErr) {
       console.error('[MATCH_STATS] Read failed:', readErr, '| userIds:', userIds)
@@ -196,6 +210,7 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
         streak_shields:   row.streak_shields ?? 0,
         best_streak_count: row.best_streak_count ?? 0,
         streak_7days_badge: row.streak_7days_badge ?? false,
+        streak_claimed_milestone: row.streak_claimed_milestone ?? 0,
       }
     }
   } catch (err) {
@@ -207,13 +222,11 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
   const todayStr = getBangkokDateString(now)
   const nowISO = now.toISOString()
 
-  const streakRewards: Array<{ userId: string; tokenReward: number }> = []
-
   const rows = valid.map(p => {
     const prev = current[p.userId] ?? {
       token_balance: 0, vip_status: 'none', games_played: 0, games_won: 0, xp: 0,
       best_hands: {}, debt_amount: 0, streak_count: 0, last_played_date: null, streak_shields: 0,
-      best_streak_count: 0, streak_7days_badge: false,
+      best_streak_count: 0, streak_7days_badge: false, streak_claimed_milestone: 0,
     }
 
     // 1-2) Escrow settle เขียน token_balance ไปแล้วก่อนหน้านี้ (settleEscrow) — ที่นี่แค่ตรวจ Debt Recovery
@@ -239,9 +252,11 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
       streakShieldsBeforeReward, prev.streak_7days_badge, todayStr,
     )
     newXp += streak.xpReward
-    if (streak.tokenReward > 0) {
-      streakRewards.push({ userId: p.userId, tokenReward: streak.tokenReward })
-    }
+    // streak.tokenReward เดิมเคย mint อัตโนมัติตรงนี้ (ดู git history) — แทนที่ด้วยระบบ Milestone
+    // Claim ใหม่ (มติลุงเยาะ 2026-08-14) ผ่านหน้า /streak เท่านั้นแล้ว ไม่แจกอัตโนมัติในนี้อีกต่อไป
+    // reset streak_claimed_milestone กลับ 0 ทุกครั้งที่ cycle ใหม่เริ่ม (cycleDay===1) กัน milestone
+    // เดิมจาก cycle ก่อนหน้าค้างกันไม่ให้ claim รอบใหม่ได้
+    const newStreakClaimedMilestone = streak.cycleDay === 1 ? 0 : prev.streak_claimed_milestone
 
     // 6) best_hands (jsonb, key = tier) — replace เฉพาะ key ของ tier นี้ถ้า score สูงกว่าเดิม
     let newBestHands = prev.best_hands ?? {}
@@ -277,6 +292,7 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
       streak_shields: streak.shields,
       best_streak_count: streak.bestStreak,
       streak_7days_badge: streak.badgeUnlocked,
+      streak_claimed_milestone: newStreakClaimedMilestone,
     }
   })
 
@@ -295,25 +311,5 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
     }
   } catch (err) {
     console.error('[MATCH_STATS] Unexpected error during upsert:', err, '| payload:', JSON.stringify(rows))
-  }
-
-  // Daily Streak Bonus — Central Economy Ledger Phase 7 Round 8 (2026-08-13). Separated from the
-  // combined stats .update() above (which still writes games_played/xp/best_hands/debt_amount
-  // directly, unchanged) so the token portion is ledger-tracked. One mint per player, isolated in
-  // its own try/catch so one failure doesn't affect the others — idempotency key is deterministic
-  // per user per day, doubling as an "at most once per day" safety net.
-  for (const { userId, tokenReward } of streakRewards) {
-    try {
-      await economyService.mint({
-        idempotencyKey: `STREAK_BONUS:${userId}:${todayStr}`,
-        to: { accountType: 'PLAYER', accountId: userId },
-        currency: 'TOKEN',
-        amount: tokenReward,
-        reason: 'STREAK_BONUS',
-        actor: 'daily_play_streak_system',
-      })
-    } catch (err) {
-      console.error('[MATCH_STATS] Streak Bonus mint failed for', userId, err)
-    }
   }
 }

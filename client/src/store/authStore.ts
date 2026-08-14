@@ -29,6 +29,7 @@ interface UserProfile {
   best_streak_count: number | null
   streak_shields: number | null
   streak_7days_badge: boolean | null
+  streak_claimed_milestone: number | null  // Streak Milestone Bonus (มติลุงเยาะ 2026-08-14) — milestone สูงสุด (0/3/5/7) ที่ claim ไปแล้วใน cycle ปัจจุบัน
   games_played: number | null         // matchStatsService.ts — นับทุกแมตช์ที่จบครบ totalRounds
   games_won: number | null            // เกณฑ์: finalWinner === humanPlayerId (อันดับ 1 ของโต๊ะ)
   best_hands: Record<string, any> | null   // jsonb — hand ที่ดีที่สุดแยกตาม rank
@@ -120,7 +121,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const { data, error } = await supabase
         .from('users')
-        .select('user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp, last_login, performance_score, ps_season, monarch_victories, tier_unlock_celebrated, beyond_path, streak_count, best_streak_count, streak_shields, streak_7days_badge, games_played, games_won, best_hands, tier_unlocked_max, iap_token_total')
+        .select('user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp, last_login, performance_score, ps_season, monarch_victories, tier_unlock_celebrated, beyond_path, streak_count, best_streak_count, streak_shields, streak_7days_badge, streak_claimed_milestone, games_played, games_won, best_hands, tier_unlocked_max, iap_token_total')
         .eq('user_id', user.id)
         .maybeSingle()
       console.log('[authStore] refreshProfile query result:', { data, error, queriedUserId: user.id })

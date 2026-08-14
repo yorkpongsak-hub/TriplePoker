@@ -236,12 +236,17 @@ export default function ProfileScreen() {
     celebratingRef.current = false
   }
 
-  const handleOriginalTierUnlockClose = () => {
+  const handleOriginalTierUnlockClose = async () => {
     if (overlayTier === 'grandmaster' && !profile?.beyond_path) {
       setTierUnlockVfxStage('path')
       return
     }
-    void handleCloseTierUnlock()
+    await handleCloseTierUnlock()
+    // Free members (ไม่ใช่ VIP/VIP Pro) เจอโฆษณาทันทีหลังปิด Tier Unlock (มติลุงเยาะ 2026-08-14)
+    // VIP ทุกระดับข้ามโฆษณาเสมอ — ใช้ isVip เดิม (vipStatus !== 'none') ไม่สร้าง selector ใหม่
+    if (!isVip) {
+      router.push({ pathname: '/(home)/watch-ad', params: { returnTo: '/(home)/profile' } } as any)
+    }
   }
 
   const handleChooseBeyondPath = async (path: BeyondPath) => {
@@ -588,7 +593,9 @@ function StatsPanel({ streakDays, streakShields, gamesPlayed, gamesWon, bestHand
       <View style={s.hLine} />
       <StatItem icon="♠" label="BEST HAND" value={bestLabel ?? '—'} sub={bestLabel ? 'ALL TIME' : 'NO DATA'} small />
       <View style={s.hLine} />
-      <StatItem icon="🔥" label="STREAK" value={`${streakDays}/7 Days`} sub={`${streakShields} SHIELD${streakShields === 1 ? '' : 'S'}`} small />
+      <TouchableOpacity onPress={() => router.push('/(home)/streak')} activeOpacity={0.7}>
+        <StatItem icon="🔥" label="STREAK" value={`${streakDays}/7 Days ›`} sub={`${streakShields} SHIELD${streakShields === 1 ? '' : 'S'}`} small />
+      </TouchableOpacity>
     </GoldCard>
   )
 }

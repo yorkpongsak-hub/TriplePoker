@@ -85,7 +85,8 @@ export default function LoginScreen() {
 
       router.replace('/game/initiate')
     } catch (e: any) {
-      setError('Could not start guest play. Please try again.')
+      console.error('[Login] handlePlayNow failed:', e)
+      setError('Could not start guest play: ' + (e?.message ?? 'unknown error'))
     } finally {
       setIsLoading(false)
     }

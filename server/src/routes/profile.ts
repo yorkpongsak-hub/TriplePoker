@@ -5,6 +5,9 @@ import { assertVip, assertVipPro, VipStatus } from '../middleware/vipGuard'
 import { getAvatarPreset, isAvatarKeyAllowed, DEFAULT_AVATAR_KEY } from '../constants/avatarPresets'
 import { getAscendantStatus } from '../game/crownVaultService'
 import { getTableSkinState, selectTableSkin } from '../game/tableSkinService'
+import { getClaimableStreakMilestone, getBangkokDateString } from '../game/matchStatsService'
+import { economyService } from '../economy/economyService'
+import { gameConfig } from '../config/gameConfig'
 
 // camelCase ตาม tier_unlocked_max ceiling model (TIER_ORDER ฝั่ง tierUnlockService.ts) -
 // ไม่รวม 'D' (ค่าเริ่มต้นก่อนปลดล็อค ไม่มีอะไรให้ฉลอง) และไม่รวม last_boss (Last Boss อยู่ใน The Arena
@@ -290,5 +293,63 @@ export async function profileRoutes(app: FastifyInstance) {
     }
 
     return reply.send({ success: true, avatarKey })
+  })
+
+  // ── POST /profile/claim-streak-reward ───────────────────────────────
+  // Streak Milestone Bonus (มติลุงเยาะ 2026-08-14) — milestone วันที่ 3/5/7 เท่านั้น (วันที่ 1 ไม่มี
+  // รางวัล) ต้องกด Claim เองจากหน้า /streak เท่านั้น ไม่มีการแจกอัตโนมัติที่ไหนอีกแล้ว (ดู
+  // matchStatsService.ts's comment — เดิมเคย mint อัตโนมัติทุกวัน ถูกถอดออกแล้ว) client รับผิดชอบ
+  // บังคับดูโฆษณาก่อนเรียก endpoint นี้เองสำหรับสมาชิกฟรี (ผ่านหน้า /watch-ad?mode=gate) — endpoint
+  // นี้ไม่เช็ค VIP/ad เลย เพราะเป็นแค่ "ให้รางวัลถ้ามีสิทธิ์" ล้วนๆ ไม่ใช่ gate
+  app.post('/profile/claim-streak-reward', async (request, reply) => {
+    const token = request.headers.authorization?.replace('Bearer ', '')
+    if (!token) return reply.status(401).send({ error: 'Unauthorized' })
+    const { data: authData, error: authError } = await supabase.auth.getUser(token)
+    if (authError || !authData.user) return reply.status(401).send({ error: 'Invalid token' })
+    const userId = authData.user.id
+
+    const { data: user, error: readError } = await supabaseAdmin
+      .from('users')
+      .select('streak_count, streak_claimed_milestone')
+      .eq('user_id', userId)
+      .maybeSingle()
+    if (readError) return reply.status(500).send({ error: 'DB_ERROR' })
+    if (!user) return reply.status(404).send({ error: 'USER_NOT_FOUND' })
+
+    const milestone = getClaimableStreakMilestone(user.streak_count ?? 0, user.streak_claimed_milestone ?? 0)
+    if (!milestone) return reply.status(400).send({ error: 'NOTHING_TO_CLAIM' })
+
+    const tokenAmount = gameConfig.dailyEconomy.streakMilestoneRewards[milestone]
+    const todayStr = getBangkokDateString(new Date())
+
+    try {
+      await economyService.mint({
+        // วันที่ (Bangkok) เป็นส่วนหนึ่งของ key เพราะ milestone เดิม (เช่น 3) claim ซ้ำได้ทุกรอบ 7 วัน
+        // ใหม่ — ไม่ใช่ claim ได้ครั้งเดียวตลอดชีพ
+        idempotencyKey: `STREAK_MILESTONE:${userId}:${milestone}:${todayStr}`,
+        to: { accountType: 'PLAYER', accountId: userId },
+        currency: 'TOKEN',
+        amount: tokenAmount,
+        reason: 'STREAK_MILESTONE_BONUS',
+        actor: 'streak_milestone_system',
+      })
+    } catch (err: any) {
+      return reply.status(500).send({ error: 'MINT_FAILED', message: err?.message ?? 'unknown error' })
+    }
+
+    const { data: updated, error: updateError } = await supabaseAdmin
+      .from('users')
+      .update({ streak_claimed_milestone: milestone })
+      .eq('user_id', userId)
+      .select('token_balance')
+      .maybeSingle()
+    if (updateError) return reply.status(500).send({ error: 'DB_ERROR' })
+
+    return reply.send({
+      success: true,
+      milestone,
+      tokensAwarded: tokenAmount,
+      newTokenBalance: updated?.token_balance ?? null,
+    })
   })
 }

@@ -40,6 +40,7 @@ export type EconomyReason =
   | 'DEBT_CARRY'
   | 'WELCOME_BONUS'
   | 'STREAK_BONUS'
+  | 'STREAK_MILESTONE_BONUS'
   | 'AD_REWARD'
   | 'OTHER'
 
