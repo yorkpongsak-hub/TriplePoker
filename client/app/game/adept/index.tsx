@@ -41,7 +41,10 @@ import type { TierInfoLabel } from '../../../src/config/tierInfoData'
 import TokenFlowPanel, { PANEL_WIDTH, PANEL_RIGHT } from '../../../src/components/game/TokenFlowPanel'
 import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/game/FlyingCoins'
 import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
-import { playCountdownWarning, playCardArrange, playJackpotFanfare, playBossPileWinThunder } from '../../../src/services/gameSfxService'
+import {
+  playCountdownWarning, playCardArrange1, playCardArrange2, playJackpotFanfare, playBossPileWinThunder,
+  playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton,
+} from '../../../src/services/gameSfxService'
 
 // ตำแหน่งที่นั่งเดียวกับ targets ใน startDealAnimation (Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย)
 const SEAT_TARGETS = {
@@ -616,6 +619,7 @@ const GameTableLive: React.FC = () => {
       ;[SEAT_TARGETS.boss, SEAT_TARGETS.p4, SEAT_TARGETS.user, SEAT_TARGETS.p2].forEach(from => {
         flyingCoinsRef.current?.fire('ante', from, SEAT_TARGETS.center)
       })
+      playAnte() // SFX: หัก Ante ต้นรอบ — ครั้งเดียวต่อรอบ ไม่ใช่ต่อที่นั่ง
 
       setComm({
         p1: data.communityCards.pile1,
@@ -723,12 +727,13 @@ const GameTableLive: React.FC = () => {
       if (typeof data.feeRake === 'number') setFlowFeeRake(data.feeRake)
       if (typeof data.buyIn === 'number') setFlowBuyIn(data.buyIn)
       setPhase('showdown')
+      playCardReveal() // SFX: เปิดเผยผลลัพธ์ — Adept เป็น Simultaneous Showdown ทั้ง 3 กองพร้อมกัน เลยเล่นครั้งเดียว
 
       // Coin Flying VFX — รางวัลออกจากกองกลางไปหาผู้ชนะแต่ละกอง (มติลุงเยาะ 2026-07-26)
       const pileCoinVariant = { 1: 'pile1', 2: 'pile2', 3: 'pile3' } as const
       ;([1, 2, 3] as const).forEach(pNum => {
         const winnerId = newWinners[pNum]
-        if (winnerId) flyingCoinsRef.current?.fire(pileCoinVariant[pNum], SEAT_TARGETS.center, seatTargetFor(winnerId))
+        if (winnerId) { flyingCoinsRef.current?.fire(pileCoinVariant[pNum], SEAT_TARGETS.center, seatTargetFor(winnerId)); playPokerChip() }
       })
 
       // SFX: ฟ้าร้องเฉพาะกองที่ AI ชนะ (ไม่ใช่ Human คนไหนเลย รวมผู้เล่นเอง) — Adept เป็น 2H+2AI จริง
@@ -854,6 +859,7 @@ const GameTableLive: React.FC = () => {
   const startDealAnimation = () => {
     // กันรอบใหม่เริ่ม deal ทับรอบเก่าที่ยังเล่นไม่จบ (native driver ชนกันถ้าปล่อยให้วิ่งพร้อมกัน)
     if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop()
+    playCardShuffle() // SFX: ครั้งเดียวตอนเริ่ม deal animation ของรอบ
     // ตำแหน่งปลายทาง: Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย
     const targets = [
       { x: -50,  y: -240 }, // Boss AI (บน)
@@ -919,14 +925,15 @@ const GameTableLive: React.FC = () => {
   // ── Card swap
   const handleCardPress = useCallback((pi: number, ci: number) => {
     if (isReady || phase !== 'arrangement') return
-    playCardArrange()
-    if (!selected) { setSelected({ pi, ci }); return }
+    // SFX: ใบแรก (เลือก) = arrange1, ใบที่สอง (สลับสำเร็จ) = arrange2 — มติลุงเยาะ 2026-08-15 รอบ 2
+    if (!selected) { setSelected({ pi, ci }); playCardArrange1(); return }
     if (selected.pi === pi && selected.ci === ci) { setSelected(null); return }
     const np = piles.map(p => [...p]) as [CardData[], CardData[], CardData[]]
     const tmp = np[selected.pi][selected.ci]
     np[selected.pi][selected.ci] = np[pi][ci]
     np[pi][ci] = tmp
     setPiles(np); setSelected(null); setSortDone(false)
+    playCardArrange2()
   }, [isReady, phase, selected, piles])
 
   // Auto Sort (Adept เสีย fee ทุกครั้ง ไม่มีรอบฟรี - มติลุงเยาะ 2026-07-25)
@@ -934,6 +941,7 @@ const GameTableLive: React.FC = () => {
   // (ห้ามจัดไพ่ก่อนแล้วค่อยแจ้ง server ไม่งั้นผู้เล่นได้ของฟรีเมื่อ request ล้มเหลว)
   const handleAutoSort = () => {
     if (!comm.p1[0] || sortDone || phase !== 'arrangement') return
+    playAutoSortButton() // SFX: กดปุ่ม AUTO SORT
 
     // ใช้ updater form เพื่ออ่านไพ่ล่าสุด เผื่อผู้เล่นสลับไพ่ระหว่างรอ ack จาก server
     const applySort = () => {
@@ -970,6 +978,7 @@ const GameTableLive: React.FC = () => {
 
   const handleReady = () => {
     if (isReady || phase !== 'arrangement') return
+    playReadyButton() // SFX: กดปุ่ม READY
     // Auto-select ใบที่ 4,5 (index 3,4) เป็น discard เพราะ autoSort เรียงไว้แล้ว
     setShowDiscard(true); setDiscardSelected([3, 4])
   }

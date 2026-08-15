@@ -713,7 +713,7 @@ const s = StyleSheet.create({
     // ให้ equippedBadgeImg (โผล่เหนือ avatarFrame ~77px, ดู equippedBadgeImg comment) มีที่พอ ไม่ล้น
     // ขอบบนของการ์ดเหมือนเดิม ใช้ paddingTop ที่ตัว heroCard แทนการแก้ avatarFrame โดยตรง เพราะ
     // marginTop บน flex child เดี่ยวจะไปรบกวน alignItems:'center' ระหว่าง avatarFrame กับ heroInfo
-    paddingTop: 90,
+    paddingTop: 50,
     paddingBottom: 16,
     paddingHorizontal: 16,
     flexDirection: 'row',

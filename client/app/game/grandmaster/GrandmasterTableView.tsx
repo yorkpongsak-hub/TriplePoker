@@ -13,7 +13,7 @@ import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
 import BossVictoryVFX from '../../../src/components/vfx/BossVictoryVFX'
 import { isLocalTripleSweep } from '../../../src/components/vfx/vfxPolicy'
 import { ArenaClientIntent, ArenaClientSnapshot, ArenaSeatView } from '../../../src/game/grandmaster/arenaClientTypes'
-import { playCardArrange, playCountdownWarning, playJackpotFanfare, playBossPileWinThunder } from '../../../src/services/gameSfxService'
+import { playCardArrange1, playCardArrange2, playCountdownWarning, playJackpotFanfare, playBossPileWinThunder, playCardReveal, playPokerChip, playReadyButton, playCardShuffle, playAnte } from '../../../src/services/gameSfxService'
 
 const MONARCH_TABLE = require('../../../assets/tables/boss_monarch_skin_table.png')
 
@@ -181,11 +181,21 @@ function ArenaDealAnimation({ width, height, localSeat }: { width: number; heigh
     return { x: (reserveIndex - 7) * 18, y: -82 }
   }
 
+  // server หัก Ante ทั้ง 3 กอง (chargeAnte x3) ก่อน transition เข้า phase DEAL_ANIMATION เสมอ
+  // (arenaMatchEngine.ts's dealGame()) — mount ของ component นี้ (key ผูก gameNumber) จึงเป็นจุดแรกที่
+  // client เห็นผลของ Ante ที่ถูกหักไปแล้วจริง เล่นทันทีไม่รอ 150ms clear-frame เหมือน playCardShuffle
+  // ด้านล่าง เพราะ Ante ในทางเศรษฐศาสตร์เกิดขึ้น "ก่อน" ภาพเริ่มแจกไพ่ (มติลุงเยาะ 2026-08-15, รอบ 2)
+  useEffect(() => { playAnte() }, [])
+
   useEffect(() => {
     // Keep one fully card-free frame between rounds. This prevents the previous
     // game's hands/community/resolved stacks from persisting under the new deal.
     const clearTimer = setTimeout(() => {
       setStarted(true)
+      // เสียง shuffle/deal ครั้งเดียวต่อรอบ ตรงจังหวะที่ไพ่เริ่มเคลื่อนจริง — component นี้ mount ใหม่ทุกเกม
+      // ผ่าน key={`deal-${snapshot.gameNumber}`} ที่จุด render (ดูด้านล่างในไฟล์นี้) จึงไม่ต้องมี ref dedupe
+      // เพิ่มเติมเหมือน hook อื่นๆ ในไฟล์นี้ — mount ใหม่ = เกมใหม่เสมอ (มติลุงเยาะ 2026-08-15, รอบ 2)
+      playCardShuffle()
       const moves = anims.map((anim, index) => {
       const target = index < 44
         ? targetFor(((index % 4) + 1) as 1 | 2 | 3 | 4, Math.floor(index / 4))
@@ -465,6 +475,11 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
     const sig = `${snapshot.gameNumber}:${reveal.pile}`
     if (firedRevealCoinsRef.current === sig) return
     firedRevealCoinsRef.current = sig
+
+    // ทุกกองที่ถูกเปิดเผยผลลัพธ์ เล่นเสียงเปิดไพ่เสมอ (มติลุงเยาะ 2026-08-15, รอบ 2) — ไม่สนว่าใครชนะ
+    // ต่างจาก playBossPileWinThunder/playJackpotFanfare ด้านล่างที่มีเงื่อนไขเฉพาะ ตัวนี้ยิงทุกครั้ง
+    playCardReveal()
+
     const others = ([1, 2, 4] as const).filter(seatNumber => seatNumber !== localSeat)
     const seatTarget = (seatNumber: 1 | 2 | 3 | 4): Point => {
       if (seatNumber === 3) return { x: 0, y: -Math.min(210, height * 0.31) }
@@ -474,6 +489,8 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
     }
     const variant = ({ 1: 'pile1', 2: 'pile2', 3: 'pile3' } as const)[reveal.pile]
     flyingCoinsRef.current?.fire(variant, { x: 0, y: 0 }, seatTarget(reveal.winnerSeat))
+    // ชิพ/เหรียญไหลไปหาผู้ชนะกอง — จุดเดียวกับ FlyingCoins VFX fire() ด้านบนเป๊ะ (มติลุงเยาะ 2026-08-15, รอบ 2)
+    playPokerChip()
 
     // Boss/AI pile-win thunder (มติลุงเยาะ 2026-08-15) — ยิงเมื่อผู้ชนะกองนี้เป็น Boss หรือ AI ตัวใดก็ตาม
     // (ไม่ใช่ human) ใช้ seat data จริงจาก bySeat แทนการเดาจาก seat number ตายตัว เพราะ FILL seat (1/2/4)
@@ -601,7 +618,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
 
   const handleArrangeCardPress = (pi: number, ci: number) => {
     if (!piles) return
-    if (!selectedCard) { setSelectedCard({ pi, ci }); playCardArrange(); return }
+    if (!selectedCard) { setSelectedCard({ pi, ci }); playCardArrange1(); return }
     if (selectedCard.pi === pi && selectedCard.ci === ci) { setSelectedCard(null); return }
     const next: [HandCardData[], HandCardData[], HandCardData[]] = [[...piles[0]], [...piles[1]], [...piles[2]]]
     const swap = next[selectedCard.pi][selectedCard.ci]
@@ -609,12 +626,15 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
     next[pi][ci] = swap
     setPiles(next)
     setSelectedCard(null)
-    playCardArrange()
+    playCardArrange2()
   }
 
   const confirmArrangement = () => {
     if (!piles) return
     const pileKeys = { pile1: piles[0].map(card => card.key), pile2: piles[1].map(card => card.key), pile3: piles[2].map(card => card.key) }
+    // ปุ่มเดียวกันทำหน้าที่ READY (ARRANGE_1) / CONFIRM ARRANGEMENT (FINAL_ARRANGE) / FINAL LOCK (FINAL_LOCK)
+    // เล่นเสียงเดียวกันทั้ง 3 กรณี เพราะเป็น "ยืนยันการจัดไพ่" ตัวเดียวกันจริง (มติลุงเยาะ 2026-08-15, รอบ 2)
+    playReadyButton()
     if (arrangingPhase === 'FINAL_LOCK') onIntent({ type: 'FINAL_LOCK', ...pileKeys })
     else if (arrangingPhase) onIntent({ type: 'SUBMIT_ARRANGEMENT', stage: arrangingPhase, ...pileKeys })
   }
@@ -691,7 +711,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
             compact={!seat.isLocal}
             width={seat.isLocal ? Math.min(width * 0.7, 420) : 190}
             disabled={!seat.isLocal}
-            onCardPress={cardId => { playCardArrange(); onIntent({ type: 'SELECT_CARD', cardId }) }}
+            onCardPress={cardId => { playCardArrange1(); onIntent({ type: 'SELECT_CARD', cardId }) }}
           />
         )}
       </View>

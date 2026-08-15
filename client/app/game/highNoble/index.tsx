@@ -22,7 +22,7 @@ import { TABLE_SKINS } from '../../../src/config/tableSkins'
 import BossVictoryVFX, { VictoryTier } from '../../../src/components/vfx/BossVictoryVFX'
 import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
 import { isLocalTripleSweep } from '../../../src/components/vfx/vfxPolicy'
-import { playCountdownWarning, playCardArrange, playAuctionBidTick, playJackpotFanfare, playBossPileWinThunder } from '../../../src/services/gameSfxService'
+import { playCountdownWarning, playCardArrange1, playCardArrange2, playAuctionBidTick, playJackpotFanfare, playBossPileWinThunder, playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton } from '../../../src/services/gameSfxService'
 import { useUserStore } from '../../../src/store/userStore'
 import { autoSort } from '../../../src/utils/autoSort'
 import { getReduceMotion } from '../../../src/utils/reduceMotion'
@@ -753,6 +753,7 @@ const GameTableLive: React.FC = () => {
       ;[SEAT_TARGETS.boss, SEAT_TARGETS.p4, SEAT_TARGETS.user, SEAT_TARGETS.p2].forEach(from => {
         flyingCoinsRef.current?.fire('ante', from, SEAT_TARGETS.center)
       })
+      playAnte()
 
       setComm({
         p1: data.communityCards.pile1,
@@ -866,13 +867,18 @@ const GameTableLive: React.FC = () => {
       setFoulReasons(data.foulReasons ?? {})
       setTokenDeltas(data.tokenDeltas ?? {})
       setPhase('showdown')
+      // Pile 1 & 2 results become visible to the UI together in this single event (server ส่งผลพร้อมกัน)
+      playCardReveal()
 
       // Coin Flying VFX — High Noble = Sequential Showdown: showdown_result มีแค่ Pile1/2
       // (Pile3/Grand Finale แยกไปยิงที่ grand_finale_result ด้านล่าง)
       const pileCoinVariant = { 1: 'pile1', 2: 'pile2', 3: 'pile3' } as const
       ;([1, 2] as const).forEach(pNum => {
         const winnerId = newWinners[pNum]
-        if (winnerId) flyingCoinsRef.current?.fire(pileCoinVariant[pNum], SEAT_TARGETS.center, seatTargetFor(winnerId))
+        if (winnerId) {
+          flyingCoinsRef.current?.fire(pileCoinVariant[pNum], SEAT_TARGETS.center, seatTargetFor(winnerId))
+          playPokerChip()
+        }
       })
     })
 
@@ -895,6 +901,10 @@ const GameTableLive: React.FC = () => {
       if (data.foulReasons) setFoulReasons(data.foulReasons)
       // Patch: เปิด popup Showdown ทันทีที่ Pile แรกมาถึง (ไม่ต้องรอ pNum===3 ซึ่ง Mastermind ไม่ไปถึง ณ จุดนี้)
       setPhase('showdown')
+      // Generic single-pile reveal (not currently exercised by High Noble's own emit path — showdown_result/
+      // grand_finale_result cover piles 1/2/3 there instead — kept here defensively same as the boss-thunder
+      // hook above, in case this event path is ever used for this tier)
+      playCardReveal()
     })
     // Patch Mastermind: Fog of War — กลับหน้าโต๊ะ เหลือ Pile 3 เท่านั้น
     socket.on('fog_of_war', (_data: any) => {
@@ -1334,6 +1344,8 @@ const GameTableLive: React.FC = () => {
       // หลัง 5 วิ ไป stage 2 (Round Summary)
       setTimeout(() => setGfResultStage(2), 5000)
 
+      // Pile 3 (Grand Finale) result becomes visible to the UI here.
+      playCardReveal()
       // Pile 3 (Grand Finale) winner becomes known here — thunder only if it's the boss seat.
       if (data.winnerId && data.winnerId === aiListRef.current[0]?.id) playBossPileWinThunder()
       // Table-wide Triple Sweep (any player, not just local — isLocalTripleSweep above only covers PLAYER_ID).
@@ -1343,7 +1355,10 @@ const GameTableLive: React.FC = () => {
       if (data.jackpotWinner) playJackpotFanfare()
 
       // Coin Flying VFX — Pile3 (Grand Finale) รู้ผลแยกจาก Pile1/2 (winnerId ว่างได้ถ้า all-foul)
-      if (data.winnerId) flyingCoinsRef.current?.fire('pile3', SEAT_TARGETS.center, seatTargetFor(data.winnerId))
+      if (data.winnerId) {
+        flyingCoinsRef.current?.fire('pile3', SEAT_TARGETS.center, seatTargetFor(data.winnerId))
+        playPokerChip()
+      }
     })
     socket.on('grand_finale_all_foul', (_data: any) => {
       offerBark({ speaker: aiListRef.current[0]?.name ?? 'Reaper', event: 'FOUL' })
@@ -1440,6 +1455,7 @@ const GameTableLive: React.FC = () => {
   useEffect(() => { getReduceMotion().then(v => { reduceMotionRef.current = v }) }, [])
 
   const startDealAnimation = () => {
+    playCardShuffle()
     // Patch: หยุด animation รอบเก่าก่อนเสมอ — กัน "Animated node is already attached to a view"
     if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop()
     // ตำแหน่งปลายทาง: Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย
@@ -1507,18 +1523,19 @@ const GameTableLive: React.FC = () => {
   // ── Card swap
   const handleCardPress = useCallback((pi: number, ci: number) => {
     if (isReady || (phase !== 'arrangement' && phase !== 'arrangement_2')) return
-    if (!selected) { setSelected({ pi, ci }); playCardArrange(); return }
+    if (!selected) { setSelected({ pi, ci }); playCardArrange1(); return }
     if (selected.pi === pi && selected.ci === ci) { setSelected(null); return }
     const np = piles.map(p => [...p]) as [CardData[], CardData[], CardData[]]
     const tmp = np[selected.pi][selected.ci]
     np[selected.pi][selected.ci] = np[pi][ci]
     np[pi][ci] = tmp
     setPiles(np); setSelected(null); setSortDone(false)
-    playCardArrange()
+    playCardArrange2()
   }, [isReady, phase, selected, piles])
 
   const handleAutoSort = () => {
     if (!comm.p1[0]) return
+    playAutoSortButton()
     const sorted = autoSort([...piles[0], ...piles[1], ...piles[2]], {
       pile1: [comm.p1[0], comm.p1[1]] as [string, string],
       pile2: [comm.p2[0], comm.p2[1]] as [string, string],
@@ -1530,6 +1547,7 @@ const GameTableLive: React.FC = () => {
   // Patch Mastermind: ตัด Discard popup ออกจาก Ready — Discard Phase จริงเกิดหลัง Blind Auction (patch ถัดไป)
   const handleReady = () => {
     if (isReady || (phase !== 'arrangement' && phase !== 'arrangement_2')) return
+    playReadyButton()
     setIsReady(true)
     if (timerRef.current) clearInterval(timerRef.current)
     // Patch Multiplayer: arrangement_2 ส่งไป hn_arrangement_2 แทน hn_player_ready

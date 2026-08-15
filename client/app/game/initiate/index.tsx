@@ -19,7 +19,10 @@ import * as Haptics from 'expo-haptics'
 import { autoSort } from '../../../src/utils/autoSort'
 import { getReduceMotion } from '../../../src/utils/reduceMotion'
 import { clearPendingMatch, markPendingMatch } from '../../../src/utils/pendingMatch'
-import { playCardArrange, playCountdownWarning, playJackpotFanfare, playBossPileWinThunder } from '../../../src/services/gameSfxService'
+import {
+  playCardArrange1, playCardArrange2, playCountdownWarning, playJackpotFanfare, playBossPileWinThunder,
+  playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton,
+} from '../../../src/services/gameSfxService'
 import { useAuthStore } from '../../../src/store/authStore'
 // Patch 2026-07-18: resolve avatar preset key → emoji/รูปภาพ (แก้ VIP preset ไม่โชว์ที่โต๊ะ)
 import { PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
@@ -569,6 +572,7 @@ const GameTableLive: React.FC = () => {
       ;[SEAT_TARGETS.boss, SEAT_TARGETS.p4, SEAT_TARGETS.user, SEAT_TARGETS.p2].forEach(from => {
         flyingCoinsRef.current?.fire('ante', from, SEAT_TARGETS.center)
       })
+      playAnte() // SFX: หัก Ante ต้นรอบ — ครั้งเดียวต่อรอบ
 
       setComm({
         p1: data.communityCards.pile1,
@@ -669,13 +673,14 @@ const GameTableLive: React.FC = () => {
       if (typeof data.feeRake === 'number') setFlowFeeRake(data.feeRake)
       if (typeof data.buyIn === 'number') setFlowBuyIn(data.buyIn)
       setPhase('showdown')
+      playCardReveal() // SFX: เปิดเผยผลลัพธ์ — Simultaneous Showdown ทั้ง 3 กองพร้อมกัน เลยเล่นครั้งเดียว
 
       // Coin Flying VFX — รางวัลออกจากกองกลางไปหาผู้ชนะแต่ละกอง (มติลุงเยาะ 2026-07-26)
       // Simultaneous Showdown: pile1/2/3 รู้ผลพร้อมกันหมด ยิงพร้อมกันได้เลย ไม่ต้อง stagger
       const pileCoinVariant = { 1: 'pile1', 2: 'pile2', 3: 'pile3' } as const
       ;([1, 2, 3] as const).forEach(pNum => {
         const winnerId = newWinners[pNum]
-        if (winnerId) flyingCoinsRef.current?.fire(pileCoinVariant[pNum], SEAT_TARGETS.center, seatTargetFor(winnerId))
+        if (winnerId) { flyingCoinsRef.current?.fire(pileCoinVariant[pNum], SEAT_TARGETS.center, seatTargetFor(winnerId)); playPokerChip() }
         if (winnerId && winnerId !== PLAYER_ID) playBossPileWinThunder()
       })
 
@@ -779,6 +784,7 @@ const GameTableLive: React.FC = () => {
   // ── Deal Animation
   const startDealAnimation = () => {
     console.log('[DEAL] startDealAnimation() called at', Date.now(), 'had previous composite:', !!dealAnimCompositeRef.current)
+    playCardShuffle() // SFX: ครั้งเดียวตอนเริ่ม deal animation ของรอบ
     // กันรอบใหม่เริ่ม deal ทับรอบเก่าที่ยังเล่นไม่จบ (native driver ชนกันถ้าปล่อยให้วิ่งพร้อมกัน)
     if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop()
     // ตำแหน่งปลายทาง: Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย
@@ -848,18 +854,19 @@ const GameTableLive: React.FC = () => {
   // ── Card swap
   const handleCardPress = useCallback((pi: number, ci: number) => {
     if (isReady || phase !== 'arrangement') return
-    if (!selected) { setSelected({ pi, ci }); return }
+    if (!selected) { setSelected({ pi, ci }); playCardArrange1(); return }
     if (selected.pi === pi && selected.ci === ci) { setSelected(null); return }
     const np = piles.map(p => [...p]) as [CardData[], CardData[], CardData[]]
     const tmp = np[selected.pi][selected.ci]
     np[selected.pi][selected.ci] = np[pi][ci]
     np[pi][ci] = tmp
     setPiles(np); setSelected(null); setSortDone(false)
-    playCardArrange()
+    playCardArrange2()
   }, [isReady, phase, selected, piles])
 
   const handleAutoSort = () => {
     if (!comm.p1[0]) return
+    playAutoSortButton() // SFX: กดปุ่ม AUTO SORT
     const sorted = autoSort([...piles[0], ...piles[1], ...piles[2]], {
       pile1: [comm.p1[0], comm.p1[1]] as [string, string],
       pile2: [comm.p2[0], comm.p2[1]] as [string, string],
@@ -870,6 +877,7 @@ const GameTableLive: React.FC = () => {
 
   const handleReady = () => {
     if (isReady || phase !== 'arrangement') return
+    playReadyButton() // SFX: กดปุ่ม READY
     // Auto-select ใบที่ 4,5 (index 3,4) เป็น discard เพราะ autoSort เรียงไว้แล้ว
     setShowDiscard(true); setDiscardSelected([3, 4])
   }

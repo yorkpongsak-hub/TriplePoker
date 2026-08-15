@@ -21,7 +21,10 @@ import { TABLE_SKINS } from '../../../src/config/tableSkins'
 import BossVictoryVFX, { VictoryTier } from '../../../src/components/vfx/BossVictoryVFX'
 import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
 import { isLocalTripleSweep } from '../../../src/components/vfx/vfxPolicy'
-import { playCountdownWarning, playCardArrange, playAuctionBidTick, playJackpotFanfare, playBossPileWinThunder } from '../../../src/services/gameSfxService'
+import {
+  playCountdownWarning, playCardArrange1, playCardArrange2, playAuctionBidTick, playJackpotFanfare, playBossPileWinThunder,
+  playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton,
+} from '../../../src/services/gameSfxService'
 import { useUserStore } from '../../../src/store/userStore'
 import { autoSort } from '../../../src/utils/autoSort'
 import { getReduceMotion } from '../../../src/utils/reduceMotion'
@@ -662,6 +665,7 @@ const GameTableLive: React.FC = () => {
       ;[SEAT_TARGETS.boss, SEAT_TARGETS.p4, SEAT_TARGETS.user, SEAT_TARGETS.p2].forEach(from => {
         flyingCoinsRef.current?.fire('ante', from, SEAT_TARGETS.center)
       })
+      playAnte() // SFX: หัก Ante ต้นรอบ — ครั้งเดียวต่อรอบ ไม่ใช่ต่อที่นั่ง
 
       setComm({
         p1: data.communityCards.pile1,
@@ -754,44 +758,10 @@ const GameTableLive: React.FC = () => {
       tick()
     })
 
-    // showdown_result — server ส่งผลทุก Pile พร้อมกัน → แสดง popup ทันที
-    socket.on('showdown_result', (data: any) => {
-      const results = data.pileResults ?? []
-      const newAllCards: Record<string, Record<number, string[]>> = {}
-      const newWinners: Record<number, string> = {}
-      const newHandRanks: Record<number, string> = {}
-      const newFouled: Record<string, boolean> = {}
-
-      results.forEach((pile: any) => {
-        const pNum: number = pile.pileNumber
-        // เก็บไพ่ทุกคน
-        Object.entries(pile.arrangements ?? {}).forEach(([pid, cards]) => {
-          if (!newAllCards[pid]) newAllCards[pid] = {}
-          newAllCards[pid][pNum] = cards as string[]
-        })
-        if (pile.winner) newWinners[pNum] = pile.winner
-        if (pile.winnerHandRank) newHandRanks[pNum] = pile.winnerHandRank
-        if (pile.fouled) Object.assign(newFouled, pile.fouled)
-      })
-
-      setAllCards(newAllCards)
-      setPileWinners(newWinners)
-      setHandRanks(newHandRanks)
-      setHasFoul(newFouled)
-      setFoulReasons(data.foulReasons ?? {})
-      setTokenDeltas(data.tokenDeltas ?? {})
-      setPhase('showdown')
-
-      // Coin Flying VFX — Mastermind = Sequential Showdown: showdown_result มีแค่ Pile1/2
-      // (Pile3/Grand Finale แยกไปยิงที่ grand_finale_result ด้านล่าง)
-      const pileCoinVariant = { 1: 'pile1', 2: 'pile2', 3: 'pile3' } as const
-      ;([1, 2] as const).forEach(pNum => {
-        const winnerId = newWinners[pNum]
-        if (winnerId) flyingCoinsRef.current?.fire(pileCoinVariant[pNum], SEAT_TARGETS.center, seatTargetFor(winnerId))
-      })
-    })
-
-    // pile_reveal — Pro+ sequential (ยังคงไว้สำหรับ Mastermind+)
+    // pile_reveal — event จริงที่ server ยิงสำหรับ Pile 1/2 ใน Mastermind (resolveMastermindPile12())
+    // หมายเหตุ: เดิมมี handler 'showdown_result' แยกอยู่ที่ยิง FlyingCoins/SFX แต่ server tier นี้
+    // ไม่เคยเรียก resolveMultiShowdown() ที่ emit event นั้น (ตกค้างจากการ copy highNoble/index.tsx มา)
+    // ลบ handler นั้นทิ้งแล้ว — VFX/SFX ย้ายมารวมที่นี่ ซึ่งเป็นจุดที่ผล Pile 1/2 มาถึงจริง
     socket.on('pile_reveal', (data: any) => {
       const pNum: number = data.pileNumber
       const arrangements: Record<string, string[]> = data.arrangements ?? {}
@@ -809,8 +779,17 @@ const GameTableLive: React.FC = () => {
       if (data.foulReasons) setFoulReasons(data.foulReasons)
       // Patch: เปิด popup Showdown ทันทีที่ Pile แรกมาถึง (ไม่ต้องรอ pNum===3 ซึ่ง Mastermind ไม่ไปถึง ณ จุดนี้)
       setPhase('showdown')
+      playCardReveal() // SFX: กอง (1 หรือ 2) ถูกเปิดเผยผลลัพธ์ — event นี้ยิงทีละกองอยู่แล้ว จึงเล่นครั้งเดียวต่อกองพอดี
       // SFX: Boss (Sentinel ที่ aiList[0]) ชนะกอง 1 หรือ 2 — Pile 3 (Grand Finale) แยกไปเช็คที่ grand_finale_result
       if (data.winner && data.winner === aiListRef.current[0]?.id) playBossPileWinThunder()
+
+      // Coin Flying VFX — ย้ายมาจาก 'showdown_result' (dead code สำหรับ Tier นี้) เพราะ pile_reveal
+      // คือ event จริงที่มี data.winner ของ Pile 1/2 ให้ใช้
+      const pileCoinVariant = { 1: 'pile1', 2: 'pile2', 3: 'pile3' } as const
+      if (data.winner && (pNum === 1 || pNum === 2)) {
+        flyingCoinsRef.current?.fire(pileCoinVariant[pNum], SEAT_TARGETS.center, seatTargetFor(data.winner))
+        playPokerChip()
+      }
     })
     // Patch Mastermind: Fog of War — กลับหน้าโต๊ะ เหลือ Pile 3 เท่านั้น
     socket.on('fog_of_war', (_data: any) => {
@@ -1085,12 +1064,13 @@ const GameTableLive: React.FC = () => {
       setTokenBalance(data.tokenBalance ?? {})
       syncTokenFlow(data)  // Pot จ่ายออกหมด -> กลับเป็น 0 ทั้ง 3 กอง / Fee & Rake โตตาม rake รอบนี้
       setPhase('grand_finale_done')
+      playCardReveal() // SFX: ผล Pile 3 (Grand Finale) ถูกเปิดเผยแล้ว — เล่นครั้งเดียวต่อรอบตรงจุดที่ผลมาถึง UI
       setGfResultStage(1)
       // หลัง 5 วิ ไป stage 2 (Round Summary)
       setTimeout(() => setGfResultStage(2), 5000)
 
       // Coin Flying VFX — Pile3 (Grand Finale) รู้ผลแยกจาก Pile1/2 (winnerId ว่างได้ถ้า all-foul)
-      if (data.winnerId) flyingCoinsRef.current?.fire('pile3', SEAT_TARGETS.center, seatTargetFor(data.winnerId))
+      if (data.winnerId) { flyingCoinsRef.current?.fire('pile3', SEAT_TARGETS.center, seatTargetFor(data.winnerId)); playPokerChip() }
 
       // SFX: Triple Sweep Jackpot (ผู้เล่นคนใดก็ได้ ไม่ใช่แค่ local — ใช้คู่กับ isLocalTripleSweep เดิมที่
       // อยู่ใน useEffect ของ pileWinners) ใช้ data.jackpotWinner ที่ server คำนวณไว้แล้วตรงๆ แทนการ derive
@@ -1234,6 +1214,7 @@ const GameTableLive: React.FC = () => {
   useEffect(() => { getReduceMotion().then(v => { reduceMotionRef.current = v }) }, [])
 
   const startDealAnimation = () => {
+    playCardShuffle() // SFX: ครั้งเดียวตอนเริ่ม deal animation ของรอบ
     // Patch: หยุด animation รอบเก่าก่อนเสมอ — กัน "Animated node is already attached to a view"
     if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop()
     // ตำแหน่งปลายทาง: Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย
@@ -1305,15 +1286,15 @@ const GameTableLive: React.FC = () => {
   // ── Card swap
   const handleCardPress = useCallback((pi: number, ci: number) => {
     if (isReady || (phase !== 'arrangement' && phase !== 'arrangement_2')) return
-    // SFX: ทุกครั้งที่แตะไพ่สำเร็จระหว่างจัดไพ่ (เลือก/สลับ) — handler เดียวใช้ร่วมทั้ง arrangement และ arrangement_2
-    playCardArrange()
-    if (!selected) { setSelected({ pi, ci }); return }
+    // handler เดียวใช้ร่วมทั้ง arrangement และ arrangement_2 (ไม่มี handler แยกสองตัวแบบที่เคยเดาไว้)
+    if (!selected) { setSelected({ pi, ci }); playCardArrange1() /* SFX: แตะไพ่ใบแรก */; return }
     if (selected.pi === pi && selected.ci === ci) { setSelected(null); return }
     const np = piles.map(p => [...p]) as [CardData[], CardData[], CardData[]]
     const tmp = np[selected.pi][selected.ci]
     np[selected.pi][selected.ci] = np[pi][ci]
     np[pi][ci] = tmp
     setPiles(np); setSelected(null); setSortDone(false)
+    playCardArrange2() // SFX: แตะไพ่ใบที่สอง — สลับสำเร็จ
   }, [isReady, phase, selected, piles])
 
   // Auto Sort (เสียทุกครั้งที่กด ไม่มีรอบฟรี - มติลุงเยาะ 2026-07-25) ค่า Auto Sort อ่านจาก server
@@ -1323,6 +1304,7 @@ const GameTableLive: React.FC = () => {
   const handleAutoSort = () => {
     if (!comm.p1[0] || sortDone) return
     if (phase !== 'arrangement' && phase !== 'arrangement_2') return
+    playAutoSortButton() // SFX: กดปุ่ม AUTO SORT — ผ่าน guard แล้ว ไม่ใช่การกดที่เป็น no-op
 
     // ใช้ updater form เพื่ออ่านไพ่ล่าสุด เผื่อผู้เล่นสลับไพ่ระหว่างรอ ack จาก server
     const applySort = () => {
@@ -1360,6 +1342,7 @@ const GameTableLive: React.FC = () => {
   // Patch Mastermind: ตัด Discard popup ออกจาก Ready — Discard Phase จริงเกิดหลัง Blind Auction (patch ถัดไป)
   const handleReady = () => {
     if (isReady || (phase !== 'arrangement' && phase !== 'arrangement_2')) return
+    playReadyButton() // SFX: กดปุ่ม READY — handler เดียวใช้ร่วมทั้ง arrangement และ arrangement_2
     setIsReady(true)
     if (timerRef.current) clearInterval(timerRef.current)
     // Patch High Noble: arrangement_2 ส่งไป submit_arrangement_2 แทน player_ready

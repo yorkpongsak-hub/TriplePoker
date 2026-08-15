@@ -506,6 +506,9 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
   const isVip      = vipStatus !== 'none'
   const isVipPro   = vipStatus === 'vip_pro'
   const tokenBalance = profile?.token_balance ?? 0
+  // มติลุงเยาะ 2026-08-15 — โชว์ Crown ควบคู่ Token ที่หัวหน้า Shop ด้วย (มาจาก profile เดียวกัน เลย
+  // อัปเดตอัตโนมัติทุกครั้งที่ purchase handler เรียก refreshProfile() อยู่แล้ว ไม่ต้อง plumb เพิ่ม)
+  const crownBalance = profile?.crown_balance ?? 0
 
   // Tier progression lock — ceiling model จาก tier_unlocked_max (ไม่ลดกลับแม้ token จะลดลงทีหลัง)
   const unlockedIdx = CEILING_ORDER.indexOf((profile?.tier_unlocked_max as any) ?? 'D')
@@ -713,6 +716,9 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
         <View style={s.tokenRow}>
           <GlassCard dense style={s.tokenChip}>
             <Text style={s.tokenChipTxt}>🪙 {fmt(tokenBalance)}</Text>
+          </GlassCard>
+          <GlassCard dense style={s.tokenChip}>
+            <Text style={s.crownChipTxt}>👑 {fmt(crownBalance)}</Text>
           </GlassCard>
         </View>
 
@@ -1157,9 +1163,10 @@ const s = StyleSheet.create({
     letterSpacing: 1,
     ...textOnGlass,
   },
-  tokenRow: { alignItems: 'center', marginBottom: 10 },
+  tokenRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 10 },
   tokenChip: { paddingHorizontal: 10, paddingVertical: 7 },
   tokenChipTxt: { fontFamily: 'JetBrainsMono_600SemiBold', color: C.gold, fontSize: 13 },
+  crownChipTxt: { fontFamily: 'JetBrainsMono_600SemiBold', color: C.goldDark, fontSize: 13 },
   addBtn: {
     width: 30, height: 30, borderRadius: 15,
     backgroundColor: C.gold,
