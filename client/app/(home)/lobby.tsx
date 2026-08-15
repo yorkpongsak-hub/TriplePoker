@@ -736,7 +736,7 @@ export default function LobbyScreen() {
       {/* ─── Menu Bar (fixed) — Feedback A2: เหลือ 4 ปุ่ม กระจายเต็มความกว้าง ไม่ scroll แล้ว ─── */}
       <View style={s.menuBar}>
         <MenuButton icon="shop" label="Shop" size="sm" onPress={handleShopNav} vipShimmer={isVip} />
-        <MenuButton icon="hall_of_fame" label="Hall of Fame" size="sm" onPress={() => router.push('/(home)/hall-of-fame')} vipShimmer={isVip} />
+        <MenuButton icon="hall_of_fame" label="Elites" size="sm" onPress={() => router.push('/(home)/hall-of-fame')} vipShimmer={isVip} />
         <MenuButton icon="friends" label="Top10" size="sm" onPress={() => router.push('/(home)/top10')} vipShimmer={isVip} />
         <MenuButton icon="ranking" label="Ranking" size="sm" onPress={() => router.push('/(home)/stats')} vipShimmer={isVip} />
       </View>

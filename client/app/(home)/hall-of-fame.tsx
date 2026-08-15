@@ -1,5 +1,5 @@
 // app/(home)/hall-of-fame.tsx
-// Hall of Fame แสดงผลจัดอันดับ All Matrix พร้อมอันดับและคะแนนดิบที่ใช้คำนวณ
+// Elites Ranking แสดงผลจัดอันดับ All Matrix พร้อมอันดับและคะแนนดิบที่ใช้คำนวณ
 
 import React, { useCallback, useEffect, useState } from 'react'
 import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
@@ -113,7 +113,7 @@ export default function HallOfFameScreen() {
       setEntries(data.entries ?? [])
     } catch (err) {
       console.error('[HallOfFame] load failed:', err)
-      setError('Could not load Hall of Fame. Pull down to try again.')
+      setError('Could not load Elites. Pull down to try again.')
       setEntries([])
     } finally {
       refresh ? setRefreshing(false) : setLoading(false)
@@ -134,7 +134,7 @@ export default function HallOfFameScreen() {
             <Text style={s.backText}>‹ Back</Text>
           </TouchableOpacity>
           <View style={s.titleWrap}>
-            <Text style={s.title}>HALL OF FAME</Text>
+            <Text style={s.title}>ELITES RANKING</Text>
             <Text style={s.subtitle}>THE ALL MATRIX LEGENDS</Text>
           </View>
           <View style={s.headerSpacer} />
@@ -151,11 +151,11 @@ export default function HallOfFameScreen() {
           </View>
 
           {loading ? (
-            <View style={s.stateBox}><ActivityIndicator color={C.gold} /><Text style={s.stateText}>Loading Hall of Fame...</Text></View>
+            <View style={s.stateBox}><ActivityIndicator color={C.gold} /><Text style={s.stateText}>Loading Elites...</Text></View>
           ) : error ? (
             <View style={s.stateBox}><Text style={[s.stateText, { color: C.red }]}>{error}</Text></View>
           ) : entries.length === 0 ? (
-            <View style={s.stateBox}><Text style={s.stateText}>No Hall of Fame data yet.</Text></View>
+            <View style={s.stateBox}><Text style={s.stateText}>No Elites data yet.</Text></View>
           ) : entries.map(entry => <HallRow key={entry.user_id} entry={entry} />)}
 
           <Text style={s.hint}>Tap a player to view their profile</Text>
