@@ -67,7 +67,7 @@ describe('POST /profile/claim-streak-reward', () => {
 
   test('day 3, never claimed — mints 300 Token and marks milestone 3 claimed', async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
-    readUserData = { streak_count: 3, streak_claimed_milestone: 0 }
+    readUserData = { streak_count: 3, streak_claimed_milestone: 0, last_played_date: '2026-08-15' }
     updateUserData = { token_balance: 1300 }
     const app = await buildApp()
     const response = await app.inject({
@@ -80,7 +80,7 @@ describe('POST /profile/claim-streak-reward', () => {
     expect(mintCall.amount).toBe(300)
     expect(mintCall.reason).toBe('STREAK_MILESTONE_BONUS')
     expect(mintCall.to).toEqual({ accountType: 'PLAYER', accountId: 'user-1' })
-    expect(mintCall.idempotencyKey).toMatch(/^STREAK_MILESTONE:user-1:3:\d{4}-\d{2}-\d{2}$/)
+    expect(mintCall.idempotencyKey).toBe('STREAK_MILESTONE:user-1:3:2026-08-13')
     expect(mockUpdate).toHaveBeenCalledWith({ streak_claimed_milestone: 3 })
     await app.close()
   })

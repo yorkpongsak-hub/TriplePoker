@@ -10,6 +10,7 @@ import { Card } from '../../src/game/deck'
 import { PlayerArrangement, CommunityCards } from '../../src/game/foulChecker'
 import {
   HNSeat, HNMatchState, buildHNCardZones, buildHNSnapshotForPlayer, resendHNRoundStartToPlayer,
+  estimateHNWinrate,
 } from '../../src/game/highNobleMultiEngine'
 
 // ─── Card helper — สร้างไพ่ deterministic ล้วนๆ (เทสนี้เทส masking ไม่ใช่ hand evaluation
@@ -50,6 +51,11 @@ function mkCards(n: number): Card[] {
 const SUIT_CHAR: Record<string, string> = { spades: 's', hearts: 'h', diamonds: 'd', clubs: 'c' }
 function toKey(c: Card): string {
   return c.rank.toString().toLowerCase() + SUIT_CHAR[c.suit]
+}
+
+function card(rank: Card['rank'], suit: Card['suit']): Card {
+  const values: Record<string, number> = { '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, J: 11, Q: 12, K: 13, A: 14 }
+  return { rank, suit, value: values[String(rank)] }
 }
 
 // ─── userId คงที่ตลอดไฟล์ ───
@@ -132,10 +138,39 @@ function makeHNState(overrides: Partial<HNMatchState> = {}): HNMatchState {
     },
     tripleSweepThisMatch: new Set([SELF]),
     afkPlayers: {}, // Step 2B: ไม่มีใคร AFK เป็นค่าเริ่มต้น (masking ไม่เกี่ยวกับ field นี้โดยตรง)
+    autoSortUsed: {},
   }
 
   return { ...base, ...overrides }
 }
+
+describe('High Noble boss card counting — public Pile 2 winner signal', () => {
+  test('ไพ่กอง 2 ที่เปิดเผยของผู้ชนะเป็น lower bound ของกอง 3 โดยไม่ต้องอ่านไพ่ลับผู้แพ้', () => {
+    const community: CommunityCards = {
+      row1: [card('3', 'clubs'), card('4', 'diamonds')],
+      row2: [card('9', 'spades'), card('10', 'spades')],
+      row3: [card('2', 'spades'), card('2', 'hearts')],
+    }
+    const state = makeHNState({ community, phase: 'grand_finale' })
+    state.finalPile3 = {
+      [BOSS]: [card('2', 'diamonds'), card('2', 'clubs'), card('K', 'hearts')],
+      [OPP1]: [card('3', 'hearts'), card('4', 'hearts'), card('5', 'hearts')],
+    }
+    const arrangements = state.pendingPile12!.allArrangements
+    arrangements[OPP1].pile2 = [card('J', 'spades'), card('Q', 'spades'), card('K', 'spades')]
+    state.pendingPile12 = { ...state.pendingPile12!, pile2Winner: OPP1, community }
+    state.grandFinale = {
+      roundNumber: 1, foldedPlayers: [], foulPlayers: [], currentTurnIdx: 0,
+      turnOrder: [BOSS, OPP1], pile3Pot: 0, revealedCards: {},
+    }
+
+    expect(estimateHNWinrate(state, BOSS)).toBe(0)
+
+    // เมื่อ signal เดียวกันไม่ได้เป็นของคู่แข่ง four-of-a-kind ของ Boss ยังปลอดภัย
+    state.pendingPile12 = { ...state.pendingPile12, pile2Winner: BOSS }
+    expect(estimateHNWinrate(state, BOSS)).toBe(1)
+  })
+})
 
 // ─── Mock Socket.IO Server (เฉพาะ T11) — เก็บ log การ emit ไว้ตรวจสอบ, pattern เดียวกับ adeptAFK.test.ts ───
 function makeIoMock() {

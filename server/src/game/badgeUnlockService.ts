@@ -3,14 +3,9 @@
 // เช็คสัญญาณ unlock จาก users/match_wins ที่มีอยู่แล้ว (ไม่มี tracking ใหม่) ครั้งเดียวต่อ request
 // แล้วเทียบกับ BADGE_CATALOG's unlock condition ต่อใบ — ดู badgeConfig.ts สำหรับตารางเกณฑ์+ราคา
 //
-// ซื้อ badge ใช้ Token เท่านั้น (ตาม CLAUDE.md Economy Rule: Earned Crown สงวนไว้ Match Stake,
-// Token คือสกุลเงินที่ shop.ts เดิมใช้กับของตกแต่ง/ไอเทมทั้งหมด) หัก Token ผ่าน RPC เดิม
-// deduct_user_tokens (shopAPI.ts's pattern เดียวกัน)
-//
-// Purchase order: INSERT user_badges ก่อน (UNIQUE(user_id,badge_key) เป็นตัวกัน double-buy แบบ
-// atomic จริงกันเคส 2 request ยิงพร้อมกัน) แล้วค่อยหัก Token — ถ้าหักไม่สำเร็จ (เงินไม่พอ) ลบแถวที่
-// เพิ่ง insert ทิ้งเพื่อ rollback ความเป็นเจ้าของ (ง่ายกว่า/ปลอดภัยกว่าการคืนเงินย้อนหลังที่ต้องมี
-// RPC credit เพิ่ม — ยังไม่มี credit_user_tokens RPC ในโปรเจคตอนนี้)
+// ซื้อ badge ใช้ Token เท่านั้นผ่าน purchase_badge_atomic RPC: ownership + Central Economy Ledger
+// burn อยู่ใน PostgreSQL transaction เดียวกัน จึงไม่มี badge ฟรี/เงินหาย/reconciliation drift
+// แม้ request ชนกันหรือขั้นตอนใดขั้นตอนหนึ่งล้มเหลว
 // The Sage Unicorn Studio Co., Ltd.
 // ============================================================
 
@@ -134,28 +129,21 @@ export async function buyBadge(userId: string, badgeKey: string): Promise<BuyBad
   if (!signals) return { success: false, error: 'USER_NOT_FOUND' }
   if (!isUnlocked(def.unlock, signals)) return { success: false, error: 'NOT_UNLOCKED' }
 
-  const { error: insertError } = await supabaseAdmin
-    .from('user_badges')
-    .insert({ user_id: userId, badge_key: badgeKey, price_paid: def.price })
+  const { data, error } = await supabaseAdmin.rpc('purchase_badge_atomic', {
+    p_user_id: userId,
+    p_badge_key: badgeKey,
+    p_price: def.price,
+  })
+  if (!error) return { success: true, newBalance: Number(data) }
 
-  if (insertError) {
-    return insertError.code === '23505' // unique_violation — already owns this badge
-      ? { success: false, error: 'ALREADY_OWNED' }
-      : { success: false, error: 'BADGE_NOT_FOUND' }
+  const message = String(error.message ?? '')
+  if (message.includes('ALREADY_OWNED') || error.code === '23505') {
+    return { success: false, error: 'ALREADY_OWNED' }
   }
-
-  try {
-    const { data, error } = await supabaseAdmin.rpc('deduct_user_tokens', {
-      p_user_id: userId,
-      p_amount: def.price,
-    })
-    if (error) throw error
-    return { success: true, newBalance: data as number }
-  } catch (err) {
-    // หักเงินไม่สำเร็จ (เงินไม่พอ) — ลบแถว ownership ที่เพิ่ง insert ทิ้ง กันได้ badge ฟรี
-    await supabaseAdmin.from('user_badges').delete().eq('user_id', userId).eq('badge_key', badgeKey)
+  if (message.includes('INSUFFICIENT_TOKEN_BALANCE')) {
     return { success: false, error: 'INSUFFICIENT_TOKENS' }
   }
+  return { success: false, error: 'BADGE_NOT_FOUND' }
 }
 
 export interface EquipBadgeResult {

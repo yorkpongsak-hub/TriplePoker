@@ -50,6 +50,15 @@ export function getBangkokDateString(d: Date): string {
   return `${y}-${m}-${day}`
 }
 
+/** Stable identifier for one 7-day streak cycle, independent of the claim date. */
+export function getStreakCycleStartDate(lastPlayedDate: string | null, streakCount: number, today: string): string {
+  const anchor = lastPlayedDate ?? today
+  const safeDay = Math.max(1, Math.min(gameConfig.dailyEconomy.playStreak.cycleDays, streakCount || 1))
+  const start = new Date(`${anchor}T00:00:00Z`)
+  start.setUTCDate(start.getUTCDate() - (safeDay - 1))
+  return start.toISOString().slice(0, 10)
+}
+
 export interface DailyStreakResult {
   cycleDay: number
   bestStreak: number
@@ -231,7 +240,7 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
 
     // 1-2) Escrow settle เขียน token_balance ไปแล้วก่อนหน้านี้ (settleEscrow) — ที่นี่แค่ตรวจ Debt Recovery
     const isVip = prev.vip_status !== 'none'
-    const { tokenBalance: newTokenBalance, debtAmount: newDebtAmount } =
+    const { debtAmount: newDebtAmount } =
       computeDebtRecovery(p.tier, isVip, prev.token_balance)
 
     // 3) games_played / games_won
@@ -281,7 +290,8 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
 
     return {
       user_id: p.userId,
-      token_balance: newTokenBalance,
+      // ห้ามเขียน token_balance ซ้ำจาก snapshot ที่อ่านก่อนหน้า: settlement/reward อื่นอาจเข้า
+      // ระหว่าง read→update แล้วถูกค่าเก่าทับหายได้ Balance mutation เป็นหน้าที่ Central Ledger เท่านั้น
       debt_amount: newDebtAmount,
       games_played: newGamesPlayed,
       games_won: newGamesWon,

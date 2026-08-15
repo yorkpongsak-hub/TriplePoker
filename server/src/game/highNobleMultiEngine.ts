@@ -23,7 +23,7 @@ import { evaluateHand, compareHands, handRankLabel, HandResult } from './handEva
 import { checkFoul, PlayerArrangement, CommunityCards } from './foulChecker'
 import { aiDecideArrangement, AIConfig, AIPersonality, AI_CONFIGS, FOUR_GODS, greedyArrangement, pickRandomMinions } from './aiEngine'
 import { Card } from './deck'
-import { gameConfig } from '../config/gameConfig'
+import { gameConfig, getAutoSortFee } from '../config/gameConfig'
 import { supabaseAdmin } from '../config/supabase'
 import { escrowBuyIn, settleEscrow, refundEscrow } from './gameLoop'
 import { Seat as RoomSeat } from './roomRegistry'
@@ -37,6 +37,7 @@ import { getAscendantStatus } from './crownVaultService'
 import { economyService } from '../economy/economyService'
 import { resolveNpcPoolKey, type ResolveNpcPoolContext } from '../economy/npcPoolResolver'
 import type { AccountRef } from '../economy/economyTypes'
+import { chargeAutoSortFee } from './tokenFlow'
 
 // ── Local copies of small pure helpers (ตั้งใจ duplicate จาก gameLoop.ts แทนการ import
 //    เพื่อไม่ให้ engine ใหม่นี้ผูกกับการแก้ไขไฟล์เดิมในอนาคต — ของเดิมพิสูจน์แล้วว่าถูกต้อง) ──
@@ -217,6 +218,8 @@ export interface HNMatchState {
   // finalizeHNAFKReplacement จะทำงานจริง) เพราะ aiSeats()/AI decision loop ทุกจุด filter จาก !isHuman
   // — flip ก่อนกำหนด = seat ถูก AI logic จับไปเล่นแทนทันที ไม่ passive ตามที่ออกแบบไว้
   afkPlayers: Record<string, { disconnectedAt: number; graceTimer: NodeJS.Timeout }>
+  /** Server-authoritative: charge Auto Sort at most once per player per round. */
+  autoSortUsed: Record<string, boolean>
 }
 
 const hnMatchStates = new Map<string, HNMatchState>()
@@ -409,6 +412,8 @@ export function buildHNSnapshotForPlayer(state: HNMatchState, userId: string): R
     myAuctionBid,
     myFinalPile3,
     ownSubmitted,
+    autoSortFee: getAutoSortFee('highNoble'),
+    autoSortPaid: !!state.autoSortUsed[userId],
 
     // opponent-masked (null จนกว่าจะถึงจังหวะที่ข้อมูลนั้นถูกเปิดเผยต่อสาธารณะจริงแล้ว)
     pileReveals,
@@ -559,6 +564,7 @@ export async function startHighNobleMultiMatch(
     submittedDiscard: new Set(),
     resolvedPileCount: 0,
     afkPlayers: {},
+    autoSortUsed: {},
   }
   hnMatchStates.set(roomId, state)
 
@@ -613,6 +619,7 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
   state.pendingPile12 = undefined
   state.grandFinale = undefined
   state.resolvedPileCount = 0
+  state.autoSortUsed = {}
 
   const dealt = dealCards()
   const playerIds = state.seats.map(s => s.id)
@@ -669,6 +676,7 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
       blindAuction: dealt.blindAuction.map(cardKey),
       seats: aiNamesPublic,
       tokenBalance: state.tokenBalance,
+      autoSortFee: getAutoSortFee('highNoble'),
       timer,
       cardZones: buildHNCardZones(state),
       ...(state.roundNumber === 1 ? { buyInAmount: state.buyInAmount } : {}),
@@ -678,6 +686,36 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
 
   const timeoutId = setTimeout(() => resolveHNArrangementTimeout(io, roomId), timer * 1000)
   ;(state as any)._arrangementTimeoutId = timeoutId
+}
+
+/**
+ * High Noble Auto Sort purchase. The client may request sorting, but only this
+ * server path decides whether the request is valid and moves TOKEN into rake.
+ */
+export function requestHNAutoSort(
+  io: Server, roomId: string, userId: string,
+): { ok: boolean; reason?: string } {
+  const state = hnMatchStates.get(roomId)
+  if (!state) return { ok: false, reason: 'NO_MATCH' }
+  if (state.phase !== 'arrangement' && state.phase !== 'arrangement_2') {
+    return { ok: false, reason: 'WRONG_PHASE' }
+  }
+  if (!humanSeats(state).some(seat => seat.id === userId)) {
+    return { ok: false, reason: 'NOT_IN_MATCH' }
+  }
+  if (state.autoSortUsed[userId]) return { ok: false, reason: 'ALREADY_USED' }
+
+  const fee = getAutoSortFee('highNoble')
+  const currentFeeRake = state.buyInAmount * state.seats.length
+    - Object.values(state.tokenBalance).reduce((sum, value) => sum + value, 0)
+    - state.flowPot.reduce((sum, value) => sum + value, 0)
+  const charged = chargeAutoSortFee(state.tokenBalance, currentFeeRake, userId, fee)
+  if (!charged.ok) return { ok: false, reason: 'INSUFFICIENT_TOKENS' }
+
+  state.tokenBalance = charged.stacks
+  state.autoSortUsed[userId] = true
+  emitHNTokenFlow(io, state)
+  return { ok: true }
 }
 
 // ── ตรวจว่า human ทุกคนที่ยังอยู่ในห้อง submit ครบหรือยัง ──
@@ -1166,7 +1204,7 @@ function startHNNextTurn(io: Server, roomId: string): void {
 }
 
 // ── Card-Counting Winrate Estimate (สำหรับ Boss เท่านั้น, ports estimateBossWinrate เดิม) ──
-function estimateHNWinrate(state: HNMatchState, bossId: string): number {
+export function estimateHNWinrate(state: HNMatchState, bossId: string): number {
   const community = state.community!
   const finalPile3 = state.finalPile3 ?? {}
   const gf = state.grandFinale
@@ -1183,10 +1221,14 @@ function estimateHNWinrate(state: HNMatchState, bossId: string): number {
   community.row3.forEach(c => seen.add(cardId(c)))
   myHand.forEach(c => seen.add(cardId(c)))
   if (state.pendingPile12) {
-    for (const arr of Object.values(state.pendingPile12.allArrangements)) {
-      arr.pile1.forEach(c => seen.add(cardId(c)))
-      arr.pile2.forEach(c => seen.add(cardId(c)))
-    }
+    // The boss knows its own cards plus the publicly revealed pile winners only.
+    // Never count every opponent arrangement here: those losing cards remain hidden.
+    const own = state.pendingPile12.allArrangements[bossId]
+    own?.pile1.forEach(c => seen.add(cardId(c)))
+    own?.pile2.forEach(c => seen.add(cardId(c)))
+    const { pile1Winner, pile2Winner, allArrangements } = state.pendingPile12
+    allArrangements[pile1Winner]?.pile1.forEach(c => seen.add(cardId(c)))
+    allArrangements[pile2Winner]?.pile2.forEach(c => seen.add(cardId(c)))
   }
   for (const cards of Object.values(gf.revealedCards)) cards.forEach(c => seen.add(cardId(c)))
 
@@ -1204,6 +1246,19 @@ function estimateHNWinrate(state: HNMatchState, bossId: string): number {
 
   let opponentsBeatMe = 0
   for (const oppId of opponents) {
+    // Pile 2 winner signal: their revealed Pile 2 is a public lower bound for
+    // their legal Pile 3 (Pile 2 <= Pile 3). This closes the Crag/Cipher blind
+    // spot without reading any losing player's private arrangement.
+    if (state.pendingPile12?.pile2Winner === oppId) {
+      const pile2 = state.pendingPile12.allArrangements[oppId]?.pile2 ?? []
+      if (pile2.length === 3) {
+        const lowerBound = evaluateHand([...pile2, ...community.row2])
+        if (compareHands(lowerBound, myResult) > 0) {
+          opponentsBeatMe++
+          continue
+        }
+      }
+    }
     const revealed = gf.revealedCards[oppId] ?? []
     const need = 3 - revealed.length
     const dangerCards = [...unseen].sort((a, b) => b.value - a.value).slice(0, need)

@@ -476,7 +476,12 @@ describe('VIP Plus Gate 4 deal and arrangement engine', () => {
     expect(state.phase).toBe('REARRANGE')
 
     const roomEvents = events.filter(event => event.room === state.roomId)
-    expect(roomEvents.some(event => JSON.stringify(event.payload).includes(vipPlusCardKey(state.auctionCard!)))).toBe(false)
+    const publicPayloadValues = (value: unknown): unknown[] => {
+      if (Array.isArray(value)) return value.flatMap(publicPayloadValues)
+      if (value && typeof value === 'object') return Object.values(value).flatMap(publicPayloadValues)
+      return [value]
+    }
+    expect(roomEvents.some(event => publicPayloadValues(event.payload).includes(vipPlusCardKey(state.auctionCard!)))).toBe(false)
     expect(roomEvents.some(event => JSON.stringify(event.payload).includes('receiptSequence'))).toBe(false)
     expect(events.filter(event => event.event === 'vip_plus:auction_card_private')).toEqual([
       expect.objectContaining({ room: 'p1' }),

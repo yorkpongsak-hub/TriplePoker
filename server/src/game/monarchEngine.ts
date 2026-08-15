@@ -1077,7 +1077,7 @@ export async function settleMonarchMatch(io: Server, state: MonarchMatchState): 
     // Batch 3D-1 Task 4: try/catch แยกของตัวเอง — relic roll พลาดต้อง "ไม่" ทำให้ settlement/badge/
     // Pot×2 ข้างบนพัง (ทุกอย่างข้างบนคำนวณ/เขียนเสร็จไปแล้วก่อนถึงบรรทัดนี้) log error พอ ไม่ throw ต่อ
     try {
-      relicResult = await rollAndRecordMonarchRelic(state.humanUserId)
+      relicResult = await rollAndRecordMonarchRelic(state.humanUserId, state.roomId)
     } catch (err) {
       console.error('[MONARCH_RELIC] Unexpected error rolling relic for', state.humanUserId, err)
     }

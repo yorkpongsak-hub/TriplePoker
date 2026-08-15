@@ -13,7 +13,6 @@ import { supabase, supabaseAdmin } from '../config/supabase'
 import { gameConfig } from '../config/gameConfig'
 import { TIER_ORDER, TierOrderKey } from './progressionGate'
 import { checkAscendantEligibility, AscendantStatusRecord, AscendantStatusValue } from './ascendantGate'
-import { deductCrown } from '../items/shopAPI'
 import { economyService } from '../economy/economyService'
 import { CREST_PER_CROWN } from '../arena/economy/crest'
 import crypto from 'crypto'
@@ -84,12 +83,6 @@ export async function buyAscendantPass(userId: string): Promise<BuyAscendantPass
   const eligibility = await checkAscendantEligibility(userId)
   if (!eligibility.eligible) return { success: false, error: 'NOT_ELIGIBLE', errorDetail: eligibility.reason }
 
-  try {
-    await deductCrown(userId, gameConfig.crownVaultConfig.ascendantPassPriceCrown)
-  } catch (err: any) {
-    return { success: false, error: 'INSUFFICIENT_CROWN', errorDetail: err.message }
-  }
-
   const { data, error } = await supabaseAdmin
     .from('users')
     .select('token_balance')
@@ -110,14 +103,21 @@ export async function buyAscendantPass(userId: string): Promise<BuyAscendantPass
         expiresAt: new Date(now.getTime() + gameConfig.ascendantConfig.windowDays * 86_400_000).toISOString(),
       }
 
-  const { error: updateError } = await supabaseAdmin
-    .from('users')
-    .update({ ascendant_status: newStatus })
-    .eq('user_id', userId)
-
-  if (updateError) {
-    console.error('[CROWN-VAULT] Error writing ascendant_status after Pass purchase for', userId, updateError)
-    return { success: false, error: 'USER_NOT_FOUND', errorDetail: updateError.message }
+  const priceCrest = gameConfig.crownVaultConfig.ascendantPassPriceCrown * CREST_PER_CROWN
+  const { error: purchaseError } = await supabaseAdmin.rpc('purchase_ascendant_pass_atomic', {
+    p_user_id: userId,
+    p_price_crest: priceCrest,
+    p_new_status: newStatus,
+  })
+  if (purchaseError) {
+    const message = String(purchaseError.message ?? '')
+    if (message.includes('INSUFFICIENT_CREST_BALANCE')) {
+      return { success: false, error: 'INSUFFICIENT_CROWN', errorDetail: message }
+    }
+    if (message.includes('ASCENDANT_ALREADY_USED')) {
+      return { success: false, error: 'NOT_ELIGIBLE', errorDetail: message }
+    }
+    return { success: false, error: 'USER_NOT_FOUND', errorDetail: message }
   }
 
   return { success: true, status: newStatus }
@@ -171,7 +171,8 @@ export interface ExchangeResult {
 // มาใช้ economyService.convert() แทน — burn TOKEN + mint CREST ในทรานแซคชันเดียวกัน (atomic) ผ่าน
 // Ledger จริง กันไม่ให้ exchange หายไปจาก economy_reconciliation() เหมือนก่อนหน้านี้ — signature/
 // return shape/error code เดิมทุกอย่าง ไม่ต้องแก้ routes/crownVault.ts หรือ client เลย
-export async function exchangeTokenToCrown(userId: string, crownAmount: number): Promise<ExchangeResult> {
+export async function exchangeTokenToCrown(userId: string, crownAmount: number, requestId?: string): Promise<ExchangeResult> {
+  if (!Number.isSafeInteger(crownAmount) || crownAmount <= 0) return { success: false, error: 'USER_NOT_FOUND' }
   const { data, error } = await supabaseAdmin
     .from('users')
     .select('tier_unlocked_max')
@@ -190,7 +191,7 @@ export async function exchangeTokenToCrown(userId: string, crownAmount: number):
 
   try {
     await economyService.convert({
-      idempotencyKey: `TOKEN_TO_CROWN:${userId}:${crypto.randomUUID()}`,
+      idempotencyKey: `TOKEN_TO_CROWN:${userId}:${requestId ?? crypto.randomUUID()}`,
       account: { accountType: 'PLAYER', accountId: userId },
       from: { currency: 'TOKEN', amount: tokenCost },
       to: { currency: 'CREST', amount: crestAmount, wallet: 'EARNED' },

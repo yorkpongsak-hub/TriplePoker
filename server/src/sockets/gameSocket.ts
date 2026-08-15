@@ -16,7 +16,7 @@ import { getMatchState, getMultiMatchState, settleEscrow } from "../game/gameLoo
 import {
   startHighNobleMultiMatch, submitHNArrangement, submitHNAuctionBid, submitHNArrangementRound2,
   submitHNDiscard, submitHNGrandFinaleAction, markHNPlayerAFK, resendHNRoundStartToPlayer,
-  getHNMatchState,
+  getHNMatchState, requestHNAutoSort,
 } from "../game/highNobleMultiEngine";
 import {
   rollMonarchEntry, startMonarchMatch, startMonarchRound, getMonarchMatchState,
@@ -957,7 +957,9 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
     // requestAutoSort หา state ให้เองทั้ง 2 โครงสร้าง (multiMatchStates ก่อน แล้ว matchStates)
     socket.on("auto_sort_request", (data: { roomId: string; userId: string }) => {
       const { roomId, userId } = data;
-      const result = requestAutoSort(io, roomId, userId);
+      const result = getHNMatchState(roomId)
+        ? requestHNAutoSort(io, roomId, userId)
+        : requestAutoSort(io, roomId, userId);
       socket.emit("auto_sort_ack", result);
     });
 

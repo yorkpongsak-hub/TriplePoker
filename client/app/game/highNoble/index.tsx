@@ -394,6 +394,8 @@ const GameTableLive: React.FC = () => {
   const [piles, setPiles]       = useState<[CardData[], CardData[], CardData[]]>([[], [], []])
   const [selected, setSelected] = useState<{ pi: number; ci: number } | null>(null)
   const [sortDone, setSortDone] = useState(false)
+  const [autoSortFee, setAutoSortFee] = useState(0)
+  const [autoSortPaid, setAutoSortPaid] = useState(false)
   const [isReady, setIsReady]   = useState(false)
 
   // ── Community + Blind
@@ -718,6 +720,8 @@ const GameTableLive: React.FC = () => {
       setRoundNumber(data.roundNumber)
       setTotalRounds(data.totalRounds ?? 5)
       setIsReady(false); setSortDone(false); setSelected(null)
+      setAutoSortPaid(false)
+      if (typeof data.autoSortFee === 'number') setAutoSortFee(data.autoSortFee)
       setAllCards({}); setPileWinners({})
       setHasFoul({}); setFoulReasons({}); setTokenDeltas({})
       setShowResult(false)
@@ -1051,6 +1055,8 @@ const GameTableLive: React.FC = () => {
       }
       if (data.tokenBalance) setTokenBalance(data.tokenBalance)
       if (data.ownSubmitted) setMyOwnSubmitted(data.ownSubmitted)
+      if (typeof data.autoSortFee === 'number') setAutoSortFee(data.autoSortFee)
+      setAutoSortPaid(!!data.autoSortPaid)
 
       const toCardObjs = (keys: string[], prefix: string) => keys.map((k: string, i: number) => ({ id: `${prefix}${i}`, key: k }))
       const submittedArrangement = !!data.ownSubmitted?.arrangement
@@ -1535,13 +1541,32 @@ const GameTableLive: React.FC = () => {
 
   const handleAutoSort = () => {
     if (!comm.p1[0]) return
-    playAutoSortButton()
-    const sorted = autoSort([...piles[0], ...piles[1], ...piles[2]], {
-      pile1: [comm.p1[0], comm.p1[1]] as [string, string],
-      pile2: [comm.p2[0], comm.p2[1]] as [string, string],
-      pile3: [comm.p3[0], comm.p3[1]] as [string, string],
+    const applySort = () => {
+      playAutoSortButton()
+      const sorted = autoSort([...piles[0], ...piles[1], ...piles[2]], {
+        pile1: [comm.p1[0], comm.p1[1]] as [string, string],
+        pile2: [comm.p2[0], comm.p2[1]] as [string, string],
+        pile3: [comm.p3[0], comm.p3[1]] as [string, string],
+      })
+      setPiles(sorted); setSelected(null); setSortDone(true)
+    }
+    if (autoSortPaid) { applySort(); return }
+    const sock = socketRef.current
+    if (!sock) return
+    sock.once('auto_sort_ack', (res: { ok: boolean; reason?: string }) => {
+      if (!res.ok) {
+        Alert.alert(
+          'Auto Sort unavailable',
+          res.reason === 'INSUFFICIENT_TOKENS'
+            ? `You need ${autoSortFee} tokens to use Auto Sort.`
+            : 'Auto Sort is not available right now.',
+        )
+        return
+      }
+      setAutoSortPaid(true)
+      applySort()
     })
-    setPiles(sorted); setSelected(null); setSortDone(true)
+    sock.emit('auto_sort_request', { roomId: ROOM_ID, userId: PLAYER_ID })
   }
 
   // Patch Mastermind: ตัด Discard popup ออกจาก Ready — Discard Phase จริงเกิดหลัง Blind Auction (patch ถัดไป)
@@ -3180,13 +3205,9 @@ const GameTableLive: React.FC = () => {
             <ActionButton
               icon="auto_sort"
               label={sortDone ? 'Sorted ✓' : 'Auto Sort'}
-              variant={sortDone ? 'disabled' : 'normal'}
-              disabled={sortDone || (phase !== 'arrangement' && phase !== 'arrangement_2')}
-              /* 750 = 50% ของ Ante กอง 3 (1,500) ตามสูตรใหม่ 2026-07-25 — เดิมค้างเลขเก่า 250 ไว้
-                 ⚠️ ตัวเลขนี้ยัง "แสดงผลอย่างเดียว" Tier นี้ยังไม่ได้ wire Token Flow จึงยังไม่หักเงินจริง
-                 ตอนทำ Token Flow ของ High Noble ให้เปลี่ยนเป็นรับ autoSortFee จาก payload round_start
-                 เหมือน Adept/Mastermind (แหล่งความจริงคือ getAutoSortFee() ใน server gameConfig.ts) */
-              costBadge="750"
+              variant={(sortDone || (!autoSortPaid && (tokenBalance[PLAYER_ID] ?? 0) < autoSortFee)) ? 'disabled' : 'normal'}
+              disabled={sortDone || (phase !== 'arrangement' && phase !== 'arrangement_2') || (!autoSortPaid && (tokenBalance[PLAYER_ID] ?? 0) < autoSortFee)}
+              costBadge={autoSortPaid ? 'PAID' : String(autoSortFee)}
               onPress={handleAutoSort}
               style={s.actionBtnSize}
             />

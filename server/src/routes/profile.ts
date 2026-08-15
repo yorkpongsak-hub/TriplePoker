@@ -5,7 +5,7 @@ import { assertVip, assertVipPro, VipStatus } from '../middleware/vipGuard'
 import { getAvatarPreset, isAvatarKeyAllowed, DEFAULT_AVATAR_KEY } from '../constants/avatarPresets'
 import { getAscendantStatus } from '../game/crownVaultService'
 import { getTableSkinState, selectTableSkin } from '../game/tableSkinService'
-import { getClaimableStreakMilestone, getBangkokDateString } from '../game/matchStatsService'
+import { getClaimableStreakMilestone, getBangkokDateString, getStreakCycleStartDate } from '../game/matchStatsService'
 import { economyService } from '../economy/economyService'
 import { gameConfig } from '../config/gameConfig'
 
@@ -310,7 +310,7 @@ export async function profileRoutes(app: FastifyInstance) {
 
     const { data: user, error: readError } = await supabaseAdmin
       .from('users')
-      .select('streak_count, streak_claimed_milestone')
+      .select('streak_count, streak_claimed_milestone, last_played_date')
       .eq('user_id', userId)
       .maybeSingle()
     if (readError) return reply.status(500).send({ error: 'DB_ERROR' })
@@ -321,12 +321,13 @@ export async function profileRoutes(app: FastifyInstance) {
 
     const tokenAmount = gameConfig.dailyEconomy.streakMilestoneRewards[milestone]
     const todayStr = getBangkokDateString(new Date())
+    const cycleStart = getStreakCycleStartDate(user.last_played_date ?? null, user.streak_count ?? 0, todayStr)
 
     try {
       await economyService.mint({
-        // วันที่ (Bangkok) เป็นส่วนหนึ่งของ key เพราะ milestone เดิม (เช่น 3) claim ซ้ำได้ทุกรอบ 7 วัน
-        // ใหม่ — ไม่ใช่ claim ได้ครั้งเดียวตลอดชีพ
-        idempotencyKey: `STREAK_MILESTONE:${userId}:${milestone}:${todayStr}`,
+        // ผูกกับวันเริ่ม cycle ไม่ใช่วันที่กด: retry ข้ามวันหลัง mint สำเร็จแต่ marker update ล้มเหลว
+        // จะ replay transaction เดิม ไม่ mint ซ้ำ ส่วน cycle ใหม่ยัง claim milestone เดิมได้ตามปกติ
+        idempotencyKey: `STREAK_MILESTONE:${userId}:${milestone}:${cycleStart}`,
         to: { accountType: 'PLAYER', accountId: userId },
         currency: 'TOKEN',
         amount: tokenAmount,

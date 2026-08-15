@@ -66,6 +66,12 @@ describe('recordMatchStats — no longer auto-mints TOKEN for streak (superseded
     await recordMatchStats([input()])
     expect(mockMint).not.toHaveBeenCalled()
   })
+
+  test('ไม่เขียน token_balance จาก snapshot เก่าทับ settlement/reward ที่อาจเข้าพร้อมกัน', async () => {
+    selectData = [freshUserRow({ token_balance: 4321 })]
+    await recordMatchStats([input()])
+    expect(mockUpdate.mock.calls[0][0]).not.toHaveProperty('token_balance')
+  })
 })
 
 describe('recordMatchStats — streak_claimed_milestone bookkeeping', () => {

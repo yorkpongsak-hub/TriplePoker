@@ -3,7 +3,7 @@
 // ครอบคลุม: Ascendant window transition (getAscendantStatus), Buy Ascendant Pass
 // (windowed / Instant Pass / Crown ไม่พอ / ไม่ eligible), Arena Pass ทั้ง 2 เส้นทาง,
 // Token→Crown Exchange atomic
-// mock ascendantGate.checkAscendantEligibility + shopAPI.deductCrown แยกต่างหาก
+// mock ascendantGate.checkAscendantEligibility + atomic purchase RPC แยกต่างหาก
 // (isolate unit ของไฟล์นี้ — ไม่ทดสอบซ้ำ logic ที่ ascendantGate.test.ts คุมอยู่แล้ว)
 // TriplePoker | The Sage Unicorn Studio Co., Ltd.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -38,11 +38,6 @@ jest.mock('../../src/game/ascendantGate', () => ({
   checkAscendantEligibility: mockCheckAscendantEligibility,
 }))
 
-const mockDeductCrown = jest.fn()
-jest.mock('../../src/items/shopAPI', () => ({
-  deductCrown: mockDeductCrown,
-}))
-
 const mockConvert = jest.fn()
 jest.mock('../../src/economy/economyService', () => ({
   economyService: { convert: (...args: unknown[]) => mockConvert(...args) },
@@ -63,7 +58,7 @@ beforeEach(() => {
   mockFrom.mockClear()
   mockRpc.mockReset()
   mockCheckAscendantEligibility.mockReset()
-  mockDeductCrown.mockReset()
+  mockRpc.mockResolvedValue({ data: 0, error: null })
   mockConvert.mockReset()
 })
 
@@ -103,16 +98,17 @@ describe('getAscendantStatus', () => {
 })
 
 describe('buyAscendantPass', () => {
-  test('ไม่ eligible → NOT_ELIGIBLE, ไม่เรียก deductCrown', async () => {
+  test('ไม่ eligible → NOT_ELIGIBLE, ไม่เรียก atomic purchase RPC', async () => {
     mockCheckAscendantEligibility.mockResolvedValue({ eligible: false, reason: 'TOKEN_BELOW_MIN' })
     const result = await buyAscendantPass('u1')
     expect(result).toEqual({ success: false, error: 'NOT_ELIGIBLE', errorDetail: 'TOKEN_BELOW_MIN' })
-    expect(mockDeductCrown).not.toHaveBeenCalled()
+    expect(mockRpc).not.toHaveBeenCalled()
   })
 
   test('eligible แต่ Crown ไม่พอ → INSUFFICIENT_CROWN', async () => {
     mockCheckAscendantEligibility.mockResolvedValue({ eligible: true, reason: 'OK' })
-    mockDeductCrown.mockRejectedValue(new Error('Insufficient crown'))
+    responseQueue = [{ data: { token_balance: 700_000 }, error: null }]
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'INSUFFICIENT_CREST_BALANCE' } })
     const result = await buyAscendantPass('u1')
     expect(result.success).toBe(false)
     expect(result.error).toBe('INSUFFICIENT_CROWN')
@@ -120,18 +116,19 @@ describe('buyAscendantPass', () => {
 
   test('eligible + Crown พอ + token < 1M → เปิด window 30 วัน (active)', async () => {
     mockCheckAscendantEligibility.mockResolvedValue({ eligible: true, reason: 'OK' })
-    mockDeductCrown.mockResolvedValue(0)
-    responseQueue = [{ data: { token_balance: 700_000 }, error: null }, { data: null, error: null }]
+    responseQueue = [{ data: { token_balance: 700_000 }, error: null }]
     const result = await buyAscendantPass('u1')
     expect(result.success).toBe(true)
     expect(result.status?.status).toBe('active')
     expect(result.status?.expiresAt).not.toBeNull()
+    expect(mockRpc).toHaveBeenCalledWith('purchase_ascendant_pass_atomic', expect.objectContaining({
+      p_user_id: 'u1', p_price_crest: 240,
+    }))
   })
 
   test('eligible + Crown พอ + token >= 1M → Instant Pass (passed ทันที)', async () => {
     mockCheckAscendantEligibility.mockResolvedValue({ eligible: true, reason: 'OK' })
-    mockDeductCrown.mockResolvedValue(0)
-    responseQueue = [{ data: { token_balance: 1_500_000 }, error: null }, { data: null, error: null }]
+    responseQueue = [{ data: { token_balance: 1_500_000 }, error: null }]
     const result = await buyAscendantPass('u1')
     expect(result.success).toBe(true)
     expect(result.status?.status).toBe('passed')
@@ -189,7 +186,6 @@ describe('buyArenaPass', () => {
       { data: { arena_unlocked: false }, error: null },
       { data: { token_balance: 1_000_000, created_at: daysAgo(200), ascendant_status: { status: 'none', startedAt: null, expiresAt: null } }, error: null },
     ]
-    mockDeductCrown.mockRejectedValue(new Error('Insufficient crown'))
     const result = await buyArenaPass('u1')
     expect(result).toEqual({ success: false, error: 'NOT_ELIGIBLE' })
   })
@@ -200,10 +196,9 @@ describe('buyArenaPass', () => {
       { data: { token_balance: 1_000_000, created_at: daysAgo(200), ascendant_status: { status: 'none', startedAt: null, expiresAt: null } }, error: null },
       { data: null, error: null }, // update response
     ]
-    mockDeductCrown.mockResolvedValue(0)
     const result = await buyArenaPass('u1')
     expect(result).toEqual({ success: false, error: 'NOT_ELIGIBLE' })
-    expect(mockDeductCrown).not.toHaveBeenCalled()
+    expect(mockRpc).not.toHaveBeenCalled()
   })
 })
 
@@ -221,13 +216,14 @@ describe('exchangeTokenToCrown — Central Economy Ledger Phase 7 Round 7 (econo
       { data: { token_balance: 900_000, crown_balance: 10 }, error: null }, // post-convert re-read
     ]
     mockConvert.mockResolvedValue({ transactionId: 1, replayed: false })
-    const result = await exchangeTokenToCrown('u1', 10)
+    const result = await exchangeTokenToCrown('u1', 10, 'req-123')
     expect(result).toEqual({ success: true, newTokenBalance: 900_000, newCrownBalance: 10 })
     expect(mockConvert).toHaveBeenCalledWith(expect.objectContaining({
       account: { accountType: 'PLAYER', accountId: 'u1' },
       from: { currency: 'TOKEN', amount: 50_000 },
       to: { currency: 'CREST', amount: 120, wallet: 'EARNED' }, // 10 Crown * 12 Crest/Crown
       reason: 'TOKEN_TO_CROWN',
+      idempotencyKey: 'TOKEN_TO_CROWN:u1:req-123',
     }))
   })
 

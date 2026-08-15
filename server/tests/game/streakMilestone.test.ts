@@ -1,4 +1,4 @@
-import { getClaimableStreakMilestone, STREAK_MILESTONES } from '../../src/game/matchStatsService'
+import { getClaimableStreakMilestone, getStreakCycleStartDate, STREAK_MILESTONES } from '../../src/game/matchStatsService'
 
 describe('getClaimableStreakMilestone', () => {
   test('milestone days are exactly 3, 5, 7', () => {
@@ -32,5 +32,16 @@ describe('getClaimableStreakMilestone', () => {
 
   test('day 7, already claimed everything up to 7 — nothing left', () => {
     expect(getClaimableStreakMilestone(7, 7)).toBeNull()
+  })
+})
+
+describe('getStreakCycleStartDate', () => {
+  test('คืน key เดิมตลอด cycle แม้ claim คนละวัน', () => {
+    expect(getStreakCycleStartDate('2026-08-15', 3, '2026-08-15')).toBe('2026-08-13')
+    expect(getStreakCycleStartDate('2026-08-17', 5, '2026-08-17')).toBe('2026-08-13')
+  })
+
+  test('cycle ใหม่ได้ key ใหม่หลัง wrap กลับ day 1', () => {
+    expect(getStreakCycleStartDate('2026-08-20', 1, '2026-08-20')).toBe('2026-08-20')
   })
 })

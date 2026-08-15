@@ -44,7 +44,7 @@ import { Seat as RoomSeat } from '../../src/game/roomRegistry'
 import { greedyArrangement } from '../../src/game/aiEngine'
 import {
   startHighNobleMultiMatch, submitHNArrangement, submitHNArrangementRound2, submitHNDiscard,
-  markHNPlayerAFK, resendHNRoundStartToPlayer, getHNMatchState,
+  markHNPlayerAFK, resendHNRoundStartToPlayer, getHNMatchState, requestHNAutoSort,
 } from '../../src/game/highNobleMultiEngine'
 
 // เพิ่ม timeout เฉพาะไฟล์นี้ (default jest คือ 5000ms) — เทสในนี้ใช้ jest.advanceTimersByTimeAsync
@@ -159,6 +159,36 @@ async function driveToGrandFinale() {
 async function resolveBossTurn() {
   await jest.advanceTimersByTimeAsync(10_000) // ครอบ aiThinkMs เต็มช่วง (7000-9999ms)
 }
+
+describe('High Noble Auto Sort fee — server authoritative', () => {
+  test('หัก 750 TOKEN เข้า Fee & Rake และกันการเก็บซ้ำในรอบเดียว', async () => {
+    const { roomId, userA, io, emitted } = await startMatch()
+    const state = getHNMatchState(roomId)!
+    const before = state.tokenBalance[userA]
+    const feeBefore = state.buyInAmount * state.seats.length
+      - Object.values(state.tokenBalance).reduce((sum, value) => sum + value, 0)
+      - state.flowPot.reduce((sum, value) => sum + value, 0)
+
+    expect(requestHNAutoSort(io, roomId, userA)).toEqual({ ok: true })
+    expect(state.tokenBalance[userA]).toBe(before - 750)
+    expect(state.autoSortUsed[userA]).toBe(true)
+    expect(requestHNAutoSort(io, roomId, userA)).toEqual({ ok: false, reason: 'ALREADY_USED' })
+
+    const flowEvents = emitted.filter(e => e.event === 'token_flow_update')
+    const flow = flowEvents[flowEvents.length - 1]?.data
+    expect(flow?.feeRake).toBe(feeBefore + 750)
+  })
+
+  test('ปฏิเสธเมื่อ TOKEN ไม่พอโดยไม่เปลี่ยนยอด', async () => {
+    const { roomId, userA, io } = await startMatch()
+    const state = getHNMatchState(roomId)!
+    state.tokenBalance[userA] = 749
+
+    expect(requestHNAutoSort(io, roomId, userA)).toEqual({ ok: false, reason: 'INSUFFICIENT_TOKENS' })
+    expect(state.tokenBalance[userA]).toBe(749)
+    expect(state.autoSortUsed[userA]).toBeUndefined()
+  })
+})
 
 // ═══════════════════════════════════════════════════════════════════════════
 describe('markHNPlayerAFK — grace เริ่ม ไม่ settle seat ยัง human', () => {

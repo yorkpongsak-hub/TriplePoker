@@ -14,7 +14,7 @@
 // จึงเป็น UI shell ที่โชว์ toast "Coming Soon" แทนการยิง API จริง (กัน UX หลอกว่าเงินถูกหักแต่ backend ไม่ทำงาน)
 // ยกเว้น interaction ที่ canon บังคับให้มี UI จริง: VIP PRO lock bottom sheet + Loot Box odds modal ก่อนซื้อ
 
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
 import {
   View,
   Text,
@@ -560,6 +560,7 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
   const [vault, setVault] = useState<CrownVaultData | null>(null)
   const [vaultBusy, setVaultBusy] = useState(false)
   const [exchangeInput, setExchangeInput] = useState('')
+  const exchangeRequestRef = useRef<{ id: string; amount: number } | null>(null)
   const [confirmAction, setConfirmAction] = useState<'exchange' | 'ascendant' | 'arena' | null>(null)
 
   const vaultAuthHeaders = () => ({
@@ -585,12 +586,21 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
   const handleConfirmExchange = async () => {
     const crownAmount = parseInt(exchangeInput, 10)
     if (!crownAmount || crownAmount <= 0) { setConfirmAction(null); return }
+    if (!exchangeRequestRef.current || exchangeRequestRef.current.amount !== crownAmount) {
+      exchangeRequestRef.current = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        amount: crownAmount,
+      }
+    }
     setVaultBusy(true)
     try {
       const res = await fetch(`${SERVER_URL}/crown-vault/exchange`, {
-        method: 'POST', headers: vaultAuthHeaders(), body: JSON.stringify({ crownAmount }),
+        method: 'POST', headers: vaultAuthHeaders(),
+        body: JSON.stringify({ crownAmount, requestId: exchangeRequestRef.current.id }),
       })
       const data = await res.json()
+      // ได้คำตอบแน่นอนแล้ว ไม่ว่า success/business error คำขอถัดไปถือเป็น intent ใหม่
+      exchangeRequestRef.current = null
       if (data.success) {
         setToastMsg(`Exchanged ${fmt(crownAmount)} Crown`)
         setExchangeInput('')

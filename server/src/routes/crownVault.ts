@@ -18,6 +18,7 @@ import {
 
 interface ExchangeBody {
   crownAmount: number
+  requestId: string
 }
 
 async function requireUserId(request: FastifyRequest, reply: FastifyReply): Promise<string | null> {
@@ -85,12 +86,12 @@ export default async function crownVaultRoutes(fastify: FastifyInstance) {
     const userId = await requireUserId(request, reply)
     if (!userId) return
 
-    const { crownAmount } = request.body ?? {}
-    if (!crownAmount || crownAmount <= 0) {
+    const { crownAmount, requestId } = request.body ?? {}
+    if (!Number.isSafeInteger(crownAmount) || crownAmount <= 0 || !requestId || requestId.length > 100) {
       return reply.status(400).send({ error: 'crownAmount ต้องเป็นเลขบวก' })
     }
 
-    const result = await exchangeTokenToCrown(userId, crownAmount)
+    const result = await exchangeTokenToCrown(userId, crownAmount, requestId)
     if (!result.success) {
       const statusCode = result.error === 'TIER_REQUIRED' ? 403
         : result.error === 'INSUFFICIENT_TOKENS' ? 402
