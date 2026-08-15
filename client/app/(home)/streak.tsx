@@ -8,11 +8,16 @@
 
 import React, { useEffect, useState } from 'react'
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native'
+import { Image } from 'expo-image'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useAuthStore } from '../../src/store/authStore'
+import { StreakBonusVFX } from '../../src/components/vfx/StreakBonusVFX'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
+
+// asset ล่าสุดที่ลุงเยาะเพิ่ม 2026-08-14 (320x180 animated WebP) — banner ต่อจาก subtitle ก่อนกล่อง progress
+const streakCountdownFx = require('../../assets/fx/streak_countdown.webp')
 
 const C = {
   bg: '#0F2418',
@@ -48,6 +53,7 @@ export default function StreakScreen() {
   const [claiming, setClaiming] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [justClaimed, setJustClaimed] = useState<{ milestone: number; tokensAwarded: number } | null>(null)
+  const [bonusVfx, setBonusVfx] = useState<{ amount: number } | null>(null)
 
   const claimable = getClaimableMilestone(streakCount, claimedMilestone)
 
@@ -66,6 +72,7 @@ export default function StreakScreen() {
         return
       }
       setJustClaimed({ milestone: json.milestone, tokensAwarded: json.tokensAwarded })
+      setBonusVfx({ amount: json.tokensAwarded })
       await useAuthStore.getState().refreshProfile()
     } catch (e) {
       setError('Could not claim reward. Please try again.')
@@ -100,6 +107,11 @@ export default function StreakScreen() {
       </View>
 
       <Text style={s.subtitle}>Play a match every day to earn Token bonuses</Text>
+
+      <View style={s.brandBlock}>
+        <Image source={streakCountdownFx} style={s.bannerFx} contentFit="contain" autoplay />
+        <Text style={s.brandTitle}>TriplePoker Winning Streak Bonus</Text>
+      </View>
 
       <View style={s.progressCard}>
         <Text style={s.progressLabel}>DAY {streakCount} / 7</Text>
@@ -146,12 +158,26 @@ export default function StreakScreen() {
           <Text style={s.errorText}>⚠ {error}</Text>
         </View>
       )}
+
+      {bonusVfx && (
+        <StreakBonusVFX amount={bonusVfx.amount} onFinish={() => setBonusVfx(null)} />
+      )}
     </View>
   )
 }
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg, paddingHorizontal: 20 },
+  // มติลุงเยาะ (รอบแก้ไขที่ 2) — ต่อจาก subtitle เลย ก่อนกล่อง progressCard (ไม่ปักไว้ล่างสุดจอแล้ว
+  // เพราะรอบแรกอยู่ต่ำเกินไป)
+  brandBlock: { alignItems: 'center', marginBottom: 16 },
+  // แบนเนอร์ assets/fx/streak_countdown.webp (320x180 เนทีฟ) — เต็มความกว้างจอ รักษา aspect ratio เป๊ะ
+  // (ไม่ใช้ paddingHorizontal ของ container เพราะต้องเต็มขอบซ้าย-ขวาจริงๆ ตาม "banner เด่น")
+  bannerFx: { width: '100%', aspectRatio: 320 / 180, marginHorizontal: -20 },
+  brandTitle: {
+    fontFamily: 'Cinzel_700Bold', color: C.gold, fontSize: 22, fontWeight: '900',
+    letterSpacing: 1, textAlign: 'center', marginTop: 10, paddingHorizontal: 12,
+  },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12 },
   backBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   backBtnText: { color: C.gold, fontSize: 26, fontWeight: '900' },

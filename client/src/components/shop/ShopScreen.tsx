@@ -27,10 +27,12 @@ import {
 } from 'react-native'
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated'
 import { router, useFocusEffect } from 'expo-router'
+import { Image } from 'expo-image'
 import { useAuthStore } from '../../store/authStore'
 import { ThemedBackground } from '../ui/ThemedBackground'
 import { glassPanel, glassPanelDense, textOnGlass } from '../../ui/glassStyles'
 import { TIER_CONFIG } from '../../config/tierConfig'
+import { BADGES } from '../../../assets/badges/BADGE_MANIFEST'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
@@ -57,7 +59,7 @@ const C = {
 
 const fmt = (n: number) => n.toLocaleString('en-US')
 
-type TabKey = 'items' | 'fun' | 'vip' | 'packs' | 'cosmetics' | 'vault'
+type TabKey = 'items' | 'fun' | 'vip' | 'packs' | 'cosmetics' | 'vault' | 'badges'
 
 // Tier progression lock — Competitive Items ปลดล็อคทีละ Tier (มติลุงเยาะ 2026-07-26)
 // ceiling model เดียวกับ profile.tsx (TIER_ORDER local const): 'D' = ยังไม่เคยปลด Tier ไหนเลย
@@ -82,7 +84,20 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'vip',        label: 'VIP' },
   { key: 'packs',      label: 'TOKEN PACKS' },
   { key: 'vault',      label: 'CROWN VAULT' },
+  { key: 'badges',     label: 'BADGES' },
 ]
+
+// Badge Shop — response shape ของ GET /badges/status (server/src/routes/badges.ts).
+// Badge ที่ยังไม่ปลดล็อค (unlocked:false) ซื้อไม่ได้เด็ดขาด — server เช็คซ้ำเสมอตอน POST /badges/buy
+interface BadgeStatusEntry {
+  key: string
+  name: string
+  category: 'tier' | 'achievement'
+  price: number
+  hint: string
+  unlocked: boolean
+  owned: boolean
+}
 
 // The Crown Vault — response shape ของ GET /crown-vault/status (server/src/routes/crownVault.ts)
 interface AscendantStatusData {
@@ -364,6 +379,33 @@ function ShopItemCard({
   )
 }
 
+// ─── Badge Card (Badge Shop — badge PNG จริงจาก BADGE_MANIFEST.ts แทน emoji icon ของ
+// ShopItemCard) — locked: มืดลง + hint เกณฑ์ปลดล็อคแทนปุ่มซื้อ, unlocked: ราคา + ปุ่ม BUY, owned: OWNED ─
+function BadgeShopCard({ badge, busy, onBuy }: { badge: BadgeStatusEntry; busy: boolean; onBuy: () => void }) {
+  const source = (BADGES as Record<string, any>)[badge.key]
+  return (
+    <GlassCard style={s.itemCard}>
+      <Image source={source} style={[s.badgeImg, !badge.unlocked && s.badgeImgLocked]} contentFit="contain" />
+      <Text style={s.itemName} numberOfLines={1}>{badge.name}</Text>
+      {badge.owned ? (
+        <View style={[s.buyBtn, s.ownedBtn]}>
+          <Text style={s.ownedBtnTxt}>✓ OWNED</Text>
+        </View>
+      ) : badge.unlocked ? (
+        <PressScale onPress={onBuy} disabled={busy} style={s.buyBtnWrap}>
+          <View style={s.buyBtn}>
+            <Text style={s.buyBtnTxt}>{busy ? '...' : `${fmt(badge.price)} 🪙`}</Text>
+          </View>
+        </PressScale>
+      ) : (
+        <View style={[s.buyBtn, s.lockBtn]}>
+          <Text style={s.lockBtnTxt} numberOfLines={2}>🔒 {badge.hint}</Text>
+        </View>
+      )}
+    </GlassCard>
+  )
+}
+
 // ─── VIP PRO Upgrade Bottom Sheet ───────────────────────────────────────
 function VipUpgradeSheet({ visible, onClose, onUpgrade }: { visible: boolean; onClose: () => void; onUpgrade: () => void }) {
   return (
@@ -596,6 +638,51 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
     } finally {
       setVaultBusy(false)
       setConfirmAction(null)
+    }
+  }
+
+  // ─── Badge Shop — เช็ค unlocked/owned จริงฝั่ง server ทุกครั้ง (badgeUnlockService.ts) ───────
+  const [badges, setBadges] = useState<BadgeStatusEntry[] | null>(null)
+  const [badgeBusyKey, setBadgeBusyKey] = useState<string | null>(null)
+
+  const fetchBadgeStatus = useCallback(async () => {
+    if (!session?.access_token) return
+    try {
+      const res = await fetch(`${SERVER_URL}/badges/status`, { headers: vaultAuthHeaders() })
+      const data = await res.json()
+      if (data.success) setBadges(data.badges)
+    } catch (e) {
+      console.error('[ShopScreen] fetchBadgeStatus failed:', e)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.access_token])
+
+  useEffect(() => {
+    if (activeTab === 'badges') fetchBadgeStatus()
+  }, [activeTab, fetchBadgeStatus])
+
+  const handleBuyBadge = async (badgeKey: string) => {
+    setBadgeBusyKey(badgeKey)
+    try {
+      const res = await fetch(`${SERVER_URL}/badges/buy`, {
+        method: 'POST', headers: vaultAuthHeaders(), body: JSON.stringify({ badgeKey }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setToastMsg('Badge purchased!')
+        await Promise.all([fetchBadgeStatus(), refreshProfile()])
+      } else {
+        setToastMsg(
+          data.error === 'INSUFFICIENT_TOKENS' ? 'Not enough Token'
+          : data.error === 'NOT_UNLOCKED' ? 'Badge not unlocked yet'
+          : data.error === 'ALREADY_OWNED' ? 'Already owned'
+          : 'Purchase failed — try again'
+        )
+      }
+    } catch (e) {
+      setToastMsg('Purchase failed — try again')
+    } finally {
+      setBadgeBusyKey(null)
     }
   }
 
@@ -914,6 +1001,27 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
             </View>
           )}
 
+          {/* ── BADGES ── */}
+          {activeTab === 'badges' && (
+            <View style={{ gap: 14 }}>
+              <SectionNote text="Only badges you've already earned in-game can be purchased. Own them forever." />
+
+              <SectionTitle title="Tier Progression" />
+              <View style={s.grid}>
+                {(badges ?? []).filter(b => b.category === 'tier').map(b => (
+                  <BadgeShopCard key={b.key} badge={b} busy={badgeBusyKey === b.key} onBuy={() => handleBuyBadge(b.key)} />
+                ))}
+              </View>
+
+              <SectionTitle title="Achievement" />
+              <View style={s.grid}>
+                {(badges ?? []).filter(b => b.category === 'achievement').map(b => (
+                  <BadgeShopCard key={b.key} badge={b} busy={badgeBusyKey === b.key} onBuy={() => handleBuyBadge(b.key)} />
+                ))}
+              </View>
+            </View>
+          )}
+
           <View style={{ height: 24 }} />
         </ScrollView>
 
@@ -1115,7 +1223,13 @@ const s = StyleSheet.create({
   },
   buyBtnTxt: { fontFamily: 'JetBrainsMono_600SemiBold', color: C.gold, fontSize: 12 },
   lockBtn: { backgroundColor: 'rgba(255,215,106,0.10)', borderColor: C.gold },
-  lockBtnTxt: { color: C.gold, fontSize: 9, fontWeight: '800', letterSpacing: 0.3 },
+  lockBtnTxt: { color: C.gold, fontSize: 9, fontWeight: '800', letterSpacing: 0.3, textAlign: 'center' },
+
+  // Badge Shop card
+  badgeImg: { width: 56, height: 56, marginBottom: 6 },
+  badgeImgLocked: { opacity: 0.28 },
+  ownedBtn: { backgroundColor: 'rgba(141,255,181,0.12)', borderColor: C.green },
+  ownedBtnTxt: { fontFamily: 'JetBrainsMono_600SemiBold', color: C.green, fontSize: 12 },
 
   // VIP Upgrade Sheet
   sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },

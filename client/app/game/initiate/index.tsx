@@ -19,6 +19,7 @@ import * as Haptics from 'expo-haptics'
 import { autoSort } from '../../../src/utils/autoSort'
 import { getReduceMotion } from '../../../src/utils/reduceMotion'
 import { clearPendingMatch, markPendingMatch } from '../../../src/utils/pendingMatch'
+import { playCardArrange, playCountdownWarning, playJackpotFanfare, playBossPileWinThunder } from '../../../src/services/gameSfxService'
 import { useAuthStore } from '../../../src/store/authStore'
 // Patch 2026-07-18: resolve avatar preset key → emoji/รูปภาพ (แก้ VIP preset ไม่โชว์ที่โต๊ะ)
 import { PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
@@ -439,6 +440,7 @@ const GameTableLive: React.FC = () => {
     if (jackpotTimeoutRef.current) clearTimeout(jackpotTimeoutRef.current)
     setJackpotVfxComplete(false)
     setJackpotWinner(winnerId)
+    playJackpotFanfare()
 
     if (winnerId === PLAYER_ID) return
 
@@ -599,6 +601,7 @@ const GameTableLive: React.FC = () => {
       timerRef.current = setInterval(() => {
         const next = Math.max(0, timerValRef.current.val - 1)
         timerValRef.current = { ...timerValRef.current, val: next }
+        if (next === 3) playCountdownWarning()
         if (next <= 0) {
           clearInterval(timerRef.current)
           setPiles(cur => {
@@ -673,6 +676,7 @@ const GameTableLive: React.FC = () => {
       ;([1, 2, 3] as const).forEach(pNum => {
         const winnerId = newWinners[pNum]
         if (winnerId) flyingCoinsRef.current?.fire(pileCoinVariant[pNum], SEAT_TARGETS.center, seatTargetFor(winnerId))
+        if (winnerId && winnerId !== PLAYER_ID) playBossPileWinThunder()
       })
 
       // Triple Sweep Jackpot — คนเดียวกันชนะครบทั้ง 3 กอง
@@ -851,6 +855,7 @@ const GameTableLive: React.FC = () => {
     np[selected.pi][selected.ci] = np[pi][ci]
     np[pi][ci] = tmp
     setPiles(np); setSelected(null); setSortDone(false)
+    playCardArrange()
   }, [isReady, phase, selected, piles])
 
   const handleAutoSort = () => {

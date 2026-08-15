@@ -75,6 +75,7 @@ function previewSnapshot(mode?: string): ArenaClientSnapshot {
       entryFeeCrest: 12,
       netCrest: 21,
       psGained: 4,
+      bossVictory: { tier: 'monarch', title: null },
     } : null,
     reveal: phase === 'REVEAL_PILE_2' ? {
       pile: 2, winnerSeat: 2, winnerDisplayName: 'Cipher Veil', handName: 'full_house',

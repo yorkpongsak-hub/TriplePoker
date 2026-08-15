@@ -4,7 +4,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
-  View, Text, TouchableOpacity,
+  View, Text, TouchableOpacity, Pressable,
   StyleSheet, StatusBar, ScrollView, Image, Alert,
 } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
@@ -26,7 +26,10 @@ import BeyondPathChoice, { BeyondPath } from '../../src/components/vfx/BeyondPat
 import MatchHistoryList from '../../src/components/profile/MatchHistoryList'
 import BossStatsPanel from '../../src/components/profile/BossStatsPanel'
 import LorePanel from '../../src/components/profile/LorePanel'
+import { Image as ExpoImage } from 'expo-image'
 import MyCollectiblesPanel from '../../src/components/profile/MyCollectiblesPanel'
+import MyBadgesPanel from '../../src/components/profile/MyBadgesPanel'
+import { BADGES } from '../../assets/badges/BADGE_MANIFEST'
 import AvatarFrame from '../../src/components/game/AvatarFrame'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
@@ -159,6 +162,10 @@ export default function ProfileScreen() {
   // ให้แล้ว) — comment เดิมที่บอกว่าคอลัมน์ไม่มีล้าสมัยไปแล้ว ต่อสายเป็นค่าจริงจาก authStore
   const streakDays  = profile?.streak_count ?? 0
   const hasSevenDayBadge = profile?.streak_7days_badge ?? false
+
+  // Badge Shop — badge ที่ equip อยู่ตอนนี้ (ดู MyBadgesPanel.tsx สำหรับ UI เลือก equip)
+  const equippedBadgeKey = profile?.equipped_badge_key ?? null
+  const equippedBadgeSource = equippedBadgeKey ? (BADGES as Record<string, any>)[equippedBadgeKey] : null
 
   // Tier คำนวณสดจาก token เสมอ — เลิกอ่าน profile.tier ตรงๆ เพราะคอลัมน์นั้นไม่มี pipeline ไหนอัปเดตจริง
   // (ดูปัญหาเดิม: Top Bar ไม่ตรงกับ Tiers Unlocked) getTierFromToken คืนแค่ 4 tier หลัก ไม่มี crash เพราะ token
@@ -384,6 +391,12 @@ export default function ProfileScreen() {
         {/* ═══════════════ HERO PLAYER CARD ═══════════════ */}
         <GoldCard style={s.heroCard}>
           <TouchableOpacity onPress={handleEditProfile} style={s.avatarFrame} activeOpacity={0.85}>
+            {/* Badge Shop — equipped badge โผล่หลัง Avatar (มติลุงเยาะ 2026-08-15: Z-order ต่ำกว่า
+                Avatar/กรอบเสมอ, Avatar ทับด้านล่างของ badge ไม่เกิน ~20% ของความสูง badge — render
+                ก่อนเสมอที่นี่เพื่อให้อยู่ชั้นล่าง ไม่ต้องพึ่ง zIndex) */}
+            {equippedBadgeSource && (
+              <ExpoImage source={equippedBadgeSource} style={s.equippedBadgeImg} contentFit="contain" pointerEvents="none" />
+            )}
             {(() => {
               const avatarVisual = profileImageSignedUrl ? (
                 <Image
@@ -448,24 +461,27 @@ export default function ProfileScreen() {
           </View>
         </GoldCard>
 
-        {/* ═══════════════ RESOURCE PANEL ═══════════════ */}
-        <GoldCard style={s.resourceCard}>
-          <ResourceBox icon="🪙" label="TOKEN" value={fmt(token)} valueColor={C.gold} />
-          <View style={s.vLine} />
-          <ResourceBox icon="👑" label="CROWN" value={fmt(crown)} valueColor={C.goldDark} />
+        {/* ═══════════════ TOKEN / CROWN + PERFORMANCE SCORE — รวมคอนเทนเนอร์เดียว (มติลุงเยาะ
+            2026-08-15 — เดิมแยก resourceCard/psCard 2 กล่อง) Season PS เด่น (เกณฑ์แข่งขัน/
+            Ascendant Star) + Career PS รอง (lifetime, ห้ามรีเซ็ต) โชว์เฉพาะ Tier A+ ขึ้นไป —
+            TODO: font JetBrains Mono ตาม spec ยังไม่ได้ load เข้า expo-font ในโปรเจกต์ ═══════════════ */}
+        <GoldCard style={s.statsCard}>
+          <View style={s.resourceRow}>
+            <ResourceBox icon="🪙" label="TOKEN" value={fmt(token)} valueColor={C.gold} />
+            <View style={s.vLine} />
+            <ResourceBox icon="👑" label="CROWN" value={fmt(crown)} valueColor={C.goldDark} />
+          </View>
+          {isPSUnlocked && (
+            <>
+              <View style={s.statsDivider} />
+              <View style={s.psSeasonRow}>
+                <Text style={s.psSeasonLabel}>📊 SEASON PS</Text>
+                <Text style={s.psSeasonValue}>{fmt(seasonPS)}</Text>
+              </View>
+              <Text style={s.psCareerValue}>Career PS (lifetime): {fmt(careerPS)}</Text>
+            </>
+          )}
         </GoldCard>
-
-        {/* ═══════════════ PERFORMANCE SCORE — Dual-Track (Tier A+ ขึ้นไปเท่านั้น — Monarch_Spec_v1_3 §4) ═══════════════ */}
-        {/* Season PS เด่น (เกณฑ์แข่งขัน/Ascendant Star) + Career PS รอง (lifetime, ห้ามรีเซ็ต) — TODO: font JetBrains Mono ตาม spec ยังไม่ได้ load เข้า expo-font ในโปรเจกต์ */}
-        {isPSUnlocked && (
-          <GoldCard style={s.psCard}>
-            <View style={s.psSeasonRow}>
-              <Text style={s.psSeasonLabel}>📊 SEASON PS</Text>
-              <Text style={s.psSeasonValue}>{fmt(seasonPS)}</Text>
-            </View>
-            <Text style={s.psCareerValue}>Career PS (lifetime): {fmt(careerPS)}</Text>
-          </GoldCard>
-        )}
 
         {/* ═══════════════ ASCENDANT HINT (token 600k-999,999 ผ่าน A+ แต่ยังไม่ชนะ Monarch) ═══════════════ */}
         {/* มติลุงเยาะ — คนเห็น hint นี้คือคนที่ยังไม่เคยชนะ Monarch มาก่อนเสมอ (เงื่อนไข showAscendantHint) ห้ามสปอยล์ชื่อ */}
@@ -508,6 +524,11 @@ export default function ProfileScreen() {
           <>
             <StatsPanel streakDays={streakDays} streakShields={profile?.streak_shields ?? 0} gamesPlayed={profile?.games_played ?? 0} gamesWon={profile?.games_won ?? 0} bestHands={profile?.best_hands ?? null} />
             <MyCollectiblesPanel userId={profile?.user_id ?? authUser?.id ?? ''} />
+            <MyBadgesPanel
+              accessToken={session?.access_token}
+              equippedBadgeKey={profile?.equipped_badge_key ?? null}
+              onEquipChanged={refreshProfile}
+            />
           </>
         )}
         {activeTab === 'bosses' && (
@@ -526,6 +547,13 @@ export default function ProfileScreen() {
           <MenuButton icon="shop" label="Shop" size="sm" onPress={handleShop} vipShimmer={isVip} />
           <MenuButton icon="hall_of_fame" label="Legends" size="sm" onPress={handleTableOfLegends} vipShimmer={isVip} />
         </View>
+
+        {/* TEMP DEV LINK (มติลุงเยาะ 2026-08-14) — ทางลัดเข้า /test/vfx ("VFX QA LAB") จากหน้าโปรไฟล์
+            โดยตรง ไม่ต้องพิมพ์ URL เอง ตั้งใจให้หน้าตาแตกต่างจากปุ่มเมนูจริงชัดเจน (ข้อความเล็ก จาง)
+            กันสับสนว่าเป็นฟีเจอร์จริง — ลบทิ้งก่อน launch ตุลาคม 2026 */}
+        <TouchableOpacity onPress={() => router.push('/test/vfx' as any)} style={s.devVfxLink} activeOpacity={0.6}>
+          <Text style={s.devVfxLinkText}>🧪 VFX QA Lab (dev only — remove before launch)</Text>
+        </TouchableOpacity>
       </ScrollView>
     </View>
     </ThemedBackground>
@@ -593,9 +621,30 @@ function StatsPanel({ streakDays, streakShields, gamesPlayed, gamesWon, bestHand
       <View style={s.hLine} />
       <StatItem icon="♠" label="BEST HAND" value={bestLabel ?? '—'} sub={bestLabel ? 'ALL TIME' : 'NO DATA'} small />
       <View style={s.hLine} />
-      <TouchableOpacity onPress={() => router.push('/(home)/streak')} activeOpacity={0.7}>
-        <StatItem icon="🔥" label="STREAK" value={`${streakDays}/7 Days ›`} sub={`${streakShields} SHIELD${streakShields === 1 ? '' : 'S'}`} small />
-      </TouchableOpacity>
+      {/* มติลุงเยาะ 2026-08-14: แถวเดิมหน้าตาเหมือน stat แถวอื่นทุกอย่าง (ต่างแค่ "›" ต่อท้ายค่าที่เล็ก
+          มาก) ไม่มีใครรู้ว่ากดได้ — ทำเป็นปุ่มจริงแยกออกจากแถว stat ธรรมดา: กรอบทอง+พื้นหลังทองจางๆ+
+          ป้าย "BONUS STREAK" ชัดเจน+ลูกศรใหญ่ท้ายแถว เปลี่ยนสีจริงตอนกด (ตาม pattern เดียวกับปุ่ม Arena) */}
+      <Pressable
+        onPress={() => router.push('/(home)/streak')}
+        hitSlop={6}
+        style={({ pressed }) => [s.streakBtn, pressed && s.streakBtnPressed]}
+      >
+        {({ pressed }) => (
+          <>
+            <View style={s.statRowLeft}>
+              <Text style={s.statIcon}>🔥</Text>
+              <View>
+                <Text style={[s.streakBtnLabel, pressed && s.streakBtnTextPressed]}>BONUS STREAK</Text>
+                <Text style={[s.streakBtnSub, pressed && s.streakBtnTextPressed]}>{streakShields} SHIELD{streakShields === 1 ? '' : 'S'}</Text>
+              </View>
+            </View>
+            <View style={s.statRowLeft}>
+              <Text style={[s.streakBtnValue, pressed && s.streakBtnTextPressed]}>{streakDays}/7 Days</Text>
+              <Text style={[s.streakBtnChevron, pressed && s.streakBtnTextPressed]}>›</Text>
+            </View>
+          </>
+        )}
+      </Pressable>
     </GoldCard>
   )
 }
@@ -660,7 +709,13 @@ const s = StyleSheet.create({
   },
   heroCard: {
     marginTop: -20,
-    padding: 16,
+    // paddingTop สูงกว่าด้านอื่นตั้งใจ (มติลุงเยาะ 2026-08-15) — ดันทั้งแถว avatarFrame+heroInfo ลงมา
+    // ให้ equippedBadgeImg (โผล่เหนือ avatarFrame ~77px, ดู equippedBadgeImg comment) มีที่พอ ไม่ล้น
+    // ขอบบนของการ์ดเหมือนเดิม ใช้ paddingTop ที่ตัว heroCard แทนการแก้ avatarFrame โดยตรง เพราะ
+    // marginTop บน flex child เดี่ยวจะไปรบกวน alignItems:'center' ระหว่าง avatarFrame กับ heroInfo
+    paddingTop: 90,
+    paddingBottom: 16,
+    paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 16,
@@ -673,6 +728,10 @@ const s = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   avatarEmoji: { fontSize: 48 },
+  // Badge Shop equipped badge — 96x96 อยู่หลัง Avatar (render ก่อน Avatar เสมอ = Z-order ต่ำกว่า)
+  // avatarFrame กว้าง/สูง 88 — top = -0.8*96 = -76.8 ทำให้ overlap เหลือแค่ 96-76.8=19.2 (~20% ของ
+  // ความสูง badge) เป็นส่วนที่ถูก Avatar ทับด้านล่าง ที่เหลือ (~80%) โผล่พ้นด้านบน/ข้างเห็นชัด
+  equippedBadgeImg: { position: 'absolute', width: 96, height: 96, top: -77, left: -4 },
   editBubble: {
     position: 'absolute', right: -4, bottom: 0,
     width: 28, height: 28, borderRadius: 14,
@@ -698,14 +757,15 @@ const s = StyleSheet.create({
   xpLine: { color: C.textSec, fontSize: 11, fontWeight: '800' },
   lastVisited: { color: C.textDim, fontSize: 10, fontWeight: '600', marginTop: 4 },
 
-  resourceCard: {
-    ...glassPanelDense, // Token/Crown bar — ตัวเลขสำคัญ ใช้กระจกทึบกว่า
+  // Token/Crown + Season PS/Career PS รวมคอนเทนเนอร์เดียว (มติลุงเยาะ 2026-08-15 — เดิมแยก
+  // resourceCard/psCard 2 กล่อง) statsDivider คั่นระหว่าง 2 ส่วนเฉพาะตอน PS ปลดล็อคแล้ว (Tier A+ ขึ้นไป)
+  statsCard: {
+    ...glassPanelDense, // ตัวเลขสำคัญ ใช้กระจกทึบกว่า
     marginTop: 12,
     padding: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
   },
+  resourceRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  statsDivider: { height: 1, backgroundColor: C.border, marginVertical: 12 },
   resourceBox: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   resourceTextWrap: { flexShrink: 1, minWidth: 0 },
   resourceIcon: { fontSize: 24, flexShrink: 0 },
@@ -713,11 +773,6 @@ const s = StyleSheet.create({
   resourceValue: { color: C.textPrimary, fontSize: 15, fontWeight: '900', marginTop: 2 },
   vLine: { width: 1, minHeight: 36, backgroundColor: C.border },
 
-  psCard: {
-    marginTop: 10,
-    padding: 12,
-    borderColor: C.purple,
-  },
   psSeasonRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   psSeasonLabel: { color: C.textSec, fontSize: 10, fontWeight: '800', letterSpacing: 1 },
   psSeasonValue: { color: C.purple, fontSize: 20, fontWeight: '900' },
@@ -758,6 +813,10 @@ const s = StyleSheet.create({
     marginTop: 16,
   },
 
+  // TEMP DEV LINK — จางกว่าปุ่มเมนูจริงตั้งใจ (opacity ต่ำ, ไม่มีกรอบ/ไอคอนแบบ MenuButton) กันดูเหมือนฟีเจอร์จริง
+  devVfxLink: { alignItems: 'center', marginTop: 18, paddingVertical: 6 },
+  devVfxLinkText: { color: C.textDim, fontSize: 10, fontWeight: '700' },
+
   tabsRow: { flexDirection: 'row', marginTop: 14 },
   tabBtn: {
     flex: 1,
@@ -787,6 +846,26 @@ const s = StyleSheet.create({
   statValue: { color: C.textPrimary, fontSize: 16, fontWeight: '900', textAlign: 'right' },
   statValueSmall: { fontSize: 11 },
   statSub: { color: C.textDim, fontSize: 8, fontWeight: '700', marginTop: 2, textAlign: 'right' },
+
+  // Bonus Streak — ปุ่มจริง แยกสายตาจากแถว stat ธรรมดาข้างบน (มติลุงเยาะ 2026-08-14)
+  streakBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,215,106,0.12)',
+    borderWidth: 1.5,
+    borderColor: C.gold,
+  },
+  streakBtnPressed: { backgroundColor: C.gold },
+  streakBtnLabel: { color: C.gold, fontSize: 10, fontWeight: '900', letterSpacing: 0.5 },
+  streakBtnSub: { color: C.textSec, fontSize: 8, fontWeight: '700', marginTop: 2 },
+  streakBtnValue: { color: C.textPrimary, fontSize: 13, fontWeight: '900' },
+  streakBtnChevron: { color: C.gold, fontSize: 18, fontWeight: '900', marginLeft: 6 },
+  streakBtnTextPressed: { color: C.bg },
 
   toastBanner: {
     // Feedback B3 — Coming Soon toast, pattern เดียวกับ lobby.tsx

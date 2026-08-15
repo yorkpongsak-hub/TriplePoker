@@ -92,7 +92,10 @@ export interface ArenaClientSnapshot {
     speaker: 'MONARCH' | 'SOREN'
     text: string
   }
-  result: null | { title: string; lines: ArenaResultLine[]; playNetCrest: number; entryFeeCrest: number; netCrest: number; psGained: number }
+  result: null | {
+    title: string; lines: ArenaResultLine[]; playNetCrest: number; entryFeeCrest: number; netCrest: number; psGained: number
+    bossVictory: null | { tier: 'sentinel' | 'god' | 'monarch'; title: string | null }
+  }
   reveal: null | {
     pile: 1 | 2 | 3
     winnerSeat: 1 | 2 | 3 | 4 | null

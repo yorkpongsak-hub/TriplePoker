@@ -4,15 +4,21 @@
 // same UI/logic without duplicating it — victory.tsx keeps its own inline step untouched (already
 // live-tested), this route is for every OTHER entry point going forward.
 //
-// Patch 2026-08-14 (มติลุงเยาะ): ยังไม่ต่อ AdMob SDK จริง — ระหว่างนี้โชว์ RoyalStraightFlushVFX
-// (สร้างไว้แล้ว commit 706bcdd แต่ไม่เคย merge เข้า branch นี้) แทนที่ปุ่ม "Watch Ad" ธรรมดา ใช้เป็น
-// placeholder + เช็คไปในตัวว่า VFX นี้ยังทำงานถูกต้องอยู่ไหม ปิด VFX แล้วนับเป็น "ดูโฆษณาจบ" เหมือนเดิม
+// Patch 2026-08-14 (มติลุงเยาะ): ยังไม่ต่อ AdMob SDK จริง — ระหว่างนี้โชว์ VFX แทนปุ่ม "Watch Ad" ธรรมดา
+// ใช้เป็น placeholder + เช็คไปในตัวว่า VFX นี้ยังทำงานถูกต้องอยู่ไหม ปิด VFX แล้วนับเป็น "ดูโฆษณาจบ" เหมือนเดิม
 // (ยังเรียก watchAd() แจกรางวัลจริงเหมือนเดิม เปลี่ยนแค่ตัว visual ที่ใช้แทนปุ่มเฉยๆ)
 //
 // Patch 2026-08-14 (มติลุงเยาะ, รอบ 2): เพิ่ม ?mode=gate — ใช้กับจุดที่ "ต้องดูโฆษณาก่อนถึงจะเล่นได้"
 // (ทางเข้า Solo/Multiplayer/Grandmaster) ต่างจาก mode เดิม ('reward', default — ใช้กับ Tier Unlock/
 // Victory/Lobby rescue-ad) ตรงที่ gate mode ไม่เรียก watchAd()/ไม่แจก Token เลย แค่บังคับดู VFX ให้ครบ
 // แล้วปล่อยผ่านไปยัง returnTo เฉยๆ (ตามมติ: ด่านก่อนเข้าเล่น ไม่ใช่รางวัล กันเป็น loop ปั่น Token)
+//
+// Patch 2026-08-14 (มติลุงเยาะ, รอบ 3 — VFX test harness convention): หน้านี้ยังไม่มี AdMob จริง
+// placeholder slot จึงว่างและเข้าถึงง่ายที่สุดในแอป (ไม่ต้องผ่านเงื่อนไขเกมจริงเลย) — ตกลงกันว่า
+// "งาน VFX ไหนทำเสร็จใหม่ล่าสุด ให้เอามาใส่แทนที่ตรงนี้ชั่วคราว" เพื่อเทสเห็นภาพจริงได้ทันทีทุกครั้งที่
+// เด้งเข้าหน้าโฆษณา แทนที่จะต้องไล่ trigger เงื่อนไขจริงของ VFX นั้นๆ ทุกรอบ — ของเดิม (RoyalStraightFlushVFX)
+// ไฟล์ยังอยู่ครบไม่ได้ลบ แค่เลิกโชว์ตรงนี้ ส่วน "งานหลัก" (TierUnlockOverlay ต่อกับเงื่อนไขปลด Tier จริง)
+// ยังคงเดิมที่ profile.tsx ไม่ได้ย้ายมาไว้ที่นี่ — ตรงนี้คือชั้น "โชว์ VFX ซ้ำเพื่อเทส" เท่านั้น
 // The Sage Unicorn Studio Co., Ltd.
 
 import React, { useState } from 'react'
@@ -20,7 +26,7 @@ import { View, Text, StyleSheet } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useAuthStore } from '../../src/store/authStore'
 import { watchAd } from '../../src/services/adRewards'
-import RoyalStraightFlushVFX from '../../src/components/vfx/RoyalStraightFlushVFX'
+import LegendaryCardVFX from '../../src/components/vfx/LegendaryCardVFX'
 
 // ธีมสีหลัก (Website Theme Spec v1.0) — เหมือนกับ victory.tsx
 const C = {
@@ -34,7 +40,6 @@ export default function WatchAdScreen() {
   const isGateMode = params.mode === 'gate'
 
   const accessToken = useAuthStore(s => s.session?.access_token ?? null)
-  const displayName = useAuthStore(s => s.profile?.display_name ?? undefined)
   const [msg, setMsg] = useState<string | null>(null)
 
   const goBack = () => router.replace(returnTo as any)
@@ -59,7 +64,7 @@ export default function WatchAdScreen() {
           <Text style={s.msg}>{msg}</Text>
         </View>
       ) : (
-        <RoyalStraightFlushVFX playerName={displayName} onClose={handleVfxClose} />
+        <LegendaryCardVFX title="LEGENDARY VICTORY" subtitle="TRIPLE SWEEP" onFinish={handleVfxClose} />
       )}
     </View>
   )

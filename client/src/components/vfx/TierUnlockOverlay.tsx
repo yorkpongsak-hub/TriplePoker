@@ -1,18 +1,26 @@
 // TierUnlockOverlay.tsx
 // Full-screen celebration overlay ตอนปลด Tier ใหม่ (tier_unlocked_max ceiling model)
-// Code animation ล้วนด้วย Reanimated (ห้าม Lottie, ห้าม sprite sheet)
+// Badge/particle burst เป็น Reanimated ล้วน + ชั้น background FX เป็น animated WebP asset
+// (มติลุงเยาะ 2026-08-14: ปลดล็อคกติกาเดิม "ห้าม Lottie, ห้าม sprite sheet" เฉพาะกรณีนี้ —
+// มีเครื่องมือทำ VFX สะดวกแล้ว ไฟล์ assets/fx/tier_unlocked.webp บีบอัดลงเหลือ 320x180/60เฟรม/15fps/
+// ~326KB จาก 18.4MB เดิม วนลูปไม่จำกัด (loop count 0) เข้ากับ overlay ที่เปิดค้างจนกด CONTINUE พอดี
+// — ยังคง pattern เดิมของโปรเจค: precedent เดียวกับ victory.tsx's tokenDropGif (expo-image + autoplay)
 // The Sage Unicorn Studio Co., Ltd.
 
 import React, { useEffect } from 'react'
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import { Image } from 'expo-image'
 import Animated, {
   Easing,
   useAnimatedStyle,
   useSharedValue,
   withDelay,
+  withSequence,
   withSpring,
   withTiming,
 } from 'react-native-reanimated'
+
+const tierUnlockedFx = require('../../../assets/fx/tier_unlocked.webp')
 
 export interface TierUnlockOverlayProps {
   tier: string
@@ -76,16 +84,27 @@ function Particle({ angle, delay }: { angle: number; delay: number }) {
 // ปิดได้เฉพาะกดปุ่ม CONTINUE เท่านั้น (ห้าม auto-dismiss)
 export function TierUnlockOverlay({ tier, onClose }: TierUnlockOverlayProps) {
   const scrimOpacity = useSharedValue(0)
+  const fxOpacity = useSharedValue(0)
   const badgeScale = useSharedValue(0)
   const badgeRotate = useSharedValue(-180)
+  const badgeOpacity = useSharedValue(1)
   const titleOpacity = useSharedValue(0)
   const tierLabelOpacity = useSharedValue(0)
   const buttonOpacity = useSharedValue(0)
 
   useEffect(() => {
     scrimOpacity.value = withTiming(1, { duration: 400, easing: Easing.out(Easing.cubic) })
-    badgeScale.value = withDelay(250, withSpring(1, { damping: 9, stiffness: 120 }))
+    fxOpacity.value = withDelay(150, withTiming(1, { duration: 500, easing: Easing.out(Easing.cubic) }))
+    // มติลุงเยาะ 2026-08-14 (รอบ 3) — เลิกไล่จัดตำแหน่งเลี่ยง Crown บัง animation แล้ว เปลี่ยนวิธี:
+    // Crown โผล่มาเต็มขนาดตามเดิม ค้างไว้ครู่หนึ่งให้เห็นชัดว่าปลดล็อคอะไร แล้วหด+จางหายไปเอง (ไม่ใช่แค่
+    // หดเฉยๆ ตามคำขอ "เล็กจนจางหายไป") เปิดทางให้เห็นภาพ animation เต็มๆ โดยไม่ต้องแก้ตำแหน่งอะไรอีก —
+    // fxLayer กลับไปกึ่งกลาง badge เหมือนเดิมได้ เพราะ Crown ไม่ได้ค้างบังถาวรอีกต่อไป
+    badgeScale.value = withDelay(250, withSequence(
+      withSpring(1, { damping: 9, stiffness: 120 }),
+      withDelay(700, withTiming(0.2, { duration: 450, easing: Easing.in(Easing.cubic) })),
+    ))
     badgeRotate.value = withDelay(250, withTiming(0, { duration: 600, easing: Easing.out(Easing.cubic) }))
+    badgeOpacity.value = withDelay(1550, withTiming(0, { duration: 450, easing: Easing.in(Easing.cubic) }))
     titleOpacity.value = withDelay(900, withTiming(1, { duration: 400 }))
     tierLabelOpacity.value = withDelay(1100, withTiming(1, { duration: 400 }))
     buttonOpacity.value = withDelay(1400, withTiming(1, { duration: 300 }))
@@ -94,7 +113,9 @@ export function TierUnlockOverlay({ tier, onClose }: TierUnlockOverlayProps) {
   }, [])
 
   const scrimStyle = useAnimatedStyle(() => ({ opacity: scrimOpacity.value }))
+  const fxStyle = useAnimatedStyle(() => ({ opacity: fxOpacity.value }))
   const badgeStyle = useAnimatedStyle(() => ({
+    opacity: badgeOpacity.value,
     // cast เดียวกับ particleStyle ด้านบน - Reanimated transform tuple typing
     transform: [{ scale: badgeScale.value }, { rotate: `${badgeRotate.value}deg` }] as any,
   }))
@@ -109,6 +130,9 @@ export function TierUnlockOverlay({ tier, onClose }: TierUnlockOverlayProps) {
     <Animated.View style={[s.scrim, scrimStyle]}>
       <View style={s.center}>
         <View style={s.badgeWrap}>
+          <Animated.View style={[s.fxLayer, fxStyle]} pointerEvents="none">
+            <Image source={tierUnlockedFx} style={s.fxImage} contentFit="contain" autoplay />
+          </Animated.View>
           <View style={s.particleField}>
             {particles.map(i => (
               <Particle key={i} angle={(i / PARTICLE_COUNT) * Math.PI * 2} delay={650 + i * 25} />
@@ -154,12 +178,29 @@ const s = StyleSheet.create({
     height: BADGE_SIZE,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 28,
+    // fxLayer (180 สูง) ล้นใต้ badgeWrap (120 สูง) อยู่ 30px แล้ว (จัดกึ่งกลาง) — marginBottom ต้อง
+    // เผื่อระยะนั้นก่อน แล้วค่อยบวก buffer จริงให้ TIER UNLOCKED/tier label ไม่ทับภาพ .webp (เคยเป็น 28
+    // เดิมซึ่งไม่พอเลย ทำให้ "INITIATE" ทับ "TriplePoker · Rise" ในภาพ)
+    marginBottom: 70,
   },
   particleField: {
     position: 'absolute',
     width: BADGE_SIZE,
     height: BADGE_SIZE,
+  },
+  // ขนาดเนทีฟของ assets/fx/tier_unlocked.webp (320x180) — ไม่ scale กันภาพเบลอ วางกึ่งกลาง badge
+  // (มติลุงเยาะ 2026-08-14 รอบ 3: กลับมากึ่งกลางเหมือนเดิม เพราะ badge หด+จางหายไปเองแล้วหลังโผล่มาสักครู่
+  // ไม่บังภาพถาวรอีกต่อไป — เคยลองเลื่อนขึ้นแทนแต่ยังไม่พอ เปลี่ยนวิธีมาทำให้ badge เป็น transient แทน)
+  fxLayer: {
+    position: 'absolute',
+    width: 320,
+    height: 180,
+    left: BADGE_SIZE / 2 - 160,
+    top: BADGE_SIZE / 2 - 90,
+  },
+  fxImage: {
+    width: '100%',
+    height: '100%',
   },
   particle: {
     position: 'absolute',

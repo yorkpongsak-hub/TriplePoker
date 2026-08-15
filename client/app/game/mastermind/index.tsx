@@ -21,6 +21,7 @@ import { TABLE_SKINS } from '../../../src/config/tableSkins'
 import BossVictoryVFX, { VictoryTier } from '../../../src/components/vfx/BossVictoryVFX'
 import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
 import { isLocalTripleSweep } from '../../../src/components/vfx/vfxPolicy'
+import { playCountdownWarning, playCardArrange, playAuctionBidTick, playJackpotFanfare, playBossPileWinThunder } from '../../../src/services/gameSfxService'
 import { useUserStore } from '../../../src/store/userStore'
 import { autoSort } from '../../../src/utils/autoSort'
 import { getReduceMotion } from '../../../src/utils/reduceMotion'
@@ -66,15 +67,15 @@ const studioLogo  = require('../../../assets/images/sage_unicorn_logo_transparen
 // Patch Mastermind Conquest: ไม่มี Boss Intro Popup ในเกม — เรื่องราว/motto แสดงที่หน้า story.tsx ก่อนเข้าห้องแล้ว
 // รูป Avatar Nine Sentinels (square crop หน้าชิด ใช้กับ AvatarBubble ของ P3 เท่านั้น) — key ตรงกับ aiNames[0].name จาก server
 const BOSS_AVATAR: Record<string, any> = {
-  'Iron Wall':   require('../../../assets/sentinels/boss_iron_wall.png'),
-  'Chivalry':    require('../../../assets/sentinels/boss_chivalry.png'),
-  'War Lord':    require('../../../assets/sentinels/boss_war_lord.png'),
-  'Phantom':     require('../../../assets/sentinels/boss_phantom.png'),
-  'Dark Shark':  require('../../../assets/sentinels/boss_dark_shark.png'),
-  'Oracle':      require('../../../assets/sentinels/boss_oracle.png'),
-  'Jester':      require('../../../assets/sentinels/boss_jester.png'),
-  'Phoenix':     require('../../../assets/sentinels/boss_phoenix.png'),
-  'Black Magic': require('../../../assets/sentinels/boss_black_magic.png'),
+  'Iron Wall':   require('../../../assets/sentinels/boss_iron_wall_avatar.png'),
+  'Chivalry':    require('../../../assets/sentinels/boss_chivalry_avatar.png'),
+  'War Lord':    require('../../../assets/sentinels/boss_war_lord_avatar.png'),
+  'Phantom':     require('../../../assets/sentinels/boss_phantom_avatar.png'),
+  'Dark Shark':  require('../../../assets/sentinels/boss_dark_shark_avatar.png'),
+  'Oracle':      require('../../../assets/sentinels/boss_oracle_avatar.png'),
+  'Jester':      require('../../../assets/sentinels/boss_jester_avatar.png'),
+  'Phoenix':     require('../../../assets/sentinels/boss_phoenix_avatar.png'),
+  'Black Magic': require('../../../assets/sentinels/boss_black_magic_avatar.png'),
 }
 const cardBackImg = CARD_BACK_IMG // ใช้หลังไพ่จากไฟล์กลาง cardAssets.ts (คง alias เดิมกันแก้ทุกจุดที่อ้างถึง)
 const tableImg    = require('../../../assets/images/table_default.png')
@@ -700,6 +701,7 @@ const GameTableLive: React.FC = () => {
       timerRef.current = setInterval(() => {
         const next = Math.max(0, timerValRef.current.val - 1)
         timerValRef.current = { ...timerValRef.current, val: next }
+        if (next === 3) playCountdownWarning() // เตือนครั้งเดียวตอนข้าม 3 วิ (ไม่ใช่ทุก tick ที่ <=3)
         if (next <= 0) {
           clearInterval(timerRef.current)
           setPiles(cur => {
@@ -807,6 +809,8 @@ const GameTableLive: React.FC = () => {
       if (data.foulReasons) setFoulReasons(data.foulReasons)
       // Patch: เปิด popup Showdown ทันทีที่ Pile แรกมาถึง (ไม่ต้องรอ pNum===3 ซึ่ง Mastermind ไม่ไปถึง ณ จุดนี้)
       setPhase('showdown')
+      // SFX: Boss (Sentinel ที่ aiList[0]) ชนะกอง 1 หรือ 2 — Pile 3 (Grand Finale) แยกไปเช็คที่ grand_finale_result
+      if (data.winner && data.winner === aiListRef.current[0]?.id) playBossPileWinThunder()
     })
     // Patch Mastermind: Fog of War — กลับหน้าโต๊ะ เหลือ Pile 3 เท่านั้น
     socket.on('fog_of_war', (_data: any) => {
@@ -890,6 +894,7 @@ const GameTableLive: React.FC = () => {
       timerRef.current = setInterval(() => {
         const next = Math.max(0, timerValRef.current.val - 1)
         timerValRef.current = { ...timerValRef.current, val: next }
+        if (next === 3) playCountdownWarning() // เตือนครั้งเดียวตอนข้าม 3 วิ (arrangement รอบ 2)
         if (next <= 0) {
           clearInterval(timerRef.current)
           setPiles(cur => {
@@ -1086,6 +1091,15 @@ const GameTableLive: React.FC = () => {
 
       // Coin Flying VFX — Pile3 (Grand Finale) รู้ผลแยกจาก Pile1/2 (winnerId ว่างได้ถ้า all-foul)
       if (data.winnerId) flyingCoinsRef.current?.fire('pile3', SEAT_TARGETS.center, seatTargetFor(data.winnerId))
+
+      // SFX: Triple Sweep Jackpot (ผู้เล่นคนใดก็ได้ ไม่ใช่แค่ local — ใช้คู่กับ isLocalTripleSweep เดิมที่
+      // อยู่ใน useEffect ของ pileWinners) ใช้ data.jackpotWinner ที่ server คำนวณไว้แล้วตรงๆ แทนการ derive
+      // จาก pileWinners[3] ฝั่ง client เพราะ Tier นี้ไม่เคย setPileWinners(3) เลย (Pile 3 มาจาก Grand Finale
+      // event นี้ ไม่ใช่ pile_reveal เหมือน Pile 1/2) — data.jackpotWinner คือ "whatever winner data is
+      // already available" ที่ตรงตามเงื่อนไขสุดพอดีอยู่แล้ว (null ถ้าไม่ sweep)
+      if (data.jackpotWinner) playJackpotFanfare()
+      // SFX: Boss ชนะกอง 3 (Grand Finale) — เว้นกรณี burned (ทุกคน fold/foul = ไม่มีผู้ชนะจริง)
+      if (!data.burned && data.winnerId && data.winnerId === aiListRef.current[0]?.id) playBossPileWinThunder()
     })
     socket.on('grand_finale_all_foul', (_data: any) => {
       offerBark({ speaker: aiListRef.current[0]?.name ?? 'Jester', event: 'FOUL' })
@@ -1291,6 +1305,8 @@ const GameTableLive: React.FC = () => {
   // ── Card swap
   const handleCardPress = useCallback((pi: number, ci: number) => {
     if (isReady || (phase !== 'arrangement' && phase !== 'arrangement_2')) return
+    // SFX: ทุกครั้งที่แตะไพ่สำเร็จระหว่างจัดไพ่ (เลือก/สลับ) — handler เดียวใช้ร่วมทั้ง arrangement และ arrangement_2
+    playCardArrange()
     if (!selected) { setSelected({ pi, ci }); return }
     if (selected.pi === pi && selected.ci === ci) { setSelected(null); return }
     const np = piles.map(p => [...p]) as [CardData[], CardData[], CardData[]]
@@ -1403,6 +1419,7 @@ const GameTableLive: React.FC = () => {
   const handleAuctionBid = (cardIndex: 0 | 1, level: number) => {
     if (auctionMyBid) return
     setAuctionMyBid({ cardIndex, level })
+    playAuctionBidTick() // SFX: ยืนยันการส่งบิด Blind Auction จริง
     socketRef.current?.emit('auction_bid', { roomId: ROOM_ID, playerId: PLAYER_ID, cardIndex, level })
   }
 

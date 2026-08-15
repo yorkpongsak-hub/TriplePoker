@@ -184,7 +184,7 @@ export default function Top10Screen() {
 
         {/* ═══════════════ HEADER ═══════════════ */}
         <View style={s.headerRow}>
-          <TouchableOpacity onPress={() => router.back()} style={s.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          <TouchableOpacity onPress={() => router.replace('/lobby')} style={s.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <Text style={s.backTxt}>‹ Back</Text>
           </TouchableOpacity>
           <View style={{ flex: 1, alignItems: 'center' }}>

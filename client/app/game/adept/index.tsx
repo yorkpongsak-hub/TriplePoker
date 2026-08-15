@@ -41,6 +41,7 @@ import type { TierInfoLabel } from '../../../src/config/tierInfoData'
 import TokenFlowPanel, { PANEL_WIDTH, PANEL_RIGHT } from '../../../src/components/game/TokenFlowPanel'
 import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/game/FlyingCoins'
 import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
+import { playCountdownWarning, playCardArrange, playJackpotFanfare, playBossPileWinThunder } from '../../../src/services/gameSfxService'
 
 // ตำแหน่งที่นั่งเดียวกับ targets ใน startDealAnimation (Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย)
 const SEAT_TARGETS = {
@@ -73,7 +74,7 @@ const DEV_FAKE_USER_ID = __DEV__ ? process.env.EXPO_PUBLIC_DEV_FAKE_USER_ID : un
 interface CardData { id: string; key: string }
 // Patch (2026-07-17): ใช้แทนที่นั่งคู่แข่งทั้งหมดแล้ว ไม่ใช่แค่ AI (id เป็น userId จริงถ้า Human,
 // emoji เป็น avatarUrl ของ Human ถ้ามี — ดู round_start handler ที่ map จาก data.seats)
-interface AIInfo   { id: string; name: string; emoji: string; avatarUrl?: string; isVip?: boolean }
+interface AIInfo   { id: string; name: string; emoji: string; avatarUrl?: string; isVip?: boolean; isHuman?: boolean }
 
 // =================================================================
 // TIMER DISPLAY — แยก component ไม่ให้ main re-render
@@ -456,6 +457,9 @@ const GameTableLive: React.FC = () => {
   const triggerJackpot = (winnerId: string) => {
     if (jackpotTimeoutRef.current) clearTimeout(jackpotTimeoutRef.current)
     setJackpotWinner(winnerId)
+    // SFX: เล่นก่อน early-return ของ PLAYER_ID ด้านล่าง เพราะ Triple Sweep ต้องมีเสียงไม่ว่าใครชนะ
+    // (ผู้เล่นเองใช้ LegendaryCardVFX แยก ไม่ใช่ jackpotPulse/confetti ด้านล่างนี้)
+    playJackpotFanfare()
 
     if (winnerId === PLAYER_ID) return
 
@@ -600,7 +604,7 @@ const GameTableLive: React.FC = () => {
       // ทั้งไฟล์) แต่ตอนนี้หมายถึง "คู่แข่งทั้งหมด" ไม่ใช่แค่ AI แล้ว
       const opponents: AIInfo[] = (data.seats ?? [])
         .filter((seat: any) => seat.userId !== PLAYER_ID)
-        .map((seat: any) => ({ id: seat.userId, name: seat.displayName, emoji: seat.avatarUrl || seat.emoji || '👤', avatarUrl: seat.avatarUrl, isVip: seat.isVip }))
+        .map((seat: any) => ({ id: seat.userId, name: seat.displayName, emoji: seat.avatarUrl || seat.emoji || '👤', avatarUrl: seat.avatarUrl, isVip: seat.isVip, isHuman: seat.isHuman }))
       setAiList(opponents)
       aiListRef.current = opponents
 
@@ -643,6 +647,8 @@ const GameTableLive: React.FC = () => {
       timerRef.current = setInterval(() => {
         const next = Math.max(0, timerValRef.current.val - 1)
         timerValRef.current = { ...timerValRef.current, val: next }
+        // SFX: เตือนครั้งเดียวตอนตัวนับข้าม 3 วิ (fresh setInterval ทุกรอบใหม่ เลยไม่ต้องกัน re-fire ข้ามรอบ)
+        if (next === 3) playCountdownWarning()
         if (next <= 0) {
           clearInterval(timerRef.current)
           // TODO (backlog, 2026-07-24): Adept multiplayer arrangement round 1 has no server-side
@@ -723,6 +729,15 @@ const GameTableLive: React.FC = () => {
       ;([1, 2, 3] as const).forEach(pNum => {
         const winnerId = newWinners[pNum]
         if (winnerId) flyingCoinsRef.current?.fire(pileCoinVariant[pNum], SEAT_TARGETS.center, seatTargetFor(winnerId))
+      })
+
+      // SFX: ฟ้าร้องเฉพาะกองที่ AI ชนะ (ไม่ใช่ Human คนไหนเลย รวมผู้เล่นเอง) — Adept เป็น 2H+2AI จริง
+      // เช็คจาก isHuman ที่ map มาจาก data.seats ตอน round_start (server ส่ง state.seatOrder มาให้อยู่แล้ว)
+      ;([1, 2, 3] as const).forEach(pNum => {
+        const winnerId = newWinners[pNum]
+        if (winnerId && aiListRef.current.some(o => o.id === winnerId && o.isHuman === false)) {
+          playBossPileWinThunder()
+        }
       })
 
       // Triple Sweep Jackpot — คนเดียวกันชนะครบทั้ง 3 กอง
@@ -904,6 +919,7 @@ const GameTableLive: React.FC = () => {
   // ── Card swap
   const handleCardPress = useCallback((pi: number, ci: number) => {
     if (isReady || phase !== 'arrangement') return
+    playCardArrange()
     if (!selected) { setSelected({ pi, ci }); return }
     if (selected.pi === pi && selected.ci === ci) { setSelected(null); return }
     const np = piles.map(p => [...p]) as [CardData[], CardData[], CardData[]]

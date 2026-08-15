@@ -15,6 +15,7 @@ import { Image } from 'expo-image'
 import { router, useLocalSearchParams } from 'expo-router'
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated'
 import { useAuthStore } from '../../src/store/authStore'
+import { getTierProgress, TierProgress } from '../../src/config/tierConfig'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 const tokenDropGif = require('../../assets/fx/token_drop.gif')
@@ -33,6 +34,9 @@ const C = {
 
 // อันดับ 1-3 ของ Top10 ปัจจุบัน (Tier นี้) ได้ % ตายตัว นอกนั้นสุ่มโชว์เฉยๆ ไม่ใช่ค่าจริง (มติลุงเยาะ)
 const TOP3_PERCENTILE = [99.29, 99.19, 99.09]
+
+// ความกว้าง track ของแถบ Tier Progress (px) — คงที่ กันภาพเบลอ/animate width เป็น % string ไม่ได้บน Reanimated
+const PROGRESS_BAR_WIDTH = 240
 
 function randomPercentile(): number {
   return Math.round((Math.random() * (98 - 85) + 85) * 100) / 100
@@ -61,29 +65,35 @@ export default function VictoryScreen() {
   const [loaded, setLoaded] = useState(false)
   const [percentile, setPercentile] = useState<number>(0)
   const [xp, setXp] = useState<number>(0)
+  // แถบความก้าวหน้า Tier ถัดไป (มติลุงเยาะ 2026-08-14) — null = ยังไม่รู้ token balance จริง (เช่น
+  // timeout fallback ด้านล่าง) ซ่อนแถบไปเลยดีกว่าโชว์เลขเดา
+  const [tierProgress, setTierProgress] = useState<TierProgress | null>(null)
 
   useEffect(() => {
     let cancelled = false
     let settled = false
-    const finish = (pct: number, xpValue: number) => {
+    const finish = (pct: number, xpValue: number, progress: TierProgress | null) => {
       if (cancelled || settled) return
       settled = true
       setPercentile(pct)
       setXp(xpValue)
+      setTierProgress(progress)
       setLoaded(true)
     }
     // Patch 2026-08-13: ลุงเยาะรายงานว่าหน้านี้ค้างหมุนไม่หยุด — refreshProfile()/fetch ด้านล่างเป็น
     // network call ที่ไม่มี timeout ในตัว ถ้าค้างจริง (ไม่ throw ด้วยซ้ำ) โค้ดเดิมจะไม่มีวันเรียก
     // setLoaded(true) เลย ใส่เพดานเวลา 8 วิ กันไม่ให้หน้าจอค้างตลอดไป — โผล่ด้วยค่า default แทน
-    const timeoutId = setTimeout(() => finish(randomPercentile(), 0), 8000)
+    const timeoutId = setTimeout(() => finish(randomPercentile(), 0, null), 8000)
 
     ;(async () => {
       let pct = randomPercentile()
       let xpValue = 0
+      let progress: TierProgress | null = null
       try {
         await useAuthStore.getState().refreshProfile()
         const profile = useAuthStore.getState().profile
         xpValue = profile?.xp ?? 0
+        progress = getTierProgress(profile?.token_balance ?? 0)
         try {
           const res = await fetch(`${SERVER_URL}/stats/top10?tier=${tier}`)
           const json = await res.json()
@@ -98,7 +108,7 @@ export default function VictoryScreen() {
         console.error('[Victory] profile refresh failed:', err)
       }
       clearTimeout(timeoutId)
-      finish(pct, xpValue)
+      finish(pct, xpValue, progress)
     })()
 
     return () => { cancelled = true; clearTimeout(timeoutId) }
@@ -111,6 +121,8 @@ export default function VictoryScreen() {
   const headlineOpacity = useSharedValue(0)
   const statsOpacity = useSharedValue(0)
   const buttonOpacity = useSharedValue(0)
+  const progressOpacity = useSharedValue(0)
+  const progressFillWidth = useSharedValue(0)
 
   useEffect(() => {
     if (!loaded) return
@@ -119,6 +131,10 @@ export default function VictoryScreen() {
     headlineOpacity.value = withDelay(550, withTiming(1, { duration: 400 }))
     statsOpacity.value = withDelay(850, withTiming(1, { duration: 400 }))
     buttonOpacity.value = withDelay(1250, withTiming(1, { duration: 300 }))
+    if (tierProgress) {
+      progressOpacity.value = withDelay(1550, withTiming(1, { duration: 300 }))
+      progressFillWidth.value = withDelay(1550, withTiming((tierProgress.pct / 100) * PROGRESS_BAR_WIDTH, { duration: 700, easing: Easing.out(Easing.cubic) }))
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded])
 
@@ -127,6 +143,8 @@ export default function VictoryScreen() {
   const headlineStyle = useAnimatedStyle(() => ({ opacity: headlineOpacity.value }))
   const statsStyle = useAnimatedStyle(() => ({ opacity: statsOpacity.value }))
   const buttonStyle = useAnimatedStyle(() => ({ opacity: buttonOpacity.value }))
+  const progressStyle = useAnimatedStyle(() => ({ opacity: progressOpacity.value }))
+  const progressFillStyle = useAnimatedStyle(() => ({ width: progressFillWidth.value }))
 
   const goToWatchAd = () => router.push({ pathname: '/(home)/watch-ad', params: { returnTo: `/(home)/top10?tier=${tier}` } } as any)
 
@@ -170,6 +188,20 @@ export default function VictoryScreen() {
           )}
         </Animated.View>
       </View>
+
+      {tierProgress && (
+        <Animated.View style={[s.progressFooter, progressStyle]}>
+          <View style={s.progressLabelRow}>
+            <Text style={s.progressLabel}>
+              {tierProgress.isMaxTier ? 'GRANDMASTER' : `PROGRESS TO ${tierProgress.nextTierLabel?.toUpperCase()}`}
+            </Text>
+            <Text style={s.progressPct}>{tierProgress.isMaxTier ? 'MAX TIER' : `${tierProgress.pct}%`}</Text>
+          </View>
+          <View style={s.progressTrack}>
+            <Animated.View style={[s.progressFill, progressFillStyle]} />
+          </View>
+        </Animated.View>
+      )}
     </Animated.View>
   )
 }
@@ -225,4 +257,37 @@ const s = StyleSheet.create({
 
   registerButton: { marginTop: 14, paddingVertical: 8, paddingHorizontal: 16 },
   registerButtonText: { color: C.green, fontSize: 12, fontWeight: '700', textAlign: 'center', textDecorationLine: 'underline' },
+
+  // Tier Progress footer — ปักไว้ด้านล่างสุดของจอจริง (sibling ของ s.center ไม่ใช่ลูก) กันหน้าจอเตี้ย/
+  // สูงต่างกันแล้วแถบลอยไปคนละที่กับปุ่ม CONTINUE (มติลุงเยาะ 2026-08-14)
+  progressFooter: {
+    position: 'absolute',
+    bottom: 28,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    paddingHorizontal: 28,
+  },
+  progressLabelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: PROGRESS_BAR_WIDTH,
+    marginBottom: 6,
+  },
+  progressLabel: { color: C.textSec, fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  progressPct: { color: C.gold, fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+  progressTrack: {
+    width: PROGRESS_BAR_WIDTH,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: C.bgPanel,
+    borderWidth: 1,
+    borderColor: C.border,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 3,
+    backgroundColor: C.gold,
+  },
 })

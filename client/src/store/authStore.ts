@@ -35,6 +35,7 @@ interface UserProfile {
   best_hands: Record<string, any> | null   // jsonb — hand ที่ดีที่สุดแยกตาม rank
   tier_unlocked_max: string | null    // Ceiling model — Tier สูงสุดที่เคยปลด (token ลดไม่ล็อคกลับ)
   iap_token_total: number | null      // Token สะสมจาก IAP — ไม่นับเป็นเกณฑ์ปลดล็อค Tier (กัน pay-to-unlock)
+  equipped_badge_key: string | null   // Badge Shop — badge key ที่ equip อยู่ตอนนี้ (NULL = ไม่มี), โชว์หลัง Hero Avatar
 }
 
 interface AuthState {
@@ -121,7 +122,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const { data, error } = await supabase
         .from('users')
-        .select('user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp, last_login, performance_score, ps_season, monarch_victories, tier_unlock_celebrated, beyond_path, streak_count, best_streak_count, streak_shields, streak_7days_badge, streak_claimed_milestone, games_played, games_won, best_hands, tier_unlocked_max, iap_token_total')
+        .select('user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp, last_login, performance_score, ps_season, monarch_victories, tier_unlock_celebrated, beyond_path, streak_count, best_streak_count, streak_shields, streak_7days_badge, streak_claimed_milestone, games_played, games_won, best_hands, tier_unlocked_max, iap_token_total, equipped_badge_key')
         .eq('user_id', user.id)
         .maybeSingle()
       console.log('[authStore] refreshProfile query result:', { data, error, queriedUserId: user.id })

@@ -22,6 +22,7 @@ import { TABLE_SKINS } from '../../../src/config/tableSkins'
 import BossVictoryVFX, { VictoryTier } from '../../../src/components/vfx/BossVictoryVFX'
 import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
 import { isLocalTripleSweep } from '../../../src/components/vfx/vfxPolicy'
+import { playCountdownWarning, playCardArrange, playAuctionBidTick, playJackpotFanfare, playBossPileWinThunder } from '../../../src/services/gameSfxService'
 import { useUserStore } from '../../../src/store/userStore'
 import { autoSort } from '../../../src/utils/autoSort'
 import { getReduceMotion } from '../../../src/utils/reduceMotion'
@@ -782,6 +783,7 @@ const GameTableLive: React.FC = () => {
       timerRef.current = setInterval(() => {
         const next = Math.max(0, timerValRef.current.val - 1)
         timerValRef.current = { ...timerValRef.current, val: next }
+        if (next === 3) playCountdownWarning()
         if (next <= 0) {
           clearInterval(timerRef.current)
           setPiles(cur => {
@@ -853,6 +855,8 @@ const GameTableLive: React.FC = () => {
         if (pile.winner) newWinners[pNum] = pile.winner
         if (pile.winnerHandRank) newHandRanks[pNum] = pile.winnerHandRank
         if (pile.fouled) Object.assign(newFouled, pile.fouled)
+        // Boss (role==='boss' seat, always aiListRef.current[0]) vs Human/other-AI — thunder only for the boss seat.
+        if (pile.winner && pile.winner === aiListRef.current[0]?.id) playBossPileWinThunder()
       })
 
       setAllCards(newAllCards)
@@ -885,6 +889,7 @@ const GameTableLive: React.FC = () => {
         return next
       })
       setPileWinners(prev => ({ ...prev, [pNum]: data.winner }))
+      if (data.winner && data.winner === aiListRef.current[0]?.id) playBossPileWinThunder()
       if (data.winnerHandRank) setHandRanks(prev => ({ ...prev, [pNum]: data.winnerHandRank }))
       setHasFoul(data.fouled ?? {})
       if (data.foulReasons) setFoulReasons(data.foulReasons)
@@ -984,6 +989,7 @@ const GameTableLive: React.FC = () => {
       timerRef.current = setInterval(() => {
         const next = Math.max(0, timerValRef.current.val - 1)
         timerValRef.current = { ...timerValRef.current, val: next }
+        if (next === 3) playCountdownWarning()
         if (next <= 0) {
           clearInterval(timerRef.current)
           setPiles(cur => {
@@ -1054,6 +1060,7 @@ const GameTableLive: React.FC = () => {
           timerRef.current = setInterval(() => {
             const next = Math.max(0, timerValRef.current.val - 1)
             timerValRef.current = { ...timerValRef.current, val: next }
+            if (next === 3) playCountdownWarning()
             if (next <= 0) {
               clearInterval(timerRef.current)
               setPiles(cur => {
@@ -1327,6 +1334,14 @@ const GameTableLive: React.FC = () => {
       // หลัง 5 วิ ไป stage 2 (Round Summary)
       setTimeout(() => setGfResultStage(2), 5000)
 
+      // Pile 3 (Grand Finale) winner becomes known here — thunder only if it's the boss seat.
+      if (data.winnerId && data.winnerId === aiListRef.current[0]?.id) playBossPileWinThunder()
+      // Table-wide Triple Sweep (any player, not just local — isLocalTripleSweep above only covers PLAYER_ID).
+      // Reuse server-authoritative `jackpotWinner` instead of re-deriving from the local `pileWinners` state:
+      // that state's pile-3 slot is never actually populated for this tier (grand_finale_result never calls
+      // setPileWinners), so jackpotWinner is the only complete "swept all 3" signal available at any point.
+      if (data.jackpotWinner) playJackpotFanfare()
+
       // Coin Flying VFX — Pile3 (Grand Finale) รู้ผลแยกจาก Pile1/2 (winnerId ว่างได้ถ้า all-foul)
       if (data.winnerId) flyingCoinsRef.current?.fire('pile3', SEAT_TARGETS.center, seatTargetFor(data.winnerId))
     })
@@ -1492,13 +1507,14 @@ const GameTableLive: React.FC = () => {
   // ── Card swap
   const handleCardPress = useCallback((pi: number, ci: number) => {
     if (isReady || (phase !== 'arrangement' && phase !== 'arrangement_2')) return
-    if (!selected) { setSelected({ pi, ci }); return }
+    if (!selected) { setSelected({ pi, ci }); playCardArrange(); return }
     if (selected.pi === pi && selected.ci === ci) { setSelected(null); return }
     const np = piles.map(p => [...p]) as [CardData[], CardData[], CardData[]]
     const tmp = np[selected.pi][selected.ci]
     np[selected.pi][selected.ci] = np[pi][ci]
     np[pi][ci] = tmp
     setPiles(np); setSelected(null); setSortDone(false)
+    playCardArrange()
   }, [isReady, phase, selected, piles])
 
   const handleAutoSort = () => {
@@ -1574,6 +1590,7 @@ const GameTableLive: React.FC = () => {
     if (auctionMyBid) return
     setAuctionMyBid({ cardIndex, level })
     socketRef.current?.emit('hn_auction_bid', { roomId: ROOM_ID, userId: PLAYER_ID, cardIndex, level })
+    playAuctionBidTick()
   }
 
   // Patch 2026-07-18: หยุด win-pulse/win-opacity loop + confetti recursion ทั้งหมด ก่อน unmount/เริ่มรอบใหม่

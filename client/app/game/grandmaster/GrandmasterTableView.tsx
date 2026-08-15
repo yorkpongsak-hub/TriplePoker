@@ -8,7 +8,12 @@ import { AvatarDisplay } from '../../../src/components/profile/AvatarPicker'
 import ArenaOverlays from './ArenaOverlays'
 import CrownPanel from './CrownPanel'
 import FanHand from './FanHand'
+import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/game/FlyingCoins'
+import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
+import BossVictoryVFX from '../../../src/components/vfx/BossVictoryVFX'
+import { isLocalTripleSweep } from '../../../src/components/vfx/vfxPolicy'
 import { ArenaClientIntent, ArenaClientSnapshot, ArenaSeatView } from '../../../src/game/grandmaster/arenaClientTypes'
+import { playCardArrange, playCountdownWarning, playJackpotFanfare, playBossPileWinThunder } from '../../../src/services/gameSfxService'
 
 const MONARCH_TABLE = require('../../../assets/tables/boss_monarch_skin_table.png')
 
@@ -391,11 +396,31 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
   const [callRevealQueue, setCallRevealQueue] = useState<CallRevealEvent[]>([])
   const previousGFReveals = useRef<Map<number, string[]>>(new Map())
   const seenCallRevealEvents = useRef<Set<string>>(new Set())
+  const flyingCoinsRef = useRef<FlyingCoinsHandle>(null)
+  const firedRevealCoinsRef = useRef<string | null>(null)
+  // เก็บผู้ชนะแต่ละกองต่อเกม (ใช้ seat number แทน playerId — isLocalTripleSweep เทียบ string เฉยๆ
+  // ไม่สนโดเมนของ id ตราบใดที่ทั้งสองฝั่งใช้ระบบเดียวกันสม่ำเสมอ) เช็ค Legendary Triple Sweep
+  const pileWinnerSeatsRef = useRef<Partial<Record<1 | 2 | 3, string>>>({})
+  const [showLegendarySweep, setShowLegendarySweep] = useState(false)
+  // Boss Victory VFX (มติลุงเยาะ 2026-08-14) — โชว์เฉพาะตอนเป็นผู้ชนะโต๊ะจริงเท่านั้น (server เช็ค isLocalWinner
+  // ให้แล้ว, ส่งมาที่ snapshot.result.bossVictory เป็น null ถ้าไม่ใช่/ไม่มี AI boss ที่มีชื่อจริง) key ด้วย matchId
+  // กันยิงซ้ำ (bossVictory คงอยู่ตลอด MATCH_RESULT phase ไม่ใช่ event เกิดครั้งเดียวเหมือน tier อื่น)
+  const [victoryVfx, setVictoryVfx] = useState<{ tier: 'sentinel' | 'god' | 'monarch'; title: string | null } | null>(null)
+  const firedBossVictoryRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    const bossVictory = snapshot.result?.bossVictory
+    if (!bossVictory || firedBossVictoryRef.current === snapshot.matchId) return
+    firedBossVictoryRef.current = snapshot.matchId
+    setVictoryVfx(bossVictory)
+  }, [snapshot.result?.bossVictory, snapshot.matchId])
 
   useEffect(() => {
     previousGFReveals.current.clear()
     seenCallRevealEvents.current.clear()
     setCallRevealQueue([])
+    pileWinnerSeatsRef.current = {}
+    setShowLegendarySweep(false)
   }, [snapshot.gameNumber])
 
   useEffect(() => {
@@ -428,6 +453,46 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
   useEffect(() => {
     if (snapshot.reveal) setCallRevealQueue([])
   }, [snapshot.reveal?.pile, snapshot.reveal?.winnerSeat])
+
+  // Coin Flying VFX ตอน pile resolve (พอร์ตจาก highNoble/index.tsx's pattern — มติลุงเยาะ 2026-08-14)
+  // ยิงจากกึ่งกลางโต๊ะไปหาที่นั่งผู้ชนะจริง ใช้สูตร offset เดียวกับ AuctionAwardAnimation ด้านล่างเป๊ะ
+  // (ตำแหน่งเดียวกับที่ไพ่ auction บินไปตกจริง) กัน key ซ้ำด้วย gameNumber+pile ไม่ให้ยิงซ้ำระหว่าง
+  // re-render ที่ snapshot.reveal ยังเป็น pile เดิม (server คง phase REVEAL_PILE_X ค้างไว้ ~4s)
+  useEffect(() => {
+    const reveal = snapshot.reveal
+    const localSeat = local?.seat
+    if (!reveal || reveal.winnerSeat === null || !localSeat) return
+    const sig = `${snapshot.gameNumber}:${reveal.pile}`
+    if (firedRevealCoinsRef.current === sig) return
+    firedRevealCoinsRef.current = sig
+    const others = ([1, 2, 4] as const).filter(seatNumber => seatNumber !== localSeat)
+    const seatTarget = (seatNumber: 1 | 2 | 3 | 4): Point => {
+      if (seatNumber === 3) return { x: 0, y: -Math.min(210, height * 0.31) }
+      if (seatNumber === localSeat) return { x: 0, y: Math.min(205, height * 0.31) }
+      if (seatNumber === others[0]) return { x: -Math.min(245, width * 0.38), y: 0 }
+      return { x: Math.min(245, width * 0.38), y: 0 }
+    }
+    const variant = ({ 1: 'pile1', 2: 'pile2', 3: 'pile3' } as const)[reveal.pile]
+    flyingCoinsRef.current?.fire(variant, { x: 0, y: 0 }, seatTarget(reveal.winnerSeat))
+
+    // Boss/AI pile-win thunder (มติลุงเยาะ 2026-08-15) — ยิงเมื่อผู้ชนะกองนี้เป็น Boss หรือ AI ตัวใดก็ตาม
+    // (ไม่ใช่ human) ใช้ seat data จริงจาก bySeat แทนการเดาจาก seat number ตายตัว เพราะ FILL seat (1/2/4)
+    // ก็อาจเป็น Nine Sentinels AI ได้เหมือนกัน ไม่ใช่แค่ seat 3 (Boss) เท่านั้น
+    const winnerSeatData = bySeat.get(reveal.winnerSeat)
+    if (winnerSeatData?.isBoss || winnerSeatData?.controller === 'AI') playBossPileWinThunder()
+
+    // Legendary Triple Sweep (มติลุงเยาะ 2026-08-14) — ใช้ isLocalTripleSweep เดิมจาก vfxPolicy.ts
+    // เหมือน mastermind/highNoble ทุกประการ แค่ป้อน seat number แทน playerId (เทียบ string ล้วน
+    // ไม่สนโดเมน id ตราบใดสองฝั่งใช้ระบบเดียวกัน)
+    pileWinnerSeatsRef.current = { ...pileWinnerSeatsRef.current, [reveal.pile]: String(reveal.winnerSeat) }
+    if (isLocalTripleSweep(pileWinnerSeatsRef.current, String(localSeat))) setShowLegendarySweep(true)
+
+    // Jackpot fanfare (มติลุงเยาะ 2026-08-15) — เวอร์ชันทั่วไปของเช็คด้านบน ยิงให้ผู้เล่น "คนไหนก็ได้" ที่กวาด
+    // 3 กอง ไม่ใช่แค่ local (isLocalTripleSweep เช็คเฉพาะ local เท่านั้น) — เพิ่มเป็นเช็คแยกต่างหาก ไม่แก้/ลบ
+    // ของเดิมด้านบน
+    const winners = pileWinnerSeatsRef.current
+    if (winners[1] !== undefined && winners[1] === winners[2] && winners[2] === winners[3]) playJackpotFanfare()
+  }, [snapshot.reveal?.pile, snapshot.reveal?.winnerSeat, snapshot.gameNumber, local?.seat, width, height, bySeat])
 
   const localGFPlayer = snapshot.gfTable?.players.find(player => player.seat === local?.seat)
   const alreadyGFRevealed = localGFPlayer?.revealedCards ?? []
@@ -509,6 +574,24 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot.phase, snapshot.gameNumber])
 
+  // เตือนเสียงครั้งเดียวตอนนับถอยหลังเหลือ 3 วิ (มติลุงเยาะ 2026-08-15) — เฉพาะช่วงที่ local ต้องตัดสินใจ
+  // จริงกับ deadline เท่านั้น (จัดไพ่/Discard ตาตัวเอง/Grand Finale ตาตัวเอง/ประมูลที่ยังไม่ล็อค) ไม่ใช่ทุก phase
+  // ที่มี phaseEndsAt เพราะ phase อัตโนมัติ (DEAL_ANIMATION/RESOLVE_PILE_X/REVEAL_PILE_X ฯลฯ) ก็มี deadline
+  // เหมือนกันแต่ผู้เล่นไม่ได้ตัดสินใจอะไร — key ผูกกับ phase+phaseEndsAt+gameNumber กันยิงซ้ำทุก 250ms tick ที่
+  // seconds ยังเป็น 3 อยู่ และรีเซ็ตเองอัตโนมัติทันทีที่ phase/deadline ใหม่เข้ามา (key เปลี่ยน)
+  const localActionPending = Boolean(arrangingPhase)
+    || (snapshot.phase === 'DISCARD' && !!local?.isCurrentTurn)
+    || !!snapshot.gf?.localTurn
+    || !!(snapshot.auction && !snapshot.auction.locked)
+  const countdownWarningFiredRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!localActionPending || seconds !== 3) return
+    const key = `${snapshot.gameNumber}:${snapshot.phase}:${snapshot.phaseEndsAt}`
+    if (countdownWarningFiredRef.current === key) return
+    countdownWarningFiredRef.current = key
+    playCountdownWarning()
+  }, [seconds, localActionPending, snapshot.gameNumber, snapshot.phase, snapshot.phaseEndsAt])
+
   if (!local) return <View style={styles.fatal}><Text style={styles.fatalText}>LOCAL SEAT NOT FOUND</Text></View>
 
   // ที่นั่ง 3 คือ Boss เสมอ (AI เท่านั้น ไม่มีทาง isLocal) เลยตรึงไว้ 'top' ได้ตายตัว
@@ -518,7 +601,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
 
   const handleArrangeCardPress = (pi: number, ci: number) => {
     if (!piles) return
-    if (!selectedCard) { setSelectedCard({ pi, ci }); return }
+    if (!selectedCard) { setSelectedCard({ pi, ci }); playCardArrange(); return }
     if (selectedCard.pi === pi && selectedCard.ci === ci) { setSelectedCard(null); return }
     const next: [HandCardData[], HandCardData[], HandCardData[]] = [[...piles[0]], [...piles[1]], [...piles[2]]]
     const swap = next[selectedCard.pi][selectedCard.ci]
@@ -526,6 +609,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
     next[pi][ci] = swap
     setPiles(next)
     setSelectedCard(null)
+    playCardArrange()
   }
 
   const confirmArrangement = () => {
@@ -607,7 +691,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
             compact={!seat.isLocal}
             width={seat.isLocal ? Math.min(width * 0.7, 420) : 190}
             disabled={!seat.isLocal}
-            onCardPress={cardId => onIntent({ type: 'SELECT_CARD', cardId })}
+            onCardPress={cardId => { playCardArrange(); onIntent({ type: 'SELECT_CARD', cardId }) }}
           />
         )}
       </View>
@@ -663,6 +747,10 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
             result={{ round: 'FACE_UP', card: 'BLIND', winnerSeat: result.winnerSeat, winnerDisplayName: result.winnerDisplayName }}
             width={width} height={height} localSeat={local.seat} delayMs={index * 2000} hidden
           />)}
+
+          <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { alignItems: 'center', justifyContent: 'center', zIndex: 55 }]}>
+            <FlyingCoins ref={flyingCoinsRef} />
+          </View>
 
           {!isDealAnimation && snapshot.cardZones.stockCount > 0 && (
             <View style={styles.stockZone}>
@@ -768,6 +856,12 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
       </SafeAreaView>
       {!isDealAnimation && <ArenaOverlays snapshot={auctionAwardActive ? { ...snapshot, auction: null } : snapshot} onIntent={onIntent} selectedGFCardIds={selectedGFCardIds} requiredGFSelection={requiredGFSelection} />}
       {callRevealQueue[0] && <CallRevealSpotlight event={callRevealQueue[0]} width={width} />}
+      {victoryVfx && (
+        <BossVictoryVFX tier={victoryVfx.tier} titleOverride={victoryVfx.title ?? undefined} onFinish={() => setVictoryVfx(null)} />
+      )}
+      {showLegendarySweep && !victoryVfx && (
+        <LegendaryCardVFX title="LEGENDARY VICTORY" subtitle="TRIPLE SWEEP" onFinish={() => setShowLegendarySweep(false)} />
+      )}
     </ImageBackground>
   )
 }

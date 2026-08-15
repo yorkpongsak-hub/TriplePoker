@@ -86,6 +86,26 @@ export const SFX_S8_ITEMS: Record<string, SoundSource> = {
 export const SFX_S9_ROYAL_FLUSH: SoundSource = null
 // require('./sfx_s9_royal_flush.mp3')  ← Lazy load
 
+// ── S10–S13: เพิ่มเข้ามา 2026-08-15 — ไม่ตรงกับ category S1-S9 เดิม ยังไม่ได้ wire trigger จริง
+// ในโค้ดเกม (แค่ลง manifest ให้ก่อน) ⚠️ ไฟล์ .wav ปัจจุบันเป็น placeholder สังเคราะห์จาก sine/noise
+// ล้วนๆ (ไม่ใช่เสียงจริงจาก Sound Designer) — ตอนได้ไฟล์จริงมา copy ทับชื่อเดิมได้เลย ไม่ต้องแก้โค้ด
+
+// S10: Countdown Warning Bell (~0.5 วิ) — เตือนครั้งเดียวตอนเหลือเวลาจัดไพ่ 3 วิ (คนละตัวกับ S6 tick_fast
+// ที่ดังต่อเนื่อง — นี่คือกริ่งเตือนครั้งเดียว)
+export const SFX_S10_COUNTDOWN_WARNING: SoundSource = require('./sfx_countdown_warning_bell.wav')
+
+// S11: Card Arrange (~0.12 วิ) — เสียงตอนแตะ/สลับไพ่ระหว่างจัดมือ
+export const SFX_S11_CARD_ARRANGE: SoundSource = require('./sfx_card_arrange.wav')
+
+// S12: Auction Bid Tick (~0.09 วิ) — เสียงตอนเคาะราคาประมูล (Blind Auction)
+export const SFX_S12_AUCTION_BID_TICK: SoundSource = require('./sfx_auction_bid_tick.wav')
+
+// S13a: Jackpot Fanfare (~1.1 วิ) — เสียงตอนเกิด Triple Sweep Jackpot
+export const SFX_S13_JACKPOT_FANFARE: SoundSource = require('./sfx_jackpot_fanfare.wav')
+
+// S13b: Boss Pile Win Thunder (~0.8 วิ) — เสียงฟ้าผ่า/อิมแพ็คตอน Boss ชนะไพ่แต่ละกอง
+export const SFX_S13_BOSS_PILE_WIN_THUNDER: SoundSource = require('./sfx_boss_pile_win_thunder.wav')
+
 // ── Volume Settings (ตาม Sound Design Spec §4)
 export const VOLUME_DEFAULTS = {
   sfx:      0.8,  // SFX ปรับได้ 0–100%
