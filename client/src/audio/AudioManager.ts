@@ -29,6 +29,7 @@ class AudioManager {
   private initialized = false
   private appStateSubscription: { remove(): void } | null = null
   private resumeBgm: AudioEvent | null = null
+  private activationPromise: Promise<void> | null = null
 
   async initialize(): Promise<void> {
     if (this.initialized) return
@@ -36,7 +37,6 @@ class AudioManager {
     this.settings = await loadAudioSettings()
     this.emitSettings()
     try {
-      await setIsAudioActiveAsync(true)
       await setAudioModeAsync({
         playsInSilentMode: false,
         interruptionMode: 'mixWithOthers',
@@ -44,6 +44,7 @@ class AudioManager {
         shouldPlayInBackground: false,
         shouldRouteThroughEarpiece: false,
       })
+      await this.ensureAudioSessionActive()
     } catch (error) { this.warn('Could not configure audio focus', error) }
     this.appStateSubscription = AppState.addEventListener('change', this.handleAppState)
   }
@@ -76,10 +77,8 @@ class AudioManager {
     if (this.active.has(event)) this.stop(event, 0)
 
     try {
-      // All registry sources are local Metro assets. `downloadFirst` creates a player with a null source and
-      // replaces it asynchronously, so an immediate play() can be lost on Android. Keep the shared session
-      // active as well, otherwise one completed SFX can deactivate audio used by the next SFX/BGM player.
-      void setIsAudioActiveAsync(true).catch(error => this.warn('Could not reactivate audio session', error))
+      // All registry sources are local Metro assets. Keep the shared session active and wait until Android
+      // confirms it is ready before calling play(); otherwise the first sound after an interruption is lost.
       const player = createAudioPlayer(definition.source, {
         downloadFirst: false,
         keepAudioSessionActive: true,
@@ -103,8 +102,16 @@ class AudioManager {
           definition.priority === AudioPriority.CRITICAL ? 20_000 : 10 * 60_000,
         )
       }
-      player.play()
-      if (definition.fadeInMs) this.fadeTo(event, this.effectiveVolume(definition.category, baseVolume), definition.fadeInMs)
+      void this.ensureAudioSessionActive()
+        .then(() => {
+          if (this.active.get(event)?.player !== player) return
+          player.play()
+          if (definition.fadeInMs) this.fadeTo(event, this.effectiveVolume(definition.category, baseVolume), definition.fadeInMs)
+        })
+        .catch(error => {
+          this.warn(`Could not activate audio session for ${event}`, error)
+          this.release(event, player)
+        })
       return true
     } catch (error) {
       this.warn(`Failed to play ${event}`, error)
@@ -122,6 +129,15 @@ class AudioManager {
   }
 
   stopTimer(): void { this.stopCategory(AudioCategory.TIMER, 180) }
+
+  /** Plays the common tap sound unless the pressed control already emitted a semantic sound. */
+  playUiFeedback(): boolean {
+    const now = Date.now()
+    for (const [event, playedAt] of this.lastPlayed) {
+      if (event !== AudioEvent.BUTTON_CONFIRM && now - playedAt < 75) return false
+    }
+    return this.play(AudioEvent.BUTTON_CONFIRM)
+  }
 
   playBGM(event: AudioEvent = AudioEvent.LOBBY_BGM): boolean {
     if (audioRegistry[event]?.category !== AudioCategory.BGM) return false
@@ -196,16 +212,25 @@ class AudioManager {
       this.stopCategory(AudioCategory.BOSS, 150)
       this.stopCategory(AudioCategory.STORY, 150)
       this.stopCategory(AudioCategory.BGM, 150)
-      void setIsAudioActiveAsync(false).catch(error => this.warn('Could not suspend audio session', error))
     } else if (this.resumeBgm) {
       const bgm = this.resumeBgm
       this.resumeBgm = null
-      void setIsAudioActiveAsync(true)
+      void this.ensureAudioSessionActive()
         .then(() => this.playBGM(bgm))
         .catch(error => this.warn('Could not resume audio session', error))
     } else {
-      void setIsAudioActiveAsync(true).catch(error => this.warn('Could not resume audio session', error))
+      void this.ensureAudioSessionActive().catch(error => this.warn('Could not resume audio session', error))
     }
+  }
+
+  private ensureAudioSessionActive(): Promise<void> {
+    if (this.activationPromise) return this.activationPromise
+    const activation = setIsAudioActiveAsync(true)
+    this.activationPromise = activation
+    void activation.finally(() => {
+      if (this.activationPromise === activation) this.activationPromise = null
+    }).catch(() => undefined)
+    return activation
   }
 
   private hasBlockingPriority(priority: AudioPriority): boolean {
