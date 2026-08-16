@@ -1827,12 +1827,14 @@ export default function MonarchScreen() {
                 <Text style={styles.communityLabel}>G1 / G2 / G3</Text>
                 {/* Batch 2 Task 3 — wrapper เรืองแสงรอบมือผู้เล่น (ไม่แตะ PlayerHandView เลย) */}
                 <Reanimated.View style={[monarchHandGlowStyles.wrap, handGlowStyle]}>
-                  <PlayerHandView
-                    piles={piles}
-                    selected={selected}
-                    onCardPress={handleCardPress}
-                    isVip
-                  />
+                  <View style={styles.p1HandScale}>
+                    <PlayerHandView
+                      piles={piles}
+                      selected={selected}
+                      onCardPress={handleCardPress}
+                      isVip
+                    />
+                  </View>
                 </Reanimated.View>
                 {/* Batch 3C-1 Task 2 — ซ่อน Balance ระหว่างเกม (spec §3: "ซ่อน net token จนจบแมตช์")
                     ลบทิ้งจริง (ไม่ใช่ opacity:0) กัน layout เพี้ยนจากช่องว่างที่เหลือ */}
@@ -2642,6 +2644,7 @@ const styles = StyleSheet.create({
     width: '100%', backgroundColor: 'rgba(5,14,10,0.72)', borderColor: 'rgba(201,168,76,0.28)', borderWidth: 1,
     borderRadius: 12, paddingVertical: 6, paddingHorizontal: 8, marginTop: 2, alignItems: 'center',
   },
+  p1HandScale: { width: '100%', marginVertical: 18, alignItems: 'center', transform: [{ scale: 1.2 }] },
   humanIdentityRow: { position: 'absolute', left: 8, top: 6, flexDirection: 'row', alignItems: 'center', gap: 6, zIndex: 5 },
   humanAvatar: { width: 38, height: 38, borderRadius: 19, borderWidth: 1.5, borderColor: '#FFD76A' },
   humanAvatarFallback: { backgroundColor: '#132019', alignItems: 'center', justifyContent: 'center' },

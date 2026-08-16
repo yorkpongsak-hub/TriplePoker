@@ -68,6 +68,7 @@ const tripleSpade = require('../../../assets/images/triple_poker_icon.png')
 
 const CW = 62; const CH = 90; const OVERLAP = -38
 const INITIATE_P1_HAND_SCALE = 1.2
+const INITIATE_SIDE_HAND_RAISE = 36 // P2/P4 side cards are 25×36px
 const SIDE_COL_W = 72
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 // Escrow ผูกกับ user_id จริงใน DB — ห้าม fallback เงียบเป็น literal เด็ดขาด (บั๊กเดิม: 'Human1' ทำ escrow
@@ -1639,7 +1640,7 @@ const GameTableLive: React.FC = () => {
               <View style={{ marginTop: -6, marginBottom: 60 }}>
                 <AvatarBubble emoji={p2AI?.emoji ?? '👤'} size={36} />
               </View>
-              {p2AI && <SideSeat aiId={p2AI.id} offsetX={0} offsetY={1} />}
+              {p2AI && <SideSeat aiId={p2AI.id} offsetX={0} offsetY={-INITIATE_SIDE_HAND_RAISE} />}
             </View>
 
             <View style={s.commWrap}>
@@ -1660,7 +1661,7 @@ const GameTableLive: React.FC = () => {
               <View style={{ marginTop: -6, marginBottom: 60 }}>
                 <AvatarBubble emoji={p4AI?.emoji ?? '👤'} size={36} />
               </View>
-              {p4AI && <SideSeat aiId={p4AI.id} offsetX={0} offsetY={1} />}
+              {p4AI && <SideSeat aiId={p4AI.id} offsetX={0} offsetY={-INITIATE_SIDE_HAND_RAISE} />}
             </View>
           </View>
 

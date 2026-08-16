@@ -122,7 +122,8 @@ function groupPileSize(group: number, ruleset: CenterRuleset): number {
 // Batch 2 (VIP-07/08) — ขยายขนาดไพ่กองกลาง + ไพ่คู่ต่อสู้ตอน BETTING ตามตัวเลขที่ลุงเยาะคำนวณมาแล้ว
 const CENTER_CW = 49, CENTER_CH = 71
 const OPP_CW = 44, OPP_CH = 64
-const OWN_BET_CW = 50, OWN_BET_CH = 72
+// Match the 20% larger P1 hand presentation used by the standard tables.
+const OWN_BET_CW = 60, OWN_BET_CH = 86
 
 // Batch 4 (VIP-09) — พิกัดโดยประมาณสำหรับ Coin Flying VFX เทียบจากจุดกึ่งกลางจอ (x:0,y:0) ตาม pattern
 // เดียวกับ SEAT_TARGETS ของ Mastermind (mastermind/index.tsx) ⚠️ เป็นค่าประมาณจาก layout (remoteSeatPosition
@@ -1060,8 +1061,8 @@ function ArrangementEditor({ hand, arrangement, disabled, centerRuleset, reveale
     setSelected(null)
     onChange(next)
   }
-  const cardWidth = 56
-  const cardHeight = 80
+  const cardWidth = 67
+  const cardHeight = 96
   // Feedback ลุงเยาะ — ไพ่ในกองเดียวกันซ้อนเกยกัน ~20% ของความกว้างไพ่ (step = 80% ของ cardWidth) ส่วนกอง
   // G1 ต้องห่างจากกอง G2 เพิ่มอีกครึ่งใบ (groupGapExtra = cardWidth/2) ที่จุด groupSplitAt ในแถวบนเท่านั้น
   const normalStep = cardWidth * 0.8
