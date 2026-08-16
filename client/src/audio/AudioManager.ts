@@ -1,6 +1,6 @@
 import { AppState, AppStateStatus } from 'react-native'
 import { AudioPlayer, createAudioPlayer, setAudioModeAsync, setIsAudioActiveAsync } from 'expo-audio'
-import { audioRegistry } from './audioRegistry'
+import { audioRegistry, PRELOAD_AUDIO_EVENTS } from './audioRegistry'
 import { AudioCategory, AudioEvent, AudioPlayContext, AudioPriority } from './audioEvents'
 import { AudioSettings, DEFAULT_AUDIO_SETTINGS, clampVolume, loadAudioSettings, saveAudioSettings } from './audioSettings'
 import { BossAudioProfile, bossAudioProfiles } from './bossAudioProfiles'
@@ -17,6 +17,7 @@ type ActiveAudio = {
 type Listener = (settings: AudioSettings) => void
 const PRIVATE_EVENTS = new Set([AudioEvent.PLAYER_TURN, AudioEvent.TIMER_WARNING, AudioEvent.TIMER_CRITICAL, AudioEvent.TIMER_PRESSURE, AudioEvent.TIMER_LONG])
 const RESULT_EVENTS = new Set([AudioEvent.MATCH_WIN, AudioEvent.TRIPLE_SWEEP_CELEBRATION, AudioEvent.TIER_UNLOCK, AudioEvent.RARE_REACTION])
+const CACHED_EVENTS = new Set<AudioEvent>(PRELOAD_AUDIO_EVENTS)
 
 class AudioManager {
   private settings: AudioSettings = DEFAULT_AUDIO_SETTINGS
@@ -30,6 +31,7 @@ class AudioManager {
   private appStateSubscription: { remove(): void } | null = null
   private resumeBgm: AudioEvent | null = null
   private activationPromise: Promise<void> | null = null
+  private cachedPlayers = new Map<AudioEvent, AudioPlayer>()
 
   async initialize(): Promise<void> {
     if (this.initialized) return
@@ -45,6 +47,7 @@ class AudioManager {
         shouldRouteThroughEarpiece: false,
       })
       await this.ensureAudioSessionActive()
+      this.preloadFrequentlyUsedAudio()
     } catch (error) { this.warn('Could not configure audio focus', error) }
     this.appStateSubscription = AppState.addEventListener('change', this.handleAppState)
   }
@@ -53,6 +56,10 @@ class AudioManager {
     this.appStateSubscription?.remove()
     this.appStateSubscription = null
     this.stopAll(true)
+    for (const player of this.cachedPlayers.values()) {
+      try { player.pause(); player.remove() } catch { /* already released */ }
+    }
+    this.cachedPlayers.clear()
     this.initialized = false
   }
 
@@ -79,11 +86,7 @@ class AudioManager {
     try {
       // All registry sources are local Metro assets. Keep the shared session active and wait until Android
       // confirms it is ready before calling play(); otherwise the first sound after an interruption is lost.
-      const player = createAudioPlayer(definition.source, {
-        downloadFirst: false,
-        keepAudioSessionActive: true,
-        updateInterval: 250,
-      })
+      const player = this.getOrCreatePlayer(event)
       player.loop = definition.loop === true
       const baseVolume = definition.volume
       player.volume = definition.fadeInMs ? 0 : this.effectiveVolume(definition.category, baseVolume)
@@ -103,8 +106,10 @@ class AudioManager {
         )
       }
       void this.ensureAudioSessionActive()
-        .then(() => {
-          if (this.active.get(event)?.player !== player) return
+        .then(async () => {
+          if (this.active.get(event) !== entry) return
+          if (CACHED_EVENTS.has(event)) await player.seekTo(0)
+          if (this.active.get(event) !== entry) return
           player.play()
           if (definition.fadeInMs) this.fadeTo(event, this.effectiveVolume(definition.category, baseVolume), definition.fadeInMs)
         })
@@ -233,6 +238,25 @@ class AudioManager {
     return activation
   }
 
+  private getOrCreatePlayer(event: AudioEvent): AudioPlayer {
+    const cached = this.cachedPlayers.get(event)
+    if (cached) return cached
+    const player = createAudioPlayer(audioRegistry[event].source, {
+      downloadFirst: false,
+      keepAudioSessionActive: true,
+      updateInterval: 250,
+    })
+    if (CACHED_EVENTS.has(event)) this.cachedPlayers.set(event, player)
+    return player
+  }
+
+  private preloadFrequentlyUsedAudio(): void {
+    for (const event of CACHED_EVENTS) {
+      try { this.getOrCreatePlayer(event) }
+      catch (error) { this.warn(`Could not preload ${event}`, error) }
+    }
+  }
+
   private hasBlockingPriority(priority: AudioPriority): boolean {
     return [...this.active.values()].some(entry => entry.priority === AudioPriority.CRITICAL && priority < AudioPriority.HIGH)
   }
@@ -283,7 +307,15 @@ class AudioManager {
     this.fadeTimers.delete(event)
     this.active.delete(event)
     if (entry.safetyTimer) clearTimeout(entry.safetyTimer)
-    try { entry.cleanup?.(); player.pause(); player.remove() } catch { /* already released */ }
+    try {
+      entry.cleanup?.()
+      player.pause()
+      if (this.cachedPlayers.get(event) === player) {
+        void player.seekTo(0).catch(error => this.warn(`Could not rewind ${event}`, error))
+      } else {
+        player.remove()
+      }
+    } catch { /* already released */ }
     if (audioRegistry[event].duckBgm !== undefined && ![...this.active.keys()].some(activeEvent => audioRegistry[activeEvent].duckBgm !== undefined)) {
       this.restore(AudioCategory.BGM, 600)
     }

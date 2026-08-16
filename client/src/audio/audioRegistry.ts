@@ -94,4 +94,6 @@ export const audioRegistry: Record<AudioEvent, AudioDefinition> = {
 export const PRELOAD_AUDIO_EVENTS = [
   AudioEvent.CARD_SELECT, AudioEvent.BUTTON_CONFIRM, AudioEvent.CALL,
   AudioEvent.RAISE, AudioEvent.CARD_REVEAL, AudioEvent.PLAYER_TURN,
+  AudioEvent.CARD_MOVE, AudioEvent.AUCTION_BID, AudioEvent.AUTO_SORT,
+  AudioEvent.CARD_SHUFFLE, AudioEvent.READY_CONFIRM, AudioEvent.ANTE,
 ] as const
