@@ -160,33 +160,16 @@ async function resolveBossTurn() {
   await jest.advanceTimersByTimeAsync(10_000) // ครอบ aiThinkMs เต็มช่วง (7000-9999ms)
 }
 
-describe('High Noble Auto Sort fee — server authoritative', () => {
-  test('หัก 750 TOKEN เข้า Fee & Rake และกันการเก็บซ้ำในรอบเดียว', async () => {
+describe('High Noble Auto Sort — disabled server-side', () => {
+  test('ปฏิเสธคำขอและไม่หัก TOKEN แม้ client เก่าจะยิง socket มาเอง', async () => {
     const { roomId, userA, io, emitted } = await startMatch()
     const state = getHNMatchState(roomId)!
     const before = state.tokenBalance[userA]
-    const feeBefore = state.buyInAmount * state.seats.length
-      - Object.values(state.tokenBalance).reduce((sum, value) => sum + value, 0)
-      - state.flowPot.reduce((sum, value) => sum + value, 0)
 
-    expect(requestHNAutoSort(io, roomId, userA)).toEqual({ ok: true })
-    expect(state.tokenBalance[userA]).toBe(before - 750)
-    expect(state.autoSortUsed[userA]).toBe(true)
-    expect(requestHNAutoSort(io, roomId, userA)).toEqual({ ok: false, reason: 'ALREADY_USED' })
-
-    const flowEvents = emitted.filter(e => e.event === 'token_flow_update')
-    const flow = flowEvents[flowEvents.length - 1]?.data
-    expect(flow?.feeRake).toBe(feeBefore + 750)
-  })
-
-  test('ปฏิเสธเมื่อ TOKEN ไม่พอโดยไม่เปลี่ยนยอด', async () => {
-    const { roomId, userA, io } = await startMatch()
-    const state = getHNMatchState(roomId)!
-    state.tokenBalance[userA] = 749
-
-    expect(requestHNAutoSort(io, roomId, userA)).toEqual({ ok: false, reason: 'INSUFFICIENT_TOKENS' })
-    expect(state.tokenBalance[userA]).toBe(749)
+    expect(requestHNAutoSort(io, roomId, userA)).toEqual({ ok: false, reason: 'AUTO_SORT_DISABLED' })
+    expect(state.tokenBalance[userA]).toBe(before)
     expect(state.autoSortUsed[userA]).toBeUndefined()
+    expect(emitted.filter(e => e.event === 'token_flow_update')).toHaveLength(0)
   })
 })
 

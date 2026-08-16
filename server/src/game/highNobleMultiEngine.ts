@@ -37,7 +37,6 @@ import { getAscendantStatus } from './crownVaultService'
 import { economyService } from '../economy/economyService'
 import { resolveNpcPoolKey, type ResolveNpcPoolContext } from '../economy/npcPoolResolver'
 import type { AccountRef } from '../economy/economyTypes'
-import { chargeAutoSortFee } from './tokenFlow'
 
 // ── Local copies of small pure helpers (ตั้งใจ duplicate จาก gameLoop.ts แทนการ import
 //    เพื่อไม่ให้ engine ใหม่นี้ผูกกับการแก้ไขไฟล์เดิมในอนาคต — ของเดิมพิสูจน์แล้วว่าถูกต้อง) ──
@@ -688,34 +687,11 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
   ;(state as any)._arrangementTimeoutId = timeoutId
 }
 
-/**
- * High Noble Auto Sort purchase. The client may request sorting, but only this
- * server path decides whether the request is valid and moves TOKEN into rake.
- */
+/** High Noble is manual-arrangement only. Kept as a hard server guard for old clients. */
 export function requestHNAutoSort(
-  io: Server, roomId: string, userId: string,
+  _io: Server, _roomId: string, _userId: string,
 ): { ok: boolean; reason?: string } {
-  const state = hnMatchStates.get(roomId)
-  if (!state) return { ok: false, reason: 'NO_MATCH' }
-  if (state.phase !== 'arrangement' && state.phase !== 'arrangement_2') {
-    return { ok: false, reason: 'WRONG_PHASE' }
-  }
-  if (!humanSeats(state).some(seat => seat.id === userId)) {
-    return { ok: false, reason: 'NOT_IN_MATCH' }
-  }
-  if (state.autoSortUsed[userId]) return { ok: false, reason: 'ALREADY_USED' }
-
-  const fee = getAutoSortFee('highNoble')
-  const currentFeeRake = state.buyInAmount * state.seats.length
-    - Object.values(state.tokenBalance).reduce((sum, value) => sum + value, 0)
-    - state.flowPot.reduce((sum, value) => sum + value, 0)
-  const charged = chargeAutoSortFee(state.tokenBalance, currentFeeRake, userId, fee)
-  if (!charged.ok) return { ok: false, reason: 'INSUFFICIENT_TOKENS' }
-
-  state.tokenBalance = charged.stacks
-  state.autoSortUsed[userId] = true
-  emitHNTokenFlow(io, state)
-  return { ok: true }
+  return { ok: false, reason: 'AUTO_SORT_DISABLED' }
 }
 
 // ── ตรวจว่า human ทุกคนที่ยังอยู่ในห้อง submit ครบหรือยัง ──

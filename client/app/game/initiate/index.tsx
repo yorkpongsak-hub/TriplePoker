@@ -866,6 +866,7 @@ const GameTableLive: React.FC = () => {
   }, [isReady, phase, selected, piles])
 
   const handleAutoSort = () => {
+    if (roundNumber !== 1 || phase !== 'arrangement') return
     if (!comm.p1[0]) return
     playAutoSortButton() // SFX: กดปุ่ม AUTO SORT
     const sorted = autoSort([...piles[0], ...piles[1], ...piles[2]], {
@@ -1704,15 +1705,17 @@ const GameTableLive: React.FC = () => {
 
           {/* ACTION BAR */}
           {phase !== 'dealing' && phase !== 'showdown' && phase !== 'result' && <View style={s.actionBar}>
-            <ActionButton
-              icon="auto_sort"
-              label={sortDone ? 'Sorted ✓' : 'Auto Sort'}
-              variant={sortDone ? 'disabled' : 'normal'}
-              disabled={sortDone || phase !== 'arrangement'}
-              costBadge="FREE"
-              onPress={handleAutoSort}
-              style={s.actionBtnSize}
-            />
+            {roundNumber === 1 && (
+              <ActionButton
+                icon="auto_sort"
+                label={sortDone ? 'Sorted ✓' : 'Auto Sort'}
+                variant={sortDone ? 'disabled' : 'normal'}
+                disabled={sortDone || phase !== 'arrangement'}
+                costBadge="TUTORIAL"
+                onPress={handleAutoSort}
+                style={s.actionBtnSize}
+              />
+            )}
             <ActionButton
               icon="ready"
               label="Ready"

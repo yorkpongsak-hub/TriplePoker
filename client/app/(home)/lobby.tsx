@@ -786,7 +786,7 @@ export default function LobbyScreen() {
               <View style={s.tierDetail}>
                 <Text style={s.detailTitle}>HIGH NOBLE — TIER A+</Text>
                 {/* มติลุงเยาะ — ห้ามสปอยล์ชื่อ Monarch ก่อนผู้เล่นได้เจอจริง (card นี้เห็นได้ตั้งแต่ยังไม่ต่อคิวเลย) */}
-                <Text style={s.detailText}>Ante: 250 / 500 / 1,000{`\n`}Players: 3 Humans + Boss AI{`\n`}Boss Encounter: Four Gods / Hidden Boss{`\n`}Auto-Sort Fee: 50%</Text>
+                <Text style={s.detailText}>Ante: 250 / 500 / 1,000{`\n`}Players: 3 Humans + Boss AI{`\n`}Boss Encounter: Four Gods / Hidden Boss{`\n`}Manual arrangement only</Text>
               </View>
               <TouchableOpacity style={s.enterBtn} onPress={() => requireAdGate('high_noble')}>
                 <Text style={s.enterBtnTxt}>ENTER HIGH NOBLE</Text>

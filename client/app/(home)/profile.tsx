@@ -91,6 +91,8 @@ const VIP_INFO: Record<string, { label: string; color: string } | null> = {
   vip_pro: { label: 'VIP PRO', color: C.goldDark },
 }
 
+const FREEMIUM_INFO = { label: 'FREEMIUM', color: C.textSec }
+
 const fmt = (n: number) => n.toLocaleString('en-US')
 
 const formatLastVisited = (value: string | null | undefined) => {
@@ -467,10 +469,26 @@ export default function ProfileScreen() {
                   [{tierLetter}] {tierInfo.label}
                 </Text>
               </View>
-              {vipInfo && (
+              {vipInfo ? (
                 <View style={[s.vipBadge, { borderColor: vipInfo.color, backgroundColor: `${vipInfo.color}22` }]}>
                   <Text style={[s.vipBadgeText, { color: vipInfo.color }]}>{vipInfo.label} ♛</Text>
                 </View>
+              ) : (
+                <TouchableOpacity
+                  accessibilityRole="link"
+                  accessibilityLabel="Freemium membership. Upgrade to VIP"
+                  accessibilityHint="Opens VIP membership plans"
+                  activeOpacity={0.75}
+                  onPress={() => router.push('/(home)/shop')}
+                  style={[
+                    s.vipBadge,
+                    s.freemiumBadge,
+                    { borderColor: FREEMIUM_INFO.color, backgroundColor: `${FREEMIUM_INFO.color}18` },
+                  ]}
+                >
+                  <Text style={[s.vipBadgeText, { color: FREEMIUM_INFO.color }]}>FREEMIUM</Text>
+                  <Text style={s.freemiumUpgrade}>UPGRADE ›</Text>
+                </TouchableOpacity>
               )}
               {isMonarchSlayer && (
                 <View style={[s.vipBadge, { borderColor: C.purple, backgroundColor: `${C.purple}22` }]}>
@@ -784,6 +802,8 @@ const s = StyleSheet.create({
     borderRadius: 6, borderWidth: 1.5,
   },
   vipBadgeText: { fontSize: 9, fontWeight: '900', letterSpacing: 1 },
+  freemiumBadge: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  freemiumUpgrade: { color: C.gold, fontSize: 8, fontWeight: '900', letterSpacing: 0.5 },
   xpLine: { color: C.textSec, fontSize: 11, fontWeight: '800' },
   lastVisited: { color: C.textDim, fontSize: 10, fontWeight: '600', marginTop: 4 },
 

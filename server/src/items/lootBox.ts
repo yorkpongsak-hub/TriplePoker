@@ -31,10 +31,9 @@ export interface DropEntry {
 
 // ตาราง drop rate ของ Mystery Pouch (สุ่ม 2 ชิ้น)
 export const MYSTERY_POUCH_TABLE: DropEntry[] = [
-  { item: 'chrono_shard',    weight: 30 },
-  { item: 'auction_veil',    weight: 30 },
+  { item: 'chrono_shard',    weight: 35 },
+  { item: 'auction_veil',    weight: 35 },
   { item: 'vision',          weight: 25 },
-  { item: 'free_sort',       weight: 10 },
   { item: 'streak_shield',   weight: 5  },
 ]
 

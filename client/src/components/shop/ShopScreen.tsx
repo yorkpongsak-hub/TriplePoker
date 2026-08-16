@@ -161,7 +161,6 @@ const COMPETITIVE_ITEMS: CatalogItem[] = [
   { key: 'vision',           name: "Oracle's Vision",      icon: '👁️', price: 300,  desc: 'Peek at a hidden community card before it reveals.', unlockTier: 'initiate' },
   { key: 'auction_veil',     name: 'Shadow Bid',           icon: '🌑', price: 200,  desc: 'Hide your Blind Auction bid from other players.', unlockTier: 'initiate' },
   { key: 'chrono_shard',     name: 'Chrono Shard',         icon: '⏳', price: 250,  desc: 'Extend your arrangement timer for one round.', unlockTier: 'adept' },
-  { key: 'free_sort',        name: 'Free Sort',            icon: '🃏', price: 0,    desc: 'Waive the Auto Sort fee for one round.', tiered: [15, 40, 80], unlockTier: 'adept' },
   { key: 'alliance_of_fate', name: 'Alliance of Fate',     icon: '🤝', price: 400,  desc: 'Temporarily team up with another player for one pile.', unlockTier: 'adept' },
   { key: 'streak_shield',    name: 'Eternal Streak',       icon: '🔥', price: 350,  desc: 'Protect your win streak from breaking on one loss.', unlockTier: 'mastermind' },
   { key: 'swap',             name: "The Alchemist's Swap", icon: '⚗️', price: 600,  desc: 'Swap one card in your hand for a random new one.', unlockTier: 'mastermind' },
@@ -210,10 +209,9 @@ const LOOT_BOXES: LootBoxDef[] = [
   {
     key: 'mystery_pouch', name: 'Mystery Pouch', icon: '📦', price: 500, itemCount: 2,
     odds: [
-      { itemName: 'Chrono Shard',  percent: 30 },
-      { itemName: 'Shadow Bid',    percent: 30 },
+      { itemName: 'Chrono Shard',  percent: 35 },
+      { itemName: 'Shadow Bid',    percent: 35 },
       { itemName: "Oracle's Vision", percent: 25 },
-      { itemName: 'Free Sort',     percent: 10 },
       { itemName: 'Eternal Streak', percent: 5 },
     ],
   },
@@ -309,11 +307,27 @@ interface VipPlan {
 const VIP_PLANS: VipPlan[] = [
   {
     tier: 'vip', label: 'VIP', priceTHB: 99, price3moTHB: 259, accent: C.silver,
-    benefits: ['No Ads', '+300 Tokens daily', 'All Cosmetics', 'Bag Expansion purchases unlocked', 'VIP Milestone Rewards'],
+    benefits: [
+      'Ad-free play and reward claims',
+      '+300 Tokens automatically each daily login',
+      'Skip ads when claiming Streak Milestone rewards',
+      'VIP avatars and custom profile photo',
+      'Gold Radiance avatar frame',
+      'VIP table skins earned through progression',
+      'Open private PIN-protected tables',
+      'Bag Expansion purchases unlocked',
+    ],
   },
   {
     tier: 'vip_pro', label: 'VIP PRO', priceTHB: 199, price3moTHB: 499, accent: C.gold, ribbon: 'BEST VALUE',
-    benefits: ['Everything in VIP', '+400 Tokens daily', 'All Competitive Items', 'Grand Master (D30)', 'Exclusive Badge & Avatar Frame'],
+    benefits: [
+      'Everything included with VIP',
+      'VIP Plus: exclusive 3–5 human-player tables',
+      'VIP PRO-exclusive avatar collection',
+      'All Competitive Item purchases unlocked by Tier',
+      'Exclusive VIP PRO identity and presentation',
+      'Access to VIP Plus Beyond the Rules beta when enabled',
+    ],
   },
 ]
 

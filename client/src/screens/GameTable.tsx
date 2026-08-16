@@ -12,7 +12,6 @@ import {
   Text, TouchableOpacity, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { autoSort } from '../utils/autoSort';
 import { router } from 'expo-router';
 
 // -- Assets
@@ -183,8 +182,6 @@ const GameTable: React.FC = () => {
   const [piles, setPiles]         = useState<[CardData[], CardData[], CardData[]]>(INIT_PILES);
   const [selected, setSelected]   = useState<{ pi: number; ci: number } | null>(null);
   const [isReady, setIsReady]     = useState(false);
-  // [แก้ #2] Auto Sort state
-  const [sortDone, setSortDone]   = useState(false);
 
 
   const timeLeft   = 45;
@@ -192,7 +189,7 @@ const GameTable: React.FC = () => {
   const timerRatio = timeLeft / timeTotal;
   const tbarColor  = timerRatio <= 0.10 ? '#cc2222' : timerRatio <= 0.30 ? '#c9a84c' : '#3daa4a';
 
-  // -- Card swap: re-enable Auto Sort เมื่อ user swap
+  // -- Card swap
   const handleCardPress = useCallback((pi: number, ci: number) => {
     if (isReady) return;
     if (!selected) {
@@ -205,8 +202,6 @@ const GameTable: React.FC = () => {
       np[pi][ci] = tmp;
       setPiles(np);
       setSelected(null);
-      // re-enable Auto Sort เมื่อไพ่ถูกสลับ
-      setSortDone(false);
     }
   }, [isReady, selected, piles]);
 
@@ -430,26 +425,6 @@ const GameTable: React.FC = () => {
 
           {/* ACTION BAR */}
           <View style={s.actionBar}>
-            {/* [แก้ #2] Auto Sort disable หลังกด */}
-            <TouchableOpacity
-              style={[s.btnSort, sortDone && s.btnSortDone]}
-              disabled={sortDone}
-              onPress={() => {
-                const sorted = autoSort(
-                  [...piles[0], ...piles[1], ...piles[2]],
-                  {
-                    pile1: [COMM[0].k1, COMM[0].k2],
-                    pile2: [COMM[1].k1, COMM[1].k2],
-                    pile3: [COMM[2].k1, COMM[2].k2],
-                  }
-                );
-                setPiles(sorted);
-                setSelected(null);
-                setSortDone(true);
-              }}
-            >
-              <Text style={s.btnSortTxt}>{sortDone ? 'Sorted' : 'Auto Sort'}</Text>
-            </TouchableOpacity>
             <TouchableOpacity
               style={[s.btnReady, isReady && s.btnReadyDone]}
               onPress={() => setIsReady(true)}

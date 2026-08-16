@@ -3208,15 +3208,6 @@ const GameTableLive: React.FC = () => {
           )}
           {phase !== 'dealing' && phase !== 'showdown' && phase !== 'result' && phase !== 'fog_of_war' && phase !== 'grand_finale' && <View style={s.actionBar}>
             <ActionButton
-              icon="auto_sort"
-              label={sortDone ? 'Sorted ✓' : 'Auto Sort'}
-              variant={(sortDone || (!autoSortPaid && (tokenBalance[PLAYER_ID] ?? 0) < autoSortFee)) ? 'disabled' : 'normal'}
-              disabled={sortDone || (phase !== 'arrangement' && phase !== 'arrangement_2') || (!autoSortPaid && (tokenBalance[PLAYER_ID] ?? 0) < autoSortFee)}
-              costBadge={autoSortPaid ? 'PAID' : String(autoSortFee)}
-              onPress={handleAutoSort}
-              style={s.actionBtnSize}
-            />
-            <ActionButton
               icon="ready"
               label="Ready"
               variant={isReady ? 'waiting' : 'normal'}

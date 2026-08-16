@@ -219,6 +219,9 @@ export async function buyCompetitiveItem(
   tableTier: string = 'mastermind'
 ): Promise<PurchaseResult> {
   try {
+    if (itemKey === 'free_sort') {
+      return { success: false, error: 'ITEM_RETIRED' }
+    }
     // VIP check
     await assertVip(userId, 'competitive')
 

@@ -19,7 +19,7 @@ import { getAscendantStatus } from './crownVaultService'
 // Token Flow Panel (Spec v1.1) — ใช้ใน Initiate / Adept / Mastermind (ดู usesTokenFlow())
 // High Noble / Last Boss ยังใช้ calcDeltas() เดิม
 import {
-  collectAntes, settleRound, checkConservation, chargeAutoSortFee,
+  collectAntes, settleRound, checkConservation,
   chargeAuctionBid, chargeGrandFinaleCall, settleMastermindRound,
 } from './tokenFlow'
 import { getRoom } from './roomRegistry'
@@ -2553,89 +2553,11 @@ async function startMultiRound(io: Server, roomId: string): Promise<void> {
   if (allAlreadySubmitted) await resolveMultiShowdown(io, roomId)
 }
 
-/**
- * Auto Sort — หัก fee จาก stack ผู้กดเข้า Fee & Rake แล้ว broadcast ให้ทั้งโต๊ะเห็น Panel ขยับ
- *
- * Server-authoritative เต็มตัว: client ได้แค่ "ขอ" ส่วนการอนุญาต/หักเงิน/กันกดซ้ำ ตัดสินที่นี่ทั้งหมด
- * (ห้ามให้ client เป็นคนบอกว่าตัวเองจ่ายแล้วหรือยัง — `autoSortUsed` เก็บใน state ฝั่ง server)
- *
- * รองรับทั้ง 2 โครงสร้างโต๊ะ: multiplayer (Adept) และ single-player (Mastermind)
- * ค่าธรรมเนียมอ่านจาก config ตาม tier จริงเสมอ ห้าม hardcode
- *
- * มติลุงเยาะ 2026-07-25: ไม่มี free rounds แล้ว เสีย fee ทุกครั้งที่กด — อ่านจาก gameConfig.autoSortFee
- * (getAutoSortFee()) เสมอ ห้าม hardcode ตัวเลขในนี้อีก
- */
+/** Manual Auto Sort is disabled above Initiate. Initiate Round 1 is a local tutorial aid only. */
 export function requestAutoSort(
-  io: Server, roomId: string, userId: string,
+  _io: Server, _roomId: string, _userId: string,
 ): { ok: boolean; reason?: string } {
-  const multi = multiMatchStates.get(roomId)
-  if (multi) {
-    if (multi.phase !== 'arrangement') return { ok: false, reason: 'WRONG_PHASE' }
-    if (!multi.humanPlayerIds.includes(userId)) return { ok: false, reason: 'NOT_IN_MATCH' }
-    if (multi.autoSortUsed[userId]) return { ok: false, reason: 'ALREADY_USED' }
-
-    const fee = getAutoSortFee(multi.tier)
-    const charged = chargeAutoSortFee(multi.tokenBalance, multi.feeRake, userId, fee)
-    if (!charged.ok) return { ok: false, reason: 'INSUFFICIENT_TOKENS' }
-
-    multi.tokenBalance = charged.stacks
-    multi.feeRake = charged.feeRake
-    multi.autoSortUsed[userId] = true
-
-    const playerIds = [...multi.humanPlayerIds, ...multi.aiPlayerIds]
-    checkConservation(
-      multi.tokenBalance, playerIds, multi.pot, multi.feeRake, multi.buyInAmount,
-      `autoSort r${multi.roundNumber}`,
-    )
-
-    io.to(roomId).emit('token_flow_update', {
-      roomId,
-      tokenBalance: multi.tokenBalance,
-      pot: multi.pot,
-      feeRake: multi.feeRake,
-      buyIn: multi.buyInAmount,
-      autoSortBy: userId,
-      charged: charged.charged,
-    })
-    return { ok: true }
-  }
-
-  // ── Single-player (Mastermind) ─────────────────────────────
-  const solo = matchStates.get(roomId)
-  if (!solo) return { ok: false, reason: 'NO_MATCH' }
-
-  const tier = solo.tier
-  if (!usesTokenFlow(tier)) return { ok: false, reason: 'TIER_NOT_SUPPORTED' }
-  // arrangement_2 (จัดไพ่ใหม่หลัง Auction) รับด้วย เผื่อ Tier ที่มี phase นี้ย้ายมาใช้ tokenFlow ทีหลัง
-  // ปัจจุบัน Mastermind ไม่ผ่าน phase นี้ (arrangement_2 เป็นของ High Noble ซึ่ง gate ตัด tier ไปแล้ว)
-  if (solo.phase !== 'arrangement' && solo.phase !== 'arrangement_2') return { ok: false, reason: 'WRONG_PHASE' }
-  if (solo.humanPlayerId !== userId) return { ok: false, reason: 'NOT_IN_MATCH' }
-  if (solo.autoSortUsed) return { ok: false, reason: 'ALREADY_USED' }
-
-  const fee = getAutoSortFee(tier)
-  const charged = chargeAutoSortFee(solo.tokenBalance, solo.feeRake, userId, fee)
-  if (!charged.ok) return { ok: false, reason: 'INSUFFICIENT_TOKENS' }
-
-  solo.tokenBalance = charged.stacks
-  solo.feeRake = charged.feeRake
-  solo.autoSortUsed = true
-
-  const soloPlayerIds = [solo.humanPlayerId, ...AI_CONFIGS.map(a => a.id)]
-  checkConservation(
-    solo.tokenBalance, soloPlayerIds, solo.pot, solo.feeRake, solo.buyInAmount,
-    `autoSort r${solo.roundNumber}`,
-  )
-
-  io.to(roomId).emit('token_flow_update', {
-    roomId,
-    tokenBalance: solo.tokenBalance,
-    pot: solo.pot,
-    feeRake: solo.feeRake,
-    buyIn: solo.buyInAmount,
-    autoSortBy: userId,
-    charged: charged.charged,
-  })
-  return { ok: true }
+  return { ok: false, reason: 'AUTO_SORT_DISABLED' }
 }
 
 export async function submitMultiArrangement(

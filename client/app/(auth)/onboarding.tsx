@@ -478,7 +478,7 @@ function Slide6() {
 
       <View style={[styles.calloutBox, { borderColor: C.red }]}>
         <Text style={styles.calloutText}>
-          Use Auto-Sort when in doubt -- free for your first Tier: Initiate !
+          Auto-Sort is a tutorial aid available only in Round 1 of each Initiate match.
         </Text>
       </View>
     </View>
