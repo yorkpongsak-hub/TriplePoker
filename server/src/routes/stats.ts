@@ -9,6 +9,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { supabaseAdmin } from '../config/supabase'
 import { redis } from '../config/redis'
 import type { MatchWinTier } from '../game/matchWinsService'
+import { selectPlayerTitle } from '../game/playerTitleService'
 
 type BaseLeaderboardType = 'token' | 'ps' | 'winrate' | 'xp' | 'boss_defeats'
 type LeaderboardType = BaseLeaderboardType | 'all_matrix'
@@ -379,7 +380,7 @@ export default async function statsRoutes(fastify: FastifyInstance) {
       const { userId } = request.params
       const { data, error } = await supabaseAdmin
         .from('users')
-        .select('user_id, display_name, avatar_url, tier_unlocked_max, token_balance, performance_score, games_played, games_won')
+        .select('user_id, display_name, avatar_url, tier_unlocked_max, token_balance, performance_score, games_played, games_won, monarch_victories, streak_7days_badge, crown_balance')
         .eq('user_id', userId)
         .single()
 
@@ -390,6 +391,21 @@ export default async function statsRoutes(fastify: FastifyInstance) {
       const gamesPlayed = data.games_played ?? 0
       const gamesWon = data.games_won ?? 0
       const winRate = gamesPlayed > 0 ? Math.round((gamesWon / gamesPlayed) * 1000) / 10 : 0
+      const { data: wins, error: winsError } = await supabaseAdmin
+        .from('match_wins')
+        .select('tier, is_triple_sweep, best_hand, rank_after, tokens_won')
+        .eq('user_id', userId)
+      if (winsError) console.error('[STATS] Player title wins query failed:', winsError)
+      const title = selectPlayerTitle({
+        tierUnlockedMax: data.tier_unlocked_max,
+        monarchVictories: data.monarch_victories ?? 0,
+        streak7DaysBadge: data.streak_7days_badge ?? false,
+        crownBalance: data.crown_balance ?? 0,
+        performanceScore: data.performance_score ?? 0,
+        gamesPlayed,
+        gamesWon,
+        wins: wins ?? [],
+      })
 
       return reply.send({
         success: true,
@@ -403,6 +419,7 @@ export default async function statsRoutes(fastify: FastifyInstance) {
           games_played: gamesPlayed,
           games_won: gamesWon,
           win_rate: winRate,
+          title,
         },
       })
     }

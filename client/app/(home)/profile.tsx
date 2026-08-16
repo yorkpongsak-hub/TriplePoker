@@ -123,6 +123,7 @@ export default function ProfileScreen() {
   const authUser = useAuthStore(s => s.user)
   const session = useAuthStore(s => s.session) // ใช้แนบ Bearer token ตอน POST /profile/celebrate-tier
   const [activeTab, setActiveTab] = useState<TabKey>('stats')
+  const [playerTitle, setPlayerTitle] = useState('New Challenger')
 
   // บันทึกเวลาเข้า Profile ก่อน แล้วจึง refetch เพื่อให้หน้าจอเห็นค่าล่าสุดจากฐานข้อมูล
   useFocusEffect(
@@ -162,6 +163,21 @@ export default function ProfileScreen() {
   // ให้แล้ว) — comment เดิมที่บอกว่าคอลัมน์ไม่มีล้าสมัยไปแล้ว ต่อสายเป็นค่าจริงจาก authStore
   const streakDays  = profile?.streak_count ?? 0
   const hasSevenDayBadge = profile?.streak_7days_badge ?? false
+
+  useEffect(() => {
+    const userId = authUser?.id
+    if (!userId) return
+    let active = true
+    void fetch(`${SERVER_URL}/stats/player/${userId}`)
+      .then(response => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
+      .then(result => {
+        if (active) setPlayerTitle(result?.player?.title?.label ?? 'New Challenger')
+      })
+      .catch(error => {
+        if (__DEV__) console.warn('[Profile] Could not refresh player title', error)
+      })
+    return () => { active = false }
+  }, [authUser?.id, profile?.games_played, profile?.games_won, profile?.performance_score, profile?.tier_unlocked_max])
 
   // Badge Shop — badge ที่ equip อยู่ตอนนี้ (ดู MyBadgesPanel.tsx สำหรับ UI เลือก equip)
   const equippedBadgeKey = profile?.equipped_badge_key ?? null
@@ -439,6 +455,7 @@ export default function ProfileScreen() {
               </Text>
             </View>
             <Text style={s.userName} numberOfLines={1}>{displayName}</Text>
+            <Text style={s.playerTitle}>— {playerTitle} —</Text>
             <View style={s.badgeRow}>
               <View
                 accessibilityElementsHidden
@@ -752,6 +769,7 @@ const s = StyleSheet.create({
   editIcon: { color: C.bg, fontSize: 14, fontWeight: '900' },
   heroInfo: { flex: 1, minWidth: 0, position: 'relative' },
   userName: { color: C.textPrimary, fontSize: 22, fontWeight: '900', letterSpacing: 0.5 },
+  playerTitle: { color: C.purple, fontSize: 11, lineHeight: 16, fontWeight: '800', letterSpacing: 0.8, marginTop: 2 },
   badgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6, marginBottom: 8 },
   tierBadge: {
     paddingHorizontal: 8, paddingVertical: 3,

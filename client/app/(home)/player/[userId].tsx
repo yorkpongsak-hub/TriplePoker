@@ -45,6 +45,7 @@ interface PlayerStats {
   games_played: number
   games_won: number
   win_rate: number
+  title: { key: string; label: string }
 }
 
 // เหมือน RowAvatar ใน stats.tsx — avatar_url มีได้ 3 แบบ (preset key / emoji ดิบ / ค่าที่ไม่รู้จัก)
@@ -124,7 +125,7 @@ export default function PlayerProfileScreen() {
                 <PlayerAvatar avatarUrl={player.avatar_url} />
                 <Text style={s.tierLabel}>{TIER_LABEL[player.tier_unlocked_max ?? 'D'] ?? 'Unranked'}</Text>
                 <Text style={s.displayName}>{player.display_name}</Text>
-                <View style={s.tierPlaceholder} />
+                <Text style={s.playerTitle}>— {player.title?.label ?? 'New Challenger'} —</Text>
               </View>
 
               {/* Plain stat list — layout จริงรอลุงออกแบบทีหลัง */}
@@ -188,7 +189,7 @@ const s = StyleSheet.create({
     letterSpacing: 0.5,
     zIndex: 2,
   },
-  tierPlaceholder: { height: 14 },
+  playerTitle: { height: 14, color: C.purple, fontSize: 11, lineHeight: 14, fontWeight: '800', letterSpacing: 0.7 },
 
   statsCard: { ...glassPanel, padding: 6 },
   statRow: {
