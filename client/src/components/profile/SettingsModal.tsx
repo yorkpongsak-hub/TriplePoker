@@ -5,12 +5,14 @@
 // The Sage Unicorn Studio Co., Ltd.
 
 import React, { useEffect, useState } from 'react'
-import { Image, Modal, ScrollView, View, Text, TouchableOpacity, StyleSheet } from 'react-native'
+import { Image, Modal, ScrollView, View, Text, TouchableOpacity, StyleSheet, Pressable } from 'react-native'
 import { getReduceMotion, setReduceMotion } from '../../utils/reduceMotion'
 import { TABLE_SKINS, TABLE_SKIN_META } from '../../config/tableSkins'
 import { useTableSkins } from '../../hooks/useTableSkins'
 import { useAuthStore } from '../../store/authStore'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { audio, AudioCategory } from '../../audio'
+import { AudioSettings, DEFAULT_AUDIO_SETTINGS } from '../../audio/audioSettings'
 
 const C = {
   bg:      '#0F2418',
@@ -32,6 +34,7 @@ export default function SettingsModal({ visible, onClose }: Props) {
   const [characterDialogue, setCharacterDialogue] = useState(true)
   const [selectingSkin, setSelectingSkin] = useState<number | null>(null)
   const [skinError, setSkinError] = useState<string | null>(null)
+  const [audioSettings, setAudioSettings] = useState<AudioSettings>(DEFAULT_AUDIO_SETTINGS)
   const isVip = useAuthStore(s => (s.profile?.vip_status ?? 'none') !== 'none')
   const { unlockedSkins, activeSkin, loading: skinsLoading, selectSkin } = useTableSkins()
 
@@ -40,7 +43,10 @@ export default function SettingsModal({ visible, onClose }: Props) {
     if (!visible) return
     getReduceMotion().then(setReduceMotionState)
     AsyncStorage.getItem('settings.characterDialogue').then(value => setCharacterDialogue(value !== 'false'))
+    setAudioSettings(audio.getSettings())
   }, [visible])
+
+  useEffect(() => audio.subscribe(setAudioSettings), [])
 
   const handleToggle = () => {
     const next = !reduceMotion
@@ -89,6 +95,21 @@ export default function SettingsModal({ visible, onClose }: Props) {
             </View>
           </TouchableOpacity>
 
+          <View style={styles.audioSection}>
+            <Text style={styles.sectionTitle}>Audio</Text>
+            <TouchableOpacity style={styles.row} onPress={() => audio.setMuted(!audioSettings.muted)} activeOpacity={0.8}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowLabel}>Master Sound</Text>
+                <Text style={styles.rowSub}>{audioSettings.muted ? 'Off' : 'On'}</Text>
+              </View>
+              <View style={[styles.toggleTrack, !audioSettings.muted && styles.toggleTrackOn]}>
+                <View style={[styles.toggleThumb, !audioSettings.muted && styles.toggleThumbOn]} />
+              </View>
+            </TouchableOpacity>
+            <VolumeControl label="Music" value={audioSettings.categories[AudioCategory.BGM]} onChange={value => audio.setCategoryVolume(AudioCategory.BGM, value)} />
+            <VolumeControl label="Sound Effects" value={audioSettings.categories[AudioCategory.GAMEPLAY]} onChange={value => audio.setSfxVolume(value)} />
+          </View>
+
           <View style={styles.skinSection}>
             <Text style={styles.sectionTitle}>Table Skin</Text>
             <Text style={styles.sectionSub}>
@@ -130,6 +151,25 @@ export default function SettingsModal({ visible, onClose }: Props) {
   )
 }
 
+function VolumeControl({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  return (
+    <View style={styles.volumeRow}>
+      <View style={styles.volumeHeader}><Text style={styles.rowLabel}>{label}</Text><Text style={styles.volumeValue}>{Math.round(value * 100)}%</Text></View>
+      <Pressable
+        accessibilityRole="adjustable"
+        accessibilityLabel={`${label} volume`}
+        accessibilityValue={{ min: 0, max: 100, now: Math.round(value * 100) }}
+        accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
+        onAccessibilityAction={event => onChange(Math.max(0, Math.min(1, value + (event.nativeEvent.actionName === 'increment' ? .1 : -.1))))}
+        onPress={event => onChange(Math.max(0, Math.min(1, event.nativeEvent.locationX / 280)))}
+        style={styles.volumeTrack}
+      >
+        <View style={[styles.volumeFill, { width: `${value * 100}%` }]} />
+      </Pressable>
+    </View>
+  )
+}
+
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
@@ -167,6 +207,12 @@ const styles = StyleSheet.create({
   },
   rowLabel: { color: C.text, fontSize: 14, fontWeight: '800' },
   rowSub: { color: C.textSec, fontSize: 11, marginTop: 2 },
+  audioSection: { marginTop: 18, gap: 9 },
+  volumeRow: { backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 14 },
+  volumeHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 9 },
+  volumeValue: { color: C.green, fontSize: 11, fontWeight: '800' },
+  volumeTrack: { height: 14, borderRadius: 7, backgroundColor: C.border, overflow: 'hidden' },
+  volumeFill: { height: '100%', borderRadius: 7, backgroundColor: C.green },
   toggleTrack: {
     width: 46,
     height: 26,

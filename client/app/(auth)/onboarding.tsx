@@ -2,7 +2,6 @@
 // Onboarding Slideshow -- 6 หน้า สอนกติกาเกมให้ผู้เล่นใหม่ก่อนเข้า Lobby ครั้งแรก
 // The Sage Unicorn Studio Co., Ltd.
 //
-import { Video, ResizeMode } from "expo-av";
 // หมายเหตุ: ข้อความทุก slide เป็น copy ที่ lock แล้ว ห้ามแก้คำ -- มีแค่แทนอักขระ
 // em dash / arrow ด้วย ASCII ("--" / "->") ตามกฎห้ามใช้ Unicode พิเศษใน .tsx
 
@@ -14,6 +13,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient'
 import { router } from 'expo-router'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { Image as ExpoImage } from 'expo-image'
 
 // ─── ธีมสีหลัก (Website Theme Spec v1.0) ─── (ใช้ comment ธรรมดา ไม่มี Unicode พิเศษ)
 const C = {
@@ -428,13 +428,11 @@ function Slide5() {
   return (
     <View style={styles.slideBody}>
       <View style={styles.arenaGlowBox}>
-        <Video
-          source={require('../../assets/videos/intro.mp4')}
+        <ExpoImage
+          source={require('../../assets/videos/intro.webp')}
           style={StyleSheet.absoluteFill}
-          resizeMode={ResizeMode.COVER}
-          isLooping={false}
-          shouldPlay={true}
-          isMuted={true}
+          contentFit="cover"
+          autoplay
         />
       </View>
 

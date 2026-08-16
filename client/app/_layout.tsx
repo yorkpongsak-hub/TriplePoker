@@ -10,11 +10,17 @@ import { JetBrainsMono_400Regular, JetBrainsMono_600SemiBold } from '@expo-googl
 import { useAuthStore } from '../src/store/authStore'
 import { useUserStore } from '../src/store/userStore'
 import { PENDING_MATCH_KEY, PendingMatch } from '../src/utils/pendingMatch'
+import { audio } from '../src/audio'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({ Cinzel_400Regular, Cinzel_700Bold, JetBrainsMono_400Regular, JetBrainsMono_600SemiBold })
+
+  useEffect(() => {
+    void audio.initialize()
+    return () => audio.dispose()
+  }, [])
 
   const initAuth = useAuthStore(s => s.initAuth)
   useEffect(() => {

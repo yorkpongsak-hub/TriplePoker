@@ -21,7 +21,7 @@ import { getReduceMotion } from '../../../src/utils/reduceMotion'
 import { clearPendingMatch, markPendingMatch } from '../../../src/utils/pendingMatch'
 import {
   playCardArrange1, playCardArrange2, playCountdownWarning, playJackpotFanfare, playBossPileWinThunder,
-  playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton,
+  playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton, playRevealCountdownTick,
 } from '../../../src/services/gameSfxService'
 import { useAuthStore } from '../../../src/store/authStore'
 // Patch 2026-07-18: resolve avatar preset key → emoji/รูปภาพ (แก้ VIP preset ไม่โชว์ที่โต๊ะ)
@@ -443,7 +443,7 @@ const GameTableLive: React.FC = () => {
     if (jackpotTimeoutRef.current) clearTimeout(jackpotTimeoutRef.current)
     setJackpotVfxComplete(false)
     setJackpotWinner(winnerId)
-    playJackpotFanfare()
+    if (winnerId === PLAYER_ID) playJackpotFanfare()
 
     if (winnerId === PLAYER_ID) return
 
@@ -631,6 +631,7 @@ const GameTableLive: React.FC = () => {
       let c = data.seconds ?? 3
       const tick = () => {
         setCountdown(c)
+        if (c > 0) playRevealCountdownTick()
         Animated.sequence([
           Animated.timing(countAnim, { toValue: 1.6, duration: 150, useNativeDriver: false }),
           Animated.timing(countAnim, { toValue: 1,   duration: 850, useNativeDriver: false }),
@@ -884,6 +885,7 @@ const GameTableLive: React.FC = () => {
 
   const handleDiscardConfirm = () => {
     if (discardSelected.length !== 2) return
+    playReadyButton()
     setShowDiscard(false); setIsReady(true)
     if (timerRef.current) clearInterval(timerRef.current)
     const pile3kept = piles[2].filter((_, i) => !discardSelected.includes(i))
@@ -898,6 +900,7 @@ const GameTableLive: React.FC = () => {
   }
 
   const toggleDiscard = (idx: number) => {
+    playCardArrange1()
     setDiscardSelected(prev => {
       if (prev.includes(idx)) return prev.filter(i => i !== idx)
       if (prev.length >= 2) return prev

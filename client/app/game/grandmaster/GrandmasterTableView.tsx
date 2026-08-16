@@ -504,11 +504,9 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
     pileWinnerSeatsRef.current = { ...pileWinnerSeatsRef.current, [reveal.pile]: String(reveal.winnerSeat) }
     if (isLocalTripleSweep(pileWinnerSeatsRef.current, String(localSeat))) setShowLegendarySweep(true)
 
-    // Jackpot fanfare (มติลุงเยาะ 2026-08-15) — เวอร์ชันทั่วไปของเช็คด้านบน ยิงให้ผู้เล่น "คนไหนก็ได้" ที่กวาด
-    // 3 กอง ไม่ใช่แค่ local (isLocalTripleSweep เช็คเฉพาะ local เท่านั้น) — เพิ่มเป็นเช็คแยกต่างหาก ไม่แก้/ลบ
-    // ของเดิมด้านบน
+    // Congratulations is heard only when the local P1 seat sweeps all three piles.
     const winners = pileWinnerSeatsRef.current
-    if (winners[1] !== undefined && winners[1] === winners[2] && winners[2] === winners[3]) playJackpotFanfare()
+    if (winners[1] === String(localSeat) && winners[2] === String(localSeat) && winners[3] === String(localSeat)) playJackpotFanfare()
   }, [snapshot.reveal?.pile, snapshot.reveal?.winnerSeat, snapshot.gameNumber, local?.seat, width, height, bySeat])
 
   const localGFPlayer = snapshot.gfTable?.players.find(player => player.seat === local?.seat)
@@ -864,7 +862,11 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
                 )) : null}
               </View>
               <Pressable
-                onPress={() => discardTarget && onIntent({ type: 'DISCARD', cardId: discardTarget })}
+                onPress={() => {
+                  if (!discardTarget) return
+                  playReadyButton()
+                  onIntent({ type: 'DISCARD', cardId: discardTarget })
+                }}
                 hitSlop={10}
                 style={({ pressed }) => [styles.primaryAction, pressed && styles.primaryActionPressed]}
               >

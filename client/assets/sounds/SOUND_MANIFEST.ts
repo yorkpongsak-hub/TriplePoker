@@ -94,40 +94,40 @@ export const SFX_S9_ROYAL_FLUSH: SoundSource = null
 
 // S10: Countdown Warning Bell (~0.5 วิ) — เตือนครั้งเดียวตอนเหลือเวลาจัดไพ่ 3 วิ (คนละตัวกับ S6 tick_fast
 // ที่ดังต่อเนื่อง — นี่คือกริ่งเตือนครั้งเดียว) — ยังเป็น placeholder สังเคราะห์ รอไฟล์จริง
-export const SFX_S10_COUNTDOWN_WARNING: SoundSource = require('./sfx_countdown_warning_bell.wav')
+export const SFX_S10_COUNTDOWN_WARNING: SoundSource = require('../audio/commons/sfx_countdown_warning_bell.wav')
 
 // S11: Card Arrange — แยก 2 ไฟล์จริงตามลุงเยาะสั่ง (2026-08-15 รอบ 2): แตะใบแรก (เลือก) ใช้ arrange1,
 // แตะใบที่สอง (สลับสำเร็จ) ใช้ arrange2 — เดิมเป็นไฟล์เดียว sfx_card_arrange.wav (ลบทิ้ง ไม่ใช้แล้ว)
-export const SFX_S11_CARD_ARRANGE_1: SoundSource = require('./sfx_card_arrange1.mp3')
-export const SFX_S11_CARD_ARRANGE_2: SoundSource = require('./sfx_card_arrange2.mp3')
+export const SFX_S11_CARD_ARRANGE_1: SoundSource = require('../audio/commons/sfx_card_arrange1.mp3')
+export const SFX_S11_CARD_ARRANGE_2: SoundSource = require('../audio/commons/sfx_card_arrange2.mp3')
 
 // S12: Auction Bid Tick (~0.09 วิ) — เสียงตอนเคาะราคาประมูล (Blind Auction) — ยังเป็น placeholder สังเคราะห์
-export const SFX_S12_AUCTION_BID_TICK: SoundSource = require('./sfx_auction_bid_tick.wav')
+export const SFX_S12_AUCTION_BID_TICK: SoundSource = require('../audio/commons/sfx_auction_bid_tick.wav')
 
 // S13a: Jackpot Fanfare (~1.1 วิ) — เสียงตอนเกิด Triple Sweep Jackpot — ยังเป็น placeholder สังเคราะห์
-export const SFX_S13_JACKPOT_FANFARE: SoundSource = require('./sfx_jackpot_fanfare.wav')
+export const SFX_S13_JACKPOT_FANFARE: SoundSource = require('../audio/commons/sfx_jackpot_fanfare.wav')
 
 // S13b: Boss Pile Win Thunder (~0.8 วิ) — เสียงฟ้าผ่า/อิมแพ็คตอน Boss ชนะไพ่แต่ละกอง — ไฟล์จริงแล้ว
 // (2026-08-15 รอบ 2 — ชื่อไฟล์ตรงกับ placeholder เดิมเป๊ะ swap .wav → .mp3 ตรงๆ)
-export const SFX_S13_BOSS_PILE_WIN_THUNDER: SoundSource = require('./sfx_boss_pile_win_thunder.mp3')
+export const SFX_S13_BOSS_PILE_WIN_THUNDER: SoundSource = require('../audio/commons/sfx_boss_pile_win_thunder.mp3')
 
 // S14: Card Shuffle (~เสียงสับไพ่) — เล่นครั้งเดียวตอนเริ่ม deal animation ของแต่ละรอบ
-export const SFX_S14_CARD_SHUFFLE: SoundSource = require('./sfx_card_shuffle.mp3')
+export const SFX_S14_CARD_SHUFFLE: SoundSource = require('../audio/commons/sfx_card_shuffle.mp3')
 
 // S15: Card Reveal (~เสียงเปิดไพ่) — เล่นตอนแต่ละกองถูกเปิดเผยผลลัพธ์ (pile 1/2/3 reveal)
-export const SFX_S15_CARD_REVEAL: SoundSource = require('./sfx_card_reveal.mp3')
+export const SFX_S15_CARD_REVEAL: SoundSource = require('../audio/commons/sfx_card_reveal.mp3')
 
 // S16: Poker Chip (~เสียงชิพ) — เล่นตอนชิพ/เหรียญไหลไปหาผู้ชนะกอง (จุดเดียวกับ FlyingCoins VFX)
-export const SFX_S16_POKER_CHIP: SoundSource = require('./sfx_poker_chip.mp3')
+export const SFX_S16_POKER_CHIP: SoundSource = require('../audio/commons/sfx_poker_chip.mp3')
 
 // S17: Ante — เล่นตอนหัก Ante ต้นรอบ
-export const SFX_S17_ANTE: SoundSource = require('./sfx_ante.mp3')
+export const SFX_S17_ANTE: SoundSource = require('../audio/commons/sfx_ante.mp3')
 
 // S18: Auto Sort Button — เล่นตอนกดปุ่ม AUTO SORT
-export const SFX_S18_AUTOSORT_BUTTON: SoundSource = require('./sfx_autosort_button.mp3')
+export const SFX_S18_AUTOSORT_BUTTON: SoundSource = require('../audio/commons/sfx_autosort_button.mp3')
 
 // S19: Ready Button — เล่นตอนกดปุ่ม READY/ยืนยันการจัดไพ่
-export const SFX_S19_READY_BUTTON: SoundSource = require('./sfx_ready_button.mp3')
+export const SFX_S19_READY_BUTTON: SoundSource = require('../audio/commons/sfx_ready_button.mp3')
 
 // ── Volume Settings (ตาม Sound Design Spec §4)
 export const VOLUME_DEFAULTS = {

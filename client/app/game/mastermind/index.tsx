@@ -23,7 +23,7 @@ import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
 import { isLocalTripleSweep } from '../../../src/components/vfx/vfxPolicy'
 import {
   playCountdownWarning, playCardArrange1, playCardArrange2, playAuctionBidTick, playJackpotFanfare, playBossPileWinThunder,
-  playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton,
+  playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton, playRevealCountdownTick,
 } from '../../../src/services/gameSfxService'
 import { useUserStore } from '../../../src/store/userStore'
 import { autoSort } from '../../../src/utils/autoSort'
@@ -745,6 +745,7 @@ const GameTableLive: React.FC = () => {
       let c = data.seconds ?? 3
       const tick = () => {
         setCountdown(c)
+        if (c > 0) playRevealCountdownTick()
         Animated.sequence([
           // Patch 2026-07-18: useNativeDriver false ตาม Adept (adept:520-521) — countdown overlay
           // ค้าง mount ตลอดเวลาแล้ว (ไม่ conditional-mount อีกต่อไป) แต่ยังคง false ไว้กันความเสี่ยง
@@ -1072,12 +1073,12 @@ const GameTableLive: React.FC = () => {
       // Coin Flying VFX — Pile3 (Grand Finale) รู้ผลแยกจาก Pile1/2 (winnerId ว่างได้ถ้า all-foul)
       if (data.winnerId) { flyingCoinsRef.current?.fire('pile3', SEAT_TARGETS.center, seatTargetFor(data.winnerId)); playPokerChip() }
 
-      // SFX: Triple Sweep Jackpot (ผู้เล่นคนใดก็ได้ ไม่ใช่แค่ local — ใช้คู่กับ isLocalTripleSweep เดิมที่
-      // อยู่ใน useEffect ของ pileWinners) ใช้ data.jackpotWinner ที่ server คำนวณไว้แล้วตรงๆ แทนการ derive
+      // SFX: Triple Sweep congratulations is only for local P1. Use the server-authoritative winner
+      // instead of deriving from pileWinners because Pile 3 arrives through Grand Finale.
       // จาก pileWinners[3] ฝั่ง client เพราะ Tier นี้ไม่เคย setPileWinners(3) เลย (Pile 3 มาจาก Grand Finale
       // event นี้ ไม่ใช่ pile_reveal เหมือน Pile 1/2) — data.jackpotWinner คือ "whatever winner data is
       // already available" ที่ตรงตามเงื่อนไขสุดพอดีอยู่แล้ว (null ถ้าไม่ sweep)
-      if (data.jackpotWinner) playJackpotFanfare()
+      if (data.jackpotWinner === PLAYER_ID) playJackpotFanfare()
       // SFX: Boss ชนะกอง 3 (Grand Finale) — เว้นกรณี burned (ทุกคน fold/foul = ไม่มีผู้ชนะจริง)
       if (!data.burned && data.winnerId && data.winnerId === aiListRef.current[0]?.id) playBossPileWinThunder()
     })
@@ -1360,6 +1361,7 @@ const GameTableLive: React.FC = () => {
   const handleDiscardConfirm = () => {
     const maxDiscard = discardHandKeys.length - 3
     if (discardSelected.length !== maxDiscard) return
+    playReadyButton()
     if (discardTimerRef.current) clearInterval(discardTimerRef.current)
     const keepKeys = discardHandKeys.filter((_, i) => !discardSelected.includes(i))
     socketRef.current?.emit('discard_submit', { roomId: ROOM_ID, playerId: PLAYER_ID, keepKeys })
@@ -1370,6 +1372,7 @@ const GameTableLive: React.FC = () => {
 
   // Patch (บั๊กแก้) High Noble: toggle เลือกทิ้งทีละกอง
   const toggleDiscardPile = (pile: 'pile1' | 'pile2' | 'pile3', idx: number) => {
+    playCardArrange1()
     setDiscardSelByPile(cur => {
       const list = cur[pile]
       const next = list.includes(idx) ? list.filter(i => i !== idx) : [...list, idx]
@@ -1381,6 +1384,7 @@ const GameTableLive: React.FC = () => {
     const okP2 = discardSelByPile.pile2.length === discardNeed.pile2
     const okP3 = discardSelByPile.pile3.length === discardNeed.pile3
     if (!okP1 || !okP2 || !okP3) return
+    playReadyButton()
     if (discardTimerRef.current) clearInterval(discardTimerRef.current)
     const keepFrom = (pile: 'pile1' | 'pile2' | 'pile3') =>
       discardPiles[pile].filter((_, i) => !discardSelByPile[pile].includes(i))
@@ -1392,6 +1396,7 @@ const GameTableLive: React.FC = () => {
     setIsHNDiscard(false)
   }
   const toggleDiscard = (idx: number) => {
+    playCardArrange1()
     setDiscardSelected(prev => {
       if (prev.includes(idx)) return prev.filter(i => i !== idx)
       if (prev.length >= 2) return prev

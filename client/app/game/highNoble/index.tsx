@@ -22,7 +22,7 @@ import { TABLE_SKINS } from '../../../src/config/tableSkins'
 import BossVictoryVFX, { VictoryTier } from '../../../src/components/vfx/BossVictoryVFX'
 import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
 import { isLocalTripleSweep } from '../../../src/components/vfx/vfxPolicy'
-import { playCountdownWarning, playCardArrange1, playCardArrange2, playAuctionBidTick, playJackpotFanfare, playBossPileWinThunder, playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton } from '../../../src/services/gameSfxService'
+import { playCountdownWarning, playCardArrange1, playCardArrange2, playAuctionBidTick, playJackpotFanfare, playBossPileWinThunder, playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton, playRevealCountdownTick } from '../../../src/services/gameSfxService'
 import { useUserStore } from '../../../src/store/userStore'
 import { autoSort } from '../../../src/utils/autoSort'
 import { getReduceMotion } from '../../../src/utils/reduceMotion'
@@ -829,6 +829,7 @@ const GameTableLive: React.FC = () => {
       let c = data.seconds ?? 3
       const tick = () => {
         setCountdown(c)
+        if (c > 0) playRevealCountdownTick()
         Animated.sequence([
           // Patch 2026-07-18: useNativeDriver false ตาม Adept (adept:520-521) — countdown overlay
           // ค้าง mount ตลอดเวลาแล้ว (ไม่ conditional-mount อีกต่อไป) แต่ยังคง false ไว้กันความเสี่ยง
@@ -1354,11 +1355,11 @@ const GameTableLive: React.FC = () => {
       playCardReveal()
       // Pile 3 (Grand Finale) winner becomes known here — thunder only if it's the boss seat.
       if (data.winnerId && data.winnerId === aiListRef.current[0]?.id) playBossPileWinThunder()
-      // Table-wide Triple Sweep (any player, not just local — isLocalTripleSweep above only covers PLAYER_ID).
+      // Triple Sweep congratulations is private to local P1; other winners remain visual-only.
       // Reuse server-authoritative `jackpotWinner` instead of re-deriving from the local `pileWinners` state:
       // that state's pile-3 slot is never actually populated for this tier (grand_finale_result never calls
       // setPileWinners), so jackpotWinner is the only complete "swept all 3" signal available at any point.
-      if (data.jackpotWinner) playJackpotFanfare()
+      if (data.jackpotWinner === PLAYER_ID) playJackpotFanfare()
 
       // Coin Flying VFX — Pile3 (Grand Finale) รู้ผลแยกจาก Pile1/2 (winnerId ว่างได้ถ้า all-foul)
       if (data.winnerId) {
@@ -1590,6 +1591,7 @@ const GameTableLive: React.FC = () => {
   const handleDiscardConfirm = () => {
     const maxDiscard = discardHandKeys.length - 3
     if (discardSelected.length !== maxDiscard) return
+    playReadyButton()
     if (discardTimerRef.current) clearInterval(discardTimerRef.current)
     const keepKeys = discardHandKeys.filter((_, i) => !discardSelected.includes(i))
     socketRef.current?.emit('hn_discard_submit', { roomId: ROOM_ID, userId: PLAYER_ID, keepKeys })
@@ -1600,6 +1602,7 @@ const GameTableLive: React.FC = () => {
 
   // Patch (บั๊กแก้) High Noble: toggle เลือกทิ้งทีละกอง
   const toggleDiscardPile = (pile: 'pile1' | 'pile2' | 'pile3', idx: number) => {
+    playCardArrange1()
     setDiscardSelByPile(cur => {
       const list = cur[pile]
       const next = list.includes(idx) ? list.filter(i => i !== idx) : [...list, idx]
@@ -1611,6 +1614,7 @@ const GameTableLive: React.FC = () => {
     const okP2 = discardSelByPile.pile2.length === discardNeed.pile2
     const okP3 = discardSelByPile.pile3.length === discardNeed.pile3
     if (!okP1 || !okP2 || !okP3) return
+    playReadyButton()
     if (discardTimerRef.current) clearInterval(discardTimerRef.current)
     const keepFrom = (pile: 'pile1' | 'pile2' | 'pile3') =>
       discardPiles[pile].filter((_, i) => !discardSelByPile[pile].includes(i))
@@ -1622,6 +1626,7 @@ const GameTableLive: React.FC = () => {
     setIsHNDiscard(false)
   }
   const toggleDiscard = (idx: number) => {
+    playCardArrange1()
     setDiscardSelected(prev => {
       if (prev.includes(idx)) return prev.filter(i => i !== idx)
       if (prev.length >= 2) return prev

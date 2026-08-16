@@ -16,6 +16,7 @@ import { router, useLocalSearchParams } from 'expo-router'
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated'
 import { useAuthStore } from '../../src/store/authStore'
 import { getTierProgress, TierProgress } from '../../src/config/tierConfig'
+import { audio, AudioEvent } from '../../src/audio'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 const tokenDropGif = require('../../assets/fx/token_drop.gif')
@@ -68,6 +69,12 @@ export default function VictoryScreen() {
   // แถบความก้าวหน้า Tier ถัดไป (มติลุงเยาะ 2026-08-14) — null = ยังไม่รู้ token balance จริง (เช่น
   // timeout fallback ด้านล่าง) ซ่อนแถบไปเลยดีกว่าโชว์เลขเดา
   const [tierProgress, setTierProgress] = useState<TierProgress | null>(null)
+
+  // Quiet, screen-scoped victory ambience. Cleanup prevents it leaking into Watch Ad/Top 10.
+  useEffect(() => {
+    audio.playBGM(AudioEvent.PERFECT_VICTORY_BGM)
+    return () => audio.stop(AudioEvent.PERFECT_VICTORY_BGM, 800)
+  }, [])
 
   useEffect(() => {
     let cancelled = false

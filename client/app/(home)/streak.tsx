@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useAuthStore } from '../../src/store/authStore'
 import { StreakBonusVFX } from '../../src/components/vfx/StreakBonusVFX'
+import { audio, AudioEvent } from '../../src/audio'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
@@ -57,6 +58,11 @@ export default function StreakScreen() {
 
   const claimable = getClaimableMilestone(streakCount, claimedMilestone)
 
+  useEffect(() => {
+    audio.playBGM(AudioEvent.PLAY_STREAK_BGM)
+    return () => audio.stop(AudioEvent.PLAY_STREAK_BGM, 600)
+  }, [])
+
   const doClaim = async () => {
     if (!accessToken) { setError('Session expired. Please sign in again.'); return }
     setClaiming(true)
@@ -71,6 +77,7 @@ export default function StreakScreen() {
         setError(json.error === 'NOTHING_TO_CLAIM' ? 'Nothing to claim right now.' : 'Could not claim reward. Please try again.')
         return
       }
+      audio.play(AudioEvent.TOKEN_REWARD)
       setJustClaimed({ milestone: json.milestone, tokensAwarded: json.tokensAwarded })
       setBonusVfx({ amount: json.tokensAwarded })
       await useAuthStore.getState().refreshProfile()

@@ -130,14 +130,14 @@ export default function HallOfFameScreen() {
       <SafeAreaView style={s.safeArea} edges={['top']}>
       <View style={s.root}>
         <View style={s.header}>
-          <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
-            <Text style={s.backText}>‹ Back</Text>
-          </TouchableOpacity>
-          <View style={s.titleWrap}>
-            <Text style={s.title}>ELITES RANKING</Text>
+          <Text style={s.title}>ELITE RANKING</Text>
+          <View style={s.headerRow}>
+            <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
+              <Text style={s.backText}>‹ Back</Text>
+            </TouchableOpacity>
             <Text style={s.subtitle}>THE ALL MATRIX LEGENDS</Text>
+            <View style={s.headerSpacer} />
           </View>
-          <View style={s.headerSpacer} />
         </View>
 
         <ScrollView
@@ -146,7 +146,7 @@ export default function HallOfFameScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={C.gold} colors={[C.gold]} />}
         >
           <View style={s.introCard}>
-            <Text style={s.introTitle}>TOP 10 ASCENDANTS</Text>
+            <Text style={s.introTitle}>TOP 10 ELITES</Text>
             <Text style={s.introText}>Combined ranking from Performance Score, Win Rate, Boss Defeats, Player XP and Token.</Text>
           </View>
 
@@ -170,12 +170,12 @@ const s = StyleSheet.create({
   fill: { flex: 1 },
   safeArea: { flex: 1, backgroundColor: 'transparent' },
   root: { flex: 1 },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12 },
+  header: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
   backBtn: { ...glassPanel, width: 90, paddingVertical: 9, alignItems: 'center' },
   backText: { color: C.gold, fontSize: 15, fontWeight: '800', ...textOnGlass },
-  titleWrap: { flex: 1, alignItems: 'center' },
-  title: { color: C.gold, fontFamily: 'Cinzel_700Bold', fontSize: 24, letterSpacing: 1.2, ...textOnGlass },
-  subtitle: { color: C.silver, fontSize: 12, fontWeight: '800', letterSpacing: 1.1, marginTop: 3 },
+  title: { color: C.gold, fontFamily: 'Cinzel_700Bold', fontSize: 24, letterSpacing: 1.2, textAlign: 'center', ...textOnGlass },
+  subtitle: { flex: 1, color: C.silver, fontSize: 12, fontWeight: '800', letterSpacing: 1.1, textAlign: 'center' },
   headerSpacer: { width: 90 },
   scroll: { paddingHorizontal: 14, paddingBottom: 32, gap: 10 },
   introCard: { ...glassPanelDense, padding: 12, alignItems: 'center', marginBottom: 2 },

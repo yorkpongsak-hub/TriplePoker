@@ -7,7 +7,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react'
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, RefreshControl, ActivityIndicator } from 'react-native'
-import { router } from 'expo-router'
+import { router, useLocalSearchParams } from 'expo-router'
 import { ThemedBackground } from '../../src/components/ui/ThemedBackground'
 import { glassPanel, glassPanelDense, textOnGlass } from '../../src/ui/glassStyles'
 import { useAuthStore } from '../../src/store/authStore'
@@ -53,6 +53,9 @@ const TABS: { key: Top10Tier; label: string }[] = [
   { key: 'mastermind', label: 'A · MASTERMIND' },
   { key: 'highNoble', label: 'A+ · HIGH NOBLE' },
 ]
+
+const isTop10Tier = (value: string | undefined): value is Top10Tier =>
+  TABS.some(tab => tab.key === value)
 
 function formatTokens(value: number): string {
   const sign = value >= 0 ? '+' : ''
@@ -146,10 +149,14 @@ function Row({ entry }: { entry: Top10Entry }) {
 }
 
 export default function Top10Screen() {
+  const params = useLocalSearchParams<{ tier?: string | string[] }>()
+  const requestedTier = Array.isArray(params.tier) ? params.tier[0] : params.tier
   const profile = useAuthStore(s => s.profile)
   const isVip = (profile?.vip_status ?? 'none') !== 'none'
 
-  const [activeTab, setActiveTab] = useState<Top10Tier>('initiate')
+  const [activeTab, setActiveTab] = useState<Top10Tier>(() =>
+    isTop10Tier(requestedTier) ? requestedTier : 'initiate'
+  )
   const [entries, setEntries] = useState<Top10Entry[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -171,6 +178,12 @@ export default function Top10Screen() {
       isRefresh ? setRefreshing(false) : setLoading(false)
     }
   }, [])
+
+  // Victory → Watch Ad ส่ง ?tier= ของโต๊ะที่เพิ่งชนะมาให้ หน้านี้ต้องเลือกแท็บนั้นทันที
+  // เพื่อให้ผู้เล่นเห็นอันดับของตัวเอง ไม่ตกกลับไปแท็บ Initiate ทุกครั้ง
+  useEffect(() => {
+    if (isTop10Tier(requestedTier)) setActiveTab(requestedTier)
+  }, [requestedTier])
 
   useEffect(() => {
     fetchTop10(activeTab)

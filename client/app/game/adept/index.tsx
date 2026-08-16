@@ -43,7 +43,7 @@ import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/g
 import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
 import {
   playCountdownWarning, playCardArrange1, playCardArrange2, playJackpotFanfare, playBossPileWinThunder,
-  playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton,
+  playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton, playRevealCountdownTick,
 } from '../../../src/services/gameSfxService'
 
 // ตำแหน่งที่นั่งเดียวกับ targets ใน startDealAnimation (Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย)
@@ -460,9 +460,8 @@ const GameTableLive: React.FC = () => {
   const triggerJackpot = (winnerId: string) => {
     if (jackpotTimeoutRef.current) clearTimeout(jackpotTimeoutRef.current)
     setJackpotWinner(winnerId)
-    // SFX: เล่นก่อน early-return ของ PLAYER_ID ด้านล่าง เพราะ Triple Sweep ต้องมีเสียงไม่ว่าใครชนะ
-    // (ผู้เล่นเองใช้ LegendaryCardVFX แยก ไม่ใช่ jackpotPulse/confetti ด้านล่างนี้)
-    playJackpotFanfare()
+    // Congratulations is private to P1; other winners keep their visual result without this sound.
+    if (winnerId === PLAYER_ID) playJackpotFanfare()
 
     if (winnerId === PLAYER_ID) return
 
@@ -686,6 +685,7 @@ const GameTableLive: React.FC = () => {
       let c = data.seconds ?? 3
       const tick = () => {
         setCountdown(c)
+        if (c > 0) playRevealCountdownTick()
         Animated.sequence([
           Animated.timing(countAnim, { toValue: 1.6, duration: 150, useNativeDriver: false }),
           Animated.timing(countAnim, { toValue: 1,   duration: 850, useNativeDriver: false }),
@@ -985,6 +985,7 @@ const GameTableLive: React.FC = () => {
 
   const handleDiscardConfirm = () => {
     if (discardSelected.length !== 2) return
+    playReadyButton()
     setShowDiscard(false); setIsReady(true)
     if (timerRef.current) clearInterval(timerRef.current)
     const pile3kept = piles[2].filter((_, i) => !discardSelected.includes(i))
@@ -999,6 +1000,7 @@ const GameTableLive: React.FC = () => {
   }
 
   const toggleDiscard = (idx: number) => {
+    playCardArrange1()
     setDiscardSelected(prev => {
       if (prev.includes(idx)) return prev.filter(i => i !== idx)
       if (prev.length >= 2) return prev
