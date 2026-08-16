@@ -4,8 +4,11 @@
 
 import { router } from 'expo-router'
 import ShopScreen from '../../src/components/shop/ShopScreen'
+import { useBgm } from '../../src/services/bgmService'
+import { AudioEvent } from '../../src/audio'
 
 export default function ShopRoute() {
+  useBgm(AudioEvent.SHOP_BGM)
   // ShopScreen รุ่นใหม่ดึง vip_status/token_balance เองจาก authStore (เหมือน profile.tsx)
   // เพราะ userStore เดิมมีแค่ isVIP boolean เดี่ยว ไม่พอแยก VIP / VIP PRO ตาม canon — ดู Shop rewrite audit
   return <ShopScreen onClose={() => router.back()} />

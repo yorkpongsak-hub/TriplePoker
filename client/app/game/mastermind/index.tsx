@@ -23,7 +23,7 @@ import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
 import { isLocalTripleSweep } from '../../../src/components/vfx/vfxPolicy'
 import {
   playCountdownWarning, playCardArrange1, playCardArrange2, playAuctionBidTick, playJackpotFanfare, playBossPileWinThunder,
-  playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton, playRevealCountdownTick,
+  playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton, playRevealCountdownTick, playMatchWin,
 } from '../../../src/services/gameSfxService'
 import { useUserStore } from '../../../src/store/userStore'
 import { autoSort } from '../../../src/utils/autoSort'
@@ -1121,6 +1121,7 @@ const GameTableLive: React.FC = () => {
         useUserStore.getState().updateTokenBalance(data.newTokenBalance)
       }
       if (data.finalWinner === PLAYER_ID) {
+        playMatchWin()
         // Patch 2026-07-18: VFX ชัยชนะ Sentinel — เด้งทันทีที่ชนะ ทับทุกอย่าง เล่นจบ unmount ตัวเอง
         if (data.sentinelConquered) setVictoryVfx('sentinel')
         // Patch 2026-07-18: หยุด loop/composite ค้างจากรอบก่อน (ถ้ามี) ก่อนเริ่มใหม่เสมอ +

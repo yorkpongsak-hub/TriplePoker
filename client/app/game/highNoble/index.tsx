@@ -22,7 +22,7 @@ import { TABLE_SKINS } from '../../../src/config/tableSkins'
 import BossVictoryVFX, { VictoryTier } from '../../../src/components/vfx/BossVictoryVFX'
 import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
 import { isLocalTripleSweep } from '../../../src/components/vfx/vfxPolicy'
-import { playCountdownWarning, playCardArrange1, playCardArrange2, playAuctionBidTick, playJackpotFanfare, playBossPileWinThunder, playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton, playRevealCountdownTick } from '../../../src/services/gameSfxService'
+import { playCountdownWarning, playCardArrange1, playCardArrange2, playAuctionBidTick, playJackpotFanfare, playBossPileWinThunder, playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton, playRevealCountdownTick, playMatchWin } from '../../../src/services/gameSfxService'
 import { useUserStore } from '../../../src/store/userStore'
 import { autoSort } from '../../../src/utils/autoSort'
 import { getReduceMotion } from '../../../src/utils/reduceMotion'
@@ -1395,6 +1395,7 @@ const GameTableLive: React.FC = () => {
         useUserStore.getState().updateTokenBalance(myNewBalance)
       }
       if (data.finalWinner === PLAYER_ID) {
+        playMatchWin()
         // Batch 1.5 Task 3 (quarantine cleanup, 2026-07-30): เดิมเช็ค bossIntroName==='Monarch' เพื่อ
         // เลือก VFX ระดับตำนาน — เส้นทางนั้นตายแล้วตั้งแต่ Batch 1 (ลบ BOSS_INTRO['Monarch'] ออกไปแล้ว
         // bossIntroName จึงไม่มีทางเป็น 'Monarch' อีกต่อไปในไฟล์นี้ — Monarch มีแค่โต๊ะแยกของตัวเองที่

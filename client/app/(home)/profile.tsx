@@ -11,6 +11,7 @@ import { LinearGradient } from 'expo-linear-gradient'
 import { router, useFocusEffect } from 'expo-router'
 import { useAuthStore } from '../../src/store/authStore'
 import { useBgm } from '../../src/services/bgmService'
+import { AudioEvent } from '../../src/audio'
 import { ActionButton } from '../../src/components/ui/ActionButton'
 import { MenuButton } from '../../src/components/ui/MenuButton'
 import { ThemedBackground } from '../../src/components/ui/ThemedBackground'
@@ -118,7 +119,7 @@ const ASCENDANT_TOKEN_MAX = 999_999
 type TabKey = 'stats' | 'bosses' | 'history' | 'lore'
 
 export default function ProfileScreen() {
-  useBgm() // LobbyMatchmaking_Spec_v1_0 §2 — BGM เล่นต่อเนื่องข้าม Profile/Shop/Lobby/Hall of Fame
+  useBgm(AudioEvent.PROFILE_BGM)
   const signOut = useAuthStore(s => s.signOut)
   const profile = useAuthStore(s => s.profile)
   const refreshProfile = useAuthStore(s => s.refreshProfile)

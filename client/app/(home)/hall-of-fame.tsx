@@ -9,6 +9,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { AvatarDisplay, AvatarConfig, PRESET_AVATARS } from '../../src/components/profile/AvatarPicker'
 import { glassPanel, glassPanelDense, textOnGlass } from '../../src/ui/glassStyles'
 import { useBgm } from '../../src/services/bgmService'
+import { AudioEvent } from '../../src/audio'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
@@ -97,7 +98,7 @@ function HallRow({ entry }: { entry: HallOfFameEntry }) {
 }
 
 export default function HallOfFameScreen() {
-  useBgm()
+  useBgm(AudioEvent.ELITES_BGM)
   const [entries, setEntries] = useState<HallOfFameEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)

@@ -21,7 +21,7 @@ import { getReduceMotion } from '../../../src/utils/reduceMotion'
 import { clearPendingMatch, markPendingMatch } from '../../../src/utils/pendingMatch'
 import {
   playCardArrange1, playCardArrange2, playCountdownWarning, playJackpotFanfare, playBossPileWinThunder,
-  playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton, playRevealCountdownTick,
+  playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton, playRevealCountdownTick, playMatchWin,
 } from '../../../src/services/gameSfxService'
 import { useAuthStore } from '../../../src/store/authStore'
 // Patch 2026-07-18: resolve avatar preset key → emoji/รูปภาพ (แก้ VIP preset ไม่โชว์ที่โต๊ะ)
@@ -67,6 +67,7 @@ const tableImg    = require('../../../assets/images/table_default.png')
 const tripleSpade = require('../../../assets/images/triple_poker_icon.png')
 
 const CW = 62; const CH = 90; const OVERLAP = -38
+const INITIATE_P1_HAND_SCALE = 1.2
 const SIDE_COL_W = 72
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 // Escrow ผูกกับ user_id จริงใน DB — ห้าม fallback เงียบเป็น literal เด็ดขาด (บั๊กเดิม: 'Human1' ทำ escrow
@@ -736,6 +737,7 @@ const GameTableLive: React.FC = () => {
         useUserStore.getState().updateTokenBalance(data.newTokenBalance)
       }
       if (data.finalWinner === PLAYER_ID) {
+        playMatchWin()
         winPulseLoopRef.current = Animated.loop(Animated.sequence([
           Animated.timing(winPulse, { toValue: 1.25, duration: 400, useNativeDriver: false }),
           Animated.timing(winPulse, { toValue: 1,    duration: 400, useNativeDriver: false }),
@@ -1678,7 +1680,7 @@ const GameTableLive: React.FC = () => {
               </View>
             ) : (
               // โซนจัดไพ่ในมือ — PlayerHandView กลาง (Free: overlap แถวตรง / VIP: fan arc)
-              <View style={{ width: '100%', marginTop: 20, alignItems: 'center' }}>
+              <View style={s.initiateP1HandScale}>
                 <PlayerHandView
                   piles={piles}
                   selected={selected}
@@ -1791,6 +1793,16 @@ const s = StyleSheet.create({
   winBadgeTxt: { fontSize: 7, fontWeight: '800' },
 
   userArea:     { paddingHorizontal: 8, paddingTop: 4, paddingBottom: 4, borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,.15)', zIndex: 2, alignItems: 'center' },
+  // Initiate-only tutorial table: make P1's interactive hand 20% larger without changing the
+  // shared PlayerHandView sizing used by every other tier. Extra vertical margin reserves the
+  // transformed height so the enlarged cards do not crowd the action bar.
+  initiateP1HandScale: {
+    width: '100%',
+    marginTop: 29,
+    marginBottom: 18,
+    alignItems: 'center',
+    transform: [{ scale: INITIATE_P1_HAND_SCALE }],
+  },
   userLabels:   { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 3 },
   userPilesRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'flex-start' },
   userCard:     { width: CW, height: CH, borderRadius: 4, backgroundColor: '#fdfaf3', borderWidth: 1, borderColor: 'rgba(201,168,76,.65)', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },

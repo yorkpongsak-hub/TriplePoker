@@ -106,9 +106,7 @@ class AudioManager {
         )
       }
       void this.ensureAudioSessionActive()
-        .then(async () => {
-          if (this.active.get(event) !== entry) return
-          if (CACHED_EVENTS.has(event)) await player.seekTo(0)
+        .then(() => {
           if (this.active.get(event) !== entry) return
           player.play()
           if (definition.fadeInMs) this.fadeTo(event, this.effectiveVolume(definition.category, baseVolume), definition.fadeInMs)
@@ -146,6 +144,20 @@ class AudioManager {
 
   playBGM(event: AudioEvent = AudioEvent.LOBBY_BGM): boolean {
     if (audioRegistry[event]?.category !== AudioCategory.BGM) return false
+    const existing = this.active.get(event)
+    if (existing) {
+      // Rescue a loop whose fade-out is still running instead of restarting the same native player.
+      const fadeTimer = this.fadeTimers.get(event)
+      if (fadeTimer) clearInterval(fadeTimer)
+      this.fadeTimers.delete(event)
+      existing.player.volume = this.effectiveVolume(AudioCategory.BGM, existing.baseVolume)
+      void this.ensureAudioSessionActive()
+        .then(() => {
+          if (this.active.get(event) === existing) existing.player.play()
+        })
+        .catch(error => this.warn(`Could not resume BGM ${event}`, error))
+      return true
+    }
     this.stopCategory(AudioCategory.BGM, 300)
     return this.play(event)
   }
@@ -310,10 +322,15 @@ class AudioManager {
     try {
       entry.cleanup?.()
       player.pause()
-      if (this.cachedPlayers.get(event) === player) {
-        void player.seekTo(0).catch(error => this.warn(`Could not rewind ${event}`, error))
-      } else {
-        player.remove()
+      // Reusing a completed expo-audio player requires an asynchronous seek. On Android, rapid
+      // replay can race that seek (or inherit didJustFinish) and become silent. Retire the native
+      // instance and synchronously preload a fresh player for the next tap instead.
+      const wasCached = this.cachedPlayers.get(event) === player
+      if (wasCached) this.cachedPlayers.delete(event)
+      player.remove()
+      if (wasCached && this.initialized) {
+        try { this.getOrCreatePlayer(event) }
+        catch (error) { this.warn(`Could not refresh cached player for ${event}`, error) }
       }
     } catch { /* already released */ }
     if (audioRegistry[event].duckBgm !== undefined && ![...this.active.keys()].some(activeEvent => audioRegistry[activeEvent].duckBgm !== undefined)) {

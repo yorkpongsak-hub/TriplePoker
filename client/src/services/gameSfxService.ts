@@ -8,6 +8,7 @@ export function playCardArrange1(): void { audio.play(AudioEvent.CARD_SELECT) }
 export function playCardArrange2(): void { audio.play(AudioEvent.CARD_MOVE) }
 export function playAuctionBidTick(): void { audio.play(AudioEvent.AUCTION_BID) }
 export function playJackpotFanfare(): void { audio.play(AudioEvent.TRIPLE_SWEEP_CELEBRATION) }
+export function playMatchWin(): void { audio.play(AudioEvent.MATCH_WIN) }
 // A normal pile reveal must never sound like a Boss entrance.
 export function playBossPileWinThunder(): void { audio.play(AudioEvent.ACTION_COMPLETED) }
 export function playCardShuffle(): void { audio.play(AudioEvent.CARD_SHUFFLE) }

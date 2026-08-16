@@ -43,7 +43,7 @@ import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/g
 import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
 import {
   playCountdownWarning, playCardArrange1, playCardArrange2, playJackpotFanfare, playBossPileWinThunder,
-  playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton, playRevealCountdownTick,
+  playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton, playRevealCountdownTick, playMatchWin,
 } from '../../../src/services/gameSfxService'
 
 // ตำแหน่งที่นั่งเดียวกับ targets ใน startDealAnimation (Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย)
@@ -808,6 +808,7 @@ const GameTableLive: React.FC = () => {
         useUserStore.getState().updateTokenBalance(myNewBalance)
       }
       if (data.finalWinner === PLAYER_ID) {
+        playMatchWin()
         winPulseLoopRef.current = Animated.loop(Animated.sequence([
           Animated.timing(winPulse, { toValue: 1.25, duration: 400, useNativeDriver: false }),
           Animated.timing(winPulse, { toValue: 1,    duration: 400, useNativeDriver: false }),
