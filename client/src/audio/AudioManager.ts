@@ -13,6 +13,8 @@ type ActiveAudio = {
   startedAt: number
   cleanup?: () => void
   safetyTimer?: ReturnType<typeof setTimeout>
+  retryTimer?: ReturnType<typeof setTimeout>
+  recoveryTimer?: ReturnType<typeof setInterval>
 }
 type Listener = (settings: AudioSettings) => void
 const PRIVATE_EVENTS = new Set([AudioEvent.PLAYER_TURN, AudioEvent.TIMER_WARNING, AudioEvent.TIMER_CRITICAL, AudioEvent.TIMER_PRESSURE, AudioEvent.TIMER_LONG])
@@ -98,21 +100,33 @@ class AudioManager {
           if (status.didJustFinish) this.release(event, player)
         })
         entry.cleanup = () => subscription.remove()
-        // Native completion callbacks can be lost during an Android focus interruption. This prevents a
-        // stale CRITICAL entry from suppressing LOW/NORMAL audio for the rest of the app session.
-        entry.safetyTimer = setTimeout(
-          () => this.release(event, player),
-          definition.priority === AudioPriority.CRITICAL ? 20_000 : 10 * 60_000,
-        )
       }
-      void this.ensureAudioSessionActive()
+      void Promise.all([this.ensureAudioSessionActive(), this.waitUntilLoaded(player)])
         .then(() => {
           if (this.active.get(event) !== entry) return
           player.play()
           if (definition.fadeInMs) this.fadeTo(event, this.effectiveVolume(definition.category, baseVolume), definition.fadeInMs)
+          if (!player.loop) {
+            // Android อาจรับ play() แต่ native player ยังไม่เริ่มหลังถูก interrupt
+            // ลองซ้ำครั้งเดียวเฉพาะ entry เดิมที่เวลาเล่นยังอยู่จุดเริ่มต้น
+            entry.retryTimer = setTimeout(() => {
+              if (this.active.get(event) === entry && !player.playing && player.currentTime < 0.02) {
+                try { player.play() } catch (error) { this.warn(`Could not retry ${event}`, error) }
+              }
+            }, 180)
+            this.armOneShotSafetyTimer(entry)
+          } else {
+            // กู้ loop ใน foreground หลังเสีย audio focus ชั่วคราว ซึ่งบางครั้งไม่มี AppState event
+            entry.recoveryTimer = setInterval(() => {
+              if (this.active.get(event) !== entry || AppState.currentState !== 'active' || player.playing || !player.isLoaded) return
+              void this.ensureAudioSessionActive()
+                .then(() => { if (this.active.get(event) === entry && !player.playing) player.play() })
+                .catch(error => this.warn(`Could not recover loop ${event}`, error))
+            }, 2000)
+          }
         })
         .catch(error => {
-          this.warn(`Could not activate audio session for ${event}`, error)
+          this.warn(`Could not prepare audio for ${event}`, error)
           this.release(event, player)
         })
       return true
@@ -224,7 +238,9 @@ class AudioManager {
 
   private handleAppState = (state: AppStateStatus): void => {
     if (state !== 'active') {
-      this.resumeBgm = [...this.active.keys()].find(e => audioRegistry[e].category === AudioCategory.BGM) ?? null
+      // Android อาจส่ง inactive -> background ต่อกัน ต้องเก็บเพลงเดิมไว้แม้ fade จบแล้ว
+      const activeBgm = [...this.active.keys()].find(e => audioRegistry[e].category === AudioCategory.BGM)
+      if (activeBgm) this.resumeBgm = activeBgm
       this.stopCategory(AudioCategory.TIMER)
       this.stopCategory(AudioCategory.BOSS, 150)
       this.stopCategory(AudioCategory.STORY, 150)
@@ -254,12 +270,44 @@ class AudioManager {
     const cached = this.cachedPlayers.get(event)
     if (cached) return cached
     const player = createAudioPlayer(audioRegistry[event].source, {
-      downloadFirst: false,
+      downloadFirst: true,
       keepAudioSessionActive: true,
       updateInterval: 250,
     })
     if (CACHED_EVENTS.has(event)) this.cachedPlayers.set(event, player)
     return player
+  }
+
+  private waitUntilLoaded(player: AudioPlayer, timeoutMs = 5000): Promise<void> {
+    if (player.isLoaded) return Promise.resolve()
+    return new Promise((resolve, reject) => {
+      let settled = false
+      let timeout: ReturnType<typeof setTimeout>
+      let subscription: { remove(): void } | null = null
+      const finish = (error?: Error) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        subscription?.remove()
+        error ? reject(error) : resolve()
+      }
+      subscription = player.addListener('playbackStatusUpdate', status => {
+        if (status.isLoaded) finish()
+      })
+      timeout = setTimeout(() => finish(new Error('Audio load timed out')), timeoutMs)
+      // ปิด race เล็กๆ ระหว่างการตรวจครั้งแรกกับการติด listener
+      if (player.isLoaded) finish()
+    })
+  }
+
+  private armOneShotSafetyTimer(entry: ActiveAudio): void {
+    if (entry.safetyTimer) clearTimeout(entry.safetyTimer)
+    const durationMs = Number.isFinite(entry.player.duration) && entry.player.duration > 0
+      ? entry.player.duration * 1000
+      : 8000
+    // Android อาจไม่ส่ง didJustFinish หลังเสีย audio focus จึงคืน priority/duck ตามความยาวไฟล์จริง
+    const timeoutMs = Math.min(120_000, Math.max(2500, durationMs + 2000))
+    entry.safetyTimer = setTimeout(() => this.release(entry.event, entry.player), timeoutMs)
   }
 
   private preloadFrequentlyUsedAudio(): void {
@@ -319,6 +367,8 @@ class AudioManager {
     this.fadeTimers.delete(event)
     this.active.delete(event)
     if (entry.safetyTimer) clearTimeout(entry.safetyTimer)
+    if (entry.retryTimer) clearTimeout(entry.retryTimer)
+    if (entry.recoveryTimer) clearInterval(entry.recoveryTimer)
     try {
       entry.cleanup?.()
       player.pause()

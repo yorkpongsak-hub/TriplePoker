@@ -88,7 +88,7 @@
 - **Tier structure:** Initiate (2★) → Adept (3★) → Mastermind (4★) → High Noble (5★) → Last Boss (5★+⚡ #FFD76A, แอปแยก)
 - **Blind Auction** ปลดล็อกที่ Mastermind ขึ้นไป
 - **Triple Sweep Jackpot:** ชนะ 3 กอง = Pot ×2, Rake 5% (ยกเลิก Rake 10% แยกแล้ว — 2026-07-17), Penalty หาร 3 (ทุก Tier)
-- **Auto Sort Fee** (มติลุงเยาะ 2026-07-25 — เขียนทับเลขตายตัวชุดเดิมทั้งหมด): คิดเป็น **% ของ Ante กอง 3** ไม่ใช่เลขตายตัว — C ฟรี | B 25% (=35) | A 33% (=165) | A+ 50% (=750) | Last Boss 50% (=1,500 แต่ Arena ห้าม Auto Sort อยู่แล้ว) · ยกเลิกระบบ free rounds ถาวร (`freeRoundsForNewUser` ลบทิ้งแล้ว) เสีย fee ทุกครั้งที่กด · เจตนา: ยิ่ง Tier สูงยิ่งแพง เพื่อกึ่งบังคับให้ผู้เล่นฝึกจัดไพ่เองก่อนขึ้น Arena · **อ่านค่าผ่าน `getAutoSortFee(tier)` ใน `gameConfig.ts` เสมอ ห้าม hardcode ตัวเลขอีก** (ต้นเหตุที่เคยขัดกัน 3 แหล่งคือมันถูก hardcode ไว้หลายที่) · ฝั่ง client รับผ่าน `autoSortFee` ใน payload `round_start` ไม่มีเลขของตัวเอง
+- **Auto Sort (มติล่าสุด 2026-08-16 — เขียนทับกฎ Fee เดิม):** ปิด Auto Sort ทุกโต๊ะและทุกเกม เพราะลดแรงกดดันของเวลาและทำให้เกมไม่สนุก · อนุญาตเฉพาะ **โต๊ะ Initiate เกมแรกของแต่ละแมตช์** เพื่อสอนผู้เล่นใหม่ให้เข้าใจกติกาเท่านั้น · Server เป็น authority ผ่าน `isAutoSortAvailable(tier, gameNumber)`; client ต้องไม่แสดงปุ่มนอกเงื่อนไข และ server ต้องปฏิเสธ request ที่ bypass UI · ห้ามเปิดกลับด้วย fee หรือ hardcode เงื่อนไขแยกในแต่ละ Tier
 - **Monarch spawn rate** (High Noble): Monarch 3% / Reaper 28% / Crag 25% / Cortex 25% / Cipher 19% — adaptive personality ล็อกตอน deal
 - **Nine Sentinels** (Mastermind Conquest): Iron Wall / Chivalry / War Lord / Phantom / Dark Shark / Oracle / Jester / Phoenix / Black Magic — reuse pattern Four Gods, Jester สุ่ม weight 1-10 ใหม่ทุกเกม (pattern เดียวกับ Cipher)
 - **Unlock Tier S:** ผ่าน A+ AND token > 1,000K (ไม่ผูก 9/9 Sentinels)
@@ -110,11 +110,32 @@
 >
 > ⚠️ **Grand Finale ใช้ปุ่ม `CALL` / `FOLD` จริงเท่านั้น** (มติลุงเยาะ 2026-07-25 — ใช้กับทั้ง Mastermind และ High Noble): เลิกใช้ gesture ทั้งหมดแล้ว (เดิม แตะไพ่ซ้ำ = Call · ปัดลง = Fold · มีกล่องคำอธิบาย 2 บรรทัด) · **แตะไพ่ = เลือกใบที่จะหงายเท่านั้น** ไม่ยิง action เอง กันกดพลาดเสียเงิน · ถ้าไม่เลือกใบไหน client จะไม่ส่ง `revealedCardKey` แล้ว server เลือกใบอ่อนสุดให้เอง (`pickRevealCard`) · `GFHandView` (VIP fan) เหลือ prop `onSelect` อย่างเดียว ไม่มี `onCall`/`onFold` แล้ว
 >
-> ✅ **Fan Hand View เสร็จแล้ว** (ของเดิมเข้าใจผิดว่ายังไม่ทำ) — `PlayerHandView.tsx` มี 2 โหมดตาม VIP status (Free: กรอบทองแถวเดียว / VIP: fan จริงแบบพัดไพ่จีน pivot-rotation) ต่อใช้จริงแล้วใน `highNoble/index.tsx`
+> ✅ **Fan Hand View เสร็จแล้ว** — `PlayerHandView.tsx` มี 2 โหมดตาม VIP status: Free ใช้ layout 2 แถว (กอง 1+2 แถวบน, กอง 3 อยู่กึ่งกลางแถวล่าง) และ VIP ใช้ fan จริงแบบพัดไพ่จีน pivot-rotation · ใช้ component กลางร่วมกันในโต๊ะหลัก โดยขนาดไพ่ P1 ทุกโต๊ะปรับให้ไม่น้อยกว่า Initiate แล้ว
 >
 > ✅ **Ascendant Tier + The Crown Vault (2026-07-30)** — เชื่อม Main App กับ The Arena: entry gate จริง (`ascendantGate.ts`: token≥600k + Monarch Slayer + เคยปลด HighNoble + ครั้งเดียวต่อบัญชี, ไม่มี Account Age Gate — 180 วันเป็นเงื่อนไขคนละเส้นทาง "เส้นทางสำรอง" ผ่าน `progressionGate.arena`), `crownVaultService.ts` ใหม่คุม Buy Ascendant Pass (instant pass ถ้า token≥1M อยู่แล้ว)/Buy Arena Pass (ด่านสุดท้ายบังคับทั้ง 2 เส้นทาง)/Token→Crown Exchange, `routes/crownVault.ts` แยกจาก `shop.ts` เดิมที่ยังไม่ได้ register, atomic RPC ใหม่ 4 ตัวกัน race condition (`deduct_user_tokens`/`credit_user_crown`/`deduct_user_crown`/`exchange_token_to_crown`) — เทสใหม่ 25 เทสผ่านหมด, migration 010 ยังไม่ได้รัน (ดู pending #14)
 >
 > ✅ **Economy/Progression hardening ปิดแล้ว 2026-08-15:** Badge purchase และ Ascendant Pass purchase เปลี่ยนเป็น atomic DB transaction + Central Economy Ledger (`purchase_badge_atomic` / `purchase_ascendant_pass_atomic`) · Token→Crown exchange รับ stable `requestId` จาก client ป้องกัน retry หลัง response หายแล้วหักซ้ำ · streak milestone ใช้ cycle-start idempotency key ป้องกัน mint ซ้ำข้ามวัน · match stats ไม่เขียน `token_balance` จาก stale pre-read ทับ ledger อีก · Monarch relic complete bonus mint ผ่าน ledger ด้วย match-scoped idempotency key · **ลุงรัน migration `046_atomic_progression_purchases.sql` บน Supabase สำเร็จแล้ว 2026-08-15 (`Success. No rows returned`)** · focused Economy/Progression 47/47 และ TypeScript client/server ผ่าน · migration 010/044/045 ยังต้องยืนยันสถานะแยกต่างหาก
+
+### ✅ อัปเดตงานล่าสุด (2026-08-16)
+
+**Commit และ push แล้ว:**
+
+- **Audio lifecycle / Android reliability:** ใช้ native audio player ซ้ำอย่างปลอดภัย, ป้องกันเสียงหายกลางเกมและหลังเริ่มเกมใหม่, cleanup/focus/background lifecycle, global button/link SFX และ page-specific BGM
+- **BGM แยกตามหน้า:** Perfect Victory, Profile, Lobby, Elites และ Shop ใช้เพลงคนละไฟล์จาก asset registry; Play Streak มี BGM คลอเบาและเสียงรับรางวัล
+- **Gameplay SFX:** Discard, Reveal countdown, card reveal (เลิกใช้ thunder), shuffle ตัดเหลือครึ่งเวลา, Triple Sweep ใช้ `sfx_congratulation` เฉพาะเมื่อ P1 ชนะ และจบแมตช์ที่ P1 ชนะใช้ `sfx_match_win`
+- **Audio assets:** ใช้ไฟล์ใน `assets/audio/commons/` และโฟลเดอร์ BGM ตามชื่อ/หน้าที่ของไฟล์ ไม่อ้าง ZIP ตอน runtime
+- **Auto Sort:** จำกัดให้ใช้ได้เฉพาะ Initiate เกมแรกของแมตช์ ทั้ง client และ server พร้อม automated tests
+- **Profile / Membership:** แสดง Tier สูงสุดเหนือ Display Name โดยไม่เลื่อนตำแหน่งชื่อ, เพิ่มฉายาผู้เล่นอัตโนมัติจากพฤติกรรม/รางวัล, ป้าย Freemium เชื่อมไปสมัคร VIP และอัปเดตสิทธิประโยชน์ VIP/VIP PRO
+- **UI:** Elites ใช้พื้นหลัง gradient ม่วงเทาที่เด่นขึ้น, Intro Tier D เปลี่ยนจากวิดีโอเป็น WebP, เพิ่ม WebP ล่าสุดท้าย Lobby และลบไฟล์วิดีโอเดิม
+- **Card layout:** P1 ทุกโต๊ะมีขนาดไม่น้อยกว่า Initiate; Initiate ขยาย P1 20% และเลื่อนมือ P2/P4 ขึ้นประมาณหนึ่งความสูงไพ่
+- **QA hardening:** Core gameplay/economy/progression/privacy/reconnect regression ผ่าน baseline 86 suites / 796 tests ณ 2026-08-15
+
+**แก้แล้วใน working tree แต่ยังรอ commit/push:**
+
+- AudioManager hardening รอบสอง: รอ asset โหลดก่อน play, retry one-shot ครั้งเดียวเมื่อ Android ไม่เริ่มจริง, watchdog กู้ BGM/loop หลังเสีย audio focus, เก็บ resume BGM ข้าม `inactive -> background` และปลด stale priority/BGM duck ตามความยาวไฟล์แทน timeout 10 นาที
+- Free P1 hand เปลี่ยนเป็น 2 แถว: กอง 1+2 อยู่แถวบนที่ Y เดิมของกอง 1; กอง 3 อยู่กึ่งกลางแถวล่างและต่ำกว่าแถวบนรวม 105% ของความสูงไพ่; VIP layout ไม่เปลี่ยน
+- ยกเลิกปุ่ม `Play Now` และ Guest Play: ผู้เล่นทุกคนต้อง Sign in/Create account ก่อนเล่น, ปิด `/auth/guest-init`, ปิด anonymous access ใน Game/Home guards และ guest session เก่าถูกส่งกลับ Login
+- Welcome Bonus ย้ายกลับไปให้หลังลงทะเบียน/ตั้งชื่อผ่าน `POST /auth/register` เท่านั้น; focused Auth/Welcome Bonus tests ผ่าน 11/11 และ client TypeScript ผ่าน
 
 **Pending (เรียงตาม priority):**
 

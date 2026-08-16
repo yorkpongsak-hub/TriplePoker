@@ -76,7 +76,12 @@ export default function SetupProfileScreen() {
     (async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) return
-      setIsAnonymous(session.user.is_anonymous === true)
+      if (session.user.is_anonymous === true) {
+        await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+        router.replace('/(auth)/login')
+        return
+      }
+      setIsAnonymous(false)
       const { data } = await supabase
         .from('users')
         .select('display_name, avatar_url, vip_status')
@@ -116,6 +121,11 @@ export default function SetupProfileScreen() {
     try {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { setError('Session expired. Please sign in again.'); return }
+      if (session.user.is_anonymous === true) {
+        await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+        router.replace('/(auth)/login')
+        return
+      }
 
       // 1c) ผูก email/password เข้าบัญชี anonymous ให้เป็นบัญชีถาวรจริง — ทำก่อนขั้นตอนอื่นเสมอ กัน
       // ครึ่งๆ กลางๆ (ตั้งชื่อสำเร็จแต่ link บัญชีไม่สำเร็จ) ทำให้ผู้เล่นเข้าใจผิดว่าบัญชีปลอดภัยแล้ว

@@ -179,30 +179,12 @@ describe('POST /auth/register', () => {
   })
 })
 
-describe('POST /auth/guest-init — Guest Play (มติลุงเยาะ 2026-08-13)', () => {
-  test('ไม่มี Authorization header → 401, ไม่เรียก grantWelcomeBonusIfNeeded', async () => {
+describe('Guest registration is disabled', () => {
+  test('POST /auth/guest-init is not exposed', async () => {
     const app = await buildApp()
     const res = await app.inject({ method: 'POST', url: '/auth/guest-init' })
-    expect(res.statusCode).toBe(401)
+    expect(res.statusCode).toBe(404)
     expect(mockGrantWelcomeBonusIfNeeded).not.toHaveBeenCalled()
-    await app.close()
-  })
-
-  test('token ไม่ valid → 401', async () => {
-    mockGetUser.mockResolvedValueOnce({ data: { user: null }, error: { message: 'bad token' } })
-    const app = await buildApp()
-    const res = await app.inject({ method: 'POST', url: '/auth/guest-init', headers: { authorization: 'Bearer bad-token' } })
-    expect(res.statusCode).toBe(401)
-    await app.close()
-  })
-
-  test('token valid (session anonymous ใหม่) → 200 + เรียก grantWelcomeBonusIfNeeded ด้วย user_id', async () => {
-    mockGetUser.mockResolvedValueOnce({ data: { user: AUTH_USER }, error: null })
-    const app = await buildApp()
-    const res = await app.inject({ method: 'POST', url: '/auth/guest-init', headers: { authorization: 'Bearer good-token' } })
-    expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual({ success: true })
-    expect(mockGrantWelcomeBonusIfNeeded).toHaveBeenCalledWith(AUTH_USER.id)
     await app.close()
   })
 })

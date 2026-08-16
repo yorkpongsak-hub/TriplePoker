@@ -58,8 +58,9 @@ const MAX_EXPOSED = 40      // ส่วนที่โผล่ต่อใบ�
 const VIP_CW = 54; const VIP_CH = 78
 const VIP_HARD_MIN_CW = 46
 const VIP_MIN_EXPOSED = 28
-// Free mode เท่านั้น: ขยับกอง 1/3 แนวตั้งให้เหลื่อมขั้นบันได (กอง 2 อยู่ตำแหน่งเดิม)
-const FREE_PILE_OFFSET_Y = [-20, 0, 20]
+// Free mode: keep the new top row at the former Pile 1 Y position.
+const FREE_TOP_ROW_Y = -20
+const FREE_BOTTOM_ROW_Y_RATIO = 1.05
 const SELECT_LIFT = 12     // ระยะเด้งขึ้นตอนเลือกไพ่
 // VIP pivot-rotation: R = รัศมีจุดหมุนสมมติใต้กอง (px) ต่อจำนวนใบในกอง — R เล็ก = การ์ดใกล้ pivot มาก
 // ขึ้น = เหลื่อมกันมากขึ้นที่มุมเท่าเดิม (ดูโค้งกว่า) ค่านี้ simulate bounding-box แล้วว่าพอดีกรอบ
@@ -255,10 +256,10 @@ const PileColumn: React.FC<{
     )
   }
 
-  // Free mode — เดิมทุกประการ (ห้ามแตะ): overlap ผ่าน marginLeft คงที่ + offset แนวตั้งขั้นบันได
+  // Free mode: overlap remains horizontal; row positioning is owned by PlayerHandView.
   const overlapML = -(cw - exposed) // marginLeft ติดลบ = ระยะซ้อน
   return (
-    <View style={[styles.pileGroup, { transform: [{ translateY: FREE_PILE_OFFSET_Y[pi] }] }]}>
+    <View style={styles.pileGroup}>
       <View style={styles.cardRow}>
         {cards.map((card, ci) => {
           const isSel = selected?.pi === pi && selected?.ci === ci
@@ -304,9 +305,24 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
   const layoutTarget: LayoutTarget = isVip
     ? { cw: VIP_CW, ch: VIP_CH, hardMinCw: VIP_HARD_MIN_CW, minExposed: VIP_MIN_EXPOSED, maxExposed: MAX_EXPOSED }
     : { cw: FREE_CW, ch: FREE_CH, hardMinCw: FREE_HARD_MIN_CW, minExposed: FREE_MIN_EXPOSED, maxExposed: MAX_EXPOSED }
-  const { cw, ch, exposed } = computeLayout(screenW, pileSizes, layoutTarget)
-
   const paired = resolvedPiles.map((cards, idx) => ({ cards, pi: shown[idx] }))
+  const layout = isVip
+    ? computeLayout(screenW, pileSizes, layoutTarget)
+    : (() => {
+        // Free layout has two independent rows. Size against the widest row instead of pretending
+        // all three piles share one line, otherwise responsive fitting shrinks the cards needlessly.
+        const rowLayouts = [
+          paired.filter(p => p.pi !== 2).map(p => p.cards.length),
+          paired.filter(p => p.pi === 2).map(p => p.cards.length),
+        ].filter(row => row.length > 0).map(row => computeLayout(screenW, row, layoutTarget))
+        if (rowLayouts.length === 0) return computeLayout(screenW, [], layoutTarget)
+        return {
+          cw: Math.min(...rowLayouts.map(row => row.cw)),
+          ch: Math.min(...rowLayouts.map(row => row.ch)),
+          exposed: Math.min(...rowLayouts.map(row => row.exposed)),
+        }
+      })()
+  const { cw, ch, exposed } = layout
 
   if (isVip) {
     // VIP 2-row layout: แถวบน = Pile1+Pile2 (pi!==2), แถวล่าง = Pile3 (pi===2) ซ้อนทับแถวบน ~30%
@@ -347,9 +363,9 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
     )
   }
 
-  return (
-    <View style={styles.frame}>
-      {paired.map(({ cards, pi }) => (
+  const topPiles = paired.filter(p => p.pi !== 2)
+  const bottomPiles = paired.filter(p => p.pi === 2)
+  const renderFreePile = ({ cards, pi }: { cards: HandCardData[]; pi: number }) => (
         <PileColumn
           key={pi}
           cards={cards}
@@ -360,7 +376,21 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
           cw={cw} ch={ch} exposed={exposed}
           images={cardImages}
         />
-      ))}
+  )
+
+  return (
+    <View style={styles.freeFrame}>
+      {topPiles.length > 0 && (
+        <View style={styles.freeTopRow}>{topPiles.map(renderFreePile)}</View>
+      )}
+      {bottomPiles.length > 0 && (
+        <View style={[
+          styles.freeBottomRow,
+          { marginTop: topPiles.length > 0 ? -Math.round(ch * (1 - FREE_BOTTOM_ROW_Y_RATIO)) : 0 },
+        ]}>
+          {bottomPiles.map(renderFreePile)}
+        </View>
+      )}
     </View>
   )
 }
@@ -371,16 +401,18 @@ const styles = StyleSheet.create({
   // alignItems:'center' ด้านล่างอยู่แล้ว ไม่ต้องแก้เพิ่ม) — ระยะห่างกรอบ-ปุ่ม Auto Sort/Ready
   // เป็นคนละเรื่องกับ paddingVertical ตรงนี้ (ควบคุมโดย userArea.paddingBottom + actionBar.paddingTop
   // ในแต่ละไฟล์ Tier = 4+4 = 8px อยู่แล้ว ตรวจแล้วอยู่ในช่วง 8-12px ที่ต้องการพอดี ไม่ต้องแตะ)
-  frame: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  freeFrame: {
+    flexDirection: 'column',
     alignItems: 'center',
     width: '98%',
     paddingVertical: 14,
     paddingHorizontal: FRAME_H_PAD,
     marginTop: 4,
+    transform: [{ translateY: FREE_TOP_ROW_Y }],
   },
-  // VIP 2-row layout: กรอบเดียวกัน (width/padding/marginTop เท่า frame เดิม) แต่เป็น column ของ 2 แถว
+  freeTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: PILE_GAP },
+  freeBottomRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  // VIP 2-row layout: กรอบเดียวกันแต่เป็น column ของ 2 แถว
   // แทนที่จะเรียงแถวเดียว — แถวล่าง (Pile3) ซ้อนทับแถวบนด้วย marginTop ติดลบ (คำนวณสดใน component)
   vipFrame: {
     flexDirection: 'column',

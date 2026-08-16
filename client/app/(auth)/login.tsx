@@ -20,8 +20,6 @@ import { router } from 'expo-router'
 import { supabase } from '../../src/services/supabaseService'
 
 const triplePokerLogo = require('../../assets/images/triple_poker_icon.png')
-const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
-
 // ─── ธีมสีหลักของแอป ──────────────────────────────────────
 const C = {
   bg:          '#0F2418',
@@ -59,34 +57,6 @@ export default function LoginScreen() {
       if (authError) throw authError
     } catch (e: any) {
       setError('Google sign-in failed. Please try again.')
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  // Guest Play (มติลุงเยาะ 2026-08-13) -- เข้าเล่นโต๊ะ Initiate ได้ทันทีไม่ต้องสมัครสมาชิก
-  // สร้าง session จริงผ่าน Supabase Anonymous Sign-In (user_id จริง ไหลผ่าน escrow/Ledger เหมือน
-  // account ปกติทุกทาง) แล้วขอ Welcome Bonus ทันทีก่อนตั้งชื่อ/สมัครสมาชิก ข้าม Lobby ไปที่โต๊ะเลย
-  const handlePlayNow = async () => {
-    setIsLoading(true)
-    setError(null)
-    try {
-      const { data, error: authError } = await supabase.auth.signInAnonymously()
-      if (authError || !data.session) throw authError ?? new Error('No session returned')
-
-      try {
-        await fetch(`${SERVER_URL}/auth/guest-init`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${data.session.access_token}` },
-        })
-      } catch (e) {
-        console.error('[Login] guest-init failed (non-fatal, will retry on register):', e)
-      }
-
-      router.replace('/game/initiate')
-    } catch (e: any) {
-      console.error('[Login] handlePlayNow failed:', e)
-      setError('Could not start guest play: ' + (e?.message ?? 'unknown error'))
     } finally {
       setIsLoading(false)
     }
@@ -182,21 +152,8 @@ export default function LoginScreen() {
           </View>
         )}
 
-        {/* Play Now -- Guest Play, ไม่ต้องสมัครสมาชิก */}
-        <TouchableOpacity
-          style={styles.playNowBtn}
-          onPress={handlePlayNow}
-          disabled={isLoading}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.playNowBtnText}>
-            {isLoading ? 'Starting...' : '▶ Play Now'}
-          </Text>
-        </TouchableOpacity>
-        <Text style={styles.playNowHint}>Jump straight into Initiate — no account needed</Text>
-
         {/* Section label */}
-        <Text style={styles.sectionLabel}>OR SIGN IN TO SAVE YOUR PROGRESS</Text>
+        <Text style={styles.sectionLabel}>SIGN IN OR CREATE AN ACCOUNT TO PLAY</Text>
 
         {/* Google */}
         <TouchableOpacity
@@ -337,31 +294,6 @@ const styles = StyleSheet.create({
     letterSpacing: 3,
     fontWeight:    '700',
     marginBottom:  14,
-  },
-
-  // Play Now (Guest Play)
-  playNowBtn: {
-    alignSelf:         'stretch',
-    alignItems:        'center',
-    justifyContent:    'center',
-    backgroundColor:   C.gold,
-    borderRadius:      12,
-    paddingVertical:   16,
-    borderWidth:       1.5,
-    borderColor:       C.goldDark,
-    marginBottom:      8,
-  },
-  playNowBtnText: {
-    color:         C.bg,
-    fontSize:      16,
-    fontWeight:    '900',
-    letterSpacing: 1,
-  },
-  playNowHint: {
-    color:        C.textDim,
-    fontSize:     11,
-    textAlign:    'center',
-    marginBottom: 24,
   },
 
   // Google Button

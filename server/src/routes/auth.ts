@@ -63,30 +63,10 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'USER_NOT_FOUND', message: 'User record not found. Please complete sign-in first.' })
     }
 
-    // Welcome Bonus — Central Economy Ledger Phase 7 Round 8 (2026-08-13). Best-effort: never fail
-    // registration over this — safe to call even if a guest session already got it via
-    // /auth/guest-init (see below), idempotency key is deterministic per user_id.
+    // Welcome Bonus is best-effort and idempotent; registration must never fail because of it.
     await grantWelcomeBonusIfNeeded(authData.user.id)
 
     return reply.send({ success: true, user: updated })
   })
 
-  // Guest Play (มติลุงเยาะ 2026-08-13) — เรียกทันทีหลัง supabase.auth.signInAnonymously() สำเร็จ
-  // ฝั่ง client ให้โบนัสต้อนรับก่อนตั้งชื่อ/สมัครสมาชิก เพื่อให้เข้าเล่น Initiate ได้ทันทีมีโทเคนจริง
-  // ใช้ซ้ำได้ปลอดภัยเสมอ (idempotency key เดียวกับ /auth/register)
-  app.post('/auth/guest-init', async (request, reply) => {
-    const token = request.headers.authorization?.replace('Bearer ', '')
-    if (!token) {
-      return reply.status(401).send({ error: 'Unauthorized' })
-    }
-
-    const { data: authData, error: authError } = await supabase.auth.getUser(token)
-    if (authError || !authData.user) {
-      return reply.status(401).send({ error: 'Invalid token' })
-    }
-
-    await grantWelcomeBonusIfNeeded(authData.user.id)
-
-    return reply.send({ success: true })
-  })
 }

@@ -1,7 +1,7 @@
 // welcomeBonusService.test.ts — Guest Play / Welcome Bonus extraction (มติลุงเยาะ 2026-08-13)
 // Covers grantWelcomeBonusIfNeeded() in isolation: correct mint() call shape, and that a mint
-// failure is swallowed internally (never throws) — the contract both POST /auth/register and
-// POST /auth/guest-init rely on to stay best-effort.
+// failure is swallowed internally (never throws) — POST /auth/register relies on this service
+// remaining best-effort.
 
 const mockMint = jest.fn()
 jest.mock('../../src/economy/economyService', () => ({
