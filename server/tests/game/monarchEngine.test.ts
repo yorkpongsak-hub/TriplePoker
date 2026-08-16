@@ -23,12 +23,16 @@ jest.mock('../../src/game/monarchSpawn', () => ({
 }))
 
 const mockRecordMatchStats = jest.fn(async (..._args: any[]) => undefined)
+const mockAwardPerformanceScore = jest.fn(async (..._args: any[]) => undefined)
 const mockRecordBossResult = jest.fn(async (input: any) => {
   await mockRecordMonarchEncounter(input.userId)
   if (input.won) await mockRecordMonarchVictory(input.userId)
 })
 jest.mock('../../src/game/matchStatsService', () => ({
   recordMatchStats: (...args: any[]) => mockRecordMatchStats(...args),
+}))
+jest.mock('../../src/game/psEngine', () => ({
+  awardPerformanceScore: (...args: any[]) => mockAwardPerformanceScore(...args),
 }))
 jest.mock('../../src/game/bossStatsService', () => ({
   recordBossResult: (input: any) => mockRecordBossResult(input),

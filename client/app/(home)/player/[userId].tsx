@@ -122,8 +122,9 @@ export default function PlayerProfileScreen() {
             <>
               <View style={s.identityCard}>
                 <PlayerAvatar avatarUrl={player.avatar_url} />
-                <Text style={s.displayName}>{player.display_name}</Text>
                 <Text style={s.tierLabel}>{TIER_LABEL[player.tier_unlocked_max ?? 'D'] ?? 'Unranked'}</Text>
+                <Text style={s.displayName}>{player.display_name}</Text>
+                <View style={s.tierPlaceholder} />
               </View>
 
               {/* Plain stat list — layout จริงรอลุงออกแบบทีหลัง */}
@@ -177,7 +178,17 @@ const s = StyleSheet.create({
   identityCard: { ...glassPanel, alignItems: 'center', padding: 20, marginTop: 10, marginBottom: 14, gap: 6 },
   avatarEmoji: { fontSize: 48 },
   displayName: { color: C.textPrimary, fontSize: 17, fontWeight: '800', marginTop: 6 },
-  tierLabel: { color: C.textSec, fontSize: 11, letterSpacing: 0.5 },
+  tierLabel: {
+    position: 'absolute',
+    top: 80,
+    color: C.gold,
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    zIndex: 2,
+  },
+  tierPlaceholder: { height: 14 },
 
   statsCard: { ...glassPanel, padding: 6 },
   statRow: {

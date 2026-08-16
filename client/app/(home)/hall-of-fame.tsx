@@ -124,9 +124,15 @@ export default function HallOfFameScreen() {
 
   return (
     // มติลุงเยาะ 2026-08-15 — หน้านี้คือหน้าคัดตัวแทนไปสู้ The Last Boss ต้องโดดเด่นกว่าหน้าอื่น
-    // เลยไม่ใช้ ThemedBackground (bg_main_free/vip.png ที่ทุกหน้าใช้ร่วมกัน) แต่ใช้ gradient แดงเข้ม-ดำ
-    // ของตัวเองแทน (ยังไม่มี asset ภาพพื้นหลังเฉพาะหน้านี้จริง — ใช้สีแทนตามที่ขอ "เปลี่ยนสีพื้นหลัง")
-    <LinearGradient colors={['#2A0808', '#170303', '#0A0202']} style={s.fill}>
+    // เลยไม่ใช้ ThemedBackground (bg_main_free/vip.png ที่ทุกหน้าใช้ร่วมกัน) แต่ใช้ gradient
+    // ม่วงพลัม-เทาสเลต-เทาชาร์โคลของตัวเอง เพื่อแยก Elite Ranking ออกจากหน้าปกติอย่างชัดเจน
+    <LinearGradient
+      colors={['#5A3D72', '#343442', '#191B24']}
+      locations={[0, 0.52, 1]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={s.fill}
+    >
       <SafeAreaView style={s.safeArea} edges={['top']}>
       <View style={s.root}>
         <View style={s.header}>

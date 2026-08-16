@@ -433,9 +433,19 @@ export default function ProfileScreen() {
           />
 
           <View style={s.heroInfo}>
+            <View style={[s.tierBadge, s.tierBadgeAboveName, { borderColor: tierInfo.color }]}>
+              <Text style={[s.tierBadgeText, { color: tierInfo.color }]}>
+                [{tierLetter}] {tierInfo.label}
+              </Text>
+            </View>
             <Text style={s.userName} numberOfLines={1}>{displayName}</Text>
             <View style={s.badgeRow}>
-              <View style={[s.tierBadge, { borderColor: tierInfo.color }]}>
+              <View
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+                pointerEvents="none"
+                style={[s.tierBadge, s.tierBadgePlaceholder, { borderColor: tierInfo.color }]}
+              >
                 <Text style={[s.tierBadgeText, { color: tierInfo.color }]}>
                   [{tierLetter}] {tierInfo.label}
                 </Text>
@@ -740,7 +750,7 @@ const s = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   editIcon: { color: C.bg, fontSize: 14, fontWeight: '900' },
-  heroInfo: { flex: 1, minWidth: 0 },
+  heroInfo: { flex: 1, minWidth: 0, position: 'relative' },
   userName: { color: C.textPrimary, fontSize: 22, fontWeight: '900', letterSpacing: 0.5 },
   badgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6, marginBottom: 8 },
   tierBadge: {
@@ -748,6 +758,8 @@ const s = StyleSheet.create({
     borderRadius: 6, borderWidth: 1.5,
     backgroundColor: 'rgba(255,215,106,0.08)',
   },
+  tierBadgeAboveName: { position: 'absolute', top: -28, left: 0 },
+  tierBadgePlaceholder: { opacity: 0 },
   tierBadgeText: { fontSize: 9, fontWeight: '800', letterSpacing: 1 },
   vipBadge: {
     paddingHorizontal: 8, paddingVertical: 3,
