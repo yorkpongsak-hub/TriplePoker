@@ -27,15 +27,47 @@ jest.mock('../../src/game/gameLoop', () => ({
 // (ห่อ try/catch อยู่แล้วฝั่ง source แต่ mock ให้ resolve เงียบๆ ดีกว่าปล่อย error ผ่าน console)
 // เพิ่ม .in() นอกเหนือจาก .eq().single() ที่ให้มา เพราะ query จริงของ VIP ใช้ .select().in()
 // ไม่มี .eq()/.single() เลย (multi-row query ไม่ใช่ single-row) ───
+// + .update().eq().eq() บน 'match_escrow' และ .rpc() — settleHNMatchViaLedger (Central Economy
+// Ledger Phase 7 Round 4) เรียกจริงตอนจบแมตช์ (ดู T12-T14 ที่เดินไป grand_finale จนจบเกมได้จริง)
+// ไม่มี mock พวกนี้มาก่อนตอน mock ก้อนนี้เขียนครั้งแรก (ก่อน settleHNMatchViaLedger จะมีอยู่)
 jest.mock('../../src/config/supabase', () => ({
   supabaseAdmin: {
     from: () => ({
       select: () => ({
-        eq: () => ({ single: () => Promise.resolve({ data: null, error: null }) }),
+        eq: () => ({ single: () => Promise.resolve({ data: { token_balance: 0 }, error: null }) }),
         in: () => Promise.resolve({ data: [], error: null }),
       }),
+      update: () => ({ eq: () => ({ eq: () => Promise.resolve({ error: null }) }) }),
     }),
+    rpc: () => Promise.resolve({ data: null, error: null }),
   },
+}))
+
+// ─── Mock Central Economy Ledger match-end dependencies ───────────────────────
+// settleHNMatchViaLedger (เรียกจริงเมื่อ grand_finale เดินจนจบ round สุดท้าย — T12-T14 เข้าเงื่อนไขนี้
+// จริงเพราะ totalRounds=1 ในเทสนี้) ต่อกับของจริงหลายตัว (economyService/matchStatsService/
+// matchWinsService/psEngine/tierUnlockService/crownVaultService) — ไฟล์นี้เทส lifecycle ของ AFK/grace
+// ไม่ใช่ความถูกต้องของ ledger settlement (มีเทสแยกอยู่แล้วที่ highNobleLedgerSettlement.test.ts/
+// matchStatsStreakLedger.test.ts) จึง mock ให้ no-op สำเร็จเงียบๆ พอ กันไม่ให้ real Supabase call
+// (unmocked .rpc()/.from().update() เดิม) โยน error หรือ io.emit('server_activity', ...) ที่โค้ดจริง
+// เรียกตรงๆ (ไม่ผ่าน io.to(room)) ทำให้ process crash ตอน match_end
+jest.mock('../../src/economy/economyService', () => ({
+  economyService: { settleMatchResult: jest.fn(async () => ({ transactionId: 1, replayed: false })) },
+}))
+jest.mock('../../src/game/matchStatsService', () => ({
+  recordMatchStats: jest.fn(async () => undefined),
+}))
+jest.mock('../../src/game/matchWinsService', () => ({
+  recordMatchWin: jest.fn(async () => undefined),
+}))
+jest.mock('../../src/game/psEngine', () => ({
+  awardPerformanceScore: jest.fn(async () => undefined),
+}))
+jest.mock('../../src/game/tierUnlockService', () => ({
+  checkTierUnlock: jest.fn(async () => null),
+}))
+jest.mock('../../src/game/crownVaultService', () => ({
+  getAscendantStatus: jest.fn(async () => ({ status: 'none' })),
 }))
 
 import { Card } from '../../src/game/deck'
@@ -63,17 +95,33 @@ import {
 // ต้องใช้ `npm test` แทน หรือรันสองคำสั่งเองตรงๆ:
 //   node node_modules/jest/bin/jest.js --testPathIgnorePatterns=tests/game/hnGracePeriod.test.ts
 //   node node_modules/jest/bin/jest.js --runInBand tests/game/hnGracePeriod.test.ts
-jest.setTimeout(15000)
+//
+// 2026-08-31 — T12-T14 (กลุ่มเดียวที่เดินไปถึง grand_finale ผ่าน driveToGrandFinale()) เริ่ม timeout
+// เกิน 15000ms จริงซ้ำๆ แม้รันเดี่ยว --runInBand: สาเหตุคนละตัวกับ cross-worker CPU contention ข้างบน —
+// aiDecideArrangement() ของ Round 2 (arrangement_2, ไพ่ 12 ใบหลัง auction) ใช้ arrangeByPersonality()
+// (brute-force เต็มรูปแบบ ทุก tier ยกเว้น initiate/adept — ดู aiEngine.ts) เมื่อ Boss ชนะไพ่ประมูล
+// อย่างน้อย 1 ใบแบบไม่มีคู่แข่ง (เกิดขึ้นทุกครั้งที่ไม่มี human คนไหน bid สู้ ตรงกับที่เทสนี้ตั้งใจไม่ bid
+// เลย) — เป็น real CPU-bound work วัดจริงได้ ~15-30 วินาที wall-clock ต่อการเรียก 1 ครั้งบนเครื่องนี้
+// (jest fake timer เร่งให้ไม่ได้ ไม่ใช่ setTimeout) ไม่ใช่บั๊ก async/hang แต่ตัวเลข 15000 เดิมแคบไป
+// ต้องขยับให้มีที่ว่างพอ — ⚠️ นี่คือสัญญาณของปัญหา production จริง (event loop ทั้ง server จะแข็งค้าง
+// 15-30 วิเวลา Boss ชนะไพ่ประมูล High Noble จริง) ควรแยกไปแก้ที่ arrangeByPersonality/aiDecideArrangement
+// ต่างหาก (นอกขอบเขตไฟล์เทสนี้) ไม่ใช่แค่ขยาย timeout ทิ้งไว้เฉยๆ
+jest.setTimeout(90000)
 
 // ─── Mock Socket.IO Server — เก็บ log การ emit ไว้ตรวจสอบ (pattern เดียวกับ adeptAFK.test.ts) ───
+// io.emit() ระดับบนสุด (ไม่ผ่าน .to(room)) เพิ่มเข้ามาด้วย — match_end ของ Central Economy Ledger
+// broadcast 'server_activity' ตรงๆ ผ่าน io.emit() (ไม่ใช่ io.to(roomId).emit()) ของเดิม mock มีแค่
+// .to().emit() ทำให้ io.emit ไม่ใช่ function จริง crash ทั้ง process ตอนแมตช์จบ (T13/T14 เจอเข้าเต็มๆ)
 function makeIoMock() {
   const emitted: { room: string; event: string; data: any }[] = []
+  const broadcasted: { event: string; data: any }[] = []
   const io: any = {
     to: (room: string) => ({
       emit: (event: string, data: any) => { emitted.push({ room, event, data }) },
     }),
+    emit: (event: string, data: any) => { broadcasted.push({ event, data }) },
   }
-  return { io, emitted }
+  return { io, emitted, broadcasted }
 }
 
 const SUIT_CHAR: Record<string, string> = { spades: 's', hearts: 'h', diamonds: 'd', clubs: 'c' }
@@ -134,6 +182,9 @@ async function driveToGrandFinale() {
   }
 
   // blind_auction (decisionTimeMs=12000) + post-auction delay (3000) — ไม่ bid เลย (ไม่กระทบเทสนี้)
+  // ⚠️ ไม่มี human คน bid สู้ Boss เลย = Boss ชนะไพ่ประมูลได้ฟรีทุกครั้ง → arrangement_2 ของ Boss เดิน
+  // aiDecideArrangement()'s brute-force arrangeByPersonality() จริง (ไพ่ 12 ใบ) กิน real CPU time
+  // 15-30+ วินาที (ดูหมายเหตุที่ jest.setTimeout ด้านบน) — ไม่ใช่แค่ fake-timer advance เฉยๆ
   await jest.advanceTimersByTimeAsync(12_000 + 3_000)
 
   state = getHNMatchState(roomId)!
