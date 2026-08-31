@@ -4,8 +4,8 @@
 // Toggle แรก: Reduce Motion (Faster Deal Animation) — per-player local เท่านั้น (AsyncStorage)
 // The Sage Unicorn Studio Co., Ltd.
 
-import React, { useEffect, useState } from 'react'
-import { Image, Modal, ScrollView, View, Text, TouchableOpacity, StyleSheet, Pressable } from 'react-native'
+import React, { useEffect, useRef, useState } from 'react'
+import { Image, Modal, PanResponder, ScrollView, View, Text, TouchableOpacity, StyleSheet } from 'react-native'
 import { getReduceMotion, setReduceMotion } from '../../utils/reduceMotion'
 import { TABLE_SKINS, TABLE_SKIN_META } from '../../config/tableSkins'
 import { useTableSkins } from '../../hooks/useTableSkins'
@@ -152,20 +152,43 @@ export default function SettingsModal({ visible, onClose }: Props) {
 }
 
 function VolumeControl({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  // ต้องลากจริง (dx เกิน threshold และแนวนอนมากกว่าแนวตั้ง) ค่าถึงจะขยับ กัน
+  // แตะพลาด/สกอลผ่าน ScrollView ของ modal นี้แล้ว volume ถูกเซ็ตค่าทันทีโดยไม่ตั้งใจ
+  // (ของเดิมใช้ onPress ครั้งเดียว + หาร locationX ด้วยเลข 280 คงที่ ทั้งที่ track ยืดตามความกว้างจอจริง)
+  const trackWidthRef = useRef(0)
+  const valueRef = useRef(value)
+  const startValueRef = useRef(value)
+  valueRef.current = value
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_evt, gestureState) =>
+        Math.abs(gestureState.dx) > 4 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy),
+      onPanResponderGrant: () => { startValueRef.current = valueRef.current },
+      onPanResponderMove: (_evt, gestureState) => {
+        if (trackWidthRef.current <= 0) return
+        onChange(Math.max(0, Math.min(1, startValueRef.current + gestureState.dx / trackWidthRef.current)))
+      },
+    }),
+  ).current
+
   return (
     <View style={styles.volumeRow}>
       <View style={styles.volumeHeader}><Text style={styles.rowLabel}>{label}</Text><Text style={styles.volumeValue}>{Math.round(value * 100)}%</Text></View>
-      <Pressable
+      <View
+        accessible
         accessibilityRole="adjustable"
         accessibilityLabel={`${label} volume`}
         accessibilityValue={{ min: 0, max: 100, now: Math.round(value * 100) }}
         accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
         onAccessibilityAction={event => onChange(Math.max(0, Math.min(1, value + (event.nativeEvent.actionName === 'increment' ? .1 : -.1))))}
-        onPress={event => onChange(Math.max(0, Math.min(1, event.nativeEvent.locationX / 280)))}
+        onLayout={event => { trackWidthRef.current = event.nativeEvent.layout.width }}
         style={styles.volumeTrack}
+        {...panResponder.panHandlers}
       >
         <View style={[styles.volumeFill, { width: `${value * 100}%` }]} />
-      </Pressable>
+      </View>
     </View>
   )
 }
