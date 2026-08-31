@@ -366,6 +366,19 @@ export function aiDecideArrangement(
     return greedyArrangement(cards, community)
   }
 
+  // ── ไพ่เกิน 11 ใบ (Boss/AI ชนะ Blind Auction มา — High Noble Round 2, "สูงสุด 12 ใบ") ──
+  // arrangeByPersonality -> bestArrangement เป็น brute-force เต็มรูปแบบ C(n,3)*C(n-3,3) คูณด้วย
+  // bestThreeFromN อีกชั้นตอนหาไพ่กอง 3 ที่ดีที่สุด — ที่ 11 ใบพอทนได้ (Round 1 เรียกแบบนี้เสมอ) แต่ที่
+  // 12 ใบจำนวน combination โตขึ้น ~4 เท่า กลายเป็น synchronous CPU-bound งานเดียวกินเวลาจริง 15-30+ วิ
+  // บนเครื่องที่ไม่แรงมาก (วัดจริงตอนไล่หาสาเหตุ hnGracePeriod.test.ts timeout, 2026-08-31) บล็อก event
+  // loop ทั้งเซิร์ฟเวอร์ทุกโต๊ะพร้อมกัน — ใช้ greedyArrangement แทน (pattern เดียวกับที่ Minion ที่ชนะ
+  // ประมูลใน Mastermind ใช้อยู่แล้วจริงที่ gameLoop.ts, และเดียวกับที่ Arena เลือกใช้แทน brute-force
+  // เต็มรูปแบบด้วยเหตุผลเดียวกันทุกประการ — ดู bestArenaArrangement) ยอมเสียความละเอียดของ personality
+  // ตอนจัดไพ่เฉพาะเคสนี้ (บอทอาจ foul เองได้บ้าง เสียแค่กองนั้น ไม่ crash) แลกกับความเสถียรของเซิร์ฟเวอร์
+  if (cards.length > 11) {
+    return greedyArrangement(cards, community)
+  }
+
   // ── Mastermind+ table: เต็มฝีมือตาม personality ────────────────
   return arrangeByPersonality(config.personality, cards, community)
 }
