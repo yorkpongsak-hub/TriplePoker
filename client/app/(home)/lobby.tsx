@@ -10,6 +10,7 @@ import { io, Socket } from 'socket.io-client';
 import { useUserStore } from '../../src/store/userStore';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useBgm, fadeOutBgm } from '../../src/services/bgmService'
+import { AudioEvent } from '../../src/audio'
 import { useAuthStore } from '../../src/store/authStore'
 import { MenuButton } from '../../src/components/ui/MenuButton'
 import { ThemedBackground } from '../../src/components/ui/ThemedBackground'
@@ -62,7 +63,6 @@ const formatMMSS = (totalSeconds: number): string => {
 };
 
 export default function LobbyScreen() {
-  useBgm(); // LobbyMatchmaking_Spec_v1_0 §2 — BGM เล่นต่อเนื่องข้าม Profile/Shop/Lobby/Hall of Fame
   const [selected, setSelected] = useState<Selection | null>(null);
 
   // Ad Gate ก่อนเข้าเล่น (มติลุงเยาะ 2026-08-14) — สมาชิกฟรีต้องดูโฆษณาก่อนเข้า Solo/Multiplayer/
@@ -85,6 +85,9 @@ export default function LobbyScreen() {
   type MatchmakingStatus = 'idle' | 'queued' | 'matched';
   type MatchmakingTier = 'adept' | 'highNoble';
   const [mmStatus, setMmStatus] = useState<MatchmakingStatus>('idle');
+  // LobbyMatchmaking_Spec_v1_0 §2 — BGM เล่นต่อเนื่องข้าม Profile/Shop/Lobby/Elites ยกเว้นตอน queued
+  // (รอผู้เล่นเข้าห้อง) ที่สลับไปเพลงรอต่างหาก — useBgm() สลับ track เองอัตโนมัติเมื่อ event เปลี่ยน
+  useBgm(mmStatus === 'queued' ? AudioEvent.WAITING_BGM : AudioEvent.LOBBY_BGM);
   const [mmTier, setMmTier] = useState<MatchmakingTier>('adept');
   const [mmSeats, setMmSeats] = useState<Array<{ type: string; name: string }>>([]);
   const [mmTimeoutAt, setMmTimeoutAt] = useState<number | null>(null);

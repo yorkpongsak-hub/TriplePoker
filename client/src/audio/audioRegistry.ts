@@ -31,8 +31,9 @@ const tierUnlock = require('../../assets/audio/sfx/result/tier_unlock.mp3')
 const rareReaction = require('../../assets/audio/sfx/result/rare_reaction.mp3')
 const bossThunder = require('../../assets/audio/sfx/boss/boss_thunder.mp3')
 const bossAmbience = require('../../assets/audio/sfx/boss/boss_ambience.mp3')
-const lobbyBgm = require('../../assets/audio/bgm/lobby_bgm.mp3')
-const profileBgm = require('../../assets/audio/bgm/bgm_cool_profile.mp3')
+const lobbyBgm = require('../../assets/audio/bgm/sfx_bgm_lobby.mp3')
+const profileBgm = require('../../assets/audio/bgm/sfx_bgm_profile.mp3')
+const waitingBgm = require('../../assets/audio/bgm/sfx_bgm_waiting.mp3')
 const elitesBgm = require('../../assets/audio/bgm/bgm_top_elites.mp3')
 const shopBgm = require('../../assets/audio/bgm/bgm_coindrop.mp3')
 const perfectVictoryBgm = require('../../assets/audio/bgm/bgm_perfect_victory.mp3')
@@ -92,6 +93,7 @@ export const audioRegistry: Record<AudioEvent, AudioDefinition> = {
   [AudioEvent.PERFECT_VICTORY_BGM]: def(perfectVictoryBgm, AudioCategory.BGM, AudioPriority.LOW, .24, { loop: true, fadeInMs: 1200, fadeOutMs: 800 }),
   [AudioEvent.PLAY_STREAK_BGM]: def(lobbyBgm, AudioCategory.BGM, AudioPriority.LOW, .18, { loop: true, fadeInMs: 1000, fadeOutMs: 600 }),
   [AudioEvent.LOBBY_BGM]: def(lobbyBgm, AudioCategory.BGM, AudioPriority.LOW, .30, { loop: true, fadeInMs: 800, fadeOutMs: 500 }),
+  [AudioEvent.WAITING_BGM]: def(waitingBgm, AudioCategory.BGM, AudioPriority.LOW, .30, { loop: true, fadeInMs: 800, fadeOutMs: 500 }),
   [AudioEvent.PROFILE_BGM]: def(profileBgm, AudioCategory.BGM, AudioPriority.LOW, .25, { loop: true, fadeInMs: 800, fadeOutMs: 500 }),
   [AudioEvent.ELITES_BGM]: def(elitesBgm, AudioCategory.BGM, AudioPriority.LOW, .27, { loop: true, fadeInMs: 800, fadeOutMs: 500 }),
   [AudioEvent.SHOP_BGM]: def(shopBgm, AudioCategory.BGM, AudioPriority.LOW, .24, { loop: true, fadeInMs: 800, fadeOutMs: 500 }),
