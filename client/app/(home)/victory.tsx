@@ -20,7 +20,7 @@ import { AudioEvent } from '../../src/audio'
 import { useBgm } from '../../src/services/bgmService'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
-const tokenDropGif = require('../../assets/fx/token_drop.gif')
+const tokenDropGif = require('../../assets/fx/vfx_you_win.webp')
 
 // ธีมสีหลัก (Website Theme Spec v1.0) — โทนหรูหรา/ราชวงศ์ตามที่ลุงเยาะเลือก
 const C = {
@@ -121,7 +121,7 @@ export default function VictoryScreen() {
 
   // ── Reanimated entrance sequence — เริ่มหลังโหลดข้อมูลเสร็จเท่านั้น (pattern เดียวกับ TierUnlockOverlay) ──
   const scrimOpacity = useSharedValue(0)
-  const vfxScale = useSharedValue(0.6)
+  const vfxOpacity = useSharedValue(0)
   const headlineOpacity = useSharedValue(0)
   const statsOpacity = useSharedValue(0)
   const buttonOpacity = useSharedValue(0)
@@ -131,7 +131,13 @@ export default function VictoryScreen() {
   useEffect(() => {
     if (!loaded) return
     scrimOpacity.value = withTiming(1, { duration: 400, easing: Easing.out(Easing.cubic) })
-    vfxScale.value = withDelay(150, withTiming(1, { duration: 500, easing: Easing.out(Easing.cubic) }))
+    vfxOpacity.value = withDelay(
+      100,
+      withTiming(1, {
+        duration: 700,
+        easing: Easing.out(Easing.cubic),
+      })
+    )
     headlineOpacity.value = withDelay(550, withTiming(1, { duration: 400 }))
     statsOpacity.value = withDelay(850, withTiming(1, { duration: 400 }))
     buttonOpacity.value = withDelay(1250, withTiming(1, { duration: 300 }))
@@ -143,7 +149,9 @@ export default function VictoryScreen() {
   }, [loaded])
 
   const scrimStyle = useAnimatedStyle(() => ({ opacity: scrimOpacity.value }))
-  const vfxStyle = useAnimatedStyle(() => ({ transform: [{ scale: vfxScale.value }] as any, opacity: vfxScale.value }))
+  const vfxStyle = useAnimatedStyle(() => ({
+    opacity: vfxOpacity.value,
+  }))
   const headlineStyle = useAnimatedStyle(() => ({ opacity: headlineOpacity.value }))
   const statsStyle = useAnimatedStyle(() => ({ opacity: statsOpacity.value }))
   const buttonStyle = useAnimatedStyle(() => ({ opacity: buttonOpacity.value }))
@@ -162,11 +170,22 @@ export default function VictoryScreen() {
 
   return (
     <Animated.View style={[s.scrim, scrimStyle]}>
-      <View style={s.center}>
-        <Animated.View style={vfxStyle}>
-          <Image source={tokenDropGif} style={s.vfxGif} contentFit="contain" autoplay />
-        </Animated.View>
+      {/* Full-screen token celebration VFX.
+          Decorative background only — never blocks foreground controls. */}
+      <Animated.View
+        pointerEvents="none"
+        style={[s.vfxBackground, vfxStyle]}
+      >
+        <Image
+          source={tokenDropGif}
+          style={s.vfxGif}
+          contentFit="cover"
+          autoplay
+        />
+      </Animated.View>
 
+      {/* Foreground Victory UI */}
+      <View style={s.center}>
         <Animated.Text style={[s.headline, headlineStyle]}>PERFECT VICTORY!</Animated.Text>
 
         <Animated.View style={[s.statsCard, statsStyle]}>
@@ -218,9 +237,24 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   loadingCenter: { alignItems: 'center', justifyContent: 'center' },
-  center: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 28 },
+  center: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+    zIndex: 1,
+  },
 
-  vfxGif: { width: 220, height: 220, marginBottom: 8 },
+  // Full-screen token celebration behind all foreground UI.
+  vfxBackground: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 0,
+  },
+
+  vfxGif: {
+    width: '100%',
+    height: '100%',
+  },
 
   headline: {
     fontFamily: 'Cinzel_700Bold',
@@ -271,6 +305,7 @@ const s = StyleSheet.create({
     right: 0,
     alignItems: 'center',
     paddingHorizontal: 28,
+    zIndex: 2,
   },
   progressLabelRow: {
     flexDirection: 'row',

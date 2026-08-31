@@ -169,11 +169,20 @@ export default function LegendaryCardVFX({
     <View style={styles.root} pointerEvents="box-none">
       <Animated.View style={[styles.backdrop, overlayStyle]} />
 
-      <View style={styles.stage} pointerEvents="none">
+      {/* Full-screen animated VFX background */}
+      <View style={styles.vfxLayer} pointerEvents="none">
         <Animated.View style={[styles.fxFrame, fxStyle]}>
-          <Image source={TRIPLE_SWEEP_FX} style={styles.fxImage} contentFit="contain" autoplay />
+          <Image
+            source={TRIPLE_SWEEP_FX}
+            style={styles.fxImage}
+            contentFit="cover"
+            autoplay
+          />
         </Animated.View>
+      </View>
 
+      {/* Foreground title — always above the VFX */}
+      <View style={styles.stage} pointerEvents="none">
         <Animated.View style={[styles.titleBlock, titleStyle]}>
           <Text style={styles.eyebrow}>{subtitle}</Text>
           <Text style={styles.title}>{title}</Text>
@@ -205,20 +214,28 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#000',
   },
-  stage: {
+  // Full-screen animated WebP background.
+  vfxLayer: {
     ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
+    zIndex: 0,
+    overflow: 'hidden',
   },
-  // ขนาดเนทีฟ 320x180 — ขยายเต็มความกว้าง 92% ของจอ (จำกัดเพดาน 640 กันภาพเบลอเกินไปบนจอกว้างมาก)
+
   fxFrame: {
-    width: '92%',
-    aspectRatio: 320 / 180,
-    maxWidth: 640,
+    ...StyleSheet.absoluteFillObject,
   },
+
   fxImage: {
     width: '100%',
     height: '100%',
+  },
+
+  // Foreground text layer.
+  stage: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   titleBlock: {
     alignItems: 'center',
@@ -244,6 +261,7 @@ const styles = StyleSheet.create({
   },
   skip: {
     position: 'absolute',
+    zIndex: 2,
     top: 54,
     right: 20,
     paddingHorizontal: 15,
