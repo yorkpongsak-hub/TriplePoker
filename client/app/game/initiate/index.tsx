@@ -24,6 +24,7 @@ import {
   playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton, playRevealCountdownTick, playMatchWin,
 } from '../../../src/services/gameSfxService'
 import { useAuthStore } from '../../../src/store/authStore'
+import { GAME_RESUME_RESULT_EVENT, requestGameResume } from '../../../src/services/gameResumeProtocol'
 // Patch 2026-07-18: resolve avatar preset key → emoji/รูปภาพ (แก้ VIP preset ไม่โชว์ที่โต๊ะ)
 import { PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
 import { useTableSkins } from '../../../src/hooks/useTableSkins'
@@ -37,6 +38,7 @@ import { GuideOverlay } from '../../../src/components/onboarding/GuideOverlay'
 import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
 import PlayerHandView from '../../../src/components/game/PlayerHandView'
 import BossHandRow from '../../../src/components/game/BossHandRow'
+import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
 import GameTopBar from '../../../src/components/game/GameTopBar'
 import MatchEndOverlay from '../../../src/components/game/MatchEndOverlay'
 import { TierInfoModal } from '../../../src/components/game/TierInfoModal'
@@ -45,6 +47,7 @@ import TokenFlowPanel, { PANEL_WIDTH, PANEL_RIGHT } from '../../../src/component
 import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/game/FlyingCoins'
 import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
 import AvatarFrame from '../../../src/components/game/AvatarFrame'
+import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
 
 // ตำแหน่งที่นั่งเดียวกับ targets ใน startDealAnimation (Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย)
 // ศูนย์กลาง = จุดกำเนิด/ปลายทางของกองกลาง (เหมือนที่ dealAnims ใช้เป็น origin ตอนแจกไพ่)
@@ -261,6 +264,7 @@ const GameTableLive: React.FC = () => {
   const authUserId = useUserStore(s => s.userId)
   const usingDevFakeId = !authUserId && !!DEV_FAKE_USER_ID
   const PLAYER_ID = authUserId || DEV_FAKE_USER_ID || ''
+  const accessToken = useAuthStore(s => s.session?.access_token ?? null)
   // roomId ต้อง unique ต่อผู้เล่น — เดิม hardcode 'Initiate1' ทำให้ 2 Human เข้าพร้อมกัน
   // ชน socket-room + matchStates key เดียวกัน (ไพ่คนแรกหาย) PLAYER_ID ว่างได้แค่ก่อน auth guard
   // ด้านล่าง block ไว้แล้ว (ไม่มี emit เกิดขึ้นก่อนหน้านั้น)
@@ -365,6 +369,7 @@ const GameTableLive: React.FC = () => {
   const [foulReasons, setFoulReasons]   = useState<Record<string, string>>({})
   const [showResult, setShowResult]   = useState(false)
   const [handRanks, setHandRanks]       = useState<Record<number, string>>({})
+  const [royalFlushWinner, setRoyalFlushWinner] = useState<string | null>(null)
   const [showRankTable, setShowRankTable] = useState(false)
   const [activeShowdownTab, setActiveShowdownTab] = useState<1|2|3>(1)
   const [revealPile, setRevealPile] = useState<0|1|2|3>(0) // 0=ไม่แสดง 1/2/3=Pile นั้น
@@ -500,20 +505,27 @@ const GameTableLive: React.FC = () => {
       console.warn('[game] Using DEV_FAKE_USER_ID for PLAYER_ID:', PLAYER_ID)
     }
 
-    const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: false })
+    const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: true, reconnectionDelay: 1000 })
     socketRef.current = socket
 
-    let matchStarted = false
+    let startRequested = false
     socket.on('connect', () => {
       setConnectionError(null)
-      if (matchStarted) return
-      matchStarted = true
+      if (!accessToken) {
+        if (!startRequested) { startRequested = true; socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'initiate' }) }
+        return
+      }
+      requestGameResume(socket, { roomId: ROOM_ID, userId: PLAYER_ID, accessToken, matchType: 'INITIATE' })
       // token ไม่ส่งจาก client (server-authoritative — escrowBuyIn คิดจาก users.token_balance สดเท่านั้น)
       // (player_join_room ถูกตัดออก — dead path เดิม: client ไม่เคย listen 'player_joined'/'arrangement_start'
       // ที่มันคืนมา แถมยังสร้างตาราง tableRegistry ซ้ำด้วย roomId เดิมอีกชั้น start_match ด้านล่างทำ
       // socket.join(roomId) ให้อยู่แล้วเหมือนกัน)
       // tier ต้องตรงกับ 'initiate' เป๊ะ — aiEngine.ts เช็ค tier === 'initiate' ตรงๆ (ไม่มี normalize)
       // ของเดิมส่ง 'beginner' ทำให้ Beginner's Luck System (subOptimal/firstValid) ไม่เคย trigger เลย
+    })
+    socket.on(GAME_RESUME_RESULT_EVENT, (result: { ok: boolean; status: string; matchType: string }) => {
+      if (result.matchType !== 'INITIATE' || result.ok || result.status !== 'MATCH_NOT_FOUND' || startRequested) return
+      startRequested = true
       socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'initiate' })
     })
 
@@ -659,7 +671,10 @@ const GameTableLive: React.FC = () => {
           newAllCards[pid][pNum] = cards as string[]
         })
         if (pile.winner) newWinners[pNum] = pile.winner
-        if (pile.winnerHandRank) newHandRanks[pNum] = pile.winnerHandRank
+        if (pile.winnerHandRank) {
+          newHandRanks[pNum] = pile.winnerHandRank
+          if (String(pile.winnerHandRank).toLowerCase().replace(/[ _-]/g, '') === 'royalflush') setRoyalFlushWinner(pile.winner)
+        }
         if (pile.fouled) Object.assign(newFouled, pile.fouled)
       })
 
@@ -706,7 +721,10 @@ const GameTableLive: React.FC = () => {
         return next
       })
       setPileWinners(prev => ({ ...prev, [pNum]: data.winner }))
-      if (data.winnerHandRank) setHandRanks(prev => ({ ...prev, [pNum]: data.winnerHandRank }))
+      if (data.winnerHandRank) {
+        setHandRanks(prev => ({ ...prev, [pNum]: data.winnerHandRank }))
+        if (String(data.winnerHandRank).toLowerCase().replace(/[ _-]/g, '') === 'royalflush') setRoyalFlushWinner(data.winner)
+      }
       setHasFoul(data.fouled ?? {})
       if (data.foulReasons) setFoulReasons(data.foulReasons)
       if (pNum === 3) setPhase('showdown')
@@ -1255,6 +1273,7 @@ const GameTableLive: React.FC = () => {
   // =================================================================
   return (
     <View style={[s.root, isWeb && s.webOuter]}>
+      <GameServerStatusLight socketRef={socketRef} />
       <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" />
       <View style={[s.gameContainer, isWeb && s.webFrame]}>
         <View style={s.gameArea}>
@@ -1460,6 +1479,7 @@ const GameTableLive: React.FC = () => {
           )}
 
           {/* ── TRIPLE SWEEP — Legendary สำหรับ P1, VFX เดิมสำหรับผู้เล่นอื่น ── */}
+          {royalFlushWinner && <RoyalStraightFlushVFX playerName={royalFlushWinner === PLAYER_ID ? myDisplayName : (aiList.find(a => a.id === royalFlushWinner)?.name ?? royalFlushWinner)} onClose={() => setRoyalFlushWinner(null)} />}
           {jackpotWinner && (() => {
             const isMe = jackpotWinner === PLAYER_ID
             const winAI = aiList.find(a => a.id === jackpotWinner)

@@ -2,56 +2,53 @@ import React, { useState } from 'react'
 import { Image, ImageBackground, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 
-type Props = {
-  onComplete: () => void
-  onExit: () => void
-}
+type Props = { onComplete: () => void; onExit: () => void }
 
 const SLIDES = [
   {
     eyebrow: 'TIER S · GRANDMASTER',
-    title: 'ยินดีต้อนรับสู่ THE ARENA',
-    lead: 'บนยอดสูงสุดของ Rise กติกาที่คุณรู้จักยังคงเป็นรากฐาน—แต่โต๊ะนี้เพิ่มความไม่แน่นอน การอ่านคู่แข่ง และเดิมพันด้วย Crown',
+    title: 'WELCOME TO THE ARENA',
+    lead: 'At the summit of Rise, the rules you know remain the foundation—but this table adds uncertainty, player reads, and Crown-powered risk.',
     bullets: [
-      ['53 ใบ', 'สำรับมาตรฐาน 52 ใบ เพิ่ม Joker 1 ใบ'],
-      ['2–3 Human + Boss AI', 'ทุกโต๊ะมีคู่ต่อสู้ที่ Server ควบคุมอย่างน้อยหนึ่งที่นั่ง'],
-      ['Crown & Crest', '1 Crown = 12 Crest · ค่าใช้จ่ายและ Pot แสดงแบบ real-time'],
-      ['3 Games / Match', 'ทุกการตัดสินใจสะสมผลไปจนจบ Match'],
+      ['53 CARDS', 'The standard 52-card deck gains one Joker.'],
+      ['2–3 HUMANS + BOSS AI', 'Every table includes at least one server-controlled Boss opponent.'],
+      ['CROWN & CREST', '1 Crown = 12 Crest. Costs and pots update in real time.'],
+      ['3 GAMES PER MATCH', 'Every decision carries forward until the match is complete.'],
     ],
   },
   {
     eyebrow: 'NEW RULE · JOKER',
-    title: 'หนึ่งใบ สองชะตา',
-    lead: 'เมื่อ Joker อยู่ในมือ คุณต้องเลือกบทบาทและกองเป้าหมายก่อน Final Lock เมื่อยืนยันแล้วจะเปลี่ยนไม่ได้',
+    title: 'ONE CARD. TWO DESTINIES.',
+    lead: 'If the Joker is in your hand, choose its role and target pile before the Final Lock. Your choice cannot be changed after confirmation.',
     bullets: [
-      ['FULLY WILD', 'แทนได้ทั้ง Rank และ Suit เพื่อสร้าง Hand ที่ดีที่สุด—แต่ห้าม Five of a Kind'],
-      ['ANTE ×2', 'เพิ่ม Ante ของกองที่เลือกเป็นสองเท่า และบังคับคู่แข่ง Match Ante เท่ากัน'],
-      ['BEST 5 FROM 7', 'กอง 3 รวมไพ่ที่จัดไว้ 5 ใบกับ Community 2 ใบ แล้วเลือก 5 ใบที่แข็งที่สุดมาคิด Hand Ranking'],
-      ['คิดให้ไกลกว่าเดิม', 'Straight, Flush, Full House หรือ Straight Flush อาจเกิดจากหลาย combination ที่ซ่อนอยู่ใน 7 ใบ'],
+      ['FULLY WILD', 'It may represent any rank and suit to build the strongest hand, except Five of a Kind.'],
+      ['ANTE ×2', 'Double the ante of the chosen pile and force every opponent to match that ante.'],
+      ['BEST 5 FROM 7', 'Pile 3 combines five arranged cards with two community cards, then ranks the strongest five-card hand.'],
+      ['BOTH COMMUNITY CARDS REQUIRED', 'Your final hand must always use both community cards. Choose the best three of your five arranged cards to complete a Straight, Flush, Full House, or Straight Flush.'],
     ],
     joker: true,
   },
   {
     eyebrow: 'NEW FLOW · READ THE TABLE',
-    title: 'ชนะด้วยข้อมูล ไม่ใช่แค่ไพ่',
-    lead: 'Arena เพิ่มจังหวะตัดสินใจก่อน Showdown และเก็บข้อมูลของผู้แพ้ไว้หลังม่าน',
+    title: 'WIN WITH INFORMATION, NOT CARDS ALONE',
+    lead: 'The Arena adds decisions before showdown while keeping a defeated player’s cards hidden behind the fog of war.',
     bullets: [
-      ['FACE-UP → BLIND AUCTION', 'ประมูลไพ่หงายก่อน แล้วเสี่ยงกับไพ่คว่ำ—ผู้แพ้ประมูลไม่เสีย Crest'],
-      ['GRAND FINALE', 'กอง 2 มี Call/Fold 1 รอบ · กอง 3 มี 2 รอบ และไม่มี Raise'],
-      ['FOLD เฉพาะกอง', 'การหมอบไม่ทำให้หลุดจากทั้ง Game แต่เสียสิทธิ์ในกองปัจจุบัน'],
-      ['FOG OF WAR', 'ไพ่ผู้แพ้ไม่เปิดเผย หากทุกคน Fold ผู้ชนะรับ Pot โดยไม่ต้องโชว์ไพ่'],
+      ['FACE-UP → BLIND AUCTION', 'Bid on the face-up card first, then risk Crest on a hidden card. Losing bidders pay nothing.'],
+      ['GRAND FINALE', 'Pile 2 has one Call/Fold round. Pile 3 has two rounds. Raising is not allowed.'],
+      ['PILE-SPECIFIC FOLD', 'Folding gives up only the current pile; it does not remove you from the entire game.'],
+      ['FOG OF WAR', 'A losing hand stays hidden. If everyone folds, the winner takes the pot without revealing cards.'],
     ],
   },
   {
     eyebrow: 'MONTHLY LIVE EVENT · SOVEREIGN',
-    title: 'ประตูสู่ THE LAST BOSS',
-    lead: 'ทุกเดือน ผู้ท้าชิงเพียง 9 คนจะถูกแบ่งลงแข่ง 3 Match—คืนวันศุกร์ เสาร์ และอาทิตย์ของสัปดาห์ Event สุดท้าย',
+    title: 'THE GATE TO THE LAST BOSS',
+    lead: 'Each month, nine challengers are divided across three matches held on Friday, Saturday, and Sunday of the final event week.',
     bullets: [
-      ['ASCENDANT ROOKIE · 3', 'โอกาสครั้งแรกสำหรับผู้เล่น Tier S ที่ยังไม่เคยใช้สิทธิ์ Rookie'],
-      ['VETERAN · 3', 'ผู้เล่นที่เคยเผชิญ The Last Boss และกลับมาท้าทายอีกครั้ง'],
-      ['RISING STAR · 3', 'ผู้เล่นที่มี Monthly Performance Score สูงสุด โดยไม่ซ้ำกับสองกลุ่มแรก'],
-      ['เกณฑ์ร่วม', 'Tier S สถานะปกติ และเล่นครบอย่างน้อย 10 Match ในรอบคัดเลือก · ที่นั่งว่างใช้ลำดับสำรองตามกติกา Event'],
-      ['วันแข่งขันและสิทธิ์สำรอง', 'ประกาศรายชื่อวันอาทิตย์สัปดาห์ที่ 3 · ยืนยันภายในวันพุธ · เช็กอิน 20:00–20:05 น. ผู้ชม Tier S สมัคร Standby แบบ First Come, First Served ได้'],
+      ['ASCENDANT ROOKIE · 3', 'First-time opportunity for Tier S players who have not used their Rookie eligibility.'],
+      ['VETERAN · 3', 'Players who have faced The Last Boss before and earned another challenge.'],
+      ['RISING STAR · 3', 'The highest Monthly Performance Score players not already selected in the first two groups.'],
+      ['SHARED ELIGIBILITY', 'Maintain good Tier S standing and complete at least 10 matches during the qualifying period. Vacancies pass to alternates under event rules.'],
+      ['DATES & STANDBY', 'The roster is announced on the third Sunday and must be confirmed by Wednesday. Check-in runs from 20:00–20:05. Tier S spectators may join standby on a first-come, first-served basis.'],
     ],
     beyond: true,
   },
@@ -67,7 +64,7 @@ export default function ArenaWelcomeGuide({ onComplete, onExit }: Props) {
     <ImageBackground source={require('../../../assets/tables/boss_monarch_skin_table.png')} style={styles.root} resizeMode="cover">
       <LinearGradient colors={['rgba(5,13,9,0.88)', 'rgba(11,32,21,0.95)', '#07100B']} style={StyleSheet.absoluteFill} />
       <View style={styles.topBar}>
-        <Pressable onPress={onExit} hitSlop={12}><Text style={styles.exit}>‹ กลับ Lobby</Text></Pressable>
+        <Pressable onPress={onExit} hitSlop={12}><Text style={styles.exit}>‹ BACK TO LOBBY</Text></Pressable>
         <Text style={styles.brand}>TRIPLEPOKER : RISE</Text>
         <Text style={styles.counter}>{page + 1} / {SLIDES.length}</Text>
       </View>
@@ -78,35 +75,25 @@ export default function ArenaWelcomeGuide({ onComplete, onExit }: Props) {
           <Text style={styles.eyebrow}>{slide.eyebrow}</Text>
           <Text style={[styles.title, compact && styles.titleCompact]}>{slide.title}</Text>
           <Text style={styles.lead}>{slide.lead}</Text>
-
           {'joker' in slide && slide.joker && (
             <View style={styles.jokerStage}>
               <Image source={require('../../../assets/cards/classic/joker.png')} style={styles.jokerCard} resizeMode="contain" />
-              <View style={styles.bestFive}>
-                <Text style={styles.bestFiveTop}>PILE 3</Text>
-                <Text style={styles.bestFiveFormula}>5 + 2</Text>
-                <Text style={styles.bestFiveLabel}>BEST 5 FROM 7</Text>
-              </View>
+              <View style={styles.bestFive}><Text style={styles.bestFiveTop}>PILE 3</Text><Text style={styles.bestFiveFormula}>5 + 2</Text><Text style={styles.bestFiveLabel}>BEST 5 FROM 7</Text></View>
             </View>
           )}
-
           <View style={styles.rules}>
             {slide.bullets.map(([label, body], index) => (
               <View key={label} style={styles.ruleRow}>
                 <View style={styles.ruleNumber}><Text style={styles.ruleNumberText}>{String(index + 1).padStart(2, '0')}</Text></View>
-                <View style={styles.ruleCopy}>
-                  <Text style={styles.ruleLabel}>{label}</Text>
-                  <Text style={styles.ruleBody}>{body}</Text>
-                </View>
+                <View style={styles.ruleCopy}><Text style={styles.ruleLabel}>{label}</Text><Text style={styles.ruleBody}>{body}</Text></View>
               </View>
             ))}
           </View>
-
           {'beyond' in slide && slide.beyond && (
             <View style={styles.beyondBox}>
               <Text style={styles.beyondKicker}>THE JOURNEY CONTINUES</Text>
               <Text style={styles.beyondTitle}>BEYOND THE RULES</Text>
-              <Text style={styles.beyondText}>การเอาชนะ The Last Boss ไม่ใช่บทจบ แต่เป็นการเปิดประตูที่เขาปกป้องไว้ สู่อีกแอปหนึ่งที่กติกา TriplePoker ไม่ได้ตายตัว—เส้นทางใหม่ ทีมใหม่ และรูปแบบการเล่นที่เปลี่ยนไปตามโลกที่คุณเลือก</Text>
+              <Text style={styles.beyondText}>Defeating The Last Boss is not the end. It opens the gate they were guarding—to another app where TriplePoker rules are no longer fixed, with new paths, new teams, and play that evolves with the world you choose.</Text>
             </View>
           )}
         </View>
@@ -115,9 +102,9 @@ export default function ArenaWelcomeGuide({ onComplete, onExit }: Props) {
       <View style={styles.footer}>
         <View style={styles.dots}>{SLIDES.map((_, index) => <View key={index} style={[styles.dot, index === page && styles.dotActive]} />)}</View>
         <View style={styles.actions}>
-          {page > 0 && <Pressable onPress={() => setPage(value => value - 1)} style={styles.secondaryButton}><Text style={styles.secondaryText}>ย้อนกลับ</Text></Pressable>}
+          {page > 0 && <Pressable onPress={() => setPage(value => value - 1)} style={styles.secondaryButton}><Text style={styles.secondaryText}>BACK</Text></Pressable>}
           <Pressable onPress={() => page === SLIDES.length - 1 ? onComplete() : setPage(value => value + 1)} style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}>
-            <Text style={styles.primaryText}>{page === SLIDES.length - 1 ? 'ข้าพเจ้าเข้าใจกติกา · ENTER ARENA' : 'ถัดไป'}</Text>
+            <Text style={styles.primaryText}>{page === SLIDES.length - 1 ? 'I UNDERSTAND · ENTER ARENA' : 'NEXT'}</Text>
           </Pressable>
         </View>
       </View>
@@ -128,43 +115,13 @@ export default function ArenaWelcomeGuide({ onComplete, onExit }: Props) {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#07100B' },
   topBar: { minHeight: 58, paddingTop: 12, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: 'rgba(255,215,106,0.2)' },
-  exit: { color: '#C8C4B0', fontSize: 12, fontWeight: '700' },
-  brand: { color: '#FFD76A', fontFamily: 'Cinzel_700Bold', fontSize: 12, letterSpacing: 2 },
-  counter: { color: '#8DFFB5', fontFamily: 'JetBrainsMono_600SemiBold', fontSize: 11 },
-  scroll: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: 32 },
-  scrollCompact: { justifyContent: 'flex-start', padding: 16, paddingTop: 28 },
-  card: { width: '100%', maxWidth: 860, padding: 34, borderRadius: 22, backgroundColor: 'rgba(9,28,18,0.9)', borderWidth: 1, borderColor: 'rgba(255,215,106,0.42)', overflow: 'hidden' },
-  cardCompact: { padding: 20, borderRadius: 16 },
-  goldLine: { position: 'absolute', top: 0, left: 0, right: 0, height: 3, backgroundColor: '#FFD76A' },
-  eyebrow: { color: '#8DFFB5', fontFamily: 'JetBrainsMono_600SemiBold', fontSize: 11, letterSpacing: 2.2, textAlign: 'center' },
-  title: { color: '#FFD76A', fontFamily: 'Cinzel_700Bold', fontSize: 31, letterSpacing: 1.2, textAlign: 'center', marginTop: 10 },
-  titleCompact: { fontSize: 23 },
-  lead: { color: '#F5F2E8', fontSize: 14, lineHeight: 22, textAlign: 'center', maxWidth: 680, alignSelf: 'center', marginTop: 12 },
-  rules: { marginTop: 24, gap: 10 },
-  ruleRow: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.035)', borderWidth: 1, borderColor: 'rgba(141,255,181,0.12)' },
-  ruleNumber: { width: 34, height: 34, borderRadius: 17, borderWidth: 1, borderColor: '#B8953E', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
-  ruleNumberText: { color: '#FFD76A', fontFamily: 'JetBrainsMono_600SemiBold', fontSize: 10 },
-  ruleCopy: { flex: 1 },
-  ruleLabel: { color: '#FFD76A', fontSize: 12, fontWeight: '900', letterSpacing: 0.5 },
-  ruleBody: { color: '#C8C4B0', fontSize: 12, lineHeight: 18, marginTop: 3 },
-  jokerStage: { alignSelf: 'center', flexDirection: 'row', alignItems: 'center', marginTop: 20, gap: 18 },
-  jokerCard: { width: 74, height: 104, transform: [{ rotate: '-5deg' }] },
-  bestFive: { alignItems: 'center', paddingVertical: 10, paddingHorizontal: 20, borderLeftWidth: 1, borderLeftColor: '#B8953E' },
-  bestFiveTop: { color: '#C8C4B0', fontSize: 10, letterSpacing: 2 },
-  bestFiveFormula: { color: '#F5F2E8', fontFamily: 'Cinzel_700Bold', fontSize: 28 },
-  bestFiveLabel: { color: '#8DFFB5', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
-  beyondBox: { marginTop: 18, padding: 18, borderRadius: 14, backgroundColor: 'rgba(57,24,83,0.45)', borderWidth: 1, borderColor: 'rgba(190,132,255,0.4)' },
-  beyondKicker: { color: '#CDA6FF', fontSize: 9, fontWeight: '900', letterSpacing: 2.5, textAlign: 'center' },
-  beyondTitle: { color: '#F1E6FF', fontFamily: 'Cinzel_700Bold', fontSize: 20, letterSpacing: 2, textAlign: 'center', marginTop: 5 },
-  beyondText: { color: '#D4C6DE', fontSize: 12, lineHeight: 19, textAlign: 'center', marginTop: 8 },
-  footer: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 16, alignItems: 'center', borderTopWidth: 1, borderTopColor: 'rgba(255,215,106,0.16)', backgroundColor: 'rgba(5,13,9,0.92)' },
-  dots: { flexDirection: 'row', gap: 7, marginBottom: 10 },
-  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#465046' },
-  dotActive: { width: 22, backgroundColor: '#FFD76A' },
-  actions: { flexDirection: 'row', gap: 10, justifyContent: 'center', width: '100%' },
-  primaryButton: { minWidth: 170, maxWidth: 420, flexShrink: 1, paddingVertical: 13, paddingHorizontal: 22, borderRadius: 10, alignItems: 'center', backgroundColor: '#FFD76A' },
-  primaryText: { color: '#0F2418', fontSize: 12, fontWeight: '900', letterSpacing: 0.5, textAlign: 'center' },
-  secondaryButton: { paddingVertical: 13, paddingHorizontal: 20, borderRadius: 10, borderWidth: 1, borderColor: '#526357' },
-  secondaryText: { color: '#C8C4B0', fontSize: 12, fontWeight: '800' },
-  pressed: { opacity: 0.74, transform: [{ scale: 0.99 }] },
+  exit: { color: '#C8C4B0', fontSize: 12, fontWeight: '700' }, brand: { color: '#FFD76A', fontFamily: 'Cinzel_700Bold', fontSize: 12, letterSpacing: 2 }, counter: { color: '#8DFFB5', fontFamily: 'JetBrainsMono_600SemiBold', fontSize: 11 },
+  scroll: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: 32 }, scrollCompact: { justifyContent: 'flex-start', padding: 16, paddingTop: 28 },
+  card: { width: '100%', maxWidth: 860, padding: 34, borderRadius: 22, backgroundColor: 'rgba(9,28,18,0.9)', borderWidth: 1, borderColor: 'rgba(255,215,106,0.42)', overflow: 'hidden' }, cardCompact: { padding: 20, borderRadius: 16 },
+  goldLine: { position: 'absolute', top: 0, left: 0, right: 0, height: 3, backgroundColor: '#FFD76A' }, eyebrow: { color: '#8DFFB5', fontFamily: 'JetBrainsMono_600SemiBold', fontSize: 11, letterSpacing: 2.2, textAlign: 'center' },
+  title: { color: '#FFD76A', fontFamily: 'Cinzel_700Bold', fontSize: 31, letterSpacing: 1.2, textAlign: 'center', marginTop: 10 }, titleCompact: { fontSize: 23 }, lead: { color: '#F5F2E8', fontSize: 14, lineHeight: 22, textAlign: 'center', maxWidth: 680, alignSelf: 'center', marginTop: 12 },
+  rules: { marginTop: 24, gap: 10 }, ruleRow: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.035)', borderWidth: 1, borderColor: 'rgba(141,255,181,0.12)' }, ruleNumber: { width: 34, height: 34, borderRadius: 17, borderWidth: 1, borderColor: '#B8953E', alignItems: 'center', justifyContent: 'center', marginRight: 12 }, ruleNumberText: { color: '#FFD76A', fontFamily: 'JetBrainsMono_600SemiBold', fontSize: 10 }, ruleCopy: { flex: 1 }, ruleLabel: { color: '#FFD76A', fontSize: 12, fontWeight: '900', letterSpacing: 0.5 }, ruleBody: { color: '#C8C4B0', fontSize: 12, lineHeight: 18, marginTop: 3 },
+  jokerStage: { alignSelf: 'center', flexDirection: 'row', alignItems: 'center', marginTop: 20, gap: 18 }, jokerCard: { width: 74, height: 104, transform: [{ rotate: '-5deg' }] }, bestFive: { alignItems: 'center', paddingVertical: 10, paddingHorizontal: 20, borderLeftWidth: 1, borderLeftColor: '#B8953E' }, bestFiveTop: { color: '#C8C4B0', fontSize: 10, letterSpacing: 2 }, bestFiveFormula: { color: '#F5F2E8', fontFamily: 'Cinzel_700Bold', fontSize: 28 }, bestFiveLabel: { color: '#8DFFB5', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+  beyondBox: { marginTop: 18, padding: 18, borderRadius: 14, backgroundColor: 'rgba(57,24,83,0.45)', borderWidth: 1, borderColor: 'rgba(190,132,255,0.4)' }, beyondKicker: { color: '#CDA6FF', fontSize: 9, fontWeight: '900', letterSpacing: 2.5, textAlign: 'center' }, beyondTitle: { color: '#F1E6FF', fontFamily: 'Cinzel_700Bold', fontSize: 20, letterSpacing: 2, textAlign: 'center', marginTop: 5 }, beyondText: { color: '#D4C6DE', fontSize: 12, lineHeight: 19, textAlign: 'center', marginTop: 8 },
+  footer: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 16, alignItems: 'center', borderTopWidth: 1, borderTopColor: 'rgba(255,215,106,0.16)', backgroundColor: 'rgba(5,13,9,0.92)' }, dots: { flexDirection: 'row', gap: 7, marginBottom: 10 }, dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#465046' }, dotActive: { width: 22, backgroundColor: '#FFD76A' }, actions: { flexDirection: 'row', gap: 10, justifyContent: 'center', width: '100%' }, primaryButton: { minWidth: 170, maxWidth: 420, flexShrink: 1, paddingVertical: 13, paddingHorizontal: 22, borderRadius: 10, alignItems: 'center', backgroundColor: '#FFD76A' }, primaryText: { color: '#0F2418', fontSize: 12, fontWeight: '900', letterSpacing: 0.5, textAlign: 'center' }, secondaryButton: { paddingVertical: 13, paddingHorizontal: 20, borderRadius: 10, borderWidth: 1, borderColor: '#526357' }, secondaryText: { color: '#C8C4B0', fontSize: 12, fontWeight: '800' }, pressed: { opacity: 0.74, transform: [{ scale: 0.99 }] },
 })

@@ -14,13 +14,15 @@ import BossVictoryVFX from '../../../src/components/vfx/BossVictoryVFX'
 import { isLocalTripleSweep } from '../../../src/components/vfx/vfxPolicy'
 import { ArenaClientIntent, ArenaClientSnapshot, ArenaSeatView } from '../../../src/game/grandmaster/arenaClientTypes'
 import { playCardArrange1, playCardArrange2, playCountdownWarning, playJackpotFanfare, playBossPileWinThunder, playCardReveal, playPokerChip, playReadyButton, playCardShuffle, playAnte } from '../../../src/services/gameSfxService'
+import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
+import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
 
 const MONARCH_TABLE = require('../../../assets/tables/boss_monarch_skin_table.png')
 
-interface Props { snapshot: ArenaClientSnapshot; onIntent: (intent: ArenaClientIntent) => void; transportStatus?: string }
+interface Props { snapshot: ArenaClientSnapshot; onIntent: (intent: ArenaClientIntent) => void; transportStatus?: string; serverOnline?: boolean }
 
 type ArrangingPhase = 'ARRANGE_1' | 'FINAL_ARRANGE' | 'FINAL_LOCK'
-type CallRevealEvent = { id: string; seat: 1 | 2 | 3 | 4; displayName: string; pile: 2 | 3; cards: string[] }
+type GFActionEvent = { id: string; seat: 1 | 2 | 3 | 4; displayName: string; pile: 2 | 3; round: 1 | 2; decision: 'CALL' | 'FOLD'; cards: string[] }
 const ARRANGING_PHASES: ArrangingPhase[] = ['ARRANGE_1', 'FINAL_ARRANGE', 'FINAL_LOCK']
 // ต้องตรงกับ styles.communityCard.height เสมอ — ใช้เลื่อนกองกลางขึ้นบนอีก 1 เท่าของความสูงไพ่กองกลาง
 const COMMUNITY_CARD_HEIGHT = 49
@@ -298,7 +300,7 @@ function CommunityRevealCard({ code }: { code: string }) {
   return <Animated.View style={[styles.communityRevealGlow, { opacity: glow, transform: [{ scaleX }] }]}>{cardView(code)}</Animated.View>
 }
 
-function CallRevealSpotlight({ event, width }: { event: CallRevealEvent; width: number }) {
+function GFActionSpotlight({ event, width }: { event: GFActionEvent; width: number }) {
   const opacity = useRef(new Animated.Value(0)).current
   const scale = useRef(new Animated.Value(0.72)).current
   useEffect(() => {
@@ -309,19 +311,18 @@ function CallRevealSpotlight({ event, width }: { event: CallRevealEvent; width: 
     animation.start()
     return () => animation.stop()
   }, [opacity, scale])
-  // Keep the spotlight readable without upscaling the card bitmap so far that
-  // rank/suit details become soft. This is 25% smaller than the former 180/108px range.
-  const cardWidth = Math.min(135, Math.max(81, (width - 72) / Math.max(2, event.cards.length)))
+  // Call-reveal cards intentionally render at half the previous dimensions so
+  // the source bitmap stays crisp instead of being enlarged on high-density screens.
+  const previousCardWidth = Math.min(135, Math.max(81, (width - 72) / Math.max(2, event.cards.length)))
+  const cardWidth = Math.round(previousCardWidth * 0.5)
   const cardHeight = Math.round(cardWidth * 1.44)
   return (
     <View pointerEvents="auto" style={styles.callRevealOverlay}>
-      <Text style={styles.callRevealTitle}>{event.displayName} · CALL</Text>
-      <Text style={styles.callRevealSub}>PILE {event.pile} · REVEALED CARDS</Text>
-      <Animated.View style={[styles.callRevealCards, { opacity, transform: [{ scale }] }]}>
-        {event.cards.map((code, index) => (
-          <Image key={`${event.id}-${code}-${index}`} source={CARD_IMG[code] ?? CARD_BACK_IMG} style={[styles.callRevealCard, { width: cardWidth, height: cardHeight }]} resizeMode="cover" />
-        ))}
-      </Animated.View>
+      <Text style={[styles.callRevealTitle, event.decision === 'FOLD' && styles.foldActionTitle]}>{event.displayName} · {event.decision}</Text>
+      <Text style={styles.callRevealSub}>PILE {event.pile} · ROUND {event.round}{event.decision === 'CALL' ? ' · REVEALED CARDS' : ''}</Text>
+      {event.decision === 'CALL' && <Animated.View style={[styles.callRevealCards, { opacity, transform: [{ scale }] }]}>
+        {event.cards.map((code, index) => <Image key={`${event.id}-${code}-${index}`} source={CARD_IMG[code] ?? CARD_BACK_IMG} style={[styles.callRevealCard, { width: cardWidth, height: cardHeight }]} resizeMode="cover" />)}
+      </Animated.View>}
     </View>
   )
 }
@@ -348,7 +349,7 @@ function WaitingDot({ index, progress }: { index: number; progress: SharedValue<
   return <Reanimated.View style={[styles.waitingDot, animatedStyle]} />
 }
 
-function SeatLabel({ seat, turnSeconds }: { seat: ArenaSeatView; turnSeconds?: number | null }) {
+function SeatLabel({ seat, turnSeconds, gfStatus }: { seat: ArenaSeatView; turnSeconds?: number | null; gfStatus?: 'WAITING' | 'CURRENT' | 'CALLED' | 'FOLDED' | 'SHOWDOWN' }) {
   const status = seat.connection === 'CONNECTED' ? null : seat.connection.replaceAll('_', ' ')
   if (seat.isWaiting) return (
     <View style={[styles.seatLabel, styles.waitingSeatLabel]}>
@@ -365,6 +366,7 @@ function SeatLabel({ seat, turnSeconds }: { seat: ArenaSeatView; turnSeconds?: n
         <Text numberOfLines={1} style={styles.seatName}>{seat.displayName}</Text>
         <Text style={styles.seatBalance}>{Math.floor(seat.crownCrest / 12)} C {seat.crownCrest % 12} Cr</Text>
         {seat.isCurrentTurn && turnSeconds !== null && turnSeconds !== undefined && <Text style={styles.seatTurnTimer}>CALL / FOLD · {turnSeconds}s</Text>}
+        {gfStatus && gfStatus !== 'WAITING' && gfStatus !== 'CURRENT' && <Text style={[styles.gfSeatStatus, gfStatus === 'FOLDED' && styles.gfSeatFolded]}>{gfStatus}</Text>}
         {status && <Text style={styles.seatStatus}>{status}</Text>}
       </View>
     </View>
@@ -386,7 +388,7 @@ function restoreSavedPiles(cards: string[], saved?: ArenaSeatView['arrangedPiles
   return [toCards(saved.pile1), toCards(saved.pile2), toCards([...saved.pile3, ...missing])]
 }
 
-export default function GrandmasterTableView({ snapshot, onIntent, transportStatus }: Props) {
+export default function GrandmasterTableView({ snapshot, onIntent, transportStatus, serverOnline = true }: Props) {
   const { width, height } = useWindowDimensions()
   const compact = width < 700 || height < 420
   const [now, setNow] = useState(Date.now())
@@ -403,8 +405,18 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
   const [auctionAwardActive, setAuctionAwardActive] = useState(false)
   const [completedBlindAwards, setCompletedBlindAwards] = useState<Set<string>>(new Set())
   const [selectedGFCardIds, setSelectedGFCardIds] = useState<string[]>([])
-  const [callRevealQueue, setCallRevealQueue] = useState<CallRevealEvent[]>([])
-  const previousGFReveals = useRef<Map<number, string[]>>(new Map())
+  const [royalFlushPlayer, setRoyalFlushPlayer] = useState<string | null>(null)
+  const lastRoyalRevealRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    const reveal = snapshot.reveal
+    if (!reveal || String(reveal.handName).toLowerCase().replace(/[ _-]/g, '') !== 'royalflush') return
+    const key = `${snapshot.matchId}:${snapshot.gameNumber}:${reveal.pile}:${reveal.winnerSeat}:${reveal.handName}`
+    if (lastRoyalRevealRef.current === key) return
+    lastRoyalRevealRef.current = key
+    setRoyalFlushPlayer(reveal.winnerDisplayName || (reveal.winnerSeat ? `SEAT ${reveal.winnerSeat}` : 'PLAYER'))
+  }, [snapshot.matchId, snapshot.gameNumber, snapshot.reveal])
+  const [gfActionQueue, setGFActionQueue] = useState<GFActionEvent[]>([])
   const seenCallRevealEvents = useRef<Set<string>>(new Set())
   const flyingCoinsRef = useRef<FlyingCoinsHandle>(null)
   const firedRevealCoinsRef = useRef<string | null>(null)
@@ -426,43 +438,29 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
   }, [snapshot.result?.bossVictory, snapshot.matchId])
 
   useEffect(() => {
-    previousGFReveals.current.clear()
     seenCallRevealEvents.current.clear()
-    setCallRevealQueue([])
+    setGFActionQueue([])
     pileWinnerSeatsRef.current = {}
     setShowLegendarySweep(false)
   }, [snapshot.gameNumber])
 
   useEffect(() => {
-    if (!snapshot.gfTable) return
-    const additions: CallRevealEvent[] = []
-    snapshot.gfTable.players.forEach(player => {
-      const previous = previousGFReveals.current.get(player.seat) ?? []
-      const added = player.revealedCards.filter(card => !previous.includes(card))
-      previousGFReveals.current.set(player.seat, [...player.revealedCards])
-      // Every Call reveals two cards. The final fifth showdown card is not a
-      // Call reveal and must not create another five-second spotlight.
-      if (added.length !== 2) return
-      const id = `${snapshot.gameNumber}:${snapshot.gfTable!.pile}:${snapshot.gfTable!.round}:${player.seat}:${player.revealedCards.join(',')}`
-      if (seenCallRevealEvents.current.has(id)) return
-      seenCallRevealEvents.current.add(id)
-      additions.push({ id, seat: player.seat, displayName: player.displayName, pile: snapshot.gfTable!.pile, cards: added })
-    })
-    if (additions.length) setCallRevealQueue(current => [...current, ...additions])
-  }, [snapshot.gameNumber, snapshot.gfTable])
+    const event = snapshot.gfAction
+    if (!event || seenCallRevealEvents.current.has(event.id)) return
+    seenCallRevealEvents.current.add(event.id)
+    setGFActionQueue(current => [...current, event])
+  }, [snapshot.gameNumber, snapshot.gfAction])
 
   useEffect(() => {
-    if (!callRevealQueue.length) return
-    const timer = setTimeout(() => setCallRevealQueue(current => current.slice(1)), 5_000)
+    if (!gfActionQueue.length) return
+    const timer = setTimeout(() => setGFActionQueue(current => current.slice(1)), gfActionQueue[0].decision === 'CALL' ? 2_200 : 1_400)
     return () => clearTimeout(timer)
-  }, [callRevealQueue])
+  }, [gfActionQueue])
 
-  // A pile-result reveal has priority over the per-Call spotlight. Without
-  // this, the five-second Call overlay can cover the four-second winner panel
-  // completely when the final caller closes the betting round.
-  useEffect(() => {
-    if (snapshot.reveal) setCallRevealQueue([])
-  }, [snapshot.reveal?.pile, snapshot.reveal?.winnerSeat])
+  // A final caller can move the server directly into the pile result. Keep
+  // that result waiting until every public Call reveal has played.
+  const unseenGFAction = !!snapshot.gfAction && !seenCallRevealEvents.current.has(snapshot.gfAction.id)
+  const deferPileResult = gfActionQueue.length > 0 || unseenGFAction
 
   // Coin Flying VFX ตอน pile resolve (พอร์ตจาก highNoble/index.tsx's pattern — มติลุงเยาะ 2026-08-14)
   // ยิงจากกึ่งกลางโต๊ะไปหาที่นั่งผู้ชนะจริง ใช้สูตร offset เดียวกับ AuctionAwardAnimation ด้านล่างเป๊ะ
@@ -547,14 +545,18 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
 
   const [piles, setPiles] = useState<[HandCardData[], HandCardData[], HandCardData[]] | null>(null)
   const [selectedCard, setSelectedCard] = useState<{ pi: number; ci: number } | null>(null)
+  const [discardTarget, setDiscardTarget] = useState<string | null>(null)
   const finalDraftSentRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!arrangingPhase || !local) { setPiles(null); setSelectedCard(null); return }
-    setPiles(restoreSavedPiles(local.cards, local.arrangedPiles))
+    const isDiscardTurn = snapshot.phase === 'DISCARD' && local?.isCurrentTurn
+    if ((!arrangingPhase && !isDiscardTurn) || !local) { setPiles(null); setSelectedCard(null); setDiscardTarget(null); return }
+    const restored = restoreSavedPiles(local.cards, local.arrangedPiles)
+    setPiles(restored)
     setSelectedCard(null)
+    setDiscardTarget(isDiscardTurn ? restored[2].at(-1)?.key ?? null : null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [arrangingPhase, snapshot.gameNumber])
+  }, [arrangingPhase, snapshot.phase, snapshot.gameNumber, local?.isCurrentTurn])
 
   // Save every stable ARRANGE_1 edit as a server-side draft without marking
   // the player Ready. This survives reconnects and becomes the starting layout
@@ -581,7 +583,6 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
     })
   }, [arrangingPhase, onIntent, piles, seconds, snapshot.gameNumber, snapshot.phaseEndsAt])
 
-  const [discardTarget, setDiscardTarget] = useState<string | null>(null)
   useEffect(() => {
     if (snapshot.phase !== 'DISCARD' || !local?.isCurrentTurn) { setDiscardTarget(null); return }
     const pile3 = local.arrangedPiles?.pile3
@@ -637,10 +638,33 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
     else if (arrangingPhase) onIntent({ type: 'SUBMIT_ARRANGEMENT', stage: arrangingPhase, ...pileKeys })
   }
 
+  const chooseDiscard = (pi: number, ci: number) => {
+    if (!piles || !piles[2].length) return
+    const next: [HandCardData[], HandCardData[], HandCardData[]] = [[...piles[0]], [...piles[1]], [...piles[2]]]
+    const lastIndex = next[2].length - 1
+    const chosen = next[pi][ci]
+    if (pi !== 2 || ci !== lastIndex) {
+      const previousLast = next[2][lastIndex]
+      next[pi][ci] = previousLast
+      next[2][lastIndex] = chosen
+    }
+    setPiles(next)
+    setDiscardTarget(chosen.key)
+  }
+
+  const confirmDiscard = () => {
+    if (!piles || !discardTarget) return
+    onIntent({
+      type: 'DISCARD', cardId: discardTarget,
+      pile1: piles[0].map(card => card.key), pile2: piles[1].map(card => card.key), pile3: piles[2].map(card => card.key),
+    })
+  }
+
   const renderSeat = (number: 1 | 2 | 3 | 4, placement: 'top' | 'left' | 'right' | 'bottom') => {
     const seat = bySeat.get(number)
     if (!seat) return null
     const gfTurnSeconds = snapshot.gfTable && seat.isCurrentTurn ? seconds : null
+    const gfPlayer = snapshot.gfTable?.players.find(player => player.seat === number)
     if (snapshot.phase === 'DEAL_ANIMATION') return <View style={[styles.seat, styles[placement]]}><SeatLabel seat={seat} turnSeconds={gfTurnSeconds} /></View>
     if (seat.isLocal && arrangingPhase) return <View style={[styles.seat, styles[placement]]}><SeatLabel seat={seat} turnSeconds={gfTurnSeconds} /></View>
     if (seat.isLocal && snapshot.phase === 'DISCARD' && seat.isCurrentTurn) return <View style={[styles.seat, styles[placement]]}><SeatLabel seat={seat} turnSeconds={gfTurnSeconds} /></View>
@@ -648,7 +672,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
       return (
         <View style={[styles.seat, styles[placement]]}>
           <View style={styles.localHandGap}><PileOneOpeningHand piles={seat.arrangedPiles} width={Math.min(width * 0.82, 460)} /></View>
-          <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} />
+          <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} gfStatus={gfPlayer?.status} />
         </View>
       )
     }
@@ -657,7 +681,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
       return (
         <View style={[styles.seat, styles[placement]]}>
           <View style={styles.localHandGap}><PileTwoBettingHand piles={seat.arrangedPiles} width={Math.min(width * 0.82, 460)} revealedCards={revealedCards} selectedCards={selectedGFCardIds} onSelectCard={toggleGFRevealCard} selectable={!!snapshot.gf?.localTurn} /></View>
-          <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} />
+          <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} gfStatus={gfPlayer?.status} />
         </View>
       )
     }
@@ -666,7 +690,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
       return (
         <View style={[styles.seat, styles[placement]]}>
           <View style={styles.localHandGap}><PileThreeBettingHand piles={seat.arrangedPiles} width={Math.min(width * 0.82, 460)} revealedCards={revealedCards} selectedCards={selectedGFCardIds} onSelectCard={toggleGFRevealCard} selectable={!!snapshot.gf?.localTurn} /></View>
-          <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} />
+          <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} gfStatus={gfPlayer?.status} />
         </View>
       )
     }
@@ -687,7 +711,6 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
       return true
     }) : seat.cards
     const visibleCardCount = Math.max(0, seat.cardCount - pendingFaceUpAwardCount - pendingBlindAwardCount)
-    const gfPlayer = snapshot.gfTable?.players.find(player => player.seat === number)
     const gfRevealedCards = gfPlayer?.revealedCards ?? []
     const gfPileActive = !!snapshot.gfTable
     const gfPrivateCardCount = snapshot.gfTable?.pile === 2 ? 3 : 5
@@ -720,13 +743,13 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
       return (
         <View style={[styles.seat, styles[placement]]}>
           <View style={styles.localHandGap}>{hand}</View>
-          <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} />
+          <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} gfStatus={gfPlayer?.status} />
         </View>
       )
     }
     return (
       <View style={[styles.seat, styles[placement]]}>
-        <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} />
+        <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} gfStatus={gfPlayer?.status} />
         {hand}
       </View>
     )
@@ -734,6 +757,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
 
   return (
     <ImageBackground source={MONARCH_TABLE} resizeMode="cover" style={styles.root}>
+      <GameServerStatusLight online={serverOnline} />
       <View style={styles.darkWash} />
       <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
         {transportStatus && transportStatus !== 'MATCHED' && (
@@ -757,6 +781,14 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
           {renderSeat(otherChallengerSeats[0], 'left')}
           {renderSeat(otherChallengerSeats[1], 'right')}
           {renderSeat(local.seat, 'bottom')}
+
+          {snapshot.gfTable?.currentSeat && (() => {
+            const current = snapshot.gfTable!.players.find(player => player.seat === snapshot.gfTable!.currentSeat)
+            return current ? <View pointerEvents="none" style={styles.gfTurnBanner}>
+              <Text style={styles.gfTurnRound}>PILE {snapshot.gfTable!.pile} · ROUND {snapshot.gfTable!.round}</Text>
+              <Text style={styles.gfTurnName}>{current.seat === local.seat ? 'YOUR TURN' : `${current.displayName.toUpperCase()} THINKING`}</Text>
+            </View> : null
+          })()}
 
           {isDealAnimation && <ArenaDealAnimation key={`deal-${snapshot.gameNumber}`} width={width} height={height} localSeat={local.seat} />}
           {snapshot.auctionResult && auctionAwardActive && <AuctionAwardAnimation key={`award-${snapshot.gameNumber}-${snapshot.auctionResult.card}`} result={snapshot.auctionResult} width={width} height={height} localSeat={local.seat} />}
@@ -847,28 +879,19 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
             </View>
           )}
 
-          {snapshot.phase === 'DISCARD' && local.isCurrentTurn && (
+          {snapshot.phase === 'DISCARD' && local.isCurrentTurn && piles && (
             <View style={styles.arrangeSheet}>
-              <Text style={styles.arrangeTitle}>MANDATORY DISCARD</Text>
-              <Text style={styles.arrangeSub}>The final card in Pile 3 must be discarded. The first five cards plus two community cards rank as Best 5 of 7.</Text>
-              <View style={styles.discardRow}>
-                {discardTarget ? [discardTarget].map(code => (
-                  <Pressable
-                    key={code}
-                    disabled
-                    hitSlop={6}
-                    style={[styles.discardCard, styles.discardCardSelected]}
-                  >
-                    <Image source={CARD_IMG[code]} style={styles.discardImage} resizeMode="cover" />
-                  </Pressable>
-                )) : null}
-              </View>
+              <Text style={styles.arrangeTitle}>FINAL HAND · DISCARD</Text>
+              <Text style={styles.arrangeSub}>The last card is marked ×. Tap any card to replace it, then discard. Pile 3 uses the best 3 of your 5 cards together with both community cards.</Text>
+              <PlayerHandView
+                piles={piles}
+                selected={null}
+                discardMarked={{ pi: 2, ci: Math.max(0, piles[2].length - 1) }}
+                onCardPress={chooseDiscard}
+                isVip={false}
+              />
               <Pressable
-                onPress={() => {
-                  if (!discardTarget) return
-                  playReadyButton()
-                  onIntent({ type: 'DISCARD', cardId: discardTarget })
-                }}
+                onPress={() => { playReadyButton(); confirmDiscard() }}
                 hitSlop={10}
                 style={({ pressed }) => [styles.primaryAction, pressed && styles.primaryActionPressed]}
               >
@@ -878,8 +901,9 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
           )}
         </View>
       </SafeAreaView>
-      {!isDealAnimation && <ArenaOverlays snapshot={auctionAwardActive ? { ...snapshot, auction: null } : snapshot} onIntent={onIntent} selectedGFCardIds={selectedGFCardIds} requiredGFSelection={requiredGFSelection} />}
-      {callRevealQueue[0] && <CallRevealSpotlight event={callRevealQueue[0]} width={width} />}
+      {!isDealAnimation && <ArenaOverlays snapshot={{ ...snapshot, ...(auctionAwardActive ? { auction: null } : {}), ...(deferPileResult ? { reveal: null } : {}) }} onIntent={onIntent} selectedGFCardIds={selectedGFCardIds} requiredGFSelection={requiredGFSelection} />}
+      {royalFlushPlayer && <RoyalStraightFlushVFX playerName={royalFlushPlayer} onClose={() => setRoyalFlushPlayer(null)} />}
+      {gfActionQueue[0] && <GFActionSpotlight event={gfActionQueue[0]} width={width} />}
       {victoryVfx && (
         <BossVictoryVFX tier={victoryVfx.tier} titleOverride={victoryVfx.title ?? undefined} onFinish={() => setVictoryVfx(null)} />
       )}
@@ -916,11 +940,17 @@ const styles = StyleSheet.create({
   dealCardImage: { width: 25, height: 36 },
   dealingText: { position: 'absolute', top: '55%', color: 'rgba(255,215,106,0.72)', fontSize: 9, fontWeight: '900', letterSpacing: 1.5 },
   awardOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 60, alignItems: 'center', justifyContent: 'center' },
-  callRevealOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 90, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(2,7,5,0.92)' },
+  callRevealOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 90, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(2,7,5,0.78)' },
   callRevealTitle: { color: '#FFD76A', fontSize: 20, fontWeight: '900', letterSpacing: 1.2, textAlign: 'center' },
+  foldActionTitle: { color: '#FF7A7A' },
   callRevealSub: { color: '#8DFFB5', fontSize: 10, fontWeight: '900', letterSpacing: 1.5, marginTop: 5, marginBottom: 18 },
-  callRevealCards: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14 },
-  callRevealCard: { borderRadius: 10, borderWidth: 3, borderColor: '#FF3B30', backgroundColor: '#130D1F', shadowColor: '#FFD76A', shadowOpacity: 0.9, shadowRadius: 18, elevation: 20 },
+  callRevealCards: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
+  callRevealCard: { borderRadius: 5, borderWidth: 2, borderColor: '#FF3B30', backgroundColor: '#130D1F', shadowColor: '#FFD76A', shadowOpacity: 0.9, shadowRadius: 9, elevation: 12 },
+  gfTurnBanner: { position: 'absolute', top: '57%', alignSelf: 'center', zIndex: 34, alignItems: 'center', paddingHorizontal: 16, paddingVertical: 7, borderRadius: 10, backgroundColor: 'rgba(7,20,13,0.9)', borderWidth: 1, borderColor: 'rgba(255,215,106,0.55)' },
+  gfTurnRound: { color: '#FFC857', fontSize: 9, fontWeight: '800', letterSpacing: 1.8 },
+  gfTurnName: { color: '#FFD76A', fontSize: 16, fontWeight: '900', letterSpacing: 2, marginTop: 2 },
+  gfSeatStatus: { alignSelf: 'flex-start', marginTop: 2, color: '#8DFFB5', fontSize: 7, fontWeight: '900', letterSpacing: 1 },
+  gfSeatFolded: { color: '#FF7A7A' },
   awardMessage: { position: 'absolute', top: '31%', paddingHorizontal: 18, paddingVertical: 8, borderRadius: 18, backgroundColor: 'rgba(7,18,11,0.94)', borderWidth: 1, borderColor: '#FFD76A' },
   awardTitle: { color: '#FFD76A', fontSize: 12, fontWeight: '900', letterSpacing: 1, textAlign: 'center' },
   awardCard: { width: 54, height: 78, borderRadius: 6, overflow: 'hidden', borderWidth: 2, borderColor: '#FFD76A', backgroundColor: '#130D1F', shadowColor: '#FFD76A', shadowOpacity: 0.9, shadowRadius: 12, elevation: 15 },

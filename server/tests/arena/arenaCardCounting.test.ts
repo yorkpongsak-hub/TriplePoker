@@ -69,6 +69,21 @@ describe('ArenaMatchEngine.estimateOpponentSafeRate — card counting กอง 
     expect(engine.estimateOpponentSafeRate('p1', 2)).toBe(0.5)
   })
 
+  test('Monte Carlo equity is deterministic and produces fractional probabilities', () => {
+    const values: number[] = []
+    for (let seed = 21; seed <= 26; seed++) {
+      const engine = new ArenaMatchEngine(`m-equity-${seed}`, composition, createSeededRandom(seed), 0)
+      driveTo(engine, 'GF_PILE_2')
+      const bossId = engine.actorIds[2]
+      const first = engine.estimateOpponentSafeRate(bossId, 2)
+      const second = engine.estimateOpponentSafeRate(bossId, 2)
+      expect(second).toBe(first)
+      values.push(first)
+    }
+    expect(values.some(value => value > 0 && value < 1)).toBe(true)
+    expect(new Set(values).size).toBeGreaterThan(2)
+  })
+
   test('ค่าที่คืนอยู่ในช่วง [0,1] เสมอ ไม่ว่าใครถามหรือกองไหน (สุ่มหลาย seed)', () => {
     for (let seed = 1; seed <= 8; seed++) {
       const engine = new ArenaMatchEngine(`m-cc-${seed}`, composition, createSeededRandom(seed), 0)

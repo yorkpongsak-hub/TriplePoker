@@ -82,6 +82,8 @@ export interface MatchState {
   // ครบ (Mastermind/Last Boss ใช้ Sequential Showdown) เพราะ derive ย้อนหลังจาก state.results ไม่ได้
   bestHandThisMatch?: BestHandCandidate
   tripleSweepThisMatch?: boolean
+  disconnectedAt?: number
+  disconnectGraceTimer?: ReturnType<typeof setTimeout>
 }
 
 // เก็บ MatchState ใน memory (production ใช้ Redis)
@@ -2952,11 +2954,103 @@ export function getMatchState(roomId: string): MatchState | undefined {
   return matchStates.get(roomId)
 }
 
+export function clearSoloDisconnectGrace(roomId: string, userId: string): boolean {
+  const state = matchStates.get(roomId)
+  if (!state || state.humanPlayerId !== userId) return false
+  if (state.disconnectGraceTimer) clearTimeout(state.disconnectGraceTimer)
+  state.disconnectGraceTimer = undefined
+  state.disconnectedAt = undefined
+  return true
+}
+
+export function markSoloPlayerDisconnected(roomId: string, userId: string, graceMs = 60_000): boolean {
+  const state = matchStates.get(roomId)
+  if (!state || state.humanPlayerId !== userId || state.phase === 'match_end') return false
+  if (state.disconnectGraceTimer) clearTimeout(state.disconnectGraceTimer)
+  state.disconnectedAt = Date.now()
+  state.disconnectGraceTimer = setTimeout(() => {
+    const current = matchStates.get(roomId)
+    if (!current || current.disconnectedAt !== state.disconnectedAt) return
+    void settleAndEndSoloMatch(roomId)
+  }, graceMs)
+  state.disconnectGraceTimer.unref?.()
+  return true
+}
+
+export function resendSoloStateToPlayer(io: Server, roomId: string, userId: string): boolean {
+  const state = matchStates.get(roomId)
+  if (!state || state.humanPlayerId !== userId || state.phase === 'match_end') return false
+  const community = (state as any)._community as CommunityCards | undefined
+  const cardsMap = (state as any)._cardsMap as Record<string, Card[]> | undefined
+  if (!community || !cardsMap?.[userId]) return false
+
+  // The arrangement event is deliberately authoritative. Replaying it resets
+  // transient animations while preserving the current server-owned round.
+  io.to(userId).emit('round_start', {
+    roomId,
+    roundNumber: state.roundNumber,
+    totalRounds: state.totalRounds,
+    cards: { [userId]: cardsMap[userId].map(cardKey) },
+    communityCards: {
+      pile1: community.row1.map(cardKey), pile2: community.row2.map(cardKey), pile3: community.row3.map(cardKey),
+    },
+    blindAuction: (((state as any)._blindAuction as Card[] | undefined) ?? []).map(cardKey),
+    aiNames: AI_CONFIGS.map(ai => { const effective = getEffectiveAIConfig(state, ai); return { id: ai.id, name: effective.name, emoji: effective.emoji } }),
+    tokenBalance: state.tokenBalance,
+    timer: (gameConfig.arrangementTimer as Record<string, number>)[state.tier] ?? gameConfig.arrangementTimer.initiate,
+    ...(state.roundNumber === 1 ? { buyInAmount: state.buyInAmount } : {}),
+    ...(usesTokenFlow(state.tier) ? { pot: state.pot, feeRake: state.feeRake, buyIn: state.buyInAmount, autoSortFee: getAutoSortFee(state.tier) } : {}),
+    resumed: true,
+  })
+
+  if (state.phase === 'blind_auction') {
+    const bidLevelsMap = gameConfig.blindAuction.bidLevels as unknown as Record<string, number[]>
+    io.to(userId).emit('blind_auction_start', {
+      roomId,
+      bidLevels: bidLevelsMap[state.tier] ?? bidLevelsMap.mastermind,
+      decisionTimeMs: gameConfig.blindAuction.decisionTimeMs,
+      resumed: true,
+    })
+  }
+  if (state.phase === 'arrangement_2' && state.humanArrangement) {
+    const won = (state as any)._auctionWonCards as Record<string, Card> | undefined
+    const hand = [...state.humanArrangement.pile1, ...state.humanArrangement.pile2, ...state.humanArrangement.pile3, ...(won?.[userId] ? [won[userId]] : [])]
+    io.to(userId).emit('arrangement_2_start', {
+      roomId, hand: hand.map(cardKey), auctionCard: won?.[userId] ? cardKey(won[userId]) : null,
+      timer: (gameConfig.arrangementTimer as Record<string, number>)[state.tier] ?? 60, resumed: true,
+    })
+  }
+  if (state.phase === 'discard' && state.humanArrangement) {
+    const won = (state as any)._auctionWonCards as Record<string, Card> | undefined
+    const hand = [...state.humanArrangement.pile3, ...(won?.[userId] ? [won[userId]] : [])]
+    const { keep } = bestThreeFromHand(hand, community.row3)
+    io.to(userId).emit('discard_phase_start', { roomId, hand: hand.map(cardKey), suggestedKeep: keep.map(cardKey), decisionTimeMs: 10_000, resumed: true })
+  }
+  if (state.phase === 'grand_finale') {
+    const gf = (state as any)._grandFinale as GrandFinaleState | undefined
+    if (gf) {
+      io.to(userId).emit('grand_finale_start', {
+        roomId, roundNumber: gf.roundNumber, turnOrder: gf.turnOrder,
+        foulPlayers: gf.foulPlayers, pile3Pot: gf.pile3Pot, resumed: true,
+      })
+      const currentPlayerId = gf.turnOrder[gf.currentTurnIdx]
+      if (currentPlayerId) io.to(userId).emit('grand_finale_turn', {
+        roomId, playerId: currentPlayerId, roundNumber: gf.roundNumber,
+        callAmount: (gameConfig.grandFinale.callAmount as Record<string, number | null>)[state.tier] ?? 0,
+        timeLimitMs: ((gameConfig.grandFinale.betTimer as Record<string, number | null>)[state.tier] ?? 10) * 1000,
+        resumed: true,
+      })
+    }
+  }
+  return true
+}
+
 // Disconnect/กด Lobby กลางเกม — single-player (Initiate/Mastermind, ไม่มี tier อื่นให้ AI-replace เพราะ
 // เป็น 1 Human + AI อยู่แล้ว) — Buy-in Spec §4: settle ทันทีด้วย stack ปัจจุบัน แล้วปิดแมตช์
 export async function settleAndEndSoloMatch(roomId: string): Promise<void> {
   const state = matchStates.get(roomId)
   if (!state) return
+  if (state.disconnectGraceTimer) clearTimeout(state.disconnectGraceTimer)
   if (state.escrowId) {
     await settleEscrow(
       state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount,

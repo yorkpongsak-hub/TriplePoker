@@ -14,12 +14,14 @@ import { io, Socket } from 'socket.io-client'
 import { router, useLocalSearchParams } from 'expo-router'
 import * as Haptics from 'expo-haptics'
 import { useAuthStore } from '../../../src/store/authStore'
+import { GAME_RESUME_RESULT_EVENT, requestGameResume } from '../../../src/services/gameResumeProtocol'
 // Patch 2026-07-18: resolve avatar preset key → emoji/รูปภาพ (แก้ VIP preset ไม่โชว์ที่โต๊ะ)
 import { PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
 import { useTableSkins } from '../../../src/hooks/useTableSkins'
 import { TABLE_SKINS } from '../../../src/config/tableSkins'
 import BossVictoryVFX, { VictoryTier } from '../../../src/components/vfx/BossVictoryVFX'
 import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
+import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
 import { isLocalTripleSweep } from '../../../src/components/vfx/vfxPolicy'
 import {
   playCountdownWarning, playCardArrange1, playCardArrange2, playAuctionBidTick, playJackpotFanfare, playBossPileWinThunder,
@@ -37,6 +39,7 @@ import { glassPanelDense } from '../../../src/ui/glassStyles'
 import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
 import PlayerHandView from '../../../src/components/game/PlayerHandView'
 import CharacterBarkBubble, { useCharacterBarks } from '../../../src/components/game/CharacterBarkBubble'
+import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
 import GFHandView from '../../../src/components/game/GFHandView'
 import BossHandRow from '../../../src/components/game/BossHandRow'
 import GameTopBar from '../../../src/components/game/GameTopBar'
@@ -281,6 +284,7 @@ const GameTableLive: React.FC = () => {
   const authUserId = useUserStore(s => s.userId)
   const usingDevFakeId = !authUserId && !!DEV_FAKE_USER_ID
   const PLAYER_ID = authUserId || DEV_FAKE_USER_ID || ''
+  const accessToken = useAuthStore(s => s.session?.access_token ?? null)
   // roomId ต้อง unique ต่อผู้เล่น — เดิม hardcode 'Beginner1' ชนกันเหมือน Initiate ถ้ามี 2 Human เข้าพร้อมกัน
   // (บั๊กเดียวกัน กันปะทุล่วงหน้า — ดู auth guard ที่ block ก่อน emit ใดๆ ถ้า PLAYER_ID ว่าง)
   const ROOM_ID = `mastermind-${PLAYER_ID}`
@@ -371,6 +375,7 @@ const GameTableLive: React.FC = () => {
   const [foulReasons, setFoulReasons]   = useState<Record<string, string>>({})
   const [showResult, setShowResult]   = useState(false)
   const [handRanks, setHandRanks]       = useState<Record<number, string>>({})
+  const [royalFlushWinner, setRoyalFlushWinner] = useState<string | null>(null)
   const [showRankTable, setShowRankTable] = useState(false)
   const [activeShowdownTab, setActiveShowdownTab] = useState<1|2|3>(1)
   const [revealPile, setRevealPile] = useState<0|1|2|3>(0) // 0=ไม่แสดง 1/2/3=Pile นั้น
@@ -574,30 +579,23 @@ const GameTableLive: React.FC = () => {
     const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: true, reconnectionAttempts: 5, reconnectionDelay: 1000 })
     socketRef.current = socket
 
-    let matchStarted = false
-    let disconnectAlertShown = false
+    let startRequested = false
     socket.on('connect', () => {
       setIsReconnecting(false)
       setConnectionError(null)
-      if (matchStarted) {
-        // Reconnect หลังเคยเริ่มแมตช์ไปแล้ว — solo tier (Initiate/Mastermind) ไม่มี grace period เลย
-        // (gameSocket.ts's disconnect handler เรียก settleAndEndSoloMatch ทันทีตอน disconnect แรก ไม่รอ
-        // reconnect เหมือน Adept/High Noble) แปลว่าแมตช์ถูกปิด+settle ไปแน่นอนแล้ว เดินเกมต่อไม่ได้จริง
-        // — เด้งกลับ Lobby พร้อมแจ้งเหตุแทนปล่อยจอค้าง (มติลุงเยาะ 2026-08-13)
-        if (disconnectAlertShown) return
-        disconnectAlertShown = true
-        Alert.alert(
-          'Connection Lost',
-          'Your connection was interrupted and this match was settled with your last known stack. Returning to the Lobby.',
-          [{ text: 'OK', onPress: () => router.replace('/(home)/lobby') }],
-        )
+      if (!accessToken) {
+        if (!startRequested) { startRequested = true; socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'mastermind', bossId }) }
         return
       }
-      matchStarted = true
+      requestGameResume(socket, { roomId: ROOM_ID, userId: PLAYER_ID, accessToken, matchType: 'MASTERMIND' })
       // token ไม่ส่งจาก client (server-authoritative — escrowBuyIn คิดจาก users.token_balance สดเท่านั้น)
       // (player_join_room ถูกตัดออก — dead path เดิม: client ไม่เคย listen 'player_joined'/'arrangement_start'
       // ที่มันคืนมา แถมยังสร้างตาราง tableRegistry ซ้ำด้วย roomId เดิมอีกชั้น start_match ด้านล่างทำ
       // socket.join(roomId) ให้อยู่แล้วเหมือนกัน — pattern เดียวกับ initiate Phase 2.2)
+    })
+    socket.on(GAME_RESUME_RESULT_EVENT, (result: { ok: boolean; status: string; matchType: string }) => {
+      if (result.matchType !== 'MASTERMIND' || result.ok || result.status !== 'MATCH_NOT_FOUND' || startRequested) return
+      startRequested = true
       socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'mastermind', bossId })
     })
 
@@ -775,7 +773,10 @@ const GameTableLive: React.FC = () => {
         return next
       })
       setPileWinners(prev => ({ ...prev, [pNum]: data.winner }))
-      if (data.winnerHandRank) setHandRanks(prev => ({ ...prev, [pNum]: data.winnerHandRank }))
+      if (data.winnerHandRank) {
+        setHandRanks(prev => ({ ...prev, [pNum]: data.winnerHandRank }))
+        if (String(data.winnerHandRank).toLowerCase().replace(/[ _-]/g, '') === 'royalflush') setRoyalFlushWinner(data.winner)
+      }
       setHasFoul(data.fouled ?? {})
       if (data.foulReasons) setFoulReasons(data.foulReasons)
       // Patch: เปิด popup Showdown ทันทีที่ Pile แรกมาถึง (ไม่ต้องรอ pNum===3 ซึ่ง Mastermind ไม่ไปถึง ณ จุดนี้)
@@ -1998,6 +1999,7 @@ const GameTableLive: React.FC = () => {
   // =================================================================
   return (
     <View style={[s.root, isWeb && s.webOuter]}>
+      <GameServerStatusLight socketRef={socketRef} />
       <CharacterBarkBubble bark={bark} />
       <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" />
       <View style={[s.gameContainer, isWeb && s.webFrame]}>
@@ -2940,6 +2942,7 @@ const GameTableLive: React.FC = () => {
 
         </View>
         {/* Patch 2026-07-18: Boss Victory VFX — ทับทุก layer, จบแล้วถอดตัวเอง */}
+        {royalFlushWinner && <RoyalStraightFlushVFX playerName={royalFlushWinner === PLAYER_ID ? myDisplayName : (aiList.find(a => a.id === royalFlushWinner)?.name ?? royalFlushWinner)} onClose={() => setRoyalFlushWinner(null)} />}
         {victoryVfx && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 }} pointerEvents="none">
             <BossVictoryVFX tier={victoryVfx} onFinish={() => setVictoryVfx(null)} />

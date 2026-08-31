@@ -1,5 +1,5 @@
 import 'react-native-url-polyfill/auto'
-import { Stack } from 'expo-router'
+import { Stack, useSegments } from 'expo-router'
 import { Alert, AppState, Platform, View } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
@@ -13,8 +13,13 @@ import { PENDING_MATCH_KEY, PendingMatch } from '../src/utils/pendingMatch'
 import { audio } from '../src/audio'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
+const GAME_TABLE_ROUTES = new Set([
+  'game/initiate', 'game/adept', 'game/mastermind', 'game/highNoble',
+  'game/monarch', 'game/vipPlus', 'game/grandmaster', 'game/sovereign',
+])
 
 export default function RootLayout() {
+  const segments = useSegments()
   const [fontsLoaded] = useFonts({ Cinzel_400Regular, Cinzel_700Bold, JetBrainsMono_400Regular, JetBrainsMono_600SemiBold })
 
   useEffect(() => {
@@ -34,6 +39,16 @@ export default function RootLayout() {
   const session      = useAuthStore(s => s.session)
   const refreshProfile = useAuthStore(s => s.refreshProfile)
   const setUser      = useUserStore(s => s.setUser)
+
+  // Last visited means entering a game, not viewing Profile. Server applies an
+  // atomic Asia/Bangkok daily guard; this effect simply reports game navigation.
+  useEffect(() => {
+    if (!GAME_TABLE_ROUTES.has(segments.join('/')) || !session?.access_token) return
+    fetch(`${SERVER_URL}/profile/touch-last-login`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    }).catch(error => console.error('[layout] daily game visit failed:', error))
+  }, [segments.join('/'), session?.access_token])
 
   // Escrow Stale Recovery §b — เช็คครั้งเดียวต่อ session ตอนเปิดแอป/login (ก่อนผู้เล่นพยายาม join โต๊ะด้วยซ้ำ)
   // กู้คืน escrow ที่ค้าง 'in_match' เกิน 60 นาทีจาก session ก่อนหน้าที่ force-close/crash กลางแมตช์

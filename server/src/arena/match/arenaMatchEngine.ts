@@ -21,7 +21,7 @@ export type ArenaMatchAction =
   | { type: 'BLIND_BID'; actionId: string; actorId: string; amountCrest: 0 | 3 | 6 | 9 | 12; cardIndex: 0 | 1 }
   | { type: 'FINAL_ARRANGE'; actionId: string; actorId: string; pile1: string[]; pile2: string[]; pile3: string[] }
   | { type: 'JOKER_DECLARE'; actionId: string; actorId: string; mode: 'WILD' | 'ANTE_X2'; targetPile: 1 | 2 | 3; availableCrest: number }
-  | { type: 'DISCARD'; actionId: string; actorId: string; cardId: string }
+  | { type: 'DISCARD'; actionId: string; actorId: string; cardId: string; pile1?: string[]; pile2?: string[]; pile3?: string[] }
   | { type: 'FINAL_LOCK'; actionId: string; actorId: string; pile1: string[]; pile2: string[]; pile3: string[] }
   | { type: 'GF_ACTION'; actionId: string; actorId: string; decision: 'CALL' | 'FOLD'; revealCardIds?: string[] }
 
@@ -55,6 +55,8 @@ export interface ArenaMatchSnapshotDetail {
   gfRound: GFRound | null
   pile3Round1: GFRound | null
   gfRevealedCardIds: Record<string, string[]>
+  lastGFCallReveal: { actionId: string; actorId: string; pile: 2 | 3; round: 1 | 2; cards: string[] } | null
+  lastGFAction: { actionId: string; actorId: string; pile: 2 | 3; round: 1 | 2; decision: 'CALL' | 'FOLD'; cards: string[] } | null
   actedActorIds: string[]
   heldCardIds: Record<string, string[]>
   lastArrangements: Record<string, ArenaArrangement>
@@ -105,8 +107,23 @@ function legalJokerLocation(deal: ArenaDeal): boolean {
 }
 
 // Joker ถือเป็นใบอันตรายสุดเสมอ (wild) — ใช้จัดลำดับ "ไพ่ที่คู่ต่อสู้น่าจะได้กรณีเลวร้ายสุด" ใน estimateOpponentSafeRate
-function dangerValue(card: ArenaCard): number {
-  return card.kind === 'JOKER' ? Infinity : card.value
+// 64 samples keeps a synchronous AI decision near the 20-30ms budget while
+// remaining deterministic and substantially smoother than the old 0/1 heuristic.
+const ARENA_EQUITY_SAMPLES = 64
+
+function deterministicRandom(seedText: string): ArenaRandom {
+  let seed = 2166136261
+  for (let index = 0; index < seedText.length; index++) {
+    seed ^= seedText.charCodeAt(index)
+    seed = Math.imul(seed, 16777619)
+  }
+  return () => {
+    seed += 0x6D2B79F5
+    let value = seed
+    value = Math.imul(value ^ (value >>> 15), value | 1)
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61)
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296
+  }
 }
 
 export class ArenaMatchEngine {
@@ -127,6 +144,8 @@ export class ArenaMatchEngine {
   private gfRound: GFRound | null = null
   private pile3Round1: GFRound | null = null
   private gfRevealedCardIds = new Map<string, string[]>()
+  private lastGFCallReveal: ArenaMatchSnapshotDetail['lastGFCallReveal'] = null
+  private lastGFAction: ArenaMatchSnapshotDetail['lastGFAction'] = null
   private heldCardIds = new Map<string, Set<string>>()
   private lastArrangement = new Map<string, ArenaArrangement>()
   private lockedArrangements = new Map<string, ArenaArrangement>()
@@ -208,13 +227,13 @@ export class ArenaMatchEngine {
   // ใช้ arrangement ที่ล็อกแล้ว (FINAL_LOCK) ถ้ามี ไม่งั้น fallback ไปที่ arrangement ล่าสุดที่ส่ง (FINAL_ARRANGE)
   // เพราะ Joker declare เกิดก่อน FINAL_LOCK — ให้บอทประเมิน winrate ของกองเป้าหมายได้ทั้งสองจังหวะ
   // ผู้ชนะประมูลมีกอง 3 ชั่วคราว 6 ใบ: ใบสุดท้ายเป็น discard slot บังคับ จึงตัดออกก่อน
-  // และคิดห้าใบแรก + community 2 ใบเป็น Best 5 of 7 ตั้งแต่ FINAL_ARRANGE
+  // และเลือกไพ่ส่วนตัว 3 ใบที่ดีที่สุดร่วมกับ community ทั้ง 2 ใบเสมอ
   pileHandFor(actorId: string, pile: 1 | 2 | 3): ArenaHandResult | null {
     const arrangement = this.lockedArrangements.get(actorId) ?? this.lastArrangement.get(actorId)
     if (!arrangement || !this.deal) return null
     const arrangedPileIds = pile === 1 ? arrangement.pile1 : pile === 2 ? arrangement.pile2 : arrangement.pile3
     // For an auction winner, pile 3's last position is the mandatory discard.
-    // Rank the other five private cards with two community cards: Best 5 of 7.
+    // Choose exactly three of the five private cards and require both community cards.
     const pileIds = pile === 3 && this.auctionWinnerIds.has(actorId) && arrangedPileIds.length === 6
       ? arrangedPileIds.slice(0, 5)
       : arrangedPileIds
@@ -261,6 +280,8 @@ export class ArenaMatchEngine {
       gfRound: this.gfRound,
       pile3Round1: this.pile3Round1,
       gfRevealedCardIds: Object.fromEntries([...this.gfRevealedCardIds.entries()].map(([id, cards]) => [id, [...cards]])),
+      lastGFCallReveal: this.lastGFCallReveal ? { ...this.lastGFCallReveal, cards: [...this.lastGFCallReveal.cards] } : null,
+      lastGFAction: this.lastGFAction ? { ...this.lastGFAction, cards: [...this.lastGFAction.cards] } : null,
       actedActorIds: [...this.phaseActions.keys()],
       heldCardIds: Object.fromEntries([...this.heldCardIds.entries()].map(([actorId, ids]) => [actorId, [...ids]])),
       lastArrangements: Object.fromEntries(this.lastArrangement.entries()),
@@ -332,7 +353,15 @@ export class ArenaMatchEngine {
     if (action.type === 'BLIND_BID' && action.actorId === this.faceUpWinnerId) throw new Error('ARENA_FACE_UP_WINNER_INELIGIBLE_FOR_BLIND_AUCTION')
     if (action.type === 'DISCARD') {
       if (!this.heldCardIds.get(action.actorId)?.has(action.cardId)) throw new Error('ARENA_DISCARD_CARD_NOT_HELD')
-      const mandatoryDiscard = this.lastArrangement.get(action.actorId)?.pile3.at(-1)
+      const proposed = action.pile1 && action.pile2 && action.pile3
+        ? { pile1: action.pile1, pile2: action.pile2, pile3: action.pile3 }
+        : this.lastArrangement.get(action.actorId)
+      if (action.pile1 || action.pile2 || action.pile3) {
+        if (!action.pile1 || !action.pile2 || !action.pile3) throw new Error('ARENA_DISCARD_ARRANGEMENT_INCOMPLETE')
+        const check = validateArenaPartition(proposed!, this.heldCardIds.get(action.actorId) ?? new Set())
+        if (!check.ok) throw new Error(check.reason ?? 'ARENA_ARRANGEMENT_INVALID')
+      }
+      const mandatoryDiscard = proposed?.pile3.at(-1)
       if (!mandatoryDiscard || action.cardId !== mandatoryDiscard) throw new Error('ARENA_DISCARD_MUST_BE_LAST_PILE3_CARD')
     }
     if (isArrangementAction(action)) {
@@ -345,8 +374,15 @@ export class ArenaMatchEngine {
 
   private applyAction(action: ArenaMatchAction, now: number): void {
     if (action.type === 'GF_ACTION') {
-      if (action.decision === 'CALL') this.recordGFRevealedCards(action.actorId, action.revealCardIds)
+      const pile = this.gfRound!.pile
+      const round = this.gfRound!.round
+      let cards: string[] = []
+      if (action.decision === 'CALL') {
+        cards = this.recordGFRevealedCards(action.actorId, action.revealCardIds)
+        this.lastGFCallReveal = { actionId: action.actionId, actorId: action.actorId, pile, round, cards }
+      }
       else if (action.revealCardIds?.length) throw new Error('ARENA_GF_FOLD_CANNOT_REVEAL_CARDS')
+      this.lastGFAction = { actionId: action.actionId, actorId: action.actorId, pile, round, decision: action.decision, cards }
       this.gfRound = recordGFAction(this.gfRound!, action.actorId, action.decision)
       // เก็บสถิติ Call/Fold ของ Human ไว้ให้ Soren ปรับ bias ข้ามเกมในแมตช์เดียวกัน (ดู arenaSorenPersonality.ts)
       if (this.humanActorIds.includes(action.actorId)) this.sorenStats = recordHumanGfDecision(this.sorenStats, action.decision)
@@ -371,8 +407,16 @@ export class ArenaMatchEngine {
       }
     }
     if (action.type === 'DISCARD') {
+      if (action.pile1 && action.pile2 && action.pile3) {
+        this.lastArrangement.set(action.actorId, { pile1: action.pile1, pile2: action.pile2, pile3: action.pile3 })
+      }
       this.heldCardIds.get(action.actorId)?.delete(action.cardId)
       this.removeFromLastArrangement(action.actorId, action.cardId)
+      const locked = this.lastArrangement.get(action.actorId)
+      if (!locked) throw new Error('ARENA_DISCARD_LOCK_REQUIRES_ARRANGEMENT')
+      this.lockedArrangements.set(action.actorId, locked)
+      const foul = checkArenaFoul(locked, this.dealCardsById, this.deal!.community)
+      this.fouled.set(action.actorId, foul.fouled)
     }
     if (isArrangementAction(action)) {
       const arrangement: ArenaArrangement = { pile1: action.pile1, pile2: action.pile2, pile3: action.pile3 }
@@ -448,7 +492,7 @@ export class ArenaMatchEngine {
     }
     if (this.phase === 'FINAL_ARRANGE' && this.allActorsActed()) {
       // Materialize every pile-3 rank as soon as round-two arrangement closes.
-      // Auction winners are already evaluated as Best 5 of 7 by pileHandFor;
+      // Auction winners are already evaluated with both community cards by pileHandFor;
       // the sixth/final arranged card is reserved for mandatory discard.
       for (const actorId of this.actorIds) {
         if (!this.pileHandFor(actorId, 3)) throw new Error('ARENA_FINAL_ARRANGE_PILE3_RANK_UNAVAILABLE')
@@ -465,7 +509,7 @@ export class ArenaMatchEngine {
     if (this.phase === 'AUCTION_FACE_UP_RESULT') return this.transition('AUCTION_BLIND', now)
     if (this.phase === 'AUCTION_BLIND_RESULT') return this.transition('REVEAL_PILE3_COMMUNITY_CARD_2', now)
     if (this.phase === 'REVEAL_PILE3_COMMUNITY_CARD_2') return this.transition('FINAL_ARRANGE', now)
-    if (this.phase === 'FINAL_LOCK' && this.allActorsActed()) return this.transition('RESOLVE_PILE_1', now)
+    if (this.phase === 'FINAL_LOCK' && this.pendingActors().length === 0) return this.transition('RESOLVE_PILE_1', now)
     if (this.phase === 'RESOLVE_PILE_1') {
       this.pile1WinnerId = this.resolvePileWinner(1, this.actorIds)
       this.maybeApplyJokerAnteX2(1, this.pile1WinnerId)
@@ -553,7 +597,7 @@ export class ArenaMatchEngine {
       const pileIds = pile === 1 ? arrangement.pile1 : pile === 2 ? arrangement.pile2 : arrangement.pile3
       const community = pile === 1 ? this.deal!.community.pile1 : pile === 2 ? this.deal!.community.pile2 : this.deal!.community.pile3
       const cards = pileIds.map(id => this.dealCardsById.get(id)!)
-      const hand = evaluateArenaHand([...cards, ...community])
+      const hand = evaluatePileBest(cards, community)
       if (!best || compareArenaHands(hand, best) > 0) { best = hand; bestActorId = actorId }
     }
     // Edge case หายาก: ทุกคนที่ยังไม่ Fold ในกองนี้ Foul พร้อมกัน — เลี่ยงปล่อย Pot ค้าง (ทำให้ END_MATCH พัง) ด้วยการเทียบมือจริงไม่สนใจ Foul
@@ -590,31 +634,51 @@ export class ArenaMatchEngine {
     this.heldCardsFor(botActorId).forEach(card => known.add(arenaCardKey(card)))
     ;[...this.deal.community.pile1, ...this.deal.community.pile2, ...this.deal.community.pile3].forEach(card => known.add(arenaCardKey(card)))
     known.add(arenaCardKey(this.deal.auction.faceUp))
-    this.deal.auction.blind.forEach(card => known.add(arenaCardKey(card)))
     if (this.pile1WinnerId) this.lockedArrangements.get(this.pile1WinnerId)?.pile1.forEach(id => known.add(id))
     if (pile === 3 && this.pile2WinnerId && this.pile2Revealed) this.lockedArrangements.get(this.pile2WinnerId)?.pile2.forEach(id => known.add(id))
+
+    const revealedByOpponent = new Map<string, ArenaCard[]>()
+    for (const opponentId of contenders) {
+      const cards = (this.gfRevealedCardIds.get(opponentId) ?? [])
+        .map(id => this.dealCardsById.get(id))
+        .filter((card): card is ArenaCard => !!card)
+      cards.forEach(card => known.add(arenaCardKey(card)))
+      revealedByOpponent.set(opponentId, cards)
+    }
 
     const unseen = [...this.dealCardsById.entries()]
       .filter(([id]) => !known.has(id))
       .map(([, card]) => card)
-      .sort((a, b) => dangerValue(b) - dangerValue(a))
 
     const pileSize = pile === 2 ? 3 : 5
     const community = pile === 2 ? this.deal.community.pile2 : this.deal.community.pile3
-    const worstCaseHand = unseen.length >= pileSize ? evaluatePileBest(unseen.slice(0, pileSize), community) : null
+    const requiredUnknown = contenders.reduce((sum, id) => sum + Math.max(0, pileSize - (revealedByOpponent.get(id)?.length ?? 0)), 0)
+    if (unseen.length < requiredUnknown) return 0.5
+    const publicState = contenders.flatMap(id => [id, ...(this.gfRevealedCardIds.get(id) ?? [])]).join(',')
+    const random = deterministicRandom(`${this.matchId}:${this.gameNumber}:${pile}:${this.gfRound.round}:${botActorId}:${publicState}`)
+    let equity = 0
 
-    let safeCount = 0
-    for (const oppId of contenders) {
-      let threat = worstCaseHand
-      // known lower bound ของคู่แข่งคนนี้เอง (ถ้ากองก่อนหน้าของเขาเปิดเผยจริง) — เอาตัวที่แรงกว่าไปเทียบ
-      const lowerBoundPile: 1 | 2 | null = pile === 2 && oppId === this.pile1WinnerId ? 1 : pile === 3 && oppId === this.pile2WinnerId && this.pile2Revealed ? 2 : null
-      if (lowerBoundPile) {
-        const lowerBound = this.pileHandFor(oppId, lowerBoundPile)
-        if (lowerBound && (!threat || compareArenaHands(lowerBound, threat) > 0)) threat = lowerBound
+    for (let sample = 0; sample < ARENA_EQUITY_SAMPLES; sample++) {
+      const pool = [...unseen]
+      for (let index = 0; index < requiredUnknown; index++) {
+        const swapIndex = index + Math.floor(random() * (pool.length - index))
+        ;[pool[index], pool[swapIndex]] = [pool[swapIndex], pool[index]]
       }
-      if (!threat || compareArenaHands(threat, myHand) <= 0) safeCount++
+      let cursor = 0
+      let beaten = false
+      let ties = 0
+      for (const opponentId of contenders) {
+        const revealed = revealedByOpponent.get(opponentId) ?? []
+        const missing = pileSize - revealed.length
+        const sampledHand = [...revealed, ...pool.slice(cursor, cursor + missing)]
+        cursor += missing
+        const comparison = compareArenaHands(evaluatePileBest(sampledHand, community), myHand)
+        if (comparison > 0) { beaten = true; break }
+        if (comparison === 0) ties++
+      }
+      if (!beaten) equity += 1 / (ties + 1)
     }
-    return safeCount / contenders.length
+    return equity / ARENA_EQUITY_SAMPLES
   }
 
   private payoutPile(pile: ArenaPile, winnerId: string | null): void {
@@ -663,7 +727,7 @@ export class ArenaMatchEngine {
   private startGame(now: number): void {
     this.gameNumber = (this.gameNumber + 1) as 1 | 2 | 3
     this.deal = null; this.dealCardsById.clear(); this.faceUpWinnerId = null; this.jokerOwnerId = null
-    this.jokerDeclaration = null; this.gfRound = null; this.pile3Round1 = null; this.gfRevealedCardIds.clear(); this.auctionWinnerIds.clear(); this.blindAuctionResults = []
+    this.jokerDeclaration = null; this.gfRound = null; this.pile3Round1 = null; this.gfRevealedCardIds.clear(); this.lastGFCallReveal = null; this.lastGFAction = null; this.auctionWinnerIds.clear(); this.blindAuctionResults = []
     this.heldCardIds.clear(); this.lastArrangement.clear(); this.lockedArrangements.clear(); this.fouled.clear()
     this.pile1WinnerId = null; this.pile2WinnerId = null; this.pile3WinnerId = null
     this.pile2Revealed = false; this.pile3Revealed = false; this.jokerAnteX2Applied = false
@@ -685,7 +749,7 @@ export class ArenaMatchEngine {
   // ไม่มี weight hook ใน bestArenaArrangement ของ Arena (ดูเหตุผลใน arenaArrangement.ts) ผลลัพธ์ใกล้เคียงพอสำหรับวัด strength หยาบๆ
   private computeHandStrength(actorId: string): number {
     const probe = bestArenaArrangement(this.heldCardsFor(actorId), this.deal!.community)
-    const evalPile = (ids: string[], community: ArenaCard[]) => evaluateArenaHand([...ids.map(id => this.dealCardsById.get(id)!), ...community])
+    const evalPile = (ids: string[], community: ArenaCard[]) => evaluatePileBest(ids.map(id => this.dealCardsById.get(id)!), community)
     const h1 = evalPile(probe.pile1, this.deal!.community.pile1)
     const h2 = evalPile(probe.pile2, this.deal!.community.pile2)
     const h3 = evalPile(probe.pile3, this.deal!.community.pile3)
@@ -748,7 +812,7 @@ export class ArenaMatchEngine {
     this.transition('GF_PILE_3_ROUND_2', now, false)
   }
 
-  private recordGFRevealedCards(actorId: string, requested?: readonly string[]): void {
+  private recordGFRevealedCards(actorId: string, requested?: readonly string[]): string[] {
     if (!this.gfRound) throw new Error('ARENA_GF_ROUND_NOT_ACTIVE')
     const pile = this.gfRound.pile
     const locked = this.lockedArrangements.get(actorId)
@@ -762,6 +826,7 @@ export class ArenaMatchEngine {
     if (selected.length !== required || new Set(selected).size !== selected.length) throw new Error('ARENA_GF_REVEAL_CARD_COUNT_INVALID')
     if (selected.some(id => !pileCards.includes(id) || already.includes(id))) throw new Error('ARENA_GF_REVEAL_CARD_INVALID')
     this.gfRevealedCardIds.set(actorId, [...already, ...selected])
+    return selected
   }
 
   private gfPlayers(): GFPlayer[] {
@@ -833,7 +898,8 @@ export class ArenaMatchEngine {
       if (this.jokerDeclaration?.mode === 'ANTE_X2' && this.jokerOwnerId) required.add(this.jokerOwnerId)
       return [...required].filter(id => !this.phaseActions.has(id))
     }
-    if (['ARRANGE_1', 'AUCTION_FACE_UP', 'FINAL_ARRANGE', 'FINAL_LOCK'].includes(this.phase)) return this.actorIds.filter(id => !this.phaseActions.has(id))
+    if (this.phase === 'FINAL_LOCK') return this.actorIds.filter(id => !this.lockedArrangements.has(id) && !this.phaseActions.has(id))
+    if (['ARRANGE_1', 'AUCTION_FACE_UP', 'FINAL_ARRANGE'].includes(this.phase)) return this.actorIds.filter(id => !this.phaseActions.has(id))
     return []
   }
 

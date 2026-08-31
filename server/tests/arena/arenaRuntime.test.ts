@@ -35,4 +35,21 @@ describe('ArenaRuntime', () => {
     expect(runtime.tickQueue(260_000)).not.toBeNull()
     expect(runtime.matchForPlayer('p1')).not.toBeNull()
   })
+
+  // แก้บั๊ก IDEMPOTENCY_KEY_CONFLICT: matchId เดิมมาจาก in-memory counter ล้วนๆ (queueSequence/matchSequence)
+  // ซึ่งรีเซ็ตเป็น 1 ทุกครั้งที่ process ใหม่ (เช่น nodemon restart) — แต่ arena_settlement_transactions ใน
+  // Supabase เก็บ transaction_key เดิมไว้ถาวร ทำให้ commandId ที่ derive จาก matchId (เช่น g1:payout:pile1)
+  // ชนกับแมตช์เก่าคนละเนื้อหาได้ — จำลอง 2 process (2 instance ของ ArenaRuntime) แล้วเช็คว่า matchId ไม่ซ้ำกัน
+  test('matchId ของ ArenaRuntime คนละ instance (จำลอง process restart) ต้องไม่ชนกันเลย แม้ join sequence เหมือนกันทุกประการ', () => {
+    function firstMatchId(runtime: ArenaRuntime): string {
+      runtime.join({ playerId: 'p1', tokenBalance: 1_000_001, joinedAt: 1_000 }, 1_000)
+      runtime.join({ playerId: 'p2', tokenBalance: 1_000_001, joinedAt: 1_001 }, 1_001)
+      runtime.join({ playerId: 'p3', tokenBalance: 1_000_001, joinedAt: 1_002 }, 1_002)
+      runtime.tickQueue(1_002)
+      return runtime.matchForPlayer('p1')!.engine.matchId
+    }
+    const beforeRestart = firstMatchId(new ArenaRuntime(() => 0.2, 1_000))
+    const afterRestart = firstMatchId(new ArenaRuntime(() => 0.2, 1_000)) // ตัวนับภายในเริ่มจาก 1 เหมือนเดิมทุกประการ
+    expect(afterRestart).not.toBe(beforeRestart)
+  })
 })
