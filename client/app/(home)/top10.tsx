@@ -149,8 +149,10 @@ function Row({ entry }: { entry: Top10Entry }) {
 }
 
 export default function Top10Screen() {
-  const params = useLocalSearchParams<{ tier?: string | string[] }>()
+  const params = useLocalSearchParams<{ tier?: string | string[]; autoContinue?: string | string[] }>()
   const requestedTier = Array.isArray(params.tier) ? params.tier[0] : params.tier
+  // Solo Mode Endless Level (2026-09-01) — เดินทางมาจาก victory.tsx ถ้ามี ต้องพากลับ Lobby ต่อให้ auto-trigger
+  const autoContinue = Array.isArray(params.autoContinue) ? params.autoContinue[0] : params.autoContinue
   const profile = useAuthStore(s => s.profile)
   const isVip = (profile?.vip_status ?? 'none') !== 'none'
 
@@ -197,7 +199,9 @@ export default function Top10Screen() {
 
         {/* ═══════════════ HEADER ═══════════════ */}
         <View style={s.headerRow}>
-          <TouchableOpacity onPress={() => router.replace('/lobby')} style={s.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          <TouchableOpacity
+            onPress={() => router.replace(autoContinue ? { pathname: '/lobby', params: { autoContinue } } as any : '/lobby')}
+            style={s.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <Text style={s.backTxt}>‹ Back</Text>
           </TouchableOpacity>
           <View style={{ flex: 1, alignItems: 'center' }}>

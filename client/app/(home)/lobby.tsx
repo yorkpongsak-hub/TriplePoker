@@ -68,7 +68,7 @@ export default function LobbyScreen() {
   // Ad Gate ก่อนเข้าเล่น (มติลุงเยาะ 2026-08-14) — สมาชิกฟรีต้องดูโฆษณาก่อนเข้า Solo/Multiplayer/
   // Grandmaster เสมอ (VIP ผ่านได้เลย) resume action หลังดูจบผ่าน query param 'autoEnter' แทนการพึ่ง ref
   // ในหน่วยความจำ (router.push ไปหน้า /watch-ad เป็นการ navigate จริง ไม่ใช่ modal ในหน้าเดิม)
-  const adGateParams = useLocalSearchParams<{ autoEnter?: string }>();
+  const adGateParams = useLocalSearchParams<{ autoEnter?: string; autoContinue?: string }>();
 
   // จัดปุ่ม Profile (header) ให้ตรงแนว x กับปุ่ม Shop (menuBar ด้านล่าง) — menuBar ใช้ justifyContent:'space-evenly'
   // กับปุ่มขนาด sm (64px) 4 ปุ่ม จึงคำนวณ gap ซ้ายสุดของ Shop ด้วยสูตรเดียวกัน แทนเลขตายตัว กันพังเวลาจอกว้างไม่เท่ากัน
@@ -452,6 +452,20 @@ export default function LobbyScreen() {
     AD_GATE_RESUME_ACTIONS[key]();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adGateParams.autoEnter]);
+
+  // Solo Mode Endless Level (2026-09-01) — จบเกม Initiate/Mastermind แล้ววนกลับมาที่ Lobby ด้วย
+  // query param 'autoContinue' (มาจาก MatchEndOverlay ตรงๆ ตอนแพ้ หรืออ้อมผ่าน victory→watch-ad→
+  // top10 ตอนชนะ) ต้อง requireAdGate() เต็มรูปแบบใหม่ทุกครั้ง (ต่างจาก autoEnter ด้านบนที่ข้าม ad gate
+  // เพราะเพิ่งดูโฆษณามาหมาดๆ — รอบนี้มาจากจบเกม ไม่ใช่กลับจากดูโฆษณา ต้องเจอ ad gate ใหม่เหมือนเข้าเกม
+  // ปกติทุกประการตามที่ลุงเยาะยืนยัน) เงินไม่พอ = runBuyInGate ที่ถูกเรียกต่อ set insufficientTier
+  // แสดง modal เดิมเองอยู่แล้ว (บรรทัด 279-283) — หยุดที่ Lobby ตรงนี้พอดี ไม่ต้องเพิ่ม logic อะไรอีก
+  useEffect(() => {
+    const tier = adGateParams.autoContinue;
+    if (!tier || !(tier in AD_GATE_RESUME_ACTIONS)) return;
+    router.setParams({ autoContinue: undefined } as any);
+    requireAdGate(tier as keyof typeof AD_GATE_RESUME_ACTIONS);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adGateParams.autoContinue]);
 
   const openPrivateDialog = (mode: 'CREATE' | 'JOIN', tier: MatchmakingTier) => {
     setRoomPin('');

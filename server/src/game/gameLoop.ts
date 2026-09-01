@@ -16,6 +16,7 @@ import { supabaseAdmin } from '../config/supabase'
 import { recordMatchStats, BestHandCandidate, StatsTier } from './matchStatsService'
 import { checkTierUnlock } from './tierUnlockService'
 import { getAscendantStatus } from './crownVaultService'
+import { awardSoloEndlessLevel } from './soloEndlessLevel'
 // Token Flow Panel (Spec v1.1) — ใช้ใน Initiate / Adept / Mastermind (ดู usesTokenFlow())
 // High Noble / Last Boss ยังใช้ calcDeltas() เดิม
 import {
@@ -895,8 +896,11 @@ export async function submitArrangement(
     // ── Token Flow Panel §5: จบเกม -> Fee & Rake burn จริง (ออกจากระบบ) ──
     // Tier C เท่านั้น — ไม่มี DB write เพราะเงินก้อนนี้ไม่เคยเข้า users.token_balance ของใคร
     // (escrow settle ใช้ stack ของ human ซึ่งหัก rake ไปแล้วตั้งแต่ตอน settleRound)
+    let soloEndlessLevel: { previous: number; current: number } | null = null
     if (state.tier === 'initiate') {
       console.log('[TOKENFLOW]', Date.now(), 'Burn Fee & Rake', state.feeRake, '| room', roomId)
+      // Solo Mode Endless Level (2026-09-01) — ตัวเลขสะสมตลอดชีพ ไม่มีผลกับเกมจริง
+      soloEndlessLevel = await awardSoloEndlessLevel(state.humanPlayerId, finalWinner === state.humanPlayerId)
     }
 
     io.to(roomId).emit('match_end', {
@@ -911,6 +915,7 @@ export async function submitArrangement(
         ? { label: handRankLabel(initiateBestHand.hand), pile: initiateBestHand.pile, won: initiateBestHand.won }
         : null,
       ...(state.tier === 'initiate' ? { feeRakeBurned: state.feeRake } : {}),
+      ...(soloEndlessLevel ? { soloEndlessLevel } : {}),
     })
     // Server Activity feed: broadcast ให้ทุก client เห็น ไม่ใช่แค่คนในห้องนี้
     io.emit('server_activity', {
@@ -2243,6 +2248,13 @@ function finalizeGrandFinale(
         console.log('[TOKENFLOW]', Date.now(), 'Burn Fee & Rake', state.feeRake, '| room', roomId)
       }
 
+      // Solo Mode Endless Level (2026-09-01) — Mastermind เท่านั้น (ฟังก์ชันนี้ใช้ร่วมกับ highNoble/
+      // lastBoss ด้วย ห้าม gate ด้วย usesTokenFlow เพราะครอบคลุม Adept ซึ่งไม่ใช่ solo mode)
+      let soloEndlessLevel: { previous: number; current: number } | null = null
+      if (state.tier === 'mastermind') {
+        soloEndlessLevel = await awardSoloEndlessLevel(state.humanPlayerId, finalWinner === state.humanPlayerId)
+      }
+
       io.to(roomId).emit('match_end', {
         roomId,
         finalWinner,
@@ -2257,6 +2269,7 @@ function finalizeGrandFinale(
           ? { label: handRankLabel(state.bestHandThisMatch.hand), pile: state.bestHandThisMatch.pile, won: state.bestHandThisMatch.won }
           : null,
         ...(usesTokenFlow(state.tier) ? { feeRakeBurned: state.feeRake } : {}),
+        ...(soloEndlessLevel ? { soloEndlessLevel } : {}),
       })
       // Server Activity feed: เฉพาะ Mastermind (ห้ามปนกับ lastBoss — Last Boss อยู่แอปแยก The Arena)
       if (state.tier === 'mastermind') {

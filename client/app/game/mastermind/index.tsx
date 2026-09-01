@@ -2412,6 +2412,7 @@ const GameTableLive: React.FC = () => {
                   })}
                 /* ไม่มี Rematch (Spec §5.1 No Rematch — มติลุงเยาะ 2026-07-25: จบเกมต้องกลับ Lobby
                    ทุกครั้ง เพราะ Buy-in ล็อคตั้งแต่ต้นเกม เล่นต่อ = ต้อง escrow ก้อนใหม่จากหน้า Lobby) */
+                soloLevel={matchResult.soloEndlessLevel}
                 onBackToLobby={() => {
                   if (matchResult.finalWinner === PLAYER_ID) {
                     const tokensWon = (tokenBalance[PLAYER_ID] ?? 0) - (matchResult.buyInAmount ?? buyInAmount)
@@ -2422,10 +2423,12 @@ const GameTableLive: React.FC = () => {
                         tokensWon: String(tokensWon),
                         matchDurationSec: String(Math.max(0, Math.round((Date.now() - matchStartRef.current) / 1000))),
                         ...(matchResult.bestHandThisMatch?.label ? { bestHandLabel: matchResult.bestHandThisMatch.label } : {}),
+                        // Solo Mode Endless Level (2026-09-01) — ดู lobby.tsx's autoContinue
+                        autoContinue: 'mastermind',
                       },
                     } as any)
                   } else {
-                    router.push('/lobby')
+                    router.push({ pathname: '/lobby', params: { autoContinue: 'mastermind' } } as any)
                   }
                 }}
                 insetsBottom={insets.bottom}

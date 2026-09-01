@@ -1457,6 +1457,7 @@ const GameTableLive: React.FC = () => {
                       isSelf: pid === PLAYER_ID,
                     }
                   })}
+                soloLevel={matchResult.soloEndlessLevel}
                 onBackToLobby={() => {
                   if (matchResult.finalWinner === PLAYER_ID) {
                     const tokensWon = (tokenBalance[PLAYER_ID] ?? 0) - (matchResult.buyInAmount ?? buyInAmount)
@@ -1467,10 +1468,13 @@ const GameTableLive: React.FC = () => {
                         tokensWon: String(tokensWon),
                         matchDurationSec: String(Math.max(0, Math.round((Date.now() - matchStartRef.current) / 1000))),
                         ...(matchResult.bestHandThisMatch?.label ? { bestHandLabel: matchResult.bestHandThisMatch.label } : {}),
+                        // Solo Mode Endless Level (2026-09-01) — เดินทางผ่าน victory → watch-ad → top10
+                        // จนกลับถึง Lobby แล้ว auto-trigger เข้าเกมใหม่ทันที (ดู lobby.tsx's autoContinue)
+                        autoContinue: 'initiate',
                       },
                     } as any)
                   } else {
-                    router.replace('/(home)/lobby')
+                    router.replace({ pathname: '/(home)/lobby', params: { autoContinue: 'initiate' } } as any)
                   }
                 }}
                 insetsBottom={insets.bottom}

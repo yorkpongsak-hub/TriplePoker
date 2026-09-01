@@ -56,11 +56,13 @@ export default function VictoryScreen() {
     tokensWon?: string
     matchDurationSec?: string
     bestHandLabel?: string
+    autoContinue?: string // Solo Mode Endless Level (2026-09-01) — ดู lobby.tsx's autoContinue
   }>()
   const tier = params.tier ?? 'initiate'
   const tokensWon = Number(params.tokensWon ?? 0)
   const matchDurationSec = Number(params.matchDurationSec ?? 0)
   const bestHandLabel = params.bestHandLabel && params.bestHandLabel !== 'null' ? params.bestHandLabel : null
+  const autoContinue = params.autoContinue
 
   const isGuest = useAuthStore(s => s.session?.user?.is_anonymous === true)
 
@@ -158,7 +160,10 @@ export default function VictoryScreen() {
   const progressStyle = useAnimatedStyle(() => ({ opacity: progressOpacity.value }))
   const progressFillStyle = useAnimatedStyle(() => ({ width: progressFillWidth.value }))
 
-  const goToWatchAd = () => router.push({ pathname: '/(home)/watch-ad', params: { returnTo: `/(home)/top10?tier=${tier}` } } as any)
+  const goToWatchAd = () => router.push({
+    pathname: '/(home)/watch-ad',
+    params: { returnTo: `/(home)/top10?tier=${tier}${autoContinue ? `&autoContinue=${autoContinue}` : ''}` },
+  } as any)
 
   if (!loaded) {
     return (

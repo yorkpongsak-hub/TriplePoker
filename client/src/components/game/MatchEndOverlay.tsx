@@ -20,8 +20,8 @@
  * The Sage Unicorn Studio Co., Ltd.
  */
 
-import React from 'react'
-import { StyleSheet, Text, View } from 'react-native'
+import React, { useEffect, useRef } from 'react'
+import { Animated, StyleSheet, Text, View } from 'react-native'
 import { ResultPanel } from '../ui/ResultPanel'
 import { MenuButton } from '../ui/MenuButton'
 
@@ -43,12 +43,33 @@ export interface MatchEndOverlayProps {
   onRematch?: () => void   // undefined = ไม่แสดงปุ่ม Rematch (Adept/HighNoble)
   onBackToLobby: () => void
   insetsBottom: number
+  // Solo Mode Endless Level (2026-09-01) — undefined = ไม่แสดง (Adept/HighNoble ไม่มี solo endless
+  // level เลย, ดู soloEndlessLevel.ts ฝั่ง server) แสดงทั้งตอนชนะและแพ้เพราะ overlay นี้ใช้ร่วมกัน
+  soloLevel?: { previous: number; current: number }
+}
+
+// ป็อปอัพเล็กๆ ตอน Level เลื่อนขึ้น — ใช้ Animated ปกติ (ไฟล์นี้ไม่มี Reanimated อยู่แล้ว ไม่อยาก
+// เพิ่ม dependency ใหม่ให้ component กลางที่ใช้ร่วมกันทุก Tier แค่เพื่อ pop-in ง่ายๆ อันเดียว)
+function SoloLevelBadge({ previous, current }: { previous: number; current: number }) {
+  const scale = useRef(new Animated.Value(0.6)).current
+  const opacity = useRef(new Animated.Value(0)).current
+  useEffect(() => {
+    Animated.parallel([
+      Animated.spring(scale, { toValue: 1, friction: 5, useNativeDriver: true }),
+      Animated.timing(opacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+    ]).start()
+  }, [])
+  return (
+    <Animated.View style={[s.levelBadge, { opacity, transform: [{ scale }] }]}>
+      <Text style={s.levelBadgeText}>LEVEL {previous} → {current}</Text>
+    </Animated.View>
+  )
 }
 
 const MatchEndOverlay: React.FC<MatchEndOverlayProps> = ({
   variant, tierBadge, extraContent,
   buyInAmount, returnedAmount, tokenBalanceDisplay,
-  leaderboard, onRematch, onBackToLobby, insetsBottom,
+  leaderboard, onRematch, onBackToLobby, insetsBottom, soloLevel,
 }) => {
   const net = returnedAmount - buyInAmount
 
@@ -61,6 +82,7 @@ const MatchEndOverlay: React.FC<MatchEndOverlayProps> = ({
           </View>
         )}
         {extraContent}
+        {soloLevel && <SoloLevelBadge previous={soloLevel.previous} current={soloLevel.current} />}
         <View style={s.buyInSummaryRow}>
           <Text style={s.buyInSummaryText}>
             Buy-in <Text style={{ color: '#f87171' }}>−{buyInAmount.toLocaleString('en-US')}</Text>
@@ -104,6 +126,8 @@ const s = StyleSheet.create({
   },
   tierBadge:  { borderWidth: 1.5, borderColor: '#38bdf8', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2, backgroundColor: 'rgba(56,189,248,0.12)' },
   tierText:   { fontSize: 8, color: '#38bdf8', letterSpacing: 2, fontWeight: '800' },
+  levelBadge: { alignSelf: 'center', borderWidth: 1.5, borderColor: '#FFD76A', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 5, backgroundColor: 'rgba(255,215,106,0.12)', marginBottom: 8 },
+  levelBadgeText: { fontSize: 12, color: '#FFD76A', letterSpacing: 1.5, fontWeight: '800', fontFamily: 'JetBrainsMono_600SemiBold' },
   buyInSummaryRow:  { alignItems: 'center', marginBottom: 8 },
   buyInSummaryText: { fontSize: 10, fontFamily: 'JetBrainsMono_400Regular', color: '#C8C4B0', textAlign: 'center' },
   matchEndSub:   { fontSize: 10, color: 'rgba(201,168,76,0.5)', letterSpacing: 2, marginBottom: 10, textAlign: 'center' },
