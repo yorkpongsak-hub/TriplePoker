@@ -13,7 +13,6 @@ type ActiveAudio = {
   startedAt: number
   cleanup?: () => void
   safetyTimer?: ReturnType<typeof setTimeout>
-  retryTimer?: ReturnType<typeof setTimeout>
   recoveryTimer?: ReturnType<typeof setInterval>
 }
 type Listener = (settings: AudioSettings) => void
@@ -107,14 +106,24 @@ class AudioManager {
           player.play()
           if (definition.fadeInMs) this.fadeTo(event, this.effectiveVolume(definition.category, baseVolume), definition.fadeInMs)
           if (!player.loop) {
-            // Android อาจรับ play() แต่ native player ยังไม่เริ่มหลังถูก interrupt
-            // ลองซ้ำครั้งเดียวเฉพาะ entry เดิมที่เวลาเล่นยังอยู่จุดเริ่มต้น
-            entry.retryTimer = setTimeout(() => {
-              if (this.active.get(event) === entry && !player.playing && player.currentTime < 0.02) {
-                try { player.play() } catch (error) { this.warn(`Could not retry ${event}`, error) }
-              }
-            }, 180)
             this.armOneShotSafetyTimer(entry)
+            // Android อาจรับ play() แต่ native player ยังไม่เริ่มหลังถูก interrupt (เสีย audio focus
+            // ชั่วขณะ) — จังหวะที่ focus กลับมาไม่แน่นอนพอที่จะลองซ้ำครั้งเดียวตายตัวได้ (เดิม 180ms ครั้ง
+            // เดียว พลาดบ่อยเพราะ Android คืน focus ช้ากว่านั้นได้บ่อยๆ ต่างจาก loop ที่มี recoveryTimer
+            // คอยกู้ต่อเนื่องทุก 2 วิ) ลองซ้ำถี่ๆ ในกรอบเวลาสั้นๆ แทน หยุดเองทันทีที่เริ่มเล่นจริงหรือหมดเวลา
+            const recoveryDeadline = now + 1_500
+            entry.recoveryTimer = setInterval(() => {
+              if (this.active.get(event) !== entry) { clearInterval(entry.recoveryTimer!); return }
+              if (player.playing || player.currentTime >= 0.02) { clearInterval(entry.recoveryTimer!); entry.recoveryTimer = undefined; return }
+              if (Date.now() >= recoveryDeadline) { clearInterval(entry.recoveryTimer!); entry.recoveryTimer = undefined; return }
+              void this.ensureAudioSessionActive()
+                .then(() => {
+                  if (this.active.get(event) === entry && !player.playing && player.currentTime < 0.02) {
+                    try { player.play() } catch (error) { this.warn(`Could not retry ${event}`, error) }
+                  }
+                })
+                .catch(error => this.warn(`Could not recover one-shot ${event}`, error))
+            }, 150)
           } else {
             // กู้ loop ใน foreground หลังเสีย audio focus ชั่วคราว ซึ่งบางครั้งไม่มี AppState event
             entry.recoveryTimer = setInterval(() => {
@@ -367,7 +376,6 @@ class AudioManager {
     this.fadeTimers.delete(event)
     this.active.delete(event)
     if (entry.safetyTimer) clearTimeout(entry.safetyTimer)
-    if (entry.retryTimer) clearTimeout(entry.retryTimer)
     if (entry.recoveryTimer) clearInterval(entry.recoveryTimer)
     try {
       entry.cleanup?.()
