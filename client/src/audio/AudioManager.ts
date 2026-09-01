@@ -14,6 +14,8 @@ type ActiveAudio = {
   cleanup?: () => void
   safetyTimer?: ReturnType<typeof setTimeout>
   recoveryTimer?: ReturnType<typeof setInterval>
+  /** When a CRITICAL entry stops actually blocking lower-priority sounds — see hasBlockingPriority(). */
+  blockUntil?: number
 }
 type Listener = (settings: AudioSettings) => void
 const PRIVATE_EVENTS = new Set([AudioEvent.PLAYER_TURN, AudioEvent.TIMER_WARNING, AudioEvent.TIMER_CRITICAL, AudioEvent.TIMER_PRESSURE, AudioEvent.TIMER_LONG])
@@ -314,6 +316,11 @@ class AudioManager {
     const durationMs = Number.isFinite(entry.player.duration) && entry.player.duration > 0
       ? entry.player.duration * 1000
       : 8000
+    // ใช้ความยาวไฟล์จริงตัดสินว่า "บล็อกเสียงอื่น" นานแค่ไหน (hasBlockingPriority อ่านค่านี้) แยกจาก
+    // เวลาที่ entry จะถูกเคลียร์ออกจาก active map จริง (safetyTimer ด้านล่าง) — เดิมสองอย่างนี้ผูกกัน
+    // (บล็อกจนกว่า entry จะหายจาก active) ทำให้ถ้า Android ไม่ส่ง didJustFinish (คอมเมนต์เดิมด้านล่าง)
+    // เสียงอื่นทั้งหมด (การ์ด/ปุ่ม/ชิป) เงียบไปได้นานถึง duration+2000ms หลัง Boss Reveal ทุกครั้ง
+    entry.blockUntil = Date.now() + durationMs
     // Android อาจไม่ส่ง didJustFinish หลังเสีย audio focus จึงคืน priority/duck ตามความยาวไฟล์จริง
     const timeoutMs = Math.min(120_000, Math.max(2500, durationMs + 2000))
     entry.safetyTimer = setTimeout(() => this.release(entry.event, entry.player), timeoutMs)
@@ -327,7 +334,12 @@ class AudioManager {
   }
 
   private hasBlockingPriority(priority: AudioPriority): boolean {
-    return [...this.active.values()].some(entry => entry.priority === AudioPriority.CRITICAL && priority < AudioPriority.HIGH)
+    if (priority >= AudioPriority.HIGH) return false
+    const now = Date.now()
+    // blockUntil ยังไม่ถูกตั้ง (ระหว่างรอโหลด/armOneShotSafetyTimer ยังไม่ทำงาน) ให้ถือว่ายังบล็อกอยู่
+    // ไปก่อนแบบระมัดระวัง — ช่วงเวลานี้สั้นมาก (ไม่ถึง 1 tick ของ event loop)
+    return [...this.active.values()].some(entry =>
+      entry.priority === AudioPriority.CRITICAL && (entry.blockUntil === undefined || now < entry.blockUntil))
   }
   private suppressLowPriority(): void {
     for (const [event, entry] of this.active) if (entry.priority <= AudioPriority.NORMAL) this.stop(event, 80)
