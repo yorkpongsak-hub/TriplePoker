@@ -129,13 +129,7 @@
 - **UI:** Elites ใช้พื้นหลัง gradient ม่วงเทาที่เด่นขึ้น, Intro Tier D เปลี่ยนจากวิดีโอเป็น WebP, เพิ่ม WebP ล่าสุดท้าย Lobby และลบไฟล์วิดีโอเดิม
 - **Card layout:** P1 ทุกโต๊ะมีขนาดไม่น้อยกว่า Initiate; Initiate ขยาย P1 20% และเลื่อนมือ P2/P4 ขึ้นประมาณหนึ่งความสูงไพ่
 - **QA hardening:** Core gameplay/economy/progression/privacy/reconnect regression ผ่าน baseline 86 suites / 796 tests ณ 2026-08-15
-
-**แก้แล้วใน working tree แต่ยังรอ commit/push:**
-
-- AudioManager hardening รอบสอง: รอ asset โหลดก่อน play, retry one-shot ครั้งเดียวเมื่อ Android ไม่เริ่มจริง, watchdog กู้ BGM/loop หลังเสีย audio focus, เก็บ resume BGM ข้าม `inactive -> background` และปลด stale priority/BGM duck ตามความยาวไฟล์แทน timeout 10 นาที
-- Free P1 hand เปลี่ยนเป็น 2 แถว: กอง 1+2 อยู่แถวบนที่ Y เดิมของกอง 1; กอง 3 อยู่กึ่งกลางแถวล่างและต่ำกว่าแถวบนรวม 105% ของความสูงไพ่; VIP layout ไม่เปลี่ยน
-- ยกเลิกปุ่ม `Play Now` และ Guest Play: ผู้เล่นทุกคนต้อง Sign in/Create account ก่อนเล่น, ปิด `/auth/guest-init`, ปิด anonymous access ใน Game/Home guards และ guest session เก่าถูกส่งกลับ Login
-- Welcome Bonus ย้ายกลับไปให้หลังลงทะเบียน/ตั้งชื่อผ่าน `POST /auth/register` เท่านั้น; focused Auth/Welcome Bonus tests ผ่าน 11/11 และ client TypeScript ผ่าน
+- ✅ **แก้ไขแล้ว commit `39d3cd6`** (ตอนจดไว้ 2026-08-16 ยังเป็น "working tree รอ commit" — เอกสารเก่าเขียนผิด แก้ไขแล้ว): AudioManager hardening รอบสอง (รอ asset โหลดก่อน play, retry one-shot, watchdog กู้ BGM/loop, resume BGM ข้าม `inactive -> background`, ปลด stale priority/BGM duck ตามความยาวไฟล์), Free P1 hand เปลี่ยนเป็น 2 แถว, ยกเลิกปุ่ม `Play Now`/Guest Play (บังคับ Sign in/Create account ทุกคน), Welcome Bonus ย้ายไปหลังลงทะเบียนผ่าน `POST /auth/register`
 
 **Pending (เรียงตาม priority):**
 
@@ -149,7 +143,7 @@
 6. **High Noble Multiplayer — ยังไม่เทสผ่าน UI จริง:** สร้าง/เทสผ่านสคริปต์ socket.io-client ล้วน (bypass เบราว์เซอร์) เพราะ Dev Login ใช้ไม่ได้ (`test1@triplepoker.dev`/`password` ขึ้น "Invalid login credentials" จริงจาก Supabase) — ต้องหา dev account ที่ใช้ได้ หรือปิด email confirmation ชั่วคราวใน Supabase dashboard ก่อนเทส 3 เบราว์เซอร์จริง
 7. ✅ **ปิดแล้ว — High Noble Multiplayer reconnect:** `buildHNSnapshotForPlayer()` + `resendHNRoundStartToPlayer()` รองรับ snapshot แบบ whitelist ครบ arrangement/auction/arrangement_2/discard/fog/grand_finale/match_end แล้ว รวมสถานะ Auto Sort ของผู้เล่นเอง โดยไม่เปิดเผยไพ่ลับคู่แข่ง · `hnSnapshot.test.ts` คุม masking/reconnect ถาวร
 
-8. **`server/tsconfig.json` พัง — `tsc` ใช้ตรวจ type ไม่ได้ทั้งโปรเจค:** `include` มี `tests/**/*` แต่ `rootDir` ตั้งเป็น `./src` → ทุกไฟล์ใน `tests/` โยน `TS6059` ออกมาหมดทุกครั้งที่รัน `tsc --noEmit` (น่าจะเป็นต้นเหตุที่ pending #4 เคยจดว่า "ส่วนใหญ่เป็น TS type error") โค้ดใน `src` เองสะอาด 0 error · แก้ได้ด้วยการเพิ่ม `tsconfig.build.json` แยกสำหรับ build หรือถอด `rootDir` ออก — เก็บไว้ทำตอน QA รวมตามกติกา "ไม่ไล่แก้ minor ระหว่างทาง"
+8. ✅ **ปิดแล้ว (ยืนยันซ้ำ 2026-09-01) — `server/tsconfig.json`:** ไม่มี `rootDir` ผิดอีกแล้ว (แก้ไปแล้วก่อนหน้านี้โดยไม่ได้จดไว้) `tsc --noEmit` รันสะอาด 0 error ทั้ง `src`/`tests` ยืนยันซ้ำหลายรอบตลอด QA รวมล่าสุด
 9. **Ascendant Tier + Crown Vault — รอรัน migration + เทสจริง:** Backend (`ascendantGate.ts`/`crownVaultService.ts`/`routes/crownVault.ts`) และ Client MVP tab (`ShopScreen.tsx`'s "CROWN VAULT") เสร็จแล้ว เทสผ่าน 25 unit tests (ดูรายละเอียดที่ `crownVaultService.test.ts`/`ascendantGate.test.ts`) — ⚠️ ต้องรัน `supabase/migrations/010_ascendant_crown_vault.sql` บน Supabase dashboard เองก่อน (มี `NOTIFY pgrst, 'reload schema';` ให้แล้ว) ถึงจะเทส endpoint จริงได้ · ยังไม่ได้เทส UI ผ่านเบราว์เซอร์/มือถือจริงเลย (แซนด์บ็อกซ์รัน `nodemon`/WSL2 dev server ไม่ได้)
 10. **Grandmaster (Tier S) — Audit 2026-08-07, Round 1+2 เสร็จ 2026-08-07:** เนื้อเกมจริงต่อครบวงจรแล้ว (จัดไพ่ → ตัดสินผู้ชนะ → หักเงินจริง) รายละเอียด:
     - **Round 1 (commit `aaa7b2e`):** gameplay projection จริงต่อ viewer ผ่าน `arenaProjection.ts` ใหม่ + personalized emit ใน `arenaSocket.ts` + บอท/AI ตอบสนองทันทีผ่าน `driveBots()`
@@ -172,6 +166,17 @@
 
 **Deferred to v1.1:** XP/Leveling, Last Boss UI (Tier S+ / Sovereign playable table — ยืนยันมติอีกครั้ง 2026-08-14 เพราะเวลาก่อน Launch ต.ค. 2026 จำกัด ดูรายละเอียดที่ pending #11), Social, Push Notifications, Lottie, iOS
 
+### ✅ อัปเดตงานล่าสุด (2026-09-01)
+
+- **Merge PR #9 (`fix/match-end-vfx-zindex`) เข้า `feature/central-economy-ledger`** (commit `8d90a44`) — สอง branch แยกออกจากจุดเดียวกัน (`059207e`, 2026-08-09) แล้วเดินคนละทางมา 19 วัน PR นี้เปิดค้างไว้เฉยๆ ไม่มีใครสังเกต แก้ conflict มือ 14 ไฟล์ ได้ของกลับมาครบ: Arena `matchId` ไม่ชนกับ settlement เก่าหลัง restart server อีกแล้ว (`randomUUID()` ต่อ instance), server online/offline status light ทุกโต๊ะ, Android hardware Back ต้อง confirm ก่อนออกจากโต๊ะ multiplayer, Royal Straight Flush celebration VFX, shared game resume protocol ให้ solo table (Initiate/Mastermind) มี grace period ตอน disconnect แทนที่ settle ทันที, รวม discard+final-lock ของ Arena เป็นครั้งเดียว · ปิด PR #9 กับ PR #2 (buyin-escrow เก่า superseded ไปแล้วตั้งแต่ `fdc2b5e`) ทั้งคู่แล้ว — ไม่มี PR ค้างในโปรเจคอีกเลย
+- ✅ **แก้ `hnGracePeriod.test.ts` timeout/mock ไม่ครบ:** T12-T14 (กลุ่มที่เล่นไปถึง `grand_finale`) เดินจนจบแมตช์จริงได้ (`totalRounds=1`) แต่ mock เดิมเขียนไว้ก่อน `settleHNMatchViaLedger` จะมีอยู่ ทำให้ process crash ตอน match_end (`io.emit` ไม่มีใน mock) — เพิ่ม mock ครบ (`economyService`/`matchStatsService`/`matchWinsService`/`psEngine`/`tierUnlockService`/`crownVaultService` + `io.emit()` top-level) และขยับ `jest.setTimeout` เป็น 90000ms
+- ✅ **แก้ perf bug จริงใน `aiEngine.ts` (`aiDecideArrangement`):** Boss/AI ชนะไพ่ Blind Auction ใน High Noble Round 2 (ไพ่ 12 ใบ) เดิมเข้า `arrangeByPersonality`'s brute-force เต็มรูปแบบ วัดจริงได้ 15-30+ วินาที **บล็อก event loop ทั้งเซิร์ฟเวอร์** (ทุกโต๊ะทุกเกมค้างพร้อมกัน) ต้นเหตุมาจากการไล่หา root cause ของบั๊ก hnGracePeriod ด้านบนเจอเข้า — เพิ่มเงื่อนไข `cards.length > 11` fallback ไป `greedyArrangement` แทน (pattern เดียวกับที่ Mastermind Minion/Arena ใช้แก้ปัญหาเดียวกันมาก่อนแล้ว)
+- ✅ **แก้บั๊กเสียงหายเป็นครั้งคราว (`AudioManager.ts`) 2 จุด** จากการตรวจสอบตามที่ลุงเยาะแจ้ง: (1) one-shot SFX (การ์ด/ปุ่ม/ชิป) เดิม retry แค่ครั้งเดียวที่ 180ms หลัง Android ไม่คืน audio focus ทัน — ขยับเป็นลองซ้ำทุก 150ms นาน 1.5 วิ หยุดเองทันทีที่เล่นจริง/entry ถูกแทนที่/หมดเวลา (loop/BGM มี recovery ต่อเนื่องอยู่แล้วไม่กระทบ) (2) `hasBlockingPriority()` เดิมบล็อกเสียง SFX อื่นทั้งหมดตราบใดที่เสียง CRITICAL (Boss/Monarch/Soren/Caelum reveal) ยังอยู่ใน active map ซึ่งอาจค้างนานถึง duration+2000ms เพราะ Android ไม่ส่ง `didJustFinish` เสมอ — แยก `blockUntil` (ตามความยาวไฟล์จริง) ออกจากเวลาที่ entry จะถูกเคลียร์จริง ยังไม่ได้ทดสอบยืนยันบนมือถือจริง (แซนด์บ็อกซ์รันแอปไม่ได้ ตรวจแบบอ่านโค้ด + สร้าง Expo web preview เช็คว่าไม่พังเท่านั้น)
+- **VFX/UI เล็กๆ:** Victory screen + Triple Sweep celebration เปลี่ยนเป็น WebP พื้นหลังเต็มจอ (เดิมเป็นคลิปเล็กตรงกลาง) · SettingsModal volume slider เปลี่ยนจาก tap-to-jump (หาร locationX ด้วยเลขคงที่ 280) เป็น `PanResponder` ลากจริงตามความกว้างจอจริง กัน scroll ผ่าน modal ทำให้ค่าเปลี่ยนโดยไม่ตั้งใจ
+- **BGM:** เปลี่ยนไฟล์ `LOBBY_BGM`/`PROFILE_BGM` เป็น `sfx_bgm_lobby.mp3`/`sfx_bgm_profile.mp3` (ลบ `lobby_bgm.mp3`/`bgm_cool_profile.mp3` เดิมทิ้งแล้ว) · เพิ่ม `WAITING_BGM` event ใหม่เล่น `sfx_bgm_waiting.mp3` เฉพาะช่วง matchmaking `queued` ("Waiting for players...") สลับกลับ `LOBBY_BGM` เองอัตโนมัติ · `sfx_bgm_water.mp3` ถูกลบทิ้งแล้ว (ไม่พบหน้า/ฟีเจอร์ที่ใช้ชื่อ "water" ในโค้ดเลย ถามลุงเยาะแล้วคำตอบซ้ำกับ waiting เลยไม่ได้ใช้)
+- **Cleanup:** ลบ debug logging ที่ค้างมาจากการไล่บั๊กเก่า — `[ANIM-DEBUG]` ใน `highNoble/index.tsx`+`mastermind/index.tsx` (92 บรรทัดรวม) และ `[DEBUG_SOCKETMAP]`/`[DEBUG_AFK_TRIGGER]` ใน `gameSocket.ts` (ยิงทุก connect/disconnect บน production จริงโดยไม่มี `__DEV__` กันเลย) · ลบไฟล์ backup timestamp เก่า (`.backup_2026081*`) และ asset กำพร้าที่ไม่มีโค้ดอ้างอิงอีก 4 ไฟล์
+- **QA รวมยืนยันซ้ำหลายรอบตลอด session:** full suite **87/87 suites, 790/790 tests ผ่าน** + `hnGracePeriod.test.ts` 15/15 แยก, `tsc --noEmit` ผ่าน 0 error ทั้ง client/server, ไม่มี secret หลุดใหม่, working tree สะอาด 100%
+
 ---
 
 ## 🔧 Workflow Rules
@@ -181,7 +186,7 @@
 3. **Assets:** boss art `boss_[key].png` (512×640) + avatar 256×256 ที่ `assets/bosses/` | card back `card_back_[skin_key].png` (360×504 @2x)
 4. **เอกสาร:** pattern `TriplePoker_[Topic]_v[X]_[Y].md` — เอกสาร canon อยู่ที่ `docs/`
 5. ก่อนรัน bash ที่เกี่ยวกับ path ให้ confirm path จริงก่อน
-6. Tests ต้องผ่านครบก่อนถือว่างานเสร็จ — **baseline ล่าสุด ณ 2026-08-15: 86/86 suites, 796/796 tests ผ่าน** (`npm.cmd test`: main suite 85 suites/780 tests + `hnGracePeriod` แยก runInBand 1 suite/16 tests; full run ล่าสุดเจอ false positive 1 จุดใน VIP+ privacy test จาก substring ของ card key แล้วแก้ assertion เป็น exact payload value และ rerun VIP+ 37/37 ผ่าน) · focused Economy/Progression 47/47 ผ่าน · client/server TypeScript `--noEmit` ผ่าน 0 error · baseline เก่าทั้งหมดด้านล่างล้าสมัยแล้ว · **วิธีรันบน Windows: ใช้ `npm.cmd test`** (PowerShell บล็อก `npm.ps1`; script นี้แยก `hnGracePeriod.test.ts` ไปรันแบบ `--runInBand` ให้อัตโนมัติ)
+6. Tests ต้องผ่านครบก่อนถือว่างานเสร็จ — **baseline ล่าสุด ณ 2026-09-01: 87/87 suites, 790/790 tests ผ่าน** (`npm.cmd test`: main suite ไม่รวม `hnGracePeriod.test.ts` + แยก runInBand ต่างหาก 1 suite/15 tests) ยืนยันซ้ำหลายรอบระหว่าง merge PR #9/แก้บั๊ก audio/cleanup debug logging ตลอด session · จำนวน suite/test เปลี่ยนจาก baseline 2026-08-15 (86/796) เพราะ merge PR #9 เข้ามาใหม่ ไม่ใช่เทสหาย · client/server TypeScript `--noEmit` ผ่าน 0 error ทั้งคู่ · **`vipPlusMatchEngine.test.ts` เจอ flaky privacy assertion เป็นครั้งคราว** (พังเฉพาะตอนรันหลาย jest process ซ้อนกันในเครื่องเดียว รันเดี่ยวสะอาด — ไม่ใช่บั๊กจริง แค่ resource contention ของแซนด์บ็อกซ์ทดสอบ) · **วิธีรันบน Windows: ใช้ `npm.cmd test`** (PowerShell บล็อก `npm.ps1`; script นี้แยก `hnGracePeriod.test.ts` ไปรันแบบ `--runInBand` ให้อัตโนมัติ)
 
 ## 🎨 Official Theme (WebsiteTheme_Spec_v1_0)
 
