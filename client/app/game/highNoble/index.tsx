@@ -271,7 +271,6 @@ const ServerLog = React.memo(({ socket, onMonarchWin }: { socket: Socket | null;
       Animated.timing(dotAnim, { toValue: 1,    duration: 900, useNativeDriver: true }),
     ]))
     p.start()
-    console.log('[ANIM-DEBUG] START dotAnim (ServerLog, always-mounted)') // ANIM-DEBUG: ลบออกหลังปิดเคส
     return () => { clearTimeout(t); p.stop() }
   }, [addLog])
 
@@ -546,44 +545,6 @@ const GameTableLive: React.FC = () => {
   const confettiActiveRef = useRef(false)
   const confettiCompositesRef = useRef<Animated.CompositeAnimation[]>([])
 
-  // ANIM-DEBUG: ลบออกหลังปิดเคส — log mount/unmount ของทุก conditional-mount block ที่มี
-  // Animated.View/Animated.Text ข้างใน (native driver ตัวไหนยังผูกอยู่ ดู START log คู่กัน)
-  useEffect(() => {
-    const active = phase === 'countdown'
-    if (active) console.log('[ANIM-DEBUG] MOUNT countdown-overlay (countAnim), phase=', phase)
-    return () => { if (active) console.log('[ANIM-DEBUG] UNMOUNT countdown-overlay (countAnim), phase=', phase) }
-  }, [phase === 'countdown']) // ANIM-DEBUG: ลบออกหลังปิดเคส
-
-  useEffect(() => {
-    const active = phase === 'fog_of_war'
-    if (active) console.log('[ANIM-DEBUG] MOUNT fog-of-war-memory-cards (pileFadeAnim), phase=', phase)
-    return () => { if (active) console.log('[ANIM-DEBUG] UNMOUNT fog-of-war-memory-cards (pileFadeAnim), phase=', phase) }
-  }, [phase === 'fog_of_war']) // ANIM-DEBUG: ลบออกหลังปิดเคส
-
-  useEffect(() => {
-    const active = phase === 'fog_of_war'
-    if (active) console.log('[ANIM-DEBUG] MOUNT fog-of-war-big-text (fogBlinkAnim), phase=', phase)
-    return () => { if (active) console.log('[ANIM-DEBUG] UNMOUNT fog-of-war-big-text (fogBlinkAnim), phase=', phase) }
-  }, [phase === 'fog_of_war']) // ANIM-DEBUG: ลบออกหลังปิดเคส
-
-  useEffect(() => {
-    const active = phase === 'grand_finale' && !!gfTurnPlayerId
-    if (active) console.log('[ANIM-DEBUG] MOUNT grand-finale-big-text (gfBlinkAnim), phase=', phase)
-    return () => { if (active) console.log('[ANIM-DEBUG] UNMOUNT grand-finale-big-text (gfBlinkAnim), phase=', phase) }
-  }, [phase === 'grand_finale' && !!gfTurnPlayerId]) // ANIM-DEBUG: ลบออกหลังปิดเคส
-
-  useEffect(() => {
-    const active = showDiscard && !isHNDiscard
-    if (active) console.log('[ANIM-DEBUG] MOUNT discard-modal-simple (confirmBlinkAnim), phase=', phase)
-    return () => { if (active) console.log('[ANIM-DEBUG] UNMOUNT discard-modal-simple (confirmBlinkAnim), phase=', phase) }
-  }, [showDiscard && !isHNDiscard]) // ANIM-DEBUG: ลบออกหลังปิดเคส
-
-  useEffect(() => {
-    const active = showDiscard && isHNDiscard
-    if (active) console.log('[ANIM-DEBUG] MOUNT discard-modal-hn (confirmBlinkAnim), phase=', phase)
-    return () => { if (active) console.log('[ANIM-DEBUG] UNMOUNT discard-modal-hn (confirmBlinkAnim), phase=', phase) }
-  }, [showDiscard && isHNDiscard]) // ANIM-DEBUG: ลบออกหลังปิดเคส
-
   // showdown_result มาถึง → แสดง ShowdownResult popup ทันที countdown 45 วิ (Multiplayer)
   const startContinueCountdown = () => {
     // ไม่เรียก setContinueCountdown ที่นี่แล้ว — ContinueTimer อ่านจาก continueValRef เองทุก 500ms
@@ -840,7 +801,6 @@ const GameTableLive: React.FC = () => {
           Animated.timing(countAnim, { toValue: 1.6, duration: 150, useNativeDriver: false }),
           Animated.timing(countAnim, { toValue: 1,   duration: 850, useNativeDriver: false }),
         ]).start()
-        console.log('[ANIM-DEBUG] START countAnim (tick c=' + c + '), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
         if (c > 0) { c--; setTimeout(tick, 1000) }
       }
       tick()
@@ -934,7 +894,6 @@ const GameTableLive: React.FC = () => {
         pileFadeTimeoutRef.current = null
         pileFadeAnim.stopAnimation()
         Animated.timing(pileFadeAnim, { toValue: 0, duration: 3000, useNativeDriver: true }).start()
-        console.log('[ANIM-DEBUG] START pileFadeAnim (fog_of_war, +5s one-shot), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
       }, 5000)
       fogBlinkLoopRef.current?.stop()
       fogBlinkAnim.setValue(1)
@@ -945,7 +904,6 @@ const GameTableLive: React.FC = () => {
         ])
       )
       fogBlinkLoopRef.current.start()
-      console.log('[ANIM-DEBUG] START fogBlinkAnim (Animated.loop, fog_of_war handler), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
     })
     // Patch Blind Auction: เริ่มประมูล
     socket.on('blind_auction_start', (data: any) => {
@@ -1219,7 +1177,6 @@ const GameTableLive: React.FC = () => {
             Animated.timing(confirmBlinkAnim, { toValue: 0.3, duration: 350, useNativeDriver: true }),
             Animated.timing(confirmBlinkAnim, { toValue: 1,   duration: 350, useNativeDriver: true }),
           ]).start()
-          console.log('[ANIM-DEBUG] START confirmBlinkAnim (discard tick left=' + left + '), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
         }
         if (left <= 0) clearInterval(discardTimerRef.current)
       }, 1000)
@@ -1258,7 +1215,6 @@ const GameTableLive: React.FC = () => {
             Animated.timing(confirmBlinkAnim, { toValue: 0.3, duration: 350, useNativeDriver: true }),
             Animated.timing(confirmBlinkAnim, { toValue: 1,   duration: 350, useNativeDriver: true }),
           ]).start()
-          console.log('[ANIM-DEBUG] START confirmBlinkAnim (discard tick left=' + left + '), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
         }
         if (left <= 0) clearInterval(discardTimerRef.current)
       }, 1000)
@@ -1327,7 +1283,6 @@ const GameTableLive: React.FC = () => {
           Animated.timing(gfBlinkAnim, { toValue: 1,   duration: 500, useNativeDriver: true }),
         ])
       ).start()
-      console.log('[ANIM-DEBUG] START gfBlinkAnim (Animated.loop, grand finale turn handler), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
     })
     // Patch Grand Finale: ผล action ของผู้เล่นคนหนึ่ง
     socket.on('grand_finale_action', (data: any) => {
@@ -1515,7 +1470,6 @@ const GameTableLive: React.FC = () => {
 
     const dealComposite = Animated.parallel(anims)
     dealAnimCompositeRef.current = dealComposite
-    console.log('[ANIM-DEBUG] START dealAnims composite (dealAnimCompositeRef), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
     dealComposite.start(({ finished }) => {
       dealAnimCompositeRef.current = null
       if (!finished) return // ถูก .stop() กลางทาง — ห้ามแตะ phase (กันเด้งไป arrangement ผิดจังหวะ)

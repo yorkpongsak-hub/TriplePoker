@@ -56,12 +56,7 @@ function toCards(keys: string[]) {
 // ─── Multiplayer: track socket -> {userId, roomId} สำหรับ disconnect handling ───
 const socketUserMap = new Map<string, { userId: string; roomId: string; tier: string }>();
 
-// TEMP DEBUG (2026-07-24, Symptom A investigation — ลบออกทีหลังหาสาเหตุ race เจอแล้ว): log ทุกจุดที่
-// socketUserMap ถูก set/clear พร้อม Date.now() ให้ correlate กับ [DISCONNECT]/[ESCROW] logs ได้ว่า
-// socketUserMap.set() ของ human แต่ละคน "เสร็จก่อนหรือหลัง" clearMatchmakingSocketTracking ที่ trigger
-// จาก human อีกคน (ทฤษฎี race ที่สงสัยหลัง Step 2 ตัด 15s buffer ออก)
 function trackMatchmakingSocket(socketId: string, info: { userId: string; roomId: string; tier: string }): void {
-  console.log('[DEBUG_SOCKETMAP] SET', Date.now(), 'socket=', socketId, 'userId=', info.userId, 'roomId=', info.roomId, 'tier=', info.tier);
   socketUserMap.set(socketId, info);
 }
 
@@ -73,10 +68,8 @@ function trackMatchmakingSocket(socketId: string, info: { userId: string; roomId
 // ซ้ำ — ต้องล้าง entry ของ matchmaking socket ทิ้งก่อน emit room_ready เสมอ ปล่อยให้ game_join (จาก socket
 // ใหม่จริง) เป็นคนผูก socketUserMap ใหม่แทนตอนต่อเข้าห้องเกมจริง
 function clearMatchmakingSocketTracking(roomId: string): void {
-  console.log('[DEBUG_SOCKETMAP] CLEAR start', Date.now(), 'roomId=', roomId);
   for (const [socketId, info] of socketUserMap) {
     if (info.roomId === roomId) {
-      console.log('[DEBUG_SOCKETMAP] CLEAR delete', Date.now(), 'socket=', socketId, 'userId=', info.userId, 'roomId=', roomId);
       socketUserMap.delete(socketId);
     }
   }
@@ -1045,9 +1038,6 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
           if (info.tier === 'adept') {
             // A5: mark AFK + ให้ AI ตอบแทนทันที (ไม่ settle escrow ตรงนี้แล้ว — รอ grace 60s ก่อน
             // reconnect ได้ ดู markPlayerAFK/finalizeAFKReplacement ใน gameLoop.ts)
-            // TEMP DEBUG (2026-07-24, Symptom A): จุดที่ trigger AFK จริง — เทียบ timestamp นี้กับ
-            // [DEBUG_SOCKETMAP] SET/CLEAR ของ userId เดียวกันเพื่อดูว่า set() มาทันหรือหลัง clear ไปแล้ว
-            console.log('[DEBUG_AFK_TRIGGER]', Date.now(), 'marking AFK for', info.userId, 'in room', info.roomId, 'from socket', socket.id);
             await markPlayerAFK(io, info.roomId, info.userId);
           } else if (info.tier === 'highNoble') {
             // Full Reconnect System Step 2B: mark AFK + grace 60s (ไม่ settle/replace ถาวรทันทีอีกต่อไป —
