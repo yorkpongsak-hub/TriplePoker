@@ -9,6 +9,8 @@ import { router } from 'expo-router'
 import { ThemedBackground } from '../../src/components/ui/ThemedBackground'
 import { glassPanel, glassPanelDense, textOnGlass } from '../../src/ui/glassStyles'
 import { useAuthStore } from '../../src/store/authStore'
+import { CountryBadge } from '../../src/country/CountryBadge'
+import { CountryPicker } from '../../src/country/CountryPicker'
 import { AvatarDisplay, PRESET_AVATARS, AvatarConfig } from '../../src/components/profile/AvatarPicker'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
@@ -35,6 +37,7 @@ const C = {
 type LeaderboardType = 'token' | 'ps' | 'winrate' | 'xp' | 'boss_defeats' | 'all_matrix'
 
 interface LeaderboardEntry {
+  country_code?: string | null
   rank: number
   user_id: string
   display_name: string
@@ -110,7 +113,7 @@ function Row({ entry, type }: { entry: LeaderboardEntry; type: LeaderboardType }
     <TouchableOpacity onPress={handlePress} activeOpacity={0.75} style={s.row}>
       <RankBadge rank={entry.rank} />
       <RowAvatar avatarUrl={entry.avatar_url} />
-      <Text style={s.rowName} numberOfLines={1}>{entry.display_name}</Text>
+      <View style={{flex:1}}><Text style={s.rowName} numberOfLines={1}>{entry.display_name}</Text><CountryBadge code={entry.country_code}/></View>
       <Text style={[s.rowValue, { color: valueColor(type) }]} numberOfLines={1}>
         {formatValue(type, entry.value)}
       </Text>
@@ -217,6 +220,7 @@ export default function StatsScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={C.gold} colors={[C.gold]} />
           }
         >
+          <CountryPicker onChange={handleRefresh}/>
           <View style={s.tableCard}>
             {/* Table header */}
             <View style={s.tableHeadRow}>

@@ -2,7 +2,7 @@
 // Login Screen -- TriplePoker (Minimal version)
 // The Sage Unicorn Studio Co., Ltd.
 
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import {
   View,
   Text,
@@ -18,6 +18,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
 import { supabase } from '../../src/services/supabaseService'
+import { shouldResumeTierDSolo } from '../../src/game/tierDSoloResume'
+import { useAuthStore } from '../../src/store/authStore'
 
 const triplePokerLogo = require('../../assets/images/triple_poker_icon.png')
 // ─── ธีมสีหลักของแอป ──────────────────────────────────────
@@ -41,6 +43,19 @@ export default function LoginScreen() {
   const [error, setError]         = useState<string | null>(null)
   const [devEmail, setDevEmail]       = useState('')
   const [devPassword, setDevPassword] = useState('')
+  const authenticatedUser = useAuthStore(state => state.user)
+  const routedUserId = useRef<string | null>(null)
+
+  // Covers email login and the later OAuth callback. Do not send a returning
+  // Solo player through Profile/Lobby before restoring their next Tier D level.
+  useEffect(() => {
+    const userId = authenticatedUser?.id
+    if (!userId || routedUserId.current === userId) return
+    routedUserId.current = userId
+    void shouldResumeTierDSolo(userId)
+      .then(resume => router.replace(resume ? '/game/tier-d' : '/(home)/profile'))
+      .catch(() => router.replace('/(home)/profile'))
+  }, [authenticatedUser?.id])
 
   // Google OAuth Sign In
   const handleGoogleSignIn = async () => {
@@ -72,7 +87,6 @@ export default function LoginScreen() {
         password: devPassword,
       })
       if (authError) throw authError
-      router.replace('/(home)/profile')
     } catch (e: any) {
       setError('Dev login failed: ' + (e?.message ?? 'unknown error'))
     } finally {
@@ -152,8 +166,12 @@ export default function LoginScreen() {
           </View>
         )}
 
+        <TouchableOpacity style={styles.googleBtn} onPress={() => router.replace('/launch')}>
+          <Text style={styles.googleBtnText}>Play Three Piles - Free Solo</Text>
+        </TouchableOpacity>
+
         {/* Section label */}
-        <Text style={styles.sectionLabel}>SIGN IN OR CREATE AN ACCOUNT TO PLAY</Text>
+        <Text style={styles.sectionLabel}>SIGN IN FOR ADVANCED TABLES</Text>
 
         {/* Google */}
         <TouchableOpacity

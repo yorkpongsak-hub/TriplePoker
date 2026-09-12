@@ -39,6 +39,8 @@ export enum AudioEvent {
   ARRANGE_VALID = 'ARRANGE_VALID',
   VALIDATION_SUCCESS = 'VALIDATION_SUCCESS',
   CARD_REVEAL = 'CARD_REVEAL',
+  /** Tier D: player wins an individual revealed pile. */
+  PILE_WIN = 'PILE_WIN',
   MEMORY_PAGE_CHANGE = 'MEMORY_PAGE_CHANGE',
   PLAYER_TURN = 'PLAYER_TURN',
   TIMER_WARNING = 'TIMER_WARNING',

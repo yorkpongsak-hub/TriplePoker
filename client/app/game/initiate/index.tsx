@@ -38,6 +38,7 @@ import { GuideOverlay } from '../../../src/components/onboarding/GuideOverlay'
 import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
 import PlayerHandView from '../../../src/components/game/PlayerHandView'
 import BossHandRow from '../../../src/components/game/BossHandRow'
+import { SharedGameTableSurface } from '../../../src/components/game/SharedGameTable'
 import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
 import GameTopBar from '../../../src/components/game/GameTopBar'
 import MatchEndOverlay from '../../../src/components/game/MatchEndOverlay'
@@ -1276,15 +1277,10 @@ const GameTableLive: React.FC = () => {
       <GameServerStatusLight socketRef={socketRef} />
       <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" />
       <View style={[s.gameContainer, isWeb && s.webFrame]}>
-        <View style={s.gameArea}>
+        <SharedGameTableSurface backgroundSource={selectedTableImg} watermarkSource={tripleSpade} style={s.gameArea}>
 
           <PreGameCountdown visible={showPreGameCountdown} onComplete={() => setShowPreGameCountdown(false)} />
           <MonarchConquestBanner winnerName={monarchWinner} onHidden={() => setMonarchWinner(null)} />
-
-          <View style={StyleSheet.absoluteFill as any} pointerEvents="none"><Image source={selectedTableImg} style={{ width: '100%', height: '100%' }} resizeMode="cover" /></View>
-          <View style={[StyleSheet.absoluteFill as any, s.logoWatermark]} pointerEvents="none">
-            <Image source={tripleSpade} style={{ width: 120, height: 120, opacity: 0.07 }} resizeMode="contain" />
-          </View>
 
           {/* ── DEAL ANIMATION ── */}
           {/* ค้าง mount ไว้เสมอ toggle แค่ opacity — เหตุผลเดียวกับ COUNTDOWN OVERLAY ด้านล่าง:
@@ -1753,7 +1749,7 @@ const GameTableLive: React.FC = () => {
             />
           </View>}
 
-        </View>
+        </SharedGameTableSurface>
         {/* ── SHOWDOWN RESULT (กลางจอ) — Feedback C5: ครอบด้วยพื้นหลัง free/vip ชุดเดียวกับ Profile/Lobby ── */}
         {showResult && (phase === 'showdown' || phase === 'result') && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: -200, zIndex: 200 }}>

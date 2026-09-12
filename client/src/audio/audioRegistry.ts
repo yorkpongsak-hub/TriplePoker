@@ -73,6 +73,7 @@ export const audioRegistry: Record<AudioEvent, AudioDefinition> = {
   [AudioEvent.ARRANGE_VALID]: def(arrangeCorrect, AudioCategory.GAMEPLAY, AudioPriority.NORMAL, .55, { cooldownMs: 300 }),
   [AudioEvent.VALIDATION_SUCCESS]: def(arrangeCorrect, AudioCategory.GAMEPLAY, AudioPriority.NORMAL, .55, { cooldownMs: 300 }),
   [AudioEvent.CARD_REVEAL]: def(cardReveal, AudioCategory.CARD, AudioPriority.NORMAL, .55, { cooldownMs: 120 }),
+  [AudioEvent.PILE_WIN]: def(matchWin, AudioCategory.RESULT, AudioPriority.HIGH, .72, { cooldownMs: 400, duckBgm: .5 }),
   [AudioEvent.MEMORY_PAGE_CHANGE]: def(cardReveal, AudioCategory.CARD, AudioPriority.NORMAL, .55, { cooldownMs: 120 }),
   [AudioEvent.PLAYER_TURN]: def(myTurn, AudioCategory.GAMEPLAY, AudioPriority.NORMAL, .65, { cooldownMs: 1000 }),
   [AudioEvent.TIMER_WARNING]: def(countdownWarningBell, AudioCategory.TIMER, AudioPriority.HIGH, .50, { fadeOutMs: 180 }),

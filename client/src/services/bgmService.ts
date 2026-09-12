@@ -10,8 +10,7 @@ export function setBgmVolume(volume0to1: number): void { audio.setCategoryVolume
 // becomes active again after a table faded it out.
 export function useBgm(event: AudioEvent = AudioEvent.LOBBY_BGM): void {
   useFocusEffect(useCallback(() => {
-    audio.playBGM(event)
-    return () => audio.stop(event, audioRegistryFadeOut(event))
+    return audio.acquireBGM(event, audioRegistryFadeOut(event))
   }, [event]))
 }
 

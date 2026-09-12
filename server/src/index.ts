@@ -3,12 +3,15 @@ import cors from '@fastify/cors'
 import { Server } from 'socket.io'
 import { authRoutes } from './routes/auth'
 import { profileRoutes } from './routes/profile'
+import { countryRoutes } from './routes/country'
 import statsRoutes from './routes/stats'
 import crownVaultRoutes from './routes/crownVault'
 import merchRoutes from './routes/merch'
 import sovereignRoutes from './routes/sovereign'
 import rewardsRoutes from './routes/rewards'
 import badgeRoutes from './routes/badges'
+import tierDLeaderboardRoutes from './routes/tierDLeaderboard'
+import { tierDRewardRoutes } from './routes/tierDRewards'
 import { startSovereignLifecycleRuntime } from './arena/sovereign/sovereignLifecycleRuntime'
 import { registerGameSocket } from './sockets/gameSocket'
 import { registerArenaSocket } from './arena/realtime/arenaSocket'
@@ -34,12 +37,15 @@ app.register(cors, { origin: '*' })
 // Routes
 app.register(authRoutes)
 app.register(profileRoutes)
+app.register(countryRoutes)
 app.register(statsRoutes)
 app.register(crownVaultRoutes)
 app.register(merchRoutes)
 app.register(sovereignRoutes)
 app.register(rewardsRoutes)
 app.register(badgeRoutes)
+app.register(tierDLeaderboardRoutes)
+app.register(tierDRewardRoutes)
 
 // Health check
 app.get('/health', async () => ({

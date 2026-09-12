@@ -40,6 +40,7 @@ import {
 import { broadcastTableUpdate } from "./lobbySocket";
 import { registerVipPlusSocket } from './vipPlusSocket';
 import { GAME_RESUME_EVENT, GAME_RESUME_RESULT_EVENT, isGameResumeRequest, type GameResumeResult } from './gameResumeProtocol';
+import { startTierDSolo, resumeTierDSolo, playTierDGame, useTierDItem, resumeTierDTimer } from '../game/tierDSoloRuntime';
 
 // แปลง card key string (เช่น "10s", "jh") → Card object — ใช้ร่วมกันทุก handler ที่รับไพ่จาก client
 function toCards(keys: string[]) {
@@ -270,6 +271,15 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
   }, 3_000);
 
   io.on("connection", (socket: Socket) => {
+    socket.on('tier_d_start', async (data:{roomId:string;playerId:string})=>{ socket.join(data.roomId); await startTierDSolo(io,data.roomId,data.playerId) })
+    // A fresh socket after an Expo reload must join before resumeTierDSolo emits
+    // its room-scoped authoritative state. Without this, the resume ACK says
+    // OK while the reconnecting client receives no tier_d_state and stays on
+    // CONNECTING SOLO.
+    socket.on('tier_d_resume',(data:{roomId:string;playerId:string})=>{ socket.join(data.roomId); socket.emit('tier_d_resume_ack',{ok:resumeTierDSolo(io,data.roomId,data.playerId)}) })
+    socket.on('tier_d_play',(data:{roomId:string;playerId:string;arrangement?:{pile1:string[];pile2:string[];pile3:string[]}})=>void playTierDGame(io,data.roomId,data.playerId,data.arrangement))
+    socket.on('tier_d_item_use',(data:{roomId:string;playerId:string;item:'single_card_swap'|'full_redraw'|'bomb_defuser';selectedCardKey?:string})=>void useTierDItem(io,data.roomId,data.playerId,data.item,data.selectedCardKey))
+    socket.on('tier_d_timer_resume',(data:{roomId:string;playerId:string})=>resumeTierDTimer(io,data.roomId,data.playerId))
     socket.on(GAME_RESUME_EVENT, async (request: unknown) => {
       if (!isGameResumeRequest(request)) return
       const fail = (status: Exclude<GameResumeResult, { ok: true }>['status']) =>

@@ -270,6 +270,11 @@ const Card: React.FC<CardProps> = ({
   const cardImage = getCardImage(suit, value);
   const textColor = isRedSuit(suit) ? C.red : C.black;
   const translateY = selected ? -5 : 0;
+  // Winner cards must be visibly distinct during the Tier D reveal, not just
+  // carry a static gold border. This scale/opacity pulse is shared safely by
+  // every table that opts into the existing `winner` prop.
+  const winnerScale = winner ? pulseAnim : 1;
+  const winnerOpacity = winner ? pulseAnim.interpolate({ inputRange: [0.8, 1], outputRange: [0.72, 1] }) : 1;
 
   return (
     <Animated.View style={[
@@ -283,7 +288,8 @@ const Card: React.FC<CardProps> = ({
         shadowColor,
         shadowOpacity,
         shadowRadius,
-        transform: [{ translateY }],
+        opacity: winnerOpacity,
+        transform: [{ translateY }, { scale: winnerScale }],
         zIndex: selected ? 3 : 1,
       },
       style,

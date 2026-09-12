@@ -19,6 +19,17 @@ export interface HandResult {
   rankIndex: number   // 9=royal_flush, 0=high_card
 }
 
+/** Canonical result for a five-card selection from a larger eligible card pool. */
+export interface BestFiveResult extends HandResult {
+  bestFive: Card[]
+  unusedCards: Card[]
+}
+
+export interface SoloG2BestFiveResult extends BestFiveResult {
+  communityCardsUsed: Card[]
+  auctionCardUsed: boolean
+}
+
 const HAND_RANK_INDEX: Record<HandRank, number> = {
   royal_flush: 9,
   straight_flush: 8,
@@ -74,6 +85,82 @@ export function evaluateHand(cards: Card[]): HandResult {
     rank,
     rankIndex: HAND_RANK_INDEX[rank],
     score: calculateScore(rank, values),
+  }
+}
+
+/**
+ * Finds the strongest five-card poker hand in a 5–7 card eligible pool.
+ * This Core Rule has no dependency on a tier or UI. Ties keep the first
+ * input-order combination so the displayed cards are deterministic.
+ */
+export function evaluateBestFive(cards: readonly Card[]): BestFiveResult {
+  if (cards.length < 5 || cards.length > 7) {
+    throw new Error(`Best Five requires 5 to 7 eligible cards; received ${cards.length}`)
+  }
+
+  let best: HandResult | undefined
+  let bestIndices: number[] | undefined
+  forEachFiveCardCombination(cards.length, indices => {
+    const hand = evaluateHand(indices.map(index => cards[index]))
+    if (!best || compareHands(hand, best) > 0) {
+      best = hand
+      bestIndices = indices
+    }
+  })
+
+  const selected = new Set(bestIndices!)
+  return {
+    ...best!,
+    bestFive: bestIndices!.map(index => cards[index]),
+    unusedCards: cards.filter((_, index) => !selected.has(index)),
+  }
+}
+
+/**
+ * Tier D Solo G2 Core Rule: 3 player cards + 2 community cards, plus an
+ * optional single Auction Card for the player who won it. This is Best 5/5 or
+ * Best 5/6; the Auction Card is eligible but never forced into Best Five.
+ */
+export function evaluateSoloG2BestFive(
+  playerCards: readonly Card[],
+  communityCards: readonly Card[],
+  auctionCard?: Card,
+): SoloG2BestFiveResult {
+  if (playerCards.length !== 3) {
+    throw new Error(`Solo G2 requires exactly 3 player cards; received ${playerCards.length}`)
+  }
+  if (communityCards.length !== 2) {
+    throw new Error(`Solo G2 requires exactly 2 community cards; received ${communityCards.length}`)
+  }
+
+  const eligible = [...playerCards, ...communityCards, ...(auctionCard ? [auctionCard] : [])]
+  const result = evaluateBestFive(eligible)
+  const bestFiveIndices = new Set(result.bestFive.map(card => eligible.indexOf(card)))
+  const communityIndices = new Set([3, 4])
+  const auctionIndex = auctionCard ? 5 : -1
+  return {
+    ...result,
+    communityCardsUsed: [...bestFiveIndices].filter(index => communityIndices.has(index)).map(index => eligible[index]),
+    auctionCardUsed: auctionIndex >= 0 && bestFiveIndices.has(auctionIndex),
+  }
+}
+
+/** Tier D G3 is always five player cards plus two community cards: Best 5/7. */
+export function evaluateSoloG3BestFive(playerCards: readonly Card[], communityCards: readonly Card[]): BestFiveResult {
+  if (playerCards.length !== 5) throw new Error(`Solo G3 requires exactly 5 player cards; received ${playerCards.length}`)
+  if (communityCards.length !== 2) throw new Error(`Solo G3 requires exactly 2 community cards; received ${communityCards.length}`)
+  return evaluateBestFive([...playerCards, ...communityCards])
+}
+
+function forEachFiveCardCombination(cardCount: number, visit: (indices: number[]) => void): void {
+  for (let a = 0; a < cardCount - 4; a++) {
+    for (let b = a + 1; b < cardCount - 3; b++) {
+      for (let c = b + 1; c < cardCount - 2; c++) {
+        for (let d = c + 1; d < cardCount - 1; d++) {
+          for (let e = d + 1; e < cardCount; e++) visit([a, b, c, d, e])
+        }
+      }
+    }
   }
 }
 

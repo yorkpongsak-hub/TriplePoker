@@ -5,9 +5,15 @@ import { Stack, Redirect } from 'expo-router'
 import { useAuthStore } from '../../src/store/authStore'
 import { needsProfileSetup } from '../../src/utils/authGuard'
 import { View, ActivityIndicator } from 'react-native'
+import { useLaunchStore } from '../../src/launch/store'
+import { tierDUnlocked } from '../../src/launch/progress'
 
 export default function HomeLayout() {
   const { isInitialized, session, profile } = useAuthStore()
+  const { hydrated, progress } = useLaunchStore()
+
+  if (!hydrated) return <View style={{ flex: 1, backgroundColor: '#091D19' }} />
+  if (!tierDUnlocked(progress)) return <Redirect href="/launch" />
 
   // ยังเช็ค session ไม่เสร็จ -- รอก่อน
   if (!isInitialized) {

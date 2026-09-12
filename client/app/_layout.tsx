@@ -15,7 +15,7 @@ import { audio } from '../src/audio'
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 const GAME_TABLE_ROUTES = new Set([
   'game/initiate', 'game/adept', 'game/mastermind', 'game/highNoble',
-  'game/monarch', 'game/vipPlus', 'game/grandmaster', 'game/sovereign',
+  'game/monarch', 'game/vipPlus', 'game/grandmaster', 'game/sovereign', 'game/tier-d',
 ])
 
 export default function RootLayout() {
@@ -172,7 +172,9 @@ export default function RootLayout() {
       }}>
         <View style={{
           width: Platform.OS === 'web' ? 390 : '100%',
-          height: Platform.OS === 'web' ? 780 : '100%',
+          maxWidth: '100%',
+          height: '100%',
+          maxHeight: Platform.OS === 'web' ? 780 : undefined,
           overflow: 'hidden',
           borderRadius: Platform.OS === 'web' ? 40 : 0,
           borderWidth: Platform.OS === 'web' ? 3 : 0,

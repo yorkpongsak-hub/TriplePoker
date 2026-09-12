@@ -10,6 +10,7 @@ import { AvatarDisplay, AvatarConfig, PRESET_AVATARS } from '../../src/component
 import { glassPanel, glassPanelDense, textOnGlass } from '../../src/ui/glassStyles'
 import { useBgm } from '../../src/services/bgmService'
 import { AudioEvent } from '../../src/audio'
+import { CountryBadge } from '../../src/country/CountryBadge'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
@@ -23,6 +24,7 @@ type MetricType = 'ps' | 'winrate' | 'boss_defeats' | 'xp' | 'token'
 
 interface MetricDetail { rank: number; value: number }
 interface HallOfFameEntry {
+  country_code?: string | null
   rank: number
   user_id: string
   display_name: string
@@ -73,6 +75,7 @@ function HallRow({ entry }: { entry: HallOfFameEntry }) {
         <RowAvatar avatarUrl={entry.avatar_url} />
         <View style={s.nameWrap}>
           <Text style={s.playerName} numberOfLines={1}>{entry.display_name}</Text>
+          <CountryBadge code={entry.country_code}/>
           <Text style={s.matrixLabel}>ALL MATRIX</Text>
         </View>
         <View style={s.totalWrap}>

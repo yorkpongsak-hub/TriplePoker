@@ -11,6 +11,7 @@ import { router, useLocalSearchParams } from 'expo-router'
 import { ThemedBackground } from '../../src/components/ui/ThemedBackground'
 import { glassPanel, glassPanelDense, textOnGlass } from '../../src/ui/glassStyles'
 import { useAuthStore } from '../../src/store/authStore'
+import { CountryBadge } from '../../src/country/CountryBadge'
 import { AvatarDisplay, PRESET_AVATARS, AvatarConfig } from '../../src/components/profile/AvatarPicker'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
@@ -36,6 +37,7 @@ const C = {
 type Top10Tier = 'initiate' | 'adept' | 'mastermind' | 'highNoble'
 
 interface Top10Entry {
+  country_code?: string | null
   rank: number
   user_id: string
   display_name: string
@@ -135,6 +137,7 @@ function Row({ entry }: { entry: Top10Entry }) {
       <RowAvatar avatarUrl={entry.avatar_url} />
       <View style={s.rowNameCol}>
         <Text style={s.rowName} numberOfLines={1}>{entry.display_name}</Text>
+        <CountryBadge code={entry.country_code}/>
         <View style={s.rowSubRow}>
           <Text style={s.rowSub} numberOfLines={1}>{formatWonAt(entry.won_at)}</Text>
           {entry.is_triple_sweep && <Text style={s.sweepTag}>SWEEP</Text>}

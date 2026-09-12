@@ -1,5 +1,8 @@
 # Dependencies
 node_modules/
+backups/
+client/launch-preview/
+client/launch-native/
 .pnp/
 
 # Expo

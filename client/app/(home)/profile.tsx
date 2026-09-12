@@ -29,6 +29,7 @@ import BossStatsPanel from '../../src/components/profile/BossStatsPanel'
 import LorePanel from '../../src/components/profile/LorePanel'
 import { Image as ExpoImage } from 'expo-image'
 import MyCollectiblesPanel from '../../src/components/profile/MyCollectiblesPanel'
+import LeagueAwardsPanel from '../../src/components/profile/LeagueAwardsPanel'
 import MyBadgesPanel from '../../src/components/profile/MyBadgesPanel'
 import { BADGES } from '../../assets/badges/BADGE_MANIFEST'
 import AvatarFrame from '../../src/components/game/AvatarFrame'
@@ -148,6 +149,9 @@ export default function ProfileScreen() {
   // ให้แล้ว) — comment เดิมที่บอกว่าคอลัมน์ไม่มีล้าสมัยไปแล้ว ต่อสายเป็นค่าจริงจาก authStore
   const streakDays  = profile?.streak_count ?? 0
   const hasSevenDayBadge = profile?.streak_7days_badge ?? false
+  const soloLevel = profile?.tier_d_solo_level ?? 1
+  const soloBestMs = profile?.tier_d_best_match_time_ms ?? null
+  const soloBestTime = soloBestMs == null ? '—' : `${Math.floor(soloBestMs / 60000)}:${String(Math.floor(soloBestMs / 1000) % 60).padStart(2, '0')}`
 
   useEffect(() => {
     const userId = authUser?.id
@@ -485,6 +489,7 @@ export default function ProfileScreen() {
               )}
             </View>
             <Text style={s.xpLine}>⭐ {fmt(xpNow)} XP</Text>
+            <Text style={s.soloStat}>TIER D · LV. {soloLevel} · PERSONAL BEST {soloBestTime}</Text>
             <Text style={s.lastVisited}>Last visited: {formatLastVisited(profile?.last_login)}</Text>
           </View>
         </GoldCard>
@@ -552,6 +557,7 @@ export default function ProfileScreen() {
           <>
             <StatsPanel streakDays={streakDays} streakShields={profile?.streak_shields ?? 0} gamesPlayed={profile?.games_played ?? 0} gamesWon={profile?.games_won ?? 0} bestHands={profile?.best_hands ?? null} />
             <MyCollectiblesPanel userId={profile?.user_id ?? authUser?.id ?? ''} />
+            <LeagueAwardsPanel />
             <MyBadgesPanel
               accessToken={session?.access_token}
               equippedBadgeKey={profile?.equipped_badge_key ?? null}
@@ -788,6 +794,7 @@ const s = StyleSheet.create({
   freemiumBadge: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   freemiumUpgrade: { color: C.gold, fontSize: 8, fontWeight: '900', letterSpacing: 0.5 },
   xpLine: { color: C.textSec, fontSize: 11, fontWeight: '800' },
+  soloStat: { color: '#8fd9ff', fontSize: 9, fontWeight: '800', marginTop: 3 },
   lastVisited: { color: C.textDim, fontSize: 10, fontWeight: '600', marginTop: 4 },
 
   // Token/Crown + Season PS/Career PS รวมคอนเทนเนอร์เดียว (มติลุงเยาะ 2026-08-15 — เดิมแยก

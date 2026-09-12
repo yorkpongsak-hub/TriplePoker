@@ -10,6 +10,7 @@ import { supabaseAdmin } from '../config/supabase'
 import { redis } from '../config/redis'
 import type { MatchWinTier } from '../game/matchWinsService'
 import { selectPlayerTitle } from '../game/playerTitleService'
+import { withCountries } from './country'
 
 type BaseLeaderboardType = 'token' | 'ps' | 'winrate' | 'xp' | 'boss_defeats'
 type LeaderboardType = BaseLeaderboardType | 'all_matrix'
@@ -288,7 +289,7 @@ export default async function statsRoutes(fastify: FastifyInstance) {
       try {
         const cached = await redis.get<LeaderboardEntry[]>(cacheKey)
         if (cached) {
-          return reply.send({ success: true, type, entries: cached, cached: true, updatedAt: null })
+          return reply.send({ success: true, type, entries: await withCountries(cached), cached: true, updatedAt: null })
         }
       } catch (err) {
         console.error('[STATS] Redis read error:', err)
@@ -321,7 +322,7 @@ export default async function statsRoutes(fastify: FastifyInstance) {
         console.error('[STATS] Redis write error:', err)
       }
 
-      return reply.send({ success: true, type, entries, cached: false, updatedAt: new Date().toISOString() })
+      return reply.send({ success: true, type, entries: await withCountries(entries), cached: false, updatedAt: new Date().toISOString() })
     }
   )
 
@@ -340,7 +341,7 @@ export default async function statsRoutes(fastify: FastifyInstance) {
       try {
         const cached = await redis.get<Top10Entry[]>(cacheKey)
         if (cached) {
-          return reply.send({ success: true, tier, entries: cached, cached: true })
+          return reply.send({ success: true, tier, entries: await withCountries(cached), cached: true })
         }
       } catch (err) {
         console.error('[STATS] Redis read error for top10:', err)
@@ -366,7 +367,7 @@ export default async function statsRoutes(fastify: FastifyInstance) {
         console.error('[STATS] Redis write error for top10:', err)
       }
 
-      return reply.send({ success: true, tier, entries, cached: false })
+      return reply.send({ success: true, tier, entries: await withCountries(entries), cached: false })
     }
   )
 

@@ -1,5 +1,6 @@
 import { AppState, AppStateStatus } from 'react-native'
-import { AudioPlayer, createAudioPlayer, setAudioModeAsync, setIsAudioActiveAsync } from 'expo-audio'
+import { setAudioModeAsync, setIsAudioActiveAsync } from 'expo-audio'
+import { createManagedPlayer, ManagedPlayer as AudioPlayer } from './playerFactory'
 import { audioRegistry, PRELOAD_AUDIO_EVENTS } from './audioRegistry'
 import { AudioCategory, AudioEvent, AudioPlayContext, AudioPriority } from './audioEvents'
 import { AudioSettings, DEFAULT_AUDIO_SETTINGS, clampVolume, loadAudioSettings, saveAudioSettings } from './audioSettings'
@@ -19,7 +20,7 @@ type ActiveAudio = {
 }
 type Listener = (settings: AudioSettings) => void
 const PRIVATE_EVENTS = new Set([AudioEvent.PLAYER_TURN, AudioEvent.TIMER_WARNING, AudioEvent.TIMER_CRITICAL, AudioEvent.TIMER_PRESSURE, AudioEvent.TIMER_LONG])
-const RESULT_EVENTS = new Set([AudioEvent.MATCH_WIN, AudioEvent.TRIPLE_SWEEP_CELEBRATION, AudioEvent.TIER_UNLOCK, AudioEvent.RARE_REACTION])
+const RESULT_EVENTS = new Set([AudioEvent.PILE_WIN, AudioEvent.MATCH_WIN, AudioEvent.TRIPLE_SWEEP_CELEBRATION, AudioEvent.TIER_UNLOCK, AudioEvent.RARE_REACTION])
 const CACHED_EVENTS = new Set<AudioEvent>(PRELOAD_AUDIO_EVENTS)
 
 class AudioManager {
@@ -35,11 +36,19 @@ class AudioManager {
   private resumeBgm: AudioEvent | null = null
   private activationPromise: Promise<void> | null = null
   private cachedPlayers = new Map<AudioEvent, AudioPlayer>()
+  private lifecycle = 0
+  private settingsRevision = 0
+  private musicRecoveryTimer?: ReturnType<typeof setInterval>
+  private bgmOwner: symbol | null = null
 
   async initialize(): Promise<void> {
     if (this.initialized) return
     this.initialized = true
-    this.settings = await loadAudioSettings()
+    const lifecycle = ++this.lifecycle
+    const settingsRevision = this.settingsRevision
+    const loadedSettings = await loadAudioSettings()
+    if (!this.initialized || lifecycle !== this.lifecycle) return
+    if (settingsRevision === this.settingsRevision) this.settings = loadedSettings
     this.emitSettings()
     try {
       await setAudioModeAsync({
@@ -50,12 +59,22 @@ class AudioManager {
         shouldRouteThroughEarpiece: false,
       })
       await this.ensureAudioSessionActive()
+      if (!this.initialized || lifecycle !== this.lifecycle) return
       this.preloadFrequentlyUsedAudio()
     } catch (error) { this.warn('Could not configure audio focus', error) }
+    if (!this.initialized || lifecycle !== this.lifecycle) return
     this.appStateSubscription = AppState.addEventListener('change', this.handleAppState)
+    this.musicRecoveryTimer = setInterval(() => {
+      if (this.canPlay() && this.resumeBgm && !this.active.has(this.resumeBgm)) this.playBGM(this.resumeBgm)
+    }, 2000)
   }
 
   dispose(): void {
+    this.bgmOwner = null
+    this.initialized = false
+    this.lifecycle++
+    if (this.musicRecoveryTimer) clearInterval(this.musicRecoveryTimer)
+    this.musicRecoveryTimer = undefined
     this.appStateSubscription?.remove()
     this.appStateSubscription = null
     this.stopAll(true)
@@ -63,12 +82,13 @@ class AudioManager {
       try { player.pause(); player.remove() } catch { /* already released */ }
     }
     this.cachedPlayers.clear()
-    this.initialized = false
+    this.lastPlayed.clear()
+    this.dedupeKeys.clear()
   }
 
   play(event: AudioEvent, context: AudioPlayContext = {}): boolean {
     const definition = audioRegistry[event]
-    if (!definition || this.settings.muted || this.settings.master <= 0) return false
+    if (!definition || !this.canPlay()) return false
     if (PRIVATE_EVENTS.has(event) && (context.spectator || context.isLocalPlayer !== true)) return false
     const now = Date.now()
     this.releaseStaleCriticalAudio(now)
@@ -78,7 +98,7 @@ class AudioManager {
       this.dedupeKeys.set(context.dedupeKey, now)
     }
     if (definition.cooldownMs && now - (this.lastPlayed.get(event) ?? 0) < definition.cooldownMs) return false
-    if (this.hasBlockingPriority(definition.priority)) return false
+    if (definition.category !== AudioCategory.BGM && this.hasBlockingPriority(definition.priority)) return false
 
     if (definition.category === AudioCategory.TIMER) this.stopCategory(AudioCategory.TIMER, 120)
     if (RESULT_EVENTS.has(event)) this.stopCategory(AudioCategory.RESULT, 100)
@@ -87,8 +107,10 @@ class AudioManager {
     if (this.active.has(event)) this.stop(event, 0)
 
     try {
-      // All registry sources are local Metro assets. Keep the shared session active and wait until Android
-      // confirms it is ready before calling play(); otherwise the first sound after an interruption is lost.
+      // ExoPlayer accepts play() while a bundled Metro asset is still buffering and
+      // starts it as soon as it is ready. Waiting for `isLoaded` here was incorrect:
+      // Expo Go on Android does not reliably publish that transition for an idle
+      // player, so short SFX were released after five seconds and retried forever.
       const player = this.getOrCreatePlayer(event)
       player.loop = definition.loop === true
       const baseVolume = definition.volume
@@ -102,9 +124,8 @@ class AudioManager {
         })
         entry.cleanup = () => subscription.remove()
       }
-      void Promise.all([this.ensureAudioSessionActive(), this.waitUntilLoaded(player)])
-        .then(() => {
-          if (this.active.get(event) !== entry) return
+      const start = () => {
+          if (this.active.get(event) !== entry || !this.canPlay()) return
           player.play()
           if (definition.fadeInMs) this.fadeTo(event, this.effectiveVolume(definition.category, baseVolume), definition.fadeInMs)
           if (!player.loop) {
@@ -113,14 +134,14 @@ class AudioManager {
             // ชั่วขณะ) — จังหวะที่ focus กลับมาไม่แน่นอนพอที่จะลองซ้ำครั้งเดียวตายตัวได้ (เดิม 180ms ครั้ง
             // เดียว พลาดบ่อยเพราะ Android คืน focus ช้ากว่านั้นได้บ่อยๆ ต่างจาก loop ที่มี recoveryTimer
             // คอยกู้ต่อเนื่องทุก 2 วิ) ลองซ้ำถี่ๆ ในกรอบเวลาสั้นๆ แทน หยุดเองทันทีที่เริ่มเล่นจริงหรือหมดเวลา
-            const recoveryDeadline = now + 1_500
+            const recoveryDeadline = Date.now() + 1_500
             entry.recoveryTimer = setInterval(() => {
               if (this.active.get(event) !== entry) { clearInterval(entry.recoveryTimer!); return }
               if (player.playing || player.currentTime >= 0.02) { clearInterval(entry.recoveryTimer!); entry.recoveryTimer = undefined; return }
               if (Date.now() >= recoveryDeadline) { clearInterval(entry.recoveryTimer!); entry.recoveryTimer = undefined; return }
               void this.ensureAudioSessionActive()
                 .then(() => {
-                  if (this.active.get(event) === entry && !player.playing && player.currentTime < 0.02) {
+                  if (this.active.get(event) === entry && this.canPlay() && !player.playing && player.currentTime < 0.02) {
                     try { player.play() } catch (error) { this.warn(`Could not retry ${event}`, error) }
                   }
                 })
@@ -131,18 +152,22 @@ class AudioManager {
             entry.recoveryTimer = setInterval(() => {
               if (this.active.get(event) !== entry || AppState.currentState !== 'active' || player.playing || !player.isLoaded) return
               void this.ensureAudioSessionActive()
-                .then(() => { if (this.active.get(event) === entry && !player.playing) player.play() })
+                .then(() => { if (this.active.get(event) === entry && this.canPlay() && !player.playing) player.play() })
                 .catch(error => this.warn(`Could not recover loop ${event}`, error))
             }, 2000)
           }
-        })
-        .catch(error => {
-          this.warn(`Could not prepare audio for ${event}`, error)
+        }
+      void this.ensureAudioSessionActive()
+        .then(start).catch(error => {
+          this.warn(`Could not activate audio for ${event}`, error)
           this.release(event, player)
         })
       return true
     } catch (error) {
       this.warn(`Failed to play ${event}`, error)
+      const failed = this.active.get(event)
+      if (failed) this.release(event, failed.player)
+      else if (definition.duckBgm !== undefined && ![...this.active.keys()].some(key => audioRegistry[key].duckBgm !== undefined)) this.restore(AudioCategory.BGM, 600)
       return false
     }
   }
@@ -160,6 +185,7 @@ class AudioManager {
 
   /** Plays the common tap sound unless the pressed control already emitted a semantic sound. */
   playUiFeedback(): boolean {
+    this.recoverOnInteraction()
     const now = Date.now()
     for (const [event, playedAt] of this.lastPlayed) {
       if (event !== AudioEvent.BUTTON_CONFIRM && now - playedAt < 75) return false
@@ -169,6 +195,9 @@ class AudioManager {
 
   playBGM(event: AudioEvent = AudioEvent.LOBBY_BGM): boolean {
     if (audioRegistry[event]?.category !== AudioCategory.BGM) return false
+    // Track screen intent even when muted/backgrounded; never resurrect an old screen's music.
+    this.resumeBgm = event
+    if (!this.canPlay()) return false
     const existing = this.active.get(event)
     if (existing) {
       // Rescue a loop whose fade-out is still running instead of restarting the same native player.
@@ -178,16 +207,29 @@ class AudioManager {
       existing.player.volume = this.effectiveVolume(AudioCategory.BGM, existing.baseVolume)
       void this.ensureAudioSessionActive()
         .then(() => {
-          if (this.active.get(event) === existing) existing.player.play()
+          if (this.active.get(event) === existing && this.canPlay()) existing.player.play()
         })
         .catch(error => this.warn(`Could not resume BGM ${event}`, error))
       return true
     }
     this.stopCategory(AudioCategory.BGM, 300)
+    this.resumeBgm = event
     return this.play(event)
   }
 
-  stopBGM(fadeMs = 500): void { this.stopCategory(AudioCategory.BGM, fadeMs) }
+  stopBGM(fadeMs = 500): void { this.resumeBgm = null; this.stopCategory(AudioCategory.BGM, fadeMs) }
+
+  /** A late blur/unmount from the old screen must not stop the new screen's same track. */
+  acquireBGM(event: AudioEvent, fadeOutMs = 500): () => void {
+    const owner = Symbol('music screen')
+    this.bgmOwner = owner
+    this.playBGM(event)
+    return () => {
+      if (this.bgmOwner !== owner) return
+      this.bgmOwner = null
+      this.stop(event, fadeOutMs)
+    }
+  }
 
   playBoss(profileName: BossAudioProfile, encounterId: string): boolean {
     const profile = bossAudioProfiles[profileName]
@@ -198,6 +240,7 @@ class AudioManager {
   }
 
   stop(event: AudioEvent, fadeMs = audioRegistry[event]?.fadeOutMs ?? 0): void {
+    if (this.resumeBgm === event) this.resumeBgm = null
     const entry = this.active.get(event)
     if (!entry) return
     if (fadeMs > 0) this.fadeTo(event, 0, fadeMs, () => this.release(event, entry.player))
@@ -239,32 +282,42 @@ class AudioManager {
     this.updateSettings({ ...this.settings, categories })
   }
   mute(): void { this.updateSettings({ ...this.settings, muted: true }); this.stopAll(false) }
-  unmute(): void { this.updateSettings({ ...this.settings, muted: false }) }
+  unmute(): void {
+    this.updateSettings({ ...this.settings, muted: false })
+    if (this.resumeBgm) this.playBGM(this.resumeBgm)
+  }
+
+  /** Called synchronously inside a user gesture to recover browser autoplay denial. */
+  recoverOnInteraction(): void {
+    if (!this.canPlay() || !this.resumeBgm) return
+    const entry = this.active.get(this.resumeBgm)
+    if (entry && !entry.player.playing && entry.player.isLoaded) {
+      try { entry.player.play() } catch (error) { this.warn('Could not resume music on interaction', error) }
+    } else if (!entry) this.playBGM(this.resumeBgm)
+  }
   setMuted(muted: boolean): void { muted ? this.mute() : this.unmute() }
   getSettings(): AudioSettings { return { ...this.settings, categories: { ...this.settings.categories } } }
   getDebugState() {
-    return { currentBGM: [...this.active.keys()].find(e => audioRegistry[e].category === AudioCategory.BGM) ?? null, activeAudio: [...this.active.keys()], settings: this.getSettings() }
+    return { currentBGM: [...this.active.keys()].find(e => audioRegistry[e].category === AudioCategory.BGM) ?? null, desiredBGM: this.resumeBgm, activeAudio: [...this.active.keys()],
+      players: [...this.active.values()].map(({event,player}) => ({event,loaded:player.isLoaded,playing:player.playing,seconds:player.currentTime,volume:player.volume})),settings: this.getSettings() }
   }
   subscribe(listener: Listener): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener) }
 
   private handleAppState = (state: AppStateStatus): void => {
     if (state !== 'active') {
-      // Android อาจส่ง inactive -> background ต่อกัน ต้องเก็บเพลงเดิมไว้แม้ fade จบแล้ว
-      const activeBgm = [...this.active.keys()].find(e => audioRegistry[e].category === AudioCategory.BGM)
-      if (activeBgm) this.resumeBgm = activeBgm
-      this.stopCategory(AudioCategory.TIMER)
-      this.stopCategory(AudioCategory.BOSS, 150)
-      this.stopCategory(AudioCategory.STORY, 150)
-      this.stopCategory(AudioCategory.BGM, 150)
+      // Stop immediately: backgrounded JS timers may never complete a fade.
+      // Old one-shots are cancelled, not replayed after returning to the game.
+      this.stopAll(false)
     } else if (this.resumeBgm) {
-      const bgm = this.resumeBgm
-      this.resumeBgm = null
-      void this.ensureAudioSessionActive()
-        .then(() => this.playBGM(bgm))
-        .catch(error => this.warn('Could not resume audio session', error))
+      this.playBGM(this.resumeBgm)
     } else {
       void this.ensureAudioSessionActive().catch(error => this.warn('Could not resume audio session', error))
     }
+  }
+
+  private canPlay(): boolean {
+    return !this.settings.muted && this.settings.master > 0 &&
+      (AppState.currentState === 'active' || AppState.currentState == null)
   }
 
   private ensureAudioSessionActive(): Promise<void> {
@@ -280,35 +333,9 @@ class AudioManager {
   private getOrCreatePlayer(event: AudioEvent): AudioPlayer {
     const cached = this.cachedPlayers.get(event)
     if (cached) return cached
-    const player = createAudioPlayer(audioRegistry[event].source, {
-      downloadFirst: true,
-      keepAudioSessionActive: true,
-      updateInterval: 250,
-    })
+    const player = createManagedPlayer(audioRegistry[event].source)
     if (CACHED_EVENTS.has(event)) this.cachedPlayers.set(event, player)
     return player
-  }
-
-  private waitUntilLoaded(player: AudioPlayer, timeoutMs = 5000): Promise<void> {
-    if (player.isLoaded) return Promise.resolve()
-    return new Promise((resolve, reject) => {
-      let settled = false
-      let timeout: ReturnType<typeof setTimeout>
-      let subscription: { remove(): void } | null = null
-      const finish = (error?: Error) => {
-        if (settled) return
-        settled = true
-        clearTimeout(timeout)
-        subscription?.remove()
-        error ? reject(error) : resolve()
-      }
-      subscription = player.addListener('playbackStatusUpdate', status => {
-        if (status.isLoaded) finish()
-      })
-      timeout = setTimeout(() => finish(new Error('Audio load timed out')), timeoutMs)
-      // ปิด race เล็กๆ ระหว่างการตรวจครั้งแรกกับการติด listener
-      if (player.isLoaded) finish()
-    })
   }
 
   private armOneShotSafetyTimer(entry: ActiveAudio): void {
@@ -342,19 +369,22 @@ class AudioManager {
       entry.priority === AudioPriority.CRITICAL && (entry.blockUntil === undefined || now < entry.blockUntil))
   }
   private suppressLowPriority(): void {
-    for (const [event, entry] of this.active) if (entry.priority <= AudioPriority.NORMAL) this.stop(event, 80)
+    for (const [event, entry] of this.active) if (entry.priority <= AudioPriority.NORMAL && audioRegistry[event].category !== AudioCategory.BGM) this.stop(event, 80)
   }
   private stopAll(clearResume: boolean): void {
+    const desiredBgm = this.resumeBgm
     for (const [event] of this.active) this.stop(event, 0)
     for (const timer of this.fadeTimers.values()) clearInterval(timer)
     this.fadeTimers.clear()
-    if (clearResume) this.resumeBgm = null
+    this.resumeBgm = clearResume ? null : desiredBgm
+    this.duckFactor = 1
   }
   private effectiveVolume(category: AudioCategory, baseVolume: number): number {
     const duck = category === AudioCategory.BGM ? this.duckFactor : 1
     return clampVolume(baseVolume * this.settings.master * this.settings.categories[category] * duck)
   }
   private updateSettings(settings: AudioSettings): void {
+    this.settingsRevision++
     this.settings = settings
     for (const entry of this.active.values()) entry.player.volume = this.effectiveVolume(audioRegistry[entry.event].category, entry.baseVolume)
     this.emitSettings()
@@ -389,20 +419,16 @@ class AudioManager {
     this.active.delete(event)
     if (entry.safetyTimer) clearTimeout(entry.safetyTimer)
     if (entry.recoveryTimer) clearInterval(entry.recoveryTimer)
-    try {
-      entry.cleanup?.()
-      player.pause()
-      // Reusing a completed expo-audio player requires an asynchronous seek. On Android, rapid
-      // replay can race that seek (or inherit didJustFinish) and become silent. Retire the native
-      // instance and synchronously preload a fresh player for the next tap instead.
-      const wasCached = this.cachedPlayers.get(event) === player
-      if (wasCached) this.cachedPlayers.delete(event)
-      player.remove()
-      if (wasCached && this.initialized) {
-        try { this.getOrCreatePlayer(event) }
-        catch (error) { this.warn(`Could not refresh cached player for ${event}`, error) }
-      }
-    } catch { /* already released */ }
+    try { entry.cleanup?.() } catch { /* already released */ }
+    try { player.pause() } catch { /* native player may already be invalid */ }
+    // Retire completed/invalid native instances so rapid replays cannot inherit stale seek state.
+    const wasCached = this.cachedPlayers.get(event) === player
+    if (wasCached) this.cachedPlayers.delete(event)
+    try { player.remove() } catch { /* evict even when native teardown fails */ }
+    if (wasCached && this.initialized) {
+      try { this.getOrCreatePlayer(event) }
+      catch (error) { this.warn(`Could not refresh cached player for ${event}`, error) }
+    }
     if (audioRegistry[event].duckBgm !== undefined && ![...this.active.keys()].some(activeEvent => audioRegistry[activeEvent].duckBgm !== undefined)) {
       this.restore(AudioCategory.BGM, 600)
     }
