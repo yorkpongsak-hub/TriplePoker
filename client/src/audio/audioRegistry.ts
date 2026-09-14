@@ -25,7 +25,9 @@ const timerWarning = require('../../assets/audio/sfx/timer/timer_warning.mp3')
 const timerCritical = require('../../assets/audio/sfx/timer/timer_critical.mp3')
 const clockTicking = require('../../assets/audio/sfx/timer/clock_ticking.mp3')
 const timerLong = require('../../assets/audio/sfx/timer/timer_long.mp3')
-const matchWin = require('../../assets/audio/sfx/result/sfx_match_win.mp3')
+const pileWinVoice = require('../../assets/audio/sfx/result/sfx_match_win.mp3')
+/** Applause-only result cue; intentionally distinct from the spoken pile-win voice. */
+const levelWinApplause = require('../../assets/audio/sfx/result/sfx_congratulation2.mp3')
 const tripleSweepCongratulations = require('../../assets/audio/sfx/result/sfx_congratulation.mp3')
 const tierUnlock = require('../../assets/audio/sfx/result/tier_unlock.mp3')
 const rareReaction = require('../../assets/audio/sfx/result/rare_reaction.mp3')
@@ -75,14 +77,14 @@ export const audioRegistry: Record<AudioEvent, AudioDefinition> = {
   [AudioEvent.ARRANGE_VALID]: def(arrangeCorrect, AudioCategory.GAMEPLAY, AudioPriority.NORMAL, .55, { cooldownMs: 300 }),
   [AudioEvent.VALIDATION_SUCCESS]: def(arrangeCorrect, AudioCategory.GAMEPLAY, AudioPriority.NORMAL, .55, { cooldownMs: 300 }),
   [AudioEvent.CARD_REVEAL]: def(cardReveal, AudioCategory.CARD, AudioPriority.NORMAL, .55, { cooldownMs: 120 }),
-  [AudioEvent.PILE_WIN]: def(matchWin, AudioCategory.RESULT, AudioPriority.HIGH, .72, { cooldownMs: 400, duckBgm: .5 }),
+  [AudioEvent.PILE_WIN]: def(pileWinVoice, AudioCategory.RESULT, AudioPriority.HIGH, .72, { cooldownMs: 400, duckBgm: .5 }),
   [AudioEvent.MEMORY_PAGE_CHANGE]: def(cardReveal, AudioCategory.CARD, AudioPriority.NORMAL, .55, { cooldownMs: 120 }),
   [AudioEvent.PLAYER_TURN]: def(myTurn, AudioCategory.GAMEPLAY, AudioPriority.NORMAL, .65, { cooldownMs: 1000 }),
   [AudioEvent.TIMER_WARNING]: def(countdownWarningBell, AudioCategory.TIMER, AudioPriority.HIGH, .50, { fadeOutMs: 180 }),
   [AudioEvent.TIMER_CRITICAL]: def(timerCritical, AudioCategory.TIMER, AudioPriority.HIGH, .60, { fadeOutMs: 150 }),
   [AudioEvent.TIMER_PRESSURE]: def(clockTicking, AudioCategory.TIMER, AudioPriority.HIGH, .55, { loop: true, fadeOutMs: 180 }),
   [AudioEvent.TIMER_LONG]: def(timerLong, AudioCategory.TIMER, AudioPriority.HIGH, .45, { loop: true, fadeOutMs: 200 }),
-  [AudioEvent.MATCH_WIN]: def(matchWin, AudioCategory.RESULT, AudioPriority.VERY_HIGH, .80, { duckBgm: .35 }),
+  [AudioEvent.MATCH_WIN]: def(levelWinApplause, AudioCategory.RESULT, AudioPriority.VERY_HIGH, .80, { duckBgm: .35 }),
   [AudioEvent.TRIPLE_SWEEP_CELEBRATION]: def(tripleSweepCongratulations, AudioCategory.RESULT, AudioPriority.VERY_HIGH, .72, { cooldownMs: 2500, duckBgm: .30 }),
   [AudioEvent.TIER_UNLOCK]: def(tierUnlock, AudioCategory.RESULT, AudioPriority.VERY_HIGH, .80, { duckBgm: .25 }),
   [AudioEvent.BOSS_REVEAL]: def(bossThunder, AudioCategory.BOSS, AudioPriority.CRITICAL, .90, { duckBgm: .25 }),

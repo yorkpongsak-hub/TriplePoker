@@ -2,23 +2,30 @@ import { supabaseAdmin } from '../config/supabase'
 import { buildTierDLeaderboardSnapshot, type TierDLeaderboardRow } from './tierDLeaderboard'
 import { getCurrentLeague, getTierDCompetitionWindow, isLeagueFinalLevel } from './tierDLeague'
 import { grantTierDLeagueAwards } from './tierDRewardService'
+import { resolveProfileAvatar, resolveProfileAvatars } from './profileAvatarService'
 
 export async function getTierDLeaderboard(userId: string) {
-  const { data: meUser, error: meError } = await supabaseAdmin.from('users').select('user_id, display_name, avatar_url, tier_d_solo_level').eq('user_id',userId).maybeSingle()
+  const { data: meUser, error: meError } = await supabaseAdmin.from('users').select('user_id, display_name, avatar_url, profile_image_url, vip_status, tier_d_solo_level').eq('user_id',userId).maybeSingle()
   if(meError)throw meError
   const window=meUser?getTierDCompetitionWindow(meUser.tier_d_solo_level):undefined
   if(!meUser||!window)return { enabled:false, entries:[], currentUser:{rank:null,leaguePoints:0}, previousDisplayedRank:null }
   const { data, error } = await supabaseAdmin.from('tier_d_competition_progress').select('user_id, league_id, cycle_no, current_level, league_points, updated_at').eq('league_id',window.leagueId).eq('cycle_no',window.cycle)
   if (error) throw error
   const ids = (data ?? []).map(row => row.user_id)
-  const { data: users, error: userError } = ids.length ? await supabaseAdmin.from('users').select('user_id, display_name, avatar_url').in('user_id', ids) : { data: [], error: null }
+  const { data: users, error: userError } = ids.length ? await supabaseAdmin.from('users').select('user_id, display_name, avatar_url, profile_image_url, vip_status, tier_d_best_win_streak').in('user_id', ids) : { data: [], error: null }
   if (userError) throw userError
   const byId = new Map((users ?? []).map(row => [row.user_id, row]))
+  const avatarById=await resolveProfileAvatars(users??[])
+  const { data: languages, error: languageError } = ids.length ? await supabaseAdmin.from('player_language_preferences').select('user_id, language_code').in('user_id', ids) : { data: [], error: null }
+  // Language flags are cosmetic. A database that has not yet received 063
+  // must still be able to serve the entire ranking.
+  if (languageError) console.warn('[TIER_D_LEADERBOARD] language flags unavailable; using English fallback', languageError.code)
+  const languageById = new Map((languages ?? []).map(row => [row.user_id, row.language_code]))
   const rows: TierDLeaderboardRow[] = (data ?? []).flatMap(row => {
     const user = byId.get(row.user_id); if (!user) return []
-    return [{ userId: row.user_id, displayName: user.display_name, avatarUrl: user.avatar_url ?? null, leagueId: row.league_id, currentLevel: row.current_level, leaguePoints: row.league_points, rankedEligible: true, updatedAt: row.updated_at }]
+    return [{ userId: row.user_id, displayName: user.display_name, avatarUrl: avatarById.get(row.user_id)??user.avatar_url ?? null, languageCode:languageById.get(row.user_id)??'en', leagueId: row.league_id, currentLevel: row.current_level, leaguePoints: row.league_points, longestWinStreak: user.tier_d_best_win_streak ?? 0, rankedEligible: true, updatedAt: row.updated_at }]
   })
-  if(!rows.some(row=>row.userId===userId))rows.push({userId,displayName:meUser.display_name,avatarUrl:meUser.avatar_url??null,leagueId:window.leagueId,currentLevel:meUser.tier_d_solo_level,leaguePoints:0,rankedEligible:true,updatedAt:new Date().toISOString()})
+  if(!rows.some(row=>row.userId===userId))rows.push({userId,displayName:meUser.display_name,avatarUrl:await resolveProfileAvatar(meUser)??meUser.avatar_url??null,languageCode:languageById.get(userId)??'en',leagueId:window.leagueId,currentLevel:meUser.tier_d_solo_level,leaguePoints:0,longestWinStreak:0,rankedEligible:true,updatedAt:new Date().toISOString()})
   return buildTierDLeaderboardSnapshot(rows, userId)
 }
 

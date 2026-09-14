@@ -3,10 +3,8 @@
 // รูปจริงเก็บที่ Supabase Storage bucket "avatars" path {userId}.webp (upsert ทับไฟล์เดิม)
 // DB เก็บแค่ path ใน users.profile_image_url แล้ว parent ขอ signed URL ตอน render เอง
 //
-// ปิด Upload Photo ชั่วคราว (MVP VIP Avatar Preset, 2026-07-17) — รอ moderation system ก่อน
-// (PDPA/UGC: รูปจริงที่ผู้ใช้อัปโหลดเองต้องมี content moderation ก่อนเปิดใช้งานจริง ยังไม่มี pipeline
-// นี้อยู่) โค้ด handleUploadPhoto + ปุ่มด้านล่างยังอยู่ครบ (ซ่อนด้วย {false && ...} ไม่ลบ) lazy cleanup
-// ฝั่ง server (recover-escrow) ยังทำงานตามปกติ ไม่ได้แตะ
+// Upload Photo is a VIP benefit. The image is cropped square, resized locally
+// to 256px WebP, then replaces the member's previous private avatar file.
 
 import React, { useState } from 'react';
 import {
@@ -133,7 +131,31 @@ export default function ProfilePicturePicker({
         <View style={styles.card}>
           <Text style={styles.title}>Edit Profile Picture</Text>
 
-          {/* ตัวเลือก 1: Upload Photo (VIP เท่านั้น) — ปิดชั่วคราว รอ moderation system (ดู comment บนไฟล์) */}
+          {/* ตัวเลือก 1: Upload Photo (VIP เท่านั้น) */}
+          <TouchableOpacity
+            style={[styles.option, !isVip && styles.optionLocked]}
+            onPress={handleUploadPhoto}
+            disabled={!isVip || uploading}
+            activeOpacity={0.7}
+          >
+            {uploading ? (
+              <ActivityIndicator color="#FFD76A" />
+            ) : (
+              <>
+                <Text style={styles.optionIcon}>{isVip ? '📷' : '🔒'}</Text>
+                <View style={styles.optionTextWrap}>
+                  <Text style={[styles.optionTitle, !isVip && styles.textDim]}>
+                    Upload Photo
+                  </Text>
+                  <Text style={styles.optionSub}>
+                    {isVip
+                      ? 'Use your own photo from gallery'
+                      : 'VIP Exclusive - Upgrade to unlock'}
+                  </Text>
+                </View>
+              </>
+            )}
+          </TouchableOpacity>
           {false && (
             <TouchableOpacity
               style={[styles.option, !isVip && styles.optionLocked]}

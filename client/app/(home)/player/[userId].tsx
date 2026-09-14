@@ -4,7 +4,7 @@
 // รอลุงออกแบบหน้าตาจริงทีหลัง ห้ามถือว่า UI นี้เป็นตัวจบ
 
 import React, { useCallback, useEffect, useState } from 'react'
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native'
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Image } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
 import { ThemedBackground } from '../../../src/components/ui/ThemedBackground'
 import { glassPanel, textOnGlass } from '../../../src/ui/glassStyles'
@@ -54,6 +54,9 @@ function PlayerAvatar({ avatarUrl }: { avatarUrl: string | null }) {
   if (isKnownPreset) {
     const config: AvatarConfig = { type: 'preset', presetKey: avatarUrl as string, frameKey: 'default' }
     return <AvatarDisplay config={config} size={64} showFrame={false} />
+  }
+  if (avatarUrl && /^(https?:|data:)/i.test(avatarUrl)) {
+    return <Image source={{ uri: avatarUrl }} style={s.avatarImage} resizeMode="cover" />
   }
   const isEmojiLike = !!avatarUrl && [...avatarUrl].length <= 3
   return <Text style={s.avatarEmoji}>{isEmojiLike ? avatarUrl : '🐉'}</Text>
@@ -178,6 +181,7 @@ const s = StyleSheet.create({
 
   identityCard: { ...glassPanel, alignItems: 'center', padding: 20, marginTop: 10, marginBottom: 14, gap: 6 },
   avatarEmoji: { fontSize: 48 },
+  avatarImage: { width: 64, height: 64, borderRadius: 32 },
   displayName: { color: C.textPrimary, fontSize: 17, fontWeight: '800', marginTop: 6 },
   tierLabel: {
     position: 'absolute',

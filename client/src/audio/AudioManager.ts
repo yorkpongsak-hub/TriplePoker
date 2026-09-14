@@ -17,6 +17,8 @@ type ActiveAudio = {
   recoveryTimer?: ReturnType<typeof setInterval>
   /** When a CRITICAL entry stops actually blocking lower-priority sounds — see hasBlockingPriority(). */
   blockUntil?: number
+  onComplete?: () => void
+  completionFired?: boolean
 }
 type Listener = (settings: AudioSettings) => void
 const PRIVATE_EVENTS = new Set([AudioEvent.PLAYER_TURN, AudioEvent.TIMER_WARNING, AudioEvent.TIMER_CRITICAL, AudioEvent.TIMER_PRESSURE, AudioEvent.TIMER_LONG])
@@ -122,14 +124,14 @@ class AudioManager {
       player.loop = definition.loop === true
       const baseVolume = definition.volume
       player.volume = definition.fadeInMs ? 0 : this.effectiveVolume(definition.category, baseVolume)
-      const entry: ActiveAudio = { event, player, priority: definition.priority, baseVolume, startedAt: now }
+      const entry: ActiveAudio = { event, player, priority: definition.priority, baseVolume, startedAt: now, onComplete: context.onComplete }
       this.active.set(event, entry)
       // Also expire players waiting on session activation, not only started sounds.
       if (!player.loop) this.armOneShotSafetyTimer(entry)
       this.lastPlayed.set(event, now)
       if (!player.loop) {
         const subscription = player.addListener('playbackStatusUpdate', status => {
-          if (status.didJustFinish) this.release(event, player)
+          if (status.didJustFinish) this.release(event, player, false, true)
         })
         entry.cleanup = () => subscription.remove()
       }
@@ -171,7 +173,7 @@ class AudioManager {
         .then(() => this.active.get(event) === entry ? player.seekTo(0) : undefined)
         .then(start).catch(error => {
           this.warn(`Could not activate audio for ${event}`, error)
-          this.release(event, player, true)
+          this.release(event, player, true, true)
         })
       return true
     } catch (error) {
@@ -385,7 +387,7 @@ class AudioManager {
     entry.blockUntil = Date.now() + durationMs
     // Android อาจไม่ส่ง didJustFinish หลังเสีย audio focus จึงคืน priority/duck ตามความยาวไฟล์จริง
     const timeoutMs = Math.max(2500, durationMs + ONE_SHOT_CLEANUP_GRACE_MS)
-    entry.safetyTimer = setTimeout(() => this.release(entry.event, entry.player), timeoutMs)
+    entry.safetyTimer = setTimeout(() => this.release(entry.event, entry.player, false, true), timeoutMs)
   }
 
   private preloadFrequentlyUsedAudio(): void {
@@ -445,7 +447,7 @@ class AudioManager {
     }, 40)
     this.fadeTimers.set(event, timer)
   }
-  private release(event: AudioEvent, player: AudioPlayer, invalid = false): void {
+  private release(event: AudioEvent, player: AudioPlayer, invalid = false, completed = false): void {
     const entry = this.active.get(event)
     if (!entry || entry.player !== player) return
     const timer = this.fadeTimers.get(event)
@@ -464,6 +466,10 @@ class AudioManager {
     }
     if (audioRegistry[event].duckBgm !== undefined && ![...this.active.keys()].some(activeEvent => audioRegistry[activeEvent].duckBgm !== undefined)) {
       this.restore(AudioCategory.BGM, 600)
+    }
+    if (completed && !entry.completionFired) {
+      entry.completionFired = true
+      try { entry.onComplete?.() } catch (error) { this.warn(`Audio completion callback failed for ${event}`, error) }
     }
   }
   private releaseStaleCriticalAudio(now: number): void {

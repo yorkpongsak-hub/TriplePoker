@@ -320,10 +320,10 @@ const GameTableLive: React.FC = () => {
   const PLAYER_ID = params.userId || authUserId || DEV_FAKE_USER_ID || ''
   // Feedback C2 — ไฟล์นี้ไม่เคยผูก authStore เลย ทำให้ P1 (ตัวผู้เล่นเอง) โชว์ '👤'/'You' hardcode ตลอด
   // Patch 2026-07-18: avatar_url เก็บเป็น preset key — resolve ผ่าน PRESET_AVATARS ก่อน render (pattern Initiate)
-  const myAvatarRaw = useAuthStore(s => s.profile?.avatar_url) || '👤'
+  const myAvatarRaw = useAuthStore(s => s.profile?.profile_image_signed_url || s.profile?.avatar_url) || '👤'
   const myPreset = PRESET_AVATARS.find(p => p.key === myAvatarRaw)
   const myAvatarEmoji = myPreset?.emoji ?? (myPreset?.image ? '' : myAvatarRaw)
-  const myAvatarImage = myPreset?.image
+  const myAvatarImage = myPreset?.image ?? (/^(https?:|data:)/i.test(myAvatarRaw) ? { uri: myAvatarRaw } : undefined)
   const myDisplayName = useAuthStore(s => s.profile?.display_name) || 'You'
   const isVip = useAuthStore(s => (s.profile?.vip_status ?? 'none') !== 'none') // Feedback C5 — ใช้ vip_status เดิม ไม่สร้าง state ใหม่
   const { activeSkin } = useTableSkins()
@@ -2033,6 +2033,7 @@ const GameTableLive: React.FC = () => {
   const resolveSeatAvatar = (seat: AIInfo | undefined, fallback: string, fallbackImage?: any) => {
     const preset = seat?.avatarUrl ? PRESET_AVATARS.find(p => p.key === seat.avatarUrl) : undefined
     if (preset) return { emoji: preset.emoji ?? (preset.image ? '' : seat!.avatarUrl!), image: preset.image }
+    if (seat?.avatarUrl && /^(https?:|data:)/i.test(seat.avatarUrl)) return { emoji: '', image: { uri: seat.avatarUrl } }
     return { emoji: seat?.emoji ?? fallback, image: fallbackImage }
   }
   const bossAvatar = resolveSeatAvatar(bossAI, '🤖', bossAI?.name ? BOSS_AVATAR[bossAI.name] : undefined)

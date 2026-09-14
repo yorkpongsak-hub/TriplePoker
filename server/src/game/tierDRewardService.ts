@@ -1,5 +1,5 @@
 import { supabaseAdmin } from '../config/supabase'
-import { tierDRewardQuantity, type TierDRewardItem, type TierDRewardMode } from './tierDRewards'
+import { tierDLevelRewardPlan, tierDRewardQuantity, type TierDRewardItem, type TierDRewardMode } from './tierDRewards'
 
 /** Server invokes this only after an ad-provider completion callback; never trust a client boolean. */
 export async function fulfillTierDItemReward(input: { userId: string; eventId: string; item: TierDRewardItem; mode: TierDRewardMode; adCompleted: boolean; isNoAdsMember: boolean }) {
@@ -36,17 +36,34 @@ export async function consumeTierDRuntimeItem(userId: string, item: TierDRewardI
   return data === true
 }
 
-export async function grantTierDLevelRandomItem(userId: string, level: number, quantity: 1 | 2) {
-  const { data, error } = await supabaseAdmin.rpc('grant_tier_d_level_random_item', { p_user_id: userId, p_level: level, p_quantity: quantity })
+export type TierDLevelReward = { items: { itemKey: TierDRewardItem; quantity: number }[]; adBonusQuantity: number; canWatchAd: boolean; idempotent: boolean }
+
+export async function getTierDLevelReward(userId:string,level:number,isVip:boolean):Promise<TierDLevelReward|undefined>{
+  const {data,error}=await supabaseAdmin.from('tier_d_level_item_rewards').select('item_key,granted_quantity,is_ad_bonus').eq('user_id',userId).eq('level',level)
+  if(error)throw error
+  if(!data?.length)return undefined
+  const totals=new Map<TierDRewardItem,number>()
+  for(const row of data)totals.set(row.item_key as TierDRewardItem,(totals.get(row.item_key as TierDRewardItem)??0)+row.granted_quantity)
+  return {items:[...totals].map(([itemKey,quantity])=>({itemKey,quantity})),adBonusQuantity:tierDLevelRewardPlan(level).adBonusQuantity,canWatchAd:!isVip&&!data.some(row=>row.is_ad_bonus),idempotent:true}
+}
+
+export async function getTierDRewardBaseline(userId:string){
+  const {data,error}=await supabaseAdmin.from('users').select('tier_d_best_win_streak,tier_d_best_level_clear_time_ms').eq('user_id',userId).maybeSingle()
+  if(error)throw error
+  return {bestWinStreak:data?.tier_d_best_win_streak??0,bestLevelClearTimeMs:data?.tier_d_best_level_clear_time_ms??null}
+}
+
+export async function grantTierDLevelRandomItem(userId: string, level: number, isVip: boolean) {
+  const { data, error } = await supabaseAdmin.rpc('grant_tier_d_level_random_item', { p_user_id: userId, p_level: level, p_quantity: 1, p_is_vip: isVip })
   if (error) throw error
-  return data as { itemKey: TierDRewardItem; quantity: number; canWatchAd: boolean; idempotent: boolean }
+  return data as TierDLevelReward
 }
 
 /** Invoke only after the production ad provider validates completion (or DEV adapter mock). */
 export async function claimTierDLevelAdBonus(userId: string, level: number) {
   const { data, error } = await supabaseAdmin.rpc('claim_tier_d_level_ad_bonus', { p_user_id: userId, p_level: level })
   if (error) throw error
-  return data as { itemKey: TierDRewardItem; quantity: number; idempotent: boolean }
+  return data as TierDLevelReward
 }
 
 /** Grants one selected item after a rewarded-ad provider callback. */

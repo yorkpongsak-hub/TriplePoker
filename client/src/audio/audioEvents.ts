@@ -77,4 +77,6 @@ export type AudioPlayContext = {
   isLocalPlayer?: boolean
   /** Private notifications are never emitted from a spectator client. */
   spectator?: boolean
+  /** Called after a one-shot finishes (or its native completion fallback expires). */
+  onComplete?: () => void
 }

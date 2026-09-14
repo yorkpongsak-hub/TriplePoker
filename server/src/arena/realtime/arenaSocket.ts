@@ -13,6 +13,7 @@ import { ArenaMatchAction } from '../match/arenaMatchEngine'
 import { ArenaSettlementPersistence } from '../settlement/arenaSettlementPersistence'
 import { projectArenaClientSnapshot, resolveArenaTableWinner } from './arenaProjection'
 import { ArenaRuntime, ArenaRuntimeMatch } from './arenaRuntime'
+import { resolveProfileAvatar } from '../../game/profileAvatarService'
 
 interface ArenaIdentity { playerId: string; tokenBalance: number; tierUnlockedMax: string | null; displayName: string; avatar: string; isVip: boolean }
 interface ArenaSocketData { identity: ArenaIdentity }
@@ -28,11 +29,11 @@ async function authenticate(token: unknown): Promise<ArenaIdentity> {
   if (typeof token !== 'string' || !token) throw new Error('ARENA_AUTH_REQUIRED')
   const { data: auth, error: authError } = await supabase.auth.getUser(token)
   if (authError || !auth.user) throw new Error('ARENA_AUTH_INVALID')
-  const { data, error } = await supabaseAdmin.from('users').select('token_balance, tier_unlocked_max, display_name, avatar_url, vip_status').eq('user_id', auth.user.id).single()
+  const { data, error } = await supabaseAdmin.from('users').select('token_balance, tier_unlocked_max, display_name, avatar_url, profile_image_url, vip_status').eq('user_id', auth.user.id).single()
   if (error || !data) throw new Error('ARENA_PROFILE_NOT_FOUND')
   return {
     playerId: auth.user.id, tokenBalance: data.token_balance ?? 0, tierUnlockedMax: data.tier_unlocked_max ?? null,
-    displayName: data.display_name ?? 'Grandmaster', avatar: data.avatar_url ?? '',
+    displayName: data.display_name ?? 'Grandmaster', avatar: await resolveProfileAvatar(data) ?? '',
     isVip: (data.vip_status ?? 'none') !== 'none',
   }
 }

@@ -1,7 +1,7 @@
 import { AI_CONFIGS, type AIConfig } from './aiEngine'
 import { createDeck, shuffleDeck, type Card } from './deck'
 import { compareHands, evaluateBestFive, evaluateSoloG2BestFive, type BestFiveResult } from './handEvaluator'
-import { TIER_D_PILE_BASE_SCORES, tierDBotCountForLevel } from './tierDLeague'
+import { TIER_D_PILE_BASE_SCORES, getCurrentLeague, tierDBotCountForLevel, type LeagueId } from './tierDLeague'
 import { comboBonus, generateMissions, generateOpenChallenge, missionResult, pileWinScore, type Mission, type OpenChallenge } from './leagueGameplay'
 
 export const TIER_D = 'D' as const
@@ -12,6 +12,37 @@ export const TIER_D_TRIPLE_SWEEP_BONUS = 5
 export type TierDGameNumber = 1 | 2 | 3
 export type TierDSeat = { id: string; isBot: boolean; bot?: AIConfig; difficulty: TierDDifficulty }
 export type TierDDifficulty = { band: 'rookie' | 'steady' | 'skilled' | 'elite' | 'master' | 'endless'; skill: number }
+
+/**
+ * Deliberately forgiving Solo AI ceiling. Higher Leagues remain harder through
+ * more opponents, shorter timers and a narrower (but still human-like) choice
+ * window instead of endlessly increasing perfect arrangement recognition.
+ */
+export const TIER_D_AI_SKILL_BY_LEAGUE: Readonly<Record<LeagueId, number>> = {
+  bronze: 1,
+  silver: 1,
+  gold: 1,
+  platinum: 2,
+  diamond: 2,
+  elite: 3,
+  master: 3,
+  grandmaster: 4,
+  legend: 4,
+  mythic: 5,
+}
+
+export const TIER_D_AI_CANDIDATE_FRACTION_BY_LEAGUE: Readonly<Record<LeagueId, number>> = {
+  bronze: .90,
+  silver: .85,
+  gold: .80,
+  platinum: .75,
+  diamond: .70,
+  elite: .65,
+  master: .50,
+  grandmaster: .40,
+  legend: .30,
+  mythic: .20,
+}
 
 /** Display-only Solo roster. Names are selected server-side for each Level. */
 export const TIER_D_ENGLISH_BOT_NAMES = [
@@ -80,19 +111,26 @@ export function tierDBotCount(level: number): number {
   return tierDBotCountForLevel(level)
 }
 
-/** Configurable level bands; AI consumers can use `skill` as their policy weight. */
+/** League-capped level bands; AI strength never grows beyond Mythic skill 5. */
 export function tierDDifficulty(level: number): TierDDifficulty {
   assertLevel(level)
-  // One fifty-level League maps to one visible skill step. The opponent never
-  // sees the player's cards; it only gains better arrangement selection.
-  const leagueSkill = Math.min(10, Math.floor((level - 1) / 50) + 1)
-  if (leagueSkill === 1) return { band: 'rookie', skill: 1 }
-  if (leagueSkill === 2) return { band: 'steady', skill: 2 }
-  if (leagueSkill === 3) return { band: 'skilled', skill: 3 }
-  if (leagueSkill === 4) return { band: 'elite', skill: 4 }
-  if (leagueSkill === 5) return { band: 'master', skill: 5 }
-  return { band: 'endless', skill: leagueSkill + Math.floor(Math.max(0, level - 501) / 100) }
+  const skill = TIER_D_AI_SKILL_BY_LEAGUE[getCurrentLeague(level).id]
+  const band: TierDDifficulty['band'] = skill === 1 ? 'rookie'
+    : skill === 2 ? 'steady'
+      : skill === 3 ? 'skilled'
+        : skill === 4 ? 'elite'
+          : 'master'
+  return { band, skill }
 }
+
+/** League-specific share of score-ranked valid arrangements used as the random pool. */
+export function tierDAiCandidateFraction(level: number): number {
+  assertLevel(level)
+  return TIER_D_AI_CANDIDATE_FRACTION_BY_LEAGUE[getCurrentLeague(level).id]
+}
+
+/** Platinum's opening ten Levels teach multi-opponent Missions to the Player first. */
+export function tierDAiMissionsEnabled(level: number): boolean { return level >= 161 }
 
 /** Starts a Tier D level with one human and the level-appropriate number of AI seats. */
 export function createTierDLevel(level: number, humanId: string, random: () => number = Math.random, lockedRules?: { comboBotId?: string; missions?: Mission[]; openChallenge?: OpenChallenge; guidedRevealPiles?: TierDGameNumber[] }): TierDLevelState {
@@ -111,7 +149,7 @@ export function createTierDLevel(level: number, humanId: string, random: () => n
     seats.push({ id: `tier-d-bot-${index + 1}`, isBot: true, bot, difficulty })
   }
   const aiSeats = seats.filter(seat => seat.isBot)
-  const comboBotId = bots >= 2 ? (aiSeats.some(seat => seat.id === lockedRules?.comboBotId) ? lockedRules!.comboBotId : aiSeats[Math.floor(random() * aiSeats.length)].id) : undefined
+  const comboBotId = bots >= 2 && level >= 201 ? (aiSeats.some(seat => seat.id === lockedRules?.comboBotId) ? lockedRules!.comboBotId : aiSeats[Math.floor(random() * aiSeats.length)].id) : undefined
   const scores = Object.fromEntries(seats.map(seat => [seat.id, 0])) as Record<string, number>
   const missions = lockedRules?.missions ?? generateMissions(level, random)
   const openChallenge = level > 1000 && lockedRules && 'openChallenge' in lockedRules ? lockedRules.openChallenge : generateOpenChallenge(level, random)
@@ -125,7 +163,10 @@ export function createTierDLevel(level: number, humanId: string, random: () => n
   cursor += 6
   const arrangements: Record<string, TierDArrangement | undefined> = {}
   // Bots arrange immediately. Human cards are intentionally left uncommitted until READY.
-  for (const seat of seats) if (seat.isBot) arrangements[seat.id] = arrangeTierDBot(dealtHands[seat.id], communityPiles, seat.difficulty.skill, random, !comboBotId || seat.id === comboBotId ? missions : [], seat.id === comboBotId)
+  for (const seat of seats) if (seat.isBot) {
+    const missionAware = tierDAiMissionsEnabled(level) && (!comboBotId || seat.id === comboBotId)
+    arrangements[seat.id] = arrangeTierDBot(dealtHands[seat.id], communityPiles, seat.difficulty.skill, random, missionAware ? missions : [], seat.id === comboBotId, tierDAiCandidateFraction(level))
+  }
   const games: TierDGameState[] = [1, 2, 3].map(game => ({
     game: game as TierDGameNumber,
     hands: Object.fromEntries(seats.map(seat => [seat.id, cardsForGame(arrangements[seat.id] ?? defaultTierDArrangement(dealtHands[seat.id]), game as TierDGameNumber)])),
@@ -220,7 +261,7 @@ export function resolveTierDGame(level: TierDLevelState, gameNumber: TierDGameNu
   const mission = level.missions.find(entry => entry.pile === gameNumber)
   const missionScores = Object.fromEntries(eligible.map(seat => [seat.id, 0])) as Record<string, number>
   const missionPenalties = Object.fromEntries(eligible.map(seat => [seat.id, 0])) as Record<string, number>
-  if (mission) for (const seat of eligible) {
+  if (mission) for (const seat of eligible.filter(seat => !seat.isBot || tierDAiMissionsEnabled(level.level))) {
     const result = missionResult(mission, hands[seat.id].rank)
     missionScores[seat.id] = result.score; missionPenalties[seat.id] = result.penalty
     level.scores[seat.id] += result.score + result.penalty
@@ -244,6 +285,7 @@ export function commitTierDCombo(level: TierDLevelState, random: () => number = 
   if (level.missions.length < 2 || level.missions.some(mission => mission.pile > committedThrough || !level.gameResults.some(result => result.game === mission.pile))) return bonuses
   for (const seat of level.seats) {
     if (level.fouled[seat.id]) continue
+    if (seat.isBot && !tierDAiMissionsEnabled(level.level)) continue
     const complete = level.missions.map(missionEntry => {
       const result = level.gameResults.find(gameResult => gameResult.game === missionEntry.pile)!
       return missionResult(missionEntry, result.hands[seat.id].rank).complete
@@ -324,7 +366,7 @@ function evaluatePile(arrangement: TierDArrangement, community: TierDCommunityPi
  * scoring legal plan it can reliably recognise. This changes decision quality,
  * never card dealing, hidden information, or the core ordering rule.
  */
-export function arrangeTierDBot(cards: Card[], community: TierDCommunityPiles, skill: number, random: () => number = Math.random, missions: readonly Mission[] = [], comboFocus = false): TierDArrangement {
+export function arrangeTierDBot(cards: Card[], community: TierDCommunityPiles, skill: number, random: () => number = Math.random, missions: readonly Mission[] = [], comboFocus = false, candidateFraction = .90): TierDArrangement {
   type Candidate = { arrangement: TierDArrangement; total: number }
   const candidates: Candidate[] = []
   forEachCombination(cards, 3, pile1 => {
@@ -341,8 +383,8 @@ export function arrangeTierDBot(cards: Card[], community: TierDCommunityPiles, s
   })
   if (!candidates.length) return defaultTierDArrangement(cards)
   candidates.sort((a, b) => b.total - a.total)
-  const recognition: Record<number, number> = { 1: .45, 2: .25, 3: .1, 4: .035, 5: .012, 6: .006, 7: .003, 8: .0015, 9: .0007, 10: .00025 }
-  const window = Math.max(1, Math.ceil(candidates.length * (recognition[Math.min(10, Math.max(1, Math.floor(skill)))] ?? .0001)))
+  const boundedFraction = Math.min(1, Math.max(.01, candidateFraction))
+  const window = Math.max(1, Math.ceil(candidates.length * boundedFraction))
   return candidates[Math.min(window - 1, Math.floor(random() * window))].arrangement
 }
 
@@ -360,8 +402,10 @@ function tierDBotHandsUtility(hands: BestFiveResult[], skill: number, missions: 
   const missionValue=outcomes.reduce((sum,result)=>sum+result.score+result.penalty,0)
   const allComplete=outcomes.every(result=>result.complete)
   const comboExpected=allComplete?(missions.length===2?6:missions.length===3?12.5:0):0
-  const strategyWeight=comboFocus?4:skill>=7?2:0.75
-  return strength+strategyWeight*(missionValue+(comboFocus||skill>=7?comboExpected:0))
+  // Even the specialist treats Combo as a preference, not an optimizer. Normal
+  // opponents only model Combo EV at the Mythic ceiling.
+  const strategyWeight=comboFocus?1.5:skill>=5?0.75:0.5
+  return strength+strategyWeight*(missionValue+(comboFocus||skill>=5?comboExpected:0))
 }
 
 /** Timeout fallback: first legal layout in deal order, with no score objective. */

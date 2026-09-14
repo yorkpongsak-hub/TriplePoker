@@ -78,6 +78,12 @@ test('web SFX starts inside the gesture without waiting for a native activation 
   expect(mockPlayers[0].playing).toBe(true);
   expect(mockActivate).not.toHaveBeenCalled();
 });
+test('one-shot completion callback fires once after the sound finishes',async()=>{
+  const complete=jest.fn();
+  expect(audio.play('BUTTON_CONFIRM',{onComplete:complete})).toBe(true);await flush();
+  mockPlayers[0].finish();mockPlayers[0].finish();
+  expect(complete).toHaveBeenCalledTimes(1);
+});
 test('unmuting restores the current screen music without another navigation',async()=>{
   audio.playBGM();await flush();audio.mute();audio.unmute();await flush();
   expect(audio.getDebugState().currentBGM).toBe('LOBBY_BGM');expect(mockPlayers.at(-1).playing).toBe(true);

@@ -90,7 +90,9 @@ export default function RoyalStraightFlushVFX({ playerName = 'PLAYER', onClose, 
               { rotate: fan.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${spreadRotation}deg`] }) },
             ],
           }]}>
-            <Image source={CARD_IMG[code]} style={styles.cardImage} resizeMode="contain" fadeDuration={0} />
+            <View style={styles.cardClip}>
+              <Image source={CARD_IMG[code]} style={styles.cardImage} resizeMode="cover" fadeDuration={0} />
+            </View>
           </Animated.View>
         })}
       </View>
@@ -114,7 +116,8 @@ const styles = StyleSheet.create({
   title: { color: '#FFF4CA', fontSize: 27, lineHeight: 33, fontWeight: '900', letterSpacing: 1.8, textAlign: 'center', textShadowColor: '#B66B08', textShadowRadius: 18 },
   player: { color: '#FFFFFF', fontSize: 14, fontWeight: '800', letterSpacing: 2.5, marginTop: 9 },
   fan: { width: '100%', height: CARD_HEIGHT + 92, alignItems: 'center', justifyContent: 'center', marginTop: 12 },
-  card: { position: 'absolute', width: CARD_WIDTH, height: CARD_HEIGHT, shadowColor: '#FFD76A', shadowOpacity: 0.75, shadowRadius: 12, elevation: 14 },
+  card: { position: 'absolute', width: CARD_WIDTH, height: CARD_HEIGHT, borderRadius: CARD_WIDTH * .14 },
+  cardClip: { width: '100%', height: '100%', borderRadius: CARD_WIDTH * .14, overflow: 'hidden' },
   cardImage: { width: '100%', height: '100%' },
   message: { color: '#D8C99A', fontSize: 13, textAlign: 'center', letterSpacing: 0.5 },
   close: { position: 'absolute', bottom: 44, paddingHorizontal: 22, paddingVertical: 13, borderRadius: 24, borderWidth: 1.5, borderColor: '#E8B94C', backgroundColor: 'rgba(7, 21, 13, 0.94)' },

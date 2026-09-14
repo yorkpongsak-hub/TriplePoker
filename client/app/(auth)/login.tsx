@@ -18,7 +18,6 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
 import { supabase } from '../../src/services/supabaseService'
-import { shouldResumeTierDSolo } from '../../src/game/tierDSoloResume'
 import { useAuthStore } from '../../src/store/authStore'
 
 const triplePokerLogo = require('../../assets/images/triple_poker_icon.png')
@@ -46,15 +45,13 @@ export default function LoginScreen() {
   const authenticatedUser = useAuthStore(state => state.user)
   const routedUserId = useRef<string | null>(null)
 
-  // Covers email login and the later OAuth callback. Do not send a returning
-  // Solo player through Profile/Lobby before restoring their next Tier D level.
+  // Every authenticated member enters through Tier D Solo. Server progression
+  // decides when legacy tables later become available.
   useEffect(() => {
     const userId = authenticatedUser?.id
     if (!userId || routedUserId.current === userId) return
     routedUserId.current = userId
-    void shouldResumeTierDSolo(userId)
-      .then(resume => router.replace(resume ? '/game/tier-d' : '/(home)/profile'))
-      .catch(() => router.replace('/(home)/profile'))
+    router.replace('/game/tier-d/entry')
   }, [authenticatedUser?.id])
 
   // Google OAuth Sign In

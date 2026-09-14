@@ -360,7 +360,9 @@ function SeatLabel({ seat, turnSeconds, gfStatus }: { seat: ArenaSeatView; turnS
   return (
     <View style={[styles.seatLabel, seat.isCurrentTurn && styles.seatTurn, seat.isBoss && styles.bossLabel]}>
       {seat.controller === 'HUMAN'
-        ? <AvatarDisplay config={{ type: 'preset', presetKey: seat.avatar, initial: seat.displayName, frameKey: seat.isVip ? 'gold' : 'default' }} size={28} showFrame={seat.isVip} />
+        ? /^(https?:|data:)/i.test(seat.avatar)
+          ? <Image source={{ uri: seat.avatar }} style={{ width: 28, height: 28, borderRadius: 14, borderWidth: seat.isVip ? 1.5 : 0, borderColor: '#FFD76A' }} />
+          : <AvatarDisplay config={{ type: 'preset', presetKey: seat.avatar, initial: seat.displayName, frameKey: seat.isVip ? 'gold' : 'default' }} size={28} showFrame={seat.isVip} />
         : <Text style={styles.avatar}>{seat.avatar}</Text>}
       <View>
         <Text numberOfLines={1} style={styles.seatName}>{seat.displayName}</Text>

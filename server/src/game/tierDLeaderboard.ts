@@ -1,8 +1,8 @@
 export type TierDLeaderboardRow = {
   userId: string; displayName: string; avatarUrl: string | null; leagueId: string
-  currentLevel: number; leaguePoints: number; rankedEligible: boolean; updatedAt: string
+  currentLevel: number; leaguePoints: number; longestWinStreak: number; rankedEligible: boolean; updatedAt: string; languageCode?: string | null
 }
-export type TierDLeaderboardEntry = { userId: string; displayName: string; avatarUrl: string | null; rank: number; leaguePoints: number; isMock?: boolean }
+export type TierDLeaderboardEntry = { userId: string; displayName: string; avatarUrl: string | null; languageCode: string | null; rank: number; leaguePoints: number; longestWinStreak: number; isMock?: boolean }
 export type TierDLeaderboardConfig = { minimumEligibleMembers: number; contextTarget: number; maxDisplayed: number }
 export const tierDLeaderboardConfig: TierDLeaderboardConfig = { minimumEligibleMembers: 100, contextTarget: 30, maxDisplayed: 20 }
 
@@ -19,11 +19,11 @@ export function buildTierDLeaderboardSnapshot(rows: readonly TierDLeaderboardRow
   const mockCount = Math.max(0, config.maxDisplayed - context.length)
   const mockRows: TierDLeaderboardRow[] = MOCK_NAMES.slice(0, mockCount).map((name, index) => ({
     userId: `league-mock-${index + 1}`, displayName: name, avatarUrl: null, leagueId: me.leagueId,
-    currentLevel: Math.max(1, me.currentLevel + (index % 5) - 2), leaguePoints: Math.max(0, 950 - index * 50),
-    rankedEligible: true, updatedAt: `2099-01-${String(index + 1).padStart(2, '0')}T00:00:00Z`,
+    currentLevel: Math.max(1, me.currentLevel + (index % 5) - 2), leaguePoints: Math.max(0, 950 - index * 50), longestWinStreak: Math.max(1, 18 - index),
+    rankedEligible: true, updatedAt: `2099-01-${String(index + 1).padStart(2, '0')}T00:00:00Z`,languageCode:['en','th','zh','ja','ko','vi','id','es','pt','fr'][index%10],
   }))
   const mockIds = new Set(mockRows.map(row => row.userId))
-  const ranked = [...context, ...mockRows].sort(compareRows).map((row, index) => ({ userId: row.userId, displayName: row.displayName, avatarUrl: row.avatarUrl, leaguePoints: row.leaguePoints, rank: index + 1, ...(mockIds.has(row.userId) ? { isMock: true } : {}) }))
+  const ranked = [...context, ...mockRows].sort(compareRows).map((row, index) => ({ userId: row.userId, displayName: row.displayName, avatarUrl: row.avatarUrl, languageCode:row.languageCode??'en', leaguePoints: row.leaguePoints, longestWinStreak: row.longestWinStreak, rank: index + 1, ...(mockIds.has(row.userId) ? { isMock: true } : {}) }))
   const current = ranked.find(entry => entry.userId === userId)
   return { enabled: true, entries: ranked.slice(0, config.maxDisplayed), currentUser: { rank: current?.rank ?? null, leaguePoints: me.leaguePoints }, previousDisplayedRank: null }
 }

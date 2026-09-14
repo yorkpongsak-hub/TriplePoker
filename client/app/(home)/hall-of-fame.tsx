@@ -2,7 +2,7 @@
 // Elites Ranking แสดงผลจัดอันดับ All Matrix พร้อมอันดับและคะแนนดิบที่ใช้คำนวณ
 
 import React, { useCallback, useEffect, useState } from 'react'
-import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import { ActivityIndicator, Image, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { router } from 'expo-router'
 import { LinearGradient } from 'expo-linear-gradient'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -49,6 +49,9 @@ function RowAvatar({ avatarUrl }: { avatarUrl: string | null }) {
   if (avatarUrl && PRESET_AVATARS.some(p => p.key === avatarUrl)) {
     const config: AvatarConfig = { type: 'preset', presetKey: avatarUrl, frameKey: 'default' }
     return <View style={s.avatar}><AvatarDisplay config={config} size={34} showFrame={false} /></View>
+  }
+  if (avatarUrl && /^(https?:|data:)/i.test(avatarUrl)) {
+    return <Image source={{ uri: avatarUrl }} style={s.avatarImage} resizeMode="cover" />
   }
   const isEmoji = !!avatarUrl && [...avatarUrl].length <= 3
   return <Text style={s.avatarEmoji}>{isEmoji ? avatarUrl : '🐉'}</Text>
@@ -197,6 +200,7 @@ const s = StyleSheet.create({
   rankText: { fontFamily: 'JetBrainsMono_600SemiBold', fontSize: 15 },
   avatar: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center' },
   avatarEmoji: { width: 34, fontSize: 25, textAlign: 'center' },
+  avatarImage: { width: 34, height: 34, borderRadius: 17 },
   nameWrap: { flex: 1 },
   playerName: { color: C.textPrimary, fontSize: 17, fontWeight: '800' },
   matrixLabel: { color: C.textDim, fontSize: 11, fontWeight: '900', letterSpacing: 0.8, marginTop: 2 },

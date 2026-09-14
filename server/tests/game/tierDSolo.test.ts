@@ -1,4 +1,4 @@
-import { applyTierDLevelOutcome, arrangeTierDBot, assertTierDCardConservation, assignTierDAuctionCard, commitTierDCombo, createTierDLevel, firstValidTierDArrangement, openChallengeMatchPassed, resolveTierDGame, resolveTierDLevel, rollbackTierDGame, submitTierDArrangement, submitTierDUndoArrangement, swapTierDHandCard, tierDBotArrangementUtility, TIER_D_TRIPLE_SWEEP_BONUS, tierDBotCount, tierDDifficulty } from '../../src/game/tierDSolo'
+import { applyTierDLevelOutcome, arrangeTierDBot, assertTierDCardConservation, assignTierDAuctionCard, commitTierDCombo, createTierDLevel, firstValidTierDArrangement, openChallengeMatchPassed, resolveTierDGame, resolveTierDLevel, rollbackTierDGame, submitTierDArrangement, submitTierDUndoArrangement, swapTierDHandCard, tierDAiCandidateFraction, tierDAiMissionsEnabled, tierDBotArrangementUtility, TIER_D_TRIPLE_SWEEP_BONUS, tierDBotCount, tierDDifficulty } from '../../src/game/tierDSolo'
 import { compareHands, evaluateBestFive } from '../../src/game/handEvaluator'
 import { createDeck, type Card } from '../../src/game/deck'
 
@@ -12,20 +12,20 @@ const random = () => 0.5
 describe('Tier D Solo loop', () => {
   test('multi-AI combo specialist is sampled at Level start and preserved when redealing', () => {
     const rules = { missions: [{ pile: 1 as const, rank: 'high_card' as const }, { pile: 2 as const, rank: 'high_card' as const }] }
-    const first = createTierDLevel(151, 'human', () => 0, rules)
-    const second = createTierDLevel(151, 'human', () => .99, rules)
+    const first = createTierDLevel(201, 'human', () => 0, rules)
+    const second = createTierDLevel(201, 'human', () => .99, rules)
     expect(first.comboBotId).toBe('tier-d-bot-1')
     expect(second.comboBotId).toBe('tier-d-bot-2')
-    const redeal = createTierDLevel(151, 'human', () => .99, { ...rules, comboBotId: first.comboBotId })
+    const redeal = createTierDLevel(201, 'human', () => .99, { ...rules, comboBotId: first.comboBotId })
     expect(redeal.comboBotId).toBe(first.comboBotId)
     for (const seat of first.seats.filter(seat => seat.isBot)) {
       const focus = seat.id === first.comboBotId
-      expect(first.arrangements[seat.id]).toEqual(arrangeTierDBot(first.dealtHands[seat.id], first.communityPiles, seat.difficulty.skill, () => 0, focus ? first.missions : [], focus))
+      expect(first.arrangements[seat.id]).toEqual(arrangeTierDBot(first.dealtHands[seat.id], first.communityPiles, seat.difficulty.skill, () => 0, focus ? first.missions : [], focus, tierDAiCandidateFraction(201)))
     }
     const arrangement = first.arrangements[first.comboBotId!]!
     expect(tierDBotArrangementUtility(arrangement, first.communityPiles, 2, first.missions, true)).toBeGreaterThan(tierDBotArrangementUtility(arrangement, first.communityPiles, 2, []))
   })
-  test.each([51, 151, 1000, 1001])('Mission and Combo eligibility at level %i applies independently to every AI', level => {
+  test.each([161, 201, 1000, 1001])('Mission and Combo eligibility at level %i applies independently to every AI', level => {
     const state = createTierDLevel(level, 'human', random)
     state.missions = [{ pile: 1, rank: 'high_card' }, { pile: 2, rank: 'high_card' }]
     for (const pile of [1, 2, 3] as const) {
@@ -63,11 +63,32 @@ describe('Tier D Solo loop', () => {
     }
   })
 
+  test('Lv. 151-160 reserves Mission and Combo scoring for the Player', () => {
+    for (const level of [151, 160]) {
+      const state = createTierDLevel(level, 'human', random, { missions: [{ pile: 1, rank: 'high_card' }, { pile: 2, rank: 'one_pair' }] })
+      expect(tierDAiMissionsEnabled(level)).toBe(false)
+      expect(state.comboBotId).toBeUndefined()
+      for (const pile of [1, 2, 3] as const) resolveTierDGame(state, pile)
+      const bonuses = commitTierDCombo(state, () => 0)
+      for (const bot of state.seats.filter(seat => seat.isBot)) {
+        expect(state.gameResults.every(result => (result.missionScores[bot.id] ?? 0) === 0)).toBe(true)
+        expect(bonuses[bot.id]).toBe(0)
+      }
+    }
+  })
+
+  test('Platinum restores AI Missions at 161 and delays the specialist until Diamond', () => {
+    expect(tierDAiMissionsEnabled(161)).toBe(true)
+    expect(createTierDLevel(161, 'human', random).comboBotId).toBeUndefined()
+    expect(createTierDLevel(200, 'human', random).comboBotId).toBeUndefined()
+    expect(createTierDLevel(201, 'human', random).comboBotId).toBeDefined()
+  })
+
   test.each([[1, 1], [150, 1], [151, 2], [350, 2], [351, 3], [1000, 3], [1501, 3]])('level %i has the configured Solo bot count', (level, bots) => {
     expect(tierDBotCount(level)).toBe(bots)
     const state = createTierDLevel(level, 'human', random)
     expect(state.seats).toHaveLength(bots + 1)
-    expect(state.seats.filter(seat => seat.id === state.comboBotId)).toHaveLength(bots >= 2 ? 1 : 0)
+    expect(state.seats.filter(seat => seat.id === state.comboBotId)).toHaveLength(bots >= 2 && level >= 201 ? 1 : 0)
   })
 
   test('deals all 11 player cards and all three community piles before arrangement', () => {
@@ -140,13 +161,20 @@ describe('Tier D Solo loop', () => {
     expect(invalid.scores.human).toBe(0)
   })
 
-  test('difficulty advances one skill per 50-level League and remains endless beyond 500', () => {
+  test('difficulty uses a forgiving League curve with Mythic as a hard ceiling', () => {
     expect(tierDDifficulty(1)).toEqual({ band: 'rookie', skill: 1 })
-    expect(tierDDifficulty(51)).toEqual({ band: 'steady', skill: 2 })
-    expect(tierDDifficulty(151)).toEqual({ band: 'elite', skill: 4 })
-    expect(tierDDifficulty(201)).toEqual({ band: 'master', skill: 5 })
-    expect(tierDDifficulty(451)).toEqual({ band: 'endless', skill: 10 })
-    expect(tierDDifficulty(601).skill).toBeGreaterThan(tierDDifficulty(501).skill)
+    expect(tierDDifficulty(51)).toEqual({ band: 'rookie', skill: 1 })
+    expect(tierDDifficulty(101)).toEqual({ band: 'rookie', skill: 1 })
+    expect(tierDDifficulty(151)).toEqual({ band: 'steady', skill: 2 })
+    expect(tierDDifficulty(201)).toEqual({ band: 'steady', skill: 2 })
+    expect(tierDDifficulty(251)).toEqual({ band: 'skilled', skill: 3 })
+    expect(tierDDifficulty(351)).toEqual({ band: 'skilled', skill: 3 })
+    expect(tierDDifficulty(501)).toEqual({ band: 'elite', skill: 4 })
+    expect(tierDDifficulty(701)).toEqual({ band: 'elite', skill: 4 })
+    expect(tierDDifficulty(1001)).toEqual({ band: 'master', skill: 5 })
+    expect(tierDDifficulty(100000)).toEqual({ band: 'master', skill: 5 })
+    expect([1, 51, 101, 151, 201, 251, 351, 501, 701, 1001].map(tierDAiCandidateFraction)).toEqual([.90, .85, .80, .75, .70, .65, .50, .40, .30, .20])
+    expect(tierDAiCandidateFraction(100000)).toBe(.20)
   })
 
   test('bot arrangement is legal against only its public community cards at every skill', () => {
@@ -162,12 +190,12 @@ describe('Tier D Solo loop', () => {
     }
   })
 
-  test('mid/high League AI values shared Missions and high League also values Combo EV', () => {
+  test('lower AI ignores Missions while the Mythic ceiling values Mission and Combo EV', () => {
     const state = createTierDLevel(351, 'human', random)
     const arrangement = firstValidTierDArrangement(state.dealtHands['tier-d-bot-1'], state.communityPiles)
     const missions = [{ pile: 1 as const, rank: 'high_card' as const }, { pile: 2 as const, rank: 'one_pair' as const }]
     expect(tierDBotArrangementUtility(arrangement, state.communityPiles, 3, missions)).toBe(tierDBotArrangementUtility(arrangement, state.communityPiles, 3, []))
-    expect(tierDBotArrangementUtility(arrangement, state.communityPiles, 7, missions)).toBeGreaterThan(tierDBotArrangementUtility(arrangement, state.communityPiles, 7, []))
+    expect(tierDBotArrangementUtility(arrangement, state.communityPiles, 5, missions)).toBeGreaterThan(tierDBotArrangementUtility(arrangement, state.communityPiles, 5, []))
   })
 
   test('Shuffle-style creation preserves an explicitly absent Open Challenge', () => {
@@ -233,7 +261,7 @@ describe('Tier D Solo loop', () => {
   })
 
   test('Combo is unavailable before G3 Commit and is applied exactly when committed', () => {
-    const state = createTierDLevel(51, 'human', random)
+    const state = createTierDLevel(161, 'human', random)
     state.missions = [{ pile: 1, rank: 'high_card' }, { pile: 2, rank: 'high_card' }]
     resolveTierDGame(state, 1)
     resolveTierDGame(state, 2)
@@ -242,9 +270,10 @@ describe('Tier D Solo loop', () => {
     resolveTierDGame(state, 3)
     const beforeCommit = { ...state.scores }
     expect(beforeCommit).not.toEqual(beforeG3)
-    expect(commitTierDCombo(state, () => 0)).toEqual({ human: 5, 'tier-d-bot-1': 5 })
+    expect(commitTierDCombo(state, () => 0)).toEqual({ human: 5, 'tier-d-bot-1': 5, 'tier-d-bot-2': 5 })
     expect(state.scores.human).toBe(beforeCommit.human + 5)
     expect(state.scores['tier-d-bot-1']).toBe(beforeCommit['tier-d-bot-1'] + 5)
+    expect(state.scores['tier-d-bot-2']).toBe(beforeCommit['tier-d-bot-2'] + 5)
   })
 
   test('timeout fallback returns the first strict G1 < G2 < G3 arrangement', () => {

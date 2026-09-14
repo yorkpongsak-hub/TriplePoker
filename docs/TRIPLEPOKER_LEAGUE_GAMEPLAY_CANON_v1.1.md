@@ -95,9 +95,9 @@ Open Challenge มีเจตนาให้ข้อมูล AI มากข�
 ถ้าจัดผิด ให้เด้งข้อความเตือนทันทีและไม่อนุญาต Confirm/Ready จนกว่าจะจัดถูก ไม่ถือว่าแพ้และไม่หักคะแนนเพราะการกดผิด
 
 คะแนนพื้นฐานเมื่อชนะกอง:
-- G1 = 2
-- G2 = 3
-- G3 = 6
+- G1 = 4
+- G2 = 6
+- G3 = 8
 
 การชนะกองใช้ Winner Takes the Pile: ต้องมี Hand แข็งที่สุดเมื่อเทียบกับ AI ทุกตัวในโต๊ะ
 
@@ -116,7 +116,7 @@ Multiplier ใช้เฉพาะ Pile Win Score และไม่คูณ M
 
 ถ้าเกิดเศษ ให้ปัดขึ้นเสมอทั้ง Player และ AI
 
-ตัวอย่าง G2: `3 × 1.5 = 4.5 → 5`
+ตัวอย่าง G2: `6 × 1.5 = 9`
 
 ถ้าแพ้กอง Pile Win Score = 0 แต่ Mission Bonus ยังคงได้รับหากทำ Mission สำเร็จ
 
@@ -352,23 +352,36 @@ Player และ AI ใช้ feedback แบบเดียวกัน
 
 AI ห้ามโกงหรือรู้ Hidden Information ของ Player
 
-ความฉลาดเพิ่มตาม League:
-- Bronze: Arrange ให้ Valid และเลือก Hand แบบพื้นฐาน
-- Silver: เริ่มสน Mission แต่เน้น Win
-- Gold: เปรียบเทียบ Win กับ Mission ง่าย ๆ
-- Platinum: เริ่มวางแผน Combo 2/2
-- Diamond: ยอมเสียโอกาสชนะบางกองเมื่อ Combo คุ้มกว่า
-- Elite: ประเมินทั้ง 3 กองร่วมกัน
-- Master: ประเมิน Win + Mission + Combo + Super Combo
-- Grandmaster: ประเมิน Expected Score ของหลาย arrangement
-- Legend: ประเมิน Mandatory Penalty Risk และ sacrifice เพื่อรักษา Super Combo
-- Mythic: เลือก arrangement ที่ Expected Final Score สูงสุดจากตัวเลือกจำนวนมาก
+ความฉลาดเพิ่มแบบผ่อนปรนและมีเพดานตาม League:
+
+| League | Skill | วิธีสุ่มจาก Valid arrangements ที่เรียงคะแนนแล้ว |
+|---|---:|---|
+| Bronze | 1 | สุ่มจากกลุ่มบน 90% |
+| Silver | 1 | สุ่มจากกลุ่มบน 85% |
+| Gold | 1 | สุ่มจากกลุ่มบน 80% |
+| Platinum | 2 | สุ่มจากกลุ่มบน 75% |
+| Diamond | 2 | สุ่มจากกลุ่มบน 70% |
+| Elite | 3 | สุ่มจากกลุ่มบน 65% |
+| Master | 3 | สุ่มจากกลุ่มบน 50% |
+| Grandmaster | 4 | สุ่มจากกลุ่มบน 40% |
+| Legend | 4 | สุ่มจากกลุ่มบน 30% |
+| Mythic / Endless | 5 | สุ่มจากกลุ่มบน 20% และไม่เพิ่มความเก่งอีก |
+
+กลุ่มสุ่มที่กว้างหมายถึง AI มีโอกาสเลือก arrangement ที่ไม่ดีที่สุดได้มากขึ้นเหมือนผู้เล่นจริง โดยทุกตัวเลือกยังต้อง Valid ตามลำดับ G1 < G2 < G3 เสมอ ความยากของ League สูงยังเพิ่มจากจำนวนคู่แข่งและ Timer ที่สั้นลง แม้ความแม่นยำในการจัดไพ่จะถูกจำกัด
 
 แนวคิด scoring objective ของ AI ระดับสูง:
 
 `Expected Final Score = Expected Pile Score + Mission Score + Combo EV + Super Combo EV − Mandatory Penalty Risk`
 
-AI ทุกตัวใช้กฎคะแนน Mission, 50% เมื่อสูงกว่า Mission, การปัดขึ้น, Multiplier, Negative Mission และ Combo/Super Combo เหมือน Player ทุกประการ
+AI ทุกตัวใช้กฎคะแนน Mission, 50% เมื่อสูงกว่า Mission, การปัดขึ้น, Multiplier, Negative Mission และ Combo/Super Combo เหมือน Player ทุกประการ แต่การวางแผน arrangement ไม่ได้สมบูรณ์แบบ: Skill 1–3 เน้นความแข็งแรงพื้นฐาน, Skill 4 เริ่มให้น้ำหนัก Mission และ Skill 5 จึงเริ่มรวม Combo EV เข้าในการเลือกตามปกติ ส่วน Combo specialist ให้น้ำหนักกลยุทธ์ 1.5 แทนค่าเดิม 4 เพื่อลดการไล่ Combo ที่แม่นยำเกินไป
+
+### 13.1 Forgiving AI tuning (ทดลองเล่น 2026-09-14)
+
+- Lv.151–160: ยังคง AI 2 ตัว แต่ Mission และ Combo คิดคะแนนให้ Player เท่านั้น
+- Lv.161–200: AI กลับมาคิด Mission/Combo ตามกติกาปกติ แต่ Platinum ถูกจำกัดที่ skill 2 และยังไม่มี Combo specialist
+- Combo specialist เริ่มที่ Lv.201 (Diamond)
+- ยกเลิกการเพิ่ม skill ต่อเนื่องทุก 50/100 Level และใช้ Mythic skill 5 เป็นเพดานถาวร
+- การทดลองนี้ลดความแม่นยำในการจัดไพ่และการไล่ Combo อย่างมาก โดยไม่เปลี่ยนจำนวน AI, Mission ที่สุ่มให้ Player, คะแนนกอง หรือเงื่อนไขผ่าน Level
 
 ## 14. Endless
 

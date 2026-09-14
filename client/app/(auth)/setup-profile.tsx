@@ -201,7 +201,7 @@ export default function SetupProfileScreen() {
       if (isExistingMember && onboardingSeen !== '1') {
         await AsyncStorage.setItem('onboarding_seen', '1')
       }
-      router.replace((isExistingMember || onboardingSeen === '1') ? '/(home)/profile' : '/(auth)/onboarding')
+      router.replace(isExistingMember ? '/(home)/profile' : '/(auth)/onboarding')
 
     } catch (e: any) {
       setError(e?.message ?? 'Unexpected error')

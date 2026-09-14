@@ -7,7 +7,6 @@ import { needsProfileSetup } from '../../src/utils/authGuard'
 import { useConfirmTableExit } from '../../src/hooks/useConfirmTableExit'
 import { View, ActivityIndicator } from 'react-native'
 import { useLaunchStore } from '../../src/launch/store'
-import { advancedUnlocked, tierDUnlocked } from '../../src/launch/progress'
 
 const STANDARD_TABLE_PATHS = new Set([
   '/game/initiate', '/game/adept', '/game/highNoble',
@@ -17,7 +16,7 @@ const STANDARD_TABLE_PATHS = new Set([
 export default function GameLayout() {
   const { isInitialized, session, profile } = useAuthStore()
   const pathname = usePathname()
-  const { hydrated, progress } = useLaunchStore()
+  const { hydrated } = useLaunchStore()
   useConfirmTableExit({
     enabled: STANDARD_TABLE_PATHS.has(pathname),
     onConfirm: () => router.replace('/(home)/lobby'),
@@ -28,11 +27,12 @@ export default function GameLayout() {
   if (isArenaDevPreview) return <Stack screenOptions={{ headerShown: false }} />
 
   if (!hydrated) return <View style={{ flex: 1, backgroundColor: '#091D19' }} />
-  // A returning Tier D player may have a new local install with no onboarding
-  // cache. Their server-persisted Solo level is enough to resume directly.
-  const canEnter = (pathname === '/game/tier-d' || pathname === '/game/tier-d/ad')
-    ? tierDUnlocked(progress) || (profile?.tier_d_solo_level ?? 1) > 1
-    : advancedUnlocked(progress)
+  // Tier D is always the first authenticated game. Legacy table access comes
+  // from the server-persisted Tier D progression (or a preserved legacy unlock).
+  const legacyEntitlement = !!profile?.tier_unlocked_max && profile.tier_unlocked_max !== 'D'
+  const canEnter = (pathname === '/game/tier-d' || pathname === '/game/tier-d/entry' || pathname === '/game/tier-d/ad')
+    ? true
+    : legacyEntitlement || (profile?.tier_d_solo_level ?? 1) >= 251
   if (!canEnter) return <Redirect href="/launch" />
 
   if (!isInitialized) {

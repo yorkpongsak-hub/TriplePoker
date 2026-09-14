@@ -12,6 +12,7 @@ import { saveCountry } from '../country/api'
 
 interface UserProfile {
   profile_image_url?: string | null; // รูปโปรไฟล์จริง (VIP) — แยกจาก avatar_url (emoji)
+  profile_image_signed_url?: string | null; // URL ชั่วคราวสำหรับจุดแสดงผลในเกม/ลอบบี้
   user_id: string
   display_name: string | null
   vip_status: 'none' | 'vip' | 'vip_pro'
@@ -38,7 +39,9 @@ interface UserProfile {
   iap_token_total: number | null      // Token สะสมจาก IAP — ไม่นับเป็นเกณฑ์ปลดล็อค Tier (กัน pay-to-unlock)
   equipped_badge_key: string | null   // Badge Shop — badge key ที่ equip อยู่ตอนนี้ (NULL = ไม่มี), โชว์หลัง Hero Avatar
   tier_d_solo_level?: number | null
+  tier_d_best_win_streak?: number | null
   tier_d_best_match_time_ms?: number | null
+  tier_d_best_match_score?: number | null
 }
 
 interface AuthState {
@@ -124,22 +127,29 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       return
     }
     try {
-      const profileColumns = 'user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp, last_login, performance_score, ps_season, monarch_victories, tier_unlock_celebrated, beyond_path, streak_count, best_streak_count, streak_shields, streak_7days_badge, streak_claimed_milestone, games_played, games_won, best_hands, tier_unlocked_max, iap_token_total, equipped_badge_key, tier_d_solo_level'
+      const profileColumns = 'user_id, display_name, vip_status, avatar_url, profile_image_url, tier, token_balance, crown_balance, xp, last_login, performance_score, ps_season, monarch_victories, tier_unlock_celebrated, beyond_path, streak_count, best_streak_count, streak_shields, streak_7days_badge, streak_claimed_milestone, games_played, games_won, best_hands, tier_unlocked_max, iap_token_total, equipped_badge_key, tier_d_solo_level, tier_d_best_win_streak'
       let { data, error } = await supabase
         .from('users')
-        .select(`${profileColumns}, tier_d_best_match_time_ms`)
+        .select(`${profileColumns}, tier_d_best_match_time_ms, tier_d_best_match_score`)
         .eq('user_id', user.id)
         .maybeSingle()
       // Migration 054 adds the personal best field. Until an existing live
       // database applies it, profile setup must still be able to complete.
-      if (error && /tier_d_best_match_time_ms/i.test(error.message ?? '')) {
+      if (error && /tier_d_best_match_time_ms|tier_d_best_match_score/i.test(error.message ?? '')) {
         const fallback = await supabase.from('users').select(profileColumns).eq('user_id', user.id).maybeSingle()
         data = fallback.data as any
         error = fallback.error
       }
       console.log('[authStore] refreshProfile query result:', { data, error, queriedUserId: user.id })
       if (get().user?.id !== user.id) return // session เปลี่ยนระหว่าง query — ห้าม profile บัญชีเก่าทับบัญชีใหม่
-      set({ profile: data as UserProfile | null })
+      let profile = data as UserProfile | null
+      // Keep the storage path separate for uploads, but provide every in-app
+      // surface a renderable URL so the player's own seat matches remote seats.
+      if (profile?.vip_status !== 'none' && profile?.profile_image_url) {
+        const { data: signed } = await supabase.storage.from('avatars').createSignedUrl(profile.profile_image_url, 3600)
+        if (signed?.signedUrl) profile = { ...profile, profile_image_signed_url: signed.signedUrl }
+      }
+      set({ profile })
     } catch (e) {
       console.error('[authStore] refreshProfile failed:', e)
       set({ profile: null })

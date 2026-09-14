@@ -9,7 +9,6 @@ import { useLaunchStore } from '../src/launch/store';
 import { advancedUnlocked, practiceComplete, tierDUnlocked, LESSONS } from '../src/launch/progress';
 import { Button, C, PlayingCard, SoundToggle, s } from '../src/launch/ui';
 import { useAuthStore } from '../src/store/authStore';
-import { shouldResumeTierDSolo } from '../src/game/tierDSoloResume';
 
 export default function Launch() {
   const languageReady=useLanguage(state=>state.ready);
@@ -21,7 +20,7 @@ export default function Launch() {
     const userId=user?.is_anonymous ? undefined : user?.id;
     if(!userId||routedUserId.current===userId)return;
     routedUserId.current=userId;
-    void shouldResumeTierDSolo(userId).then(resume=>{if(resume)router.replace('/game/tier-d');}).catch(()=>{});
+    router.replace('/game/tier-d/entry');
   },[user?.id,user?.is_anonymous]);
   if(!hydrated||!languageReady)return <SafeAreaView style={s.page}><ActivityIndicator color={C.gold}/></SafeAreaView>;
   const unlocked=advancedUnlocked(progress);
@@ -52,7 +51,7 @@ export default function Launch() {
       <Text style={s.body}>Discover the deeper tables by practicing the basics.</Text>
       <Text style={[s.body,{fontSize:12}]}>Advanced tables currently use English. Your learning screens keep your chosen language.</Text>
       <Text style={s.body}>{Math.min(progress.matches,2)} / 2 onboarding matches finished</Text>
-      {soloUnlocked&&<Button title="Play Tier D Solo" secondary onPress={()=>router.push('/game/tier-d')}/>} 
+      {soloUnlocked&&<Button title="Play Tier D Solo" secondary onPress={()=>router.push('/game/tier-d/entry')}/>
       <Text style={s.body}>{Math.min(progress.sealWins,2)} / 2 piles won with your seal</Text>
       <Text style={s.body}>{progress.lessonsPassed?'Complete':'Next'}: pass the four-question strategy check</Text>
       {practiceComplete(progress)&&!progress.lessonsPassed&&<Button title="Take the strategy check" secondary onPress={()=>{setLesson(0);setAnswer(null);}}/>}

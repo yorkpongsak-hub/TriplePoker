@@ -41,7 +41,7 @@ export default function WinStreakSun({ count, onFinish }: { count: number; onFin
   </View>
 }
 const s = StyleSheet.create({
-  overlay: { ...StyleSheet.absoluteFill, zIndex: 900, alignItems: 'center', justifyContent: 'center', backgroundColor: '#000' },
+  overlay: { ...StyleSheet.absoluteFill, zIndex: 900, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,.58)' },
   sun: { width: 248, height: 248, alignItems: 'center', justifyContent: 'center' },
   halo: { position: 'absolute', width: 230, height: 230, borderRadius: 115, backgroundColor: '#ffbe1825', shadowColor: '#ffc400', shadowOpacity: .9, shadowRadius: 32 },
   rayAxis: { position: 'absolute', width: 12, height: 248, left: 118, top: 0 },

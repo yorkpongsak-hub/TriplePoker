@@ -4,7 +4,7 @@
 // The Sage Unicorn Studio Co., Ltd.
 
 import React, { useCallback, useEffect, useState } from 'react'
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, RefreshControl, ActivityIndicator } from 'react-native'
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, RefreshControl, ActivityIndicator, Image } from 'react-native'
 import { router } from 'expo-router'
 import { ThemedBackground } from '../../src/components/ui/ThemedBackground'
 import { glassPanel, glassPanelDense, textOnGlass } from '../../src/ui/glassStyles'
@@ -99,6 +99,9 @@ function RowAvatar({ avatarUrl }: { avatarUrl: string | null }) {
         <AvatarDisplay config={config} size={26} showFrame={false} />
       </View>
     )
+  }
+  if (avatarUrl && /^(https?:|data:)/i.test(avatarUrl)) {
+    return <Image source={{ uri: avatarUrl }} style={s.rowAvatarImage} resizeMode="cover" />
   }
   // นับ code point ไม่ใช่ .length เพราะ emoji 1 ตัวกิน 2 UTF-16 units (บางตัวมี ZWJ ยาวกว่านั้น)
   const isEmojiLike = !!avatarUrl && [...avatarUrl].length <= 3
@@ -328,6 +331,7 @@ const s = StyleSheet.create({
   rankShieldNum: { fontSize: 10, fontWeight: '900', marginLeft: -2 },
 
   rowAvatarWrap: { width: 26, height: 26, alignItems: 'center', justifyContent: 'center' },
+  rowAvatarImage: { width: 26, height: 26, borderRadius: 13 },
   rowAvatarEmoji: { fontSize: 20, width: 26, textAlign: 'center' },
   rowName: { flex: 1, color: C.textPrimary, fontSize: 13, fontWeight: '700' },
   rowValue: {

@@ -147,7 +147,7 @@ export default function OnboardingScreen() {
   const handleFinish = async () => {
     // ทั้ง Skip และ Let's Play ทำผลลัพธ์เดียวกัน -- mark ว่าเคยดูแล้ว ไม่ต้องโชว์ซ้ำอัตโนมัติอีก
     await AsyncStorage.setItem('onboarding_seen', '1')
-    router.replace('/(home)/profile')
+    router.replace('/game/tier-d/entry')
   }
 
   const handleNext = () => {

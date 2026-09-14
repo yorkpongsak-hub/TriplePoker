@@ -11,6 +11,7 @@ import { redis } from '../config/redis'
 import type { MatchWinTier } from '../game/matchWinsService'
 import { selectPlayerTitle } from '../game/playerTitleService'
 import { withCountries } from './country'
+import { resolveProfileAvatars } from '../game/profileAvatarService'
 
 type BaseLeaderboardType = 'token' | 'ps' | 'winrate' | 'xp' | 'boss_defeats'
 type LeaderboardType = BaseLeaderboardType | 'all_matrix'
@@ -28,6 +29,25 @@ interface LeaderboardEntry {
     rank: number
     value: number
   }>>
+}
+
+// Public boards must use the same resolved avatar as a live table.  A custom
+// photo is stored as a private Storage path, so only the server may turn it
+// into a short-lived URL.  Looking it up in one batch also keeps the legacy
+// leaderboard queries independent of profile-image schema details.
+async function withResolvedAvatars<T extends { user_id: string; avatar_url: string | null }>(entries: T[]): Promise<T[]> {
+  if (entries.length === 0) return entries
+  const ids = [...new Set(entries.map(entry => entry.user_id))]
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .select('user_id, avatar_url, profile_image_url, vip_status')
+    .in('user_id', ids)
+  if (error) {
+    console.warn('[STATS] Could not resolve custom profile avatars:', error.message)
+    return entries
+  }
+  const resolved = await resolveProfileAvatars(data ?? [])
+  return entries.map(entry => ({ ...entry, avatar_url: resolved.get(entry.user_id) ?? entry.avatar_url }))
 }
 
 function cacheKeyFor(type: LeaderboardType): string {
@@ -149,7 +169,7 @@ async function getCachedBaseLeaderboard(type: BaseLeaderboardType): Promise<Lead
     console.error(`[STATS] Redis read error for ${type}:`, err)
   }
 
-  const entries = await queryBaseLeaderboard(type)
+  const entries = await withResolvedAvatars(await queryBaseLeaderboard(type))
   try {
     await redis.set(cacheKey, entries, { ex: CACHE_TTL_SECONDS })
   } catch (err) {
@@ -289,7 +309,7 @@ export default async function statsRoutes(fastify: FastifyInstance) {
       try {
         const cached = await redis.get<LeaderboardEntry[]>(cacheKey)
         if (cached) {
-          return reply.send({ success: true, type, entries: await withCountries(cached), cached: true, updatedAt: null })
+          return reply.send({ success: true, type, entries: await withCountries(await withResolvedAvatars(cached)), cached: true, updatedAt: null })
         }
       } catch (err) {
         console.error('[STATS] Redis read error:', err)
@@ -301,7 +321,7 @@ export default async function statsRoutes(fastify: FastifyInstance) {
       try {
         entries = type === 'all_matrix'
           ? await queryAllMatrix()
-          : await queryBaseLeaderboard(type)
+          : await withResolvedAvatars(await queryBaseLeaderboard(type))
       } catch (err) {
         // เผื่อ games_played/games_won ยังไม่มีคอลัมน์ (SQL migration ยังไม่ได้รันบน Supabase) — ตอบ empty list แทน 500
         console.error(`[STATS] Error querying leaderboard type=${type}:`, err)
@@ -341,7 +361,7 @@ export default async function statsRoutes(fastify: FastifyInstance) {
       try {
         const cached = await redis.get<Top10Entry[]>(cacheKey)
         if (cached) {
-          return reply.send({ success: true, tier, entries: await withCountries(cached), cached: true })
+          return reply.send({ success: true, tier, entries: await withCountries(await withResolvedAvatars(cached)), cached: true })
         }
       } catch (err) {
         console.error('[STATS] Redis read error for top10:', err)
@@ -349,7 +369,7 @@ export default async function statsRoutes(fastify: FastifyInstance) {
 
       let entries: Top10Entry[] = []
       try {
-        entries = await queryTop10(tier)
+        entries = await withResolvedAvatars(await queryTop10(tier))
       } catch (err) {
         console.error(`[STATS] Error querying top10 tier=${tier}:`, err)
         return reply.send({
@@ -381,7 +401,7 @@ export default async function statsRoutes(fastify: FastifyInstance) {
       const { userId } = request.params
       const { data, error } = await supabaseAdmin
         .from('users')
-        .select('user_id, display_name, avatar_url, tier_unlocked_max, token_balance, performance_score, games_played, games_won, monarch_victories, streak_7days_badge, crown_balance')
+        .select('user_id, display_name, avatar_url, profile_image_url, vip_status, tier_unlocked_max, token_balance, performance_score, games_played, games_won, monarch_victories, streak_7days_badge, crown_balance')
         .eq('user_id', userId)
         .single()
 
@@ -413,7 +433,7 @@ export default async function statsRoutes(fastify: FastifyInstance) {
         player: {
           user_id: data.user_id,
           display_name: data.display_name,
-          avatar_url: data.avatar_url,
+          avatar_url: (await resolveProfileAvatars([data])).get(data.user_id) ?? data.avatar_url,
           tier_unlocked_max: data.tier_unlocked_max,
           token_balance: data.token_balance ?? 0,
           performance_score: data.performance_score ?? 0,

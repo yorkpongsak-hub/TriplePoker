@@ -150,6 +150,7 @@ export default function ProfileScreen() {
   const streakDays  = profile?.streak_count ?? 0
   const hasSevenDayBadge = profile?.streak_7days_badge ?? false
   const soloLevel = profile?.tier_d_solo_level ?? 1
+  const longestWinStreak = profile?.tier_d_best_win_streak ?? 0
   const soloBestMs = profile?.tier_d_best_match_time_ms ?? null
   const soloBestTime = soloBestMs == null ? '—' : `${Math.floor(soloBestMs / 60000)}:${String(Math.floor(soloBestMs / 1000) % 60).padStart(2, '0')}`
 
@@ -555,7 +556,7 @@ export default function ProfileScreen() {
 
         {activeTab === 'stats' && (
           <>
-            <StatsPanel streakDays={streakDays} streakShields={profile?.streak_shields ?? 0} gamesPlayed={profile?.games_played ?? 0} gamesWon={profile?.games_won ?? 0} bestHands={profile?.best_hands ?? null} />
+            <StatsPanel streakDays={streakDays} longestWinStreak={longestWinStreak} streakShields={profile?.streak_shields ?? 0} gamesPlayed={profile?.games_played ?? 0} gamesWon={profile?.games_won ?? 0} bestHands={profile?.best_hands ?? null} />
             <MyCollectiblesPanel userId={profile?.user_id ?? authUser?.id ?? ''} />
             <LeagueAwardsPanel />
             <MyBadgesPanel
@@ -626,8 +627,9 @@ function TabButton({ label, active, onPress }: { label: string; active: boolean;
   )
 }
 
-function StatsPanel({ streakDays, streakShields, gamesPlayed, gamesWon, bestHands }: {
+function StatsPanel({ streakDays, longestWinStreak, streakShields, gamesPlayed, gamesWon, bestHands }: {
   streakDays: number
+  longestWinStreak: number
   streakShields: number
   gamesPlayed: number
   gamesWon: number
@@ -654,6 +656,8 @@ function StatsPanel({ streakDays, streakShields, gamesPlayed, gamesWon, bestHand
       <StatItem icon="⚔️" label="MATCHES" value={`${gamesPlayed}`} sub="PLAYED" small />
       <View style={s.hLine} />
       <StatItem icon="♠" label="BEST HAND" value={bestLabel ?? '—'} sub={bestLabel ? 'ALL TIME' : 'NO DATA'} small />
+      <View style={s.hLine} />
+      <StatItem icon="🔥" label="LONGEST WIN STREAK" value={`${longestWinStreak}`} sub="TIER D SOLO" small />
       <View style={s.hLine} />
       {/* มติลุงเยาะ 2026-08-14: แถวเดิมหน้าตาเหมือน stat แถวอื่นทุกอย่าง (ต่างแค่ "›" ต่อท้ายค่าที่เล็ก
           มาก) ไม่มีใครรู้ว่ากดได้ — ทำเป็นปุ่มจริงแยกออกจากแถว stat ธรรมดา: กรอบทอง+พื้นหลังทองจางๆ+

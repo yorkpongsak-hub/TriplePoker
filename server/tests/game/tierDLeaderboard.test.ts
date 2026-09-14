@@ -1,5 +1,5 @@
 import { buildTierDLeaderboardSnapshot, trophyEligibleForFinalRank, type TierDLeaderboardRow } from '../../src/game/tierDLeaderboard'
-const row = (id: string, level = 25, points = 10, at = '2026-01-01T00:00:00Z'): TierDLeaderboardRow => ({ userId: id, displayName: `Player ${id}`, avatarUrl: null, leagueId: 'tier-d-league-1', currentLevel: level, leaguePoints: points, rankedEligible: true, updatedAt: at })
+const row = (id: string, level = 25, points = 10, at = '2026-01-01T00:00:00Z'): TierDLeaderboardRow => ({ userId: id, displayName: `Player ${id}`, avatarUrl: null, leagueId: 'tier-d-league-1', currentLevel: level, leaguePoints: points, longestWinStreak: 0, rankedEligible: true, updatedAt: at })
 describe('Tier D personalized leaderboard', () => {
   test('Relax has no board', () => expect(buildTierDLeaderboardSnapshot([{ ...row('me'), rankedEligible: false }], 'me', { minimumEligibleMembers: 1, contextTarget: 30, maxDisplayed: 20 }).enabled).toBe(false))
   test('the first ten Levels of every League are a non-ranked break', () => {

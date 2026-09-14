@@ -10,6 +10,7 @@ import {
   vipPlusTableRegistry,
 } from '../game/vipPlusTableRegistry'
 import { attachVipPlusBettingIo, buildVipPlusSnapshot, forfeitVipPlusMatch, getVipPlusMatchState, markVipPlusConnected, markVipPlusDisconnected, startVipPlusMatch, submitVipPlusArrangement, submitVipPlusAuctionBid, submitVipPlusBettingAction, submitVipPlusRearrangement } from '../game/vipPlusMatchEngine'
+import { resolveProfileAvatar } from '../game/profileAvatarService'
 
 // มติลุงเยาะ — เพิ่ม avatarUrl ให้ Avatar หน้าชื่อผู้เล่นทุกที่นั่ง (Waiting Chamber + ในเกม) ตาม pattern
 // เดียวกับ Monarch (monarch/index.tsx's MonarchPlayerAvatar) — avatar_url เก็บ preset key/emoji/URL จริง
@@ -24,7 +25,7 @@ async function authenticateProfile(userId: string, accessToken?: string | null):
 
   const { data: profile, error: profileError } = await supabaseAdmin
     .from('users')
-    .select('display_name, token_balance, avatar_url, vip_status')
+    .select('display_name, token_balance, avatar_url, profile_image_url, vip_status')
     .eq('user_id', userId)
     .single()
   if (profileError || !profile) return null
@@ -32,7 +33,7 @@ async function authenticateProfile(userId: string, accessToken?: string | null):
     playerId: userId,
     displayName: profile.display_name ?? 'Player',
     tokenBalance: profile.token_balance ?? 0,
-    avatarUrl: profile.avatar_url ?? null,
+    avatarUrl: await resolveProfileAvatar(profile),
     isVip: (profile.vip_status ?? 'none') !== 'none',
   }
 }

@@ -24,6 +24,7 @@ import {
   settleAndEndMonarchMatch, clearMonarchDisconnectState, startMonarchArrangementTimer,
 } from "../game/monarchEngine";
 import { supabase, supabaseAdmin } from "../config/supabase";
+import { resolveProfileAvatar } from '../game/profileAvatarService';
 import { TIER_ORDER } from "../game/progressionGate";
 import { registerLobbySocket } from "./lobbySocket";
 import { createTableWithId, setSeat, deleteTable } from "../game/tableRegistry";
@@ -276,7 +277,7 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
     // its room-scoped authoritative state. Without this, the resume ACK says
     // OK while the reconnecting client receives no tier_d_state and stays on
     // CONNECTING SOLO.
-    socket.on('tier_d_resume',(data:{roomId:string;playerId:string})=>{ socket.join(data.roomId); socket.emit('tier_d_resume_ack',{ok:resumeTierDSolo(io,data.roomId,data.playerId)}) })
+    socket.on('tier_d_resume',async(data:{roomId:string;playerId:string})=>{ socket.join(data.roomId); const status=await resumeTierDSolo(io,data.roomId,data.playerId);socket.emit('tier_d_resume_ack',{ok:status==='RESUMED',status}) })
     socket.on('tier_d_ad_pause',(data:{roomId:string;playerId:string;item:'shuffle'|'swap'|'double_pile'|'freeze'|'undo'},ack?:(ok:boolean)=>void)=>{ack?.(pauseTierDItemAd(io,data.roomId,data.playerId,data.item))})
     socket.on('tier_d_ad_resume',(data:{roomId:string;playerId:string})=>resumeTierDItemAd(io,data.roomId,data.playerId))
     socket.on('tier_d_inventory_refresh',(data:{roomId:string;playerId:string})=>void refreshTierDSoloInventory(io,data.roomId,data.playerId))
@@ -669,13 +670,16 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
         // (client lobby.tsx ยังคง lock icon จาก token อย่างเดียวไว้เป็นแค่ preview ก่อนกดเข้าคิวจริง)
         const { data: userRow, error: userErr } = await supabaseAdmin
           .from('users')
-          .select('tier_unlocked_max, display_name, avatar_url, vip_status')
+          .select('tier_unlocked_max, display_name, avatar_url, profile_image_url, vip_status')
           .eq('user_id', userId)
           .single();
         if (userErr || !userRow) {
           socket.emit("room_error", { message: "Could not verify your account. Please try again." });
           return;
         }
+        // Avatar from the socket is only an old-client compatibility fallback.  The
+        // authenticated profile is authoritative, including a VIP custom photo.
+        const resolvedAvatarUrl = await resolveProfileAvatar(userRow) ?? avatarUrl
         const unlockedIdx = TIER_ORDER.indexOf((userRow.tier_unlocked_max ?? 'D') as typeof TIER_ORDER[number]);
         // tier เป็น RoomTier ('adept'|'mastermind'|'highNoble' เท่านั้น) ซึ่งเป็น subset ของ TIER_ORDER
         // เสมอ (ไม่มีทางเป็น 'ascendant'/'arena' — สอง tier นั้นไม่ใช่ matchmaking room tier) — เดิม cast
@@ -718,7 +722,7 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
           const state = await startMonarchMatch(
             io, monarchRoomId, userId,
             userRow.display_name ?? userName,
-            userRow.avatar_url ?? avatarUrl,
+            resolvedAvatarUrl,
           );
           if (state) {
             if (wantsLive && spectatorService) {
@@ -749,10 +753,10 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
         }
 
         const result = data.pin
-          ? await joinPrivateRoomByPin(tier, data.pin, userId, userName, avatarUrl)
+          ? await joinPrivateRoomByPin(tier, data.pin, userId, userName, resolvedAvatarUrl)
           : data.forceNew
-            ? await createNewPublicRoomAndJoin(tier, userId, userName, avatarUrl, liveMode, userId)
-            : await findOrCreateRoomAndJoin(tier, userId, userName, avatarUrl, liveMode, wantsLive ? userId : undefined);
+            ? await createNewPublicRoomAndJoin(tier, userId, userName, resolvedAvatarUrl, liveMode, userId)
+            : await findOrCreateRoomAndJoin(tier, userId, userName, resolvedAvatarUrl, liveMode, wantsLive ? userId : undefined);
         if (!result.ok || !result.room) {
           // Patch (2026-07-17): แก้ข้อความเป็นภาษาอังกฤษ (canon บังคับ UI/error message ทั้งหมดเป็น
           // อังกฤษ — เจอเป็นภาษาไทยค้างอยู่ระหว่างแก้ A2)

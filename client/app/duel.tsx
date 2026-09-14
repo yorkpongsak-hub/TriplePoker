@@ -37,7 +37,7 @@ export default function Duel() {
   useEffect(()=>{
     if(!hydrated||active?.phase!=='result'||progress.matches!==2||tierDTransitioned.current)return;
     tierDTransitioned.current=true;
-    router.replace('/game/tier-d');
+    router.replace('/game/tier-d/entry');
   },[hydrated,active?.phase,progress.matches]);
   const index=active ? active.phase==='arrange'?active.match.results.length:active.match.results.length-1:0;
   const hand=active?.match.hands[review??index];
