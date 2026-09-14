@@ -7,8 +7,8 @@
 
 import { Server } from 'socket.io'
 import { dealCards } from './cardEngine'
-import { evaluateHand, compareHands, handRankLabel } from './handEvaluator'
-import { checkFoul, PlayerArrangement, CommunityCards } from './foulChecker'
+import { evaluateBestFive, evaluateHand, compareHands, handRankLabel } from './handEvaluator'
+import { checkFoul, checkTierCFoul, PlayerArrangement, CommunityCards } from './foulChecker'
 import { aiDecideArrangement, AI_CONFIGS, AIConfig, AIPersonality, FOUR_GODS, NINE_SENTINELS, greedyArrangement, pickRandomMinions } from './aiEngine'
 import { Card } from './deck'
 import { gameConfig, getAutoSortFee } from '../config/gameConfig'
@@ -111,7 +111,8 @@ function resolvePile(
   pileNum: 1 | 2 | 3,
   arrangements: Record<string, PlayerArrangement>,
   community: CommunityCards,
-  fouled: Record<string, boolean>
+  fouled: Record<string, boolean>,
+  tierCBestFive = false,
 ): string {
   const row = pileNum === 1 ? community.row1 : pileNum === 2 ? community.row2 : community.row3
   let bestScore = -Infinity
@@ -119,8 +120,9 @@ function resolvePile(
 
   for (const [pid, arr] of Object.entries(arrangements)) {
     if (fouled[pid]) continue
-    const pileCards = pileNum === 1 ? arr.pile1 : pileNum === 2 ? arr.pile2 : arr.pile3.slice(0, 3)
-    const hand = evaluateHand([...pileCards, ...row])
+    const pileCards = pileNum === 1 ? arr.pile1 : pileNum === 2 ? arr.pile2 : tierCBestFive ? arr.pile3 : arr.pile3.slice(0, 3)
+    const eligible = [...pileCards, ...row]
+    const hand = tierCBestFive && pileNum === 3 ? evaluateBestFive(eligible) : evaluateHand(eligible)
     if (hand.score > bestScore) {
       bestScore = hand.score
       winnerId = pid
@@ -142,7 +144,7 @@ function trackBestHandLive(
 // ── Helper: End-of-Match Stats — derive best hand + triple sweep ของ userId จาก state.results ย้อนหลัง
 // ใช้ได้เฉพาะ Tier ที่ RoundResult เก็บ arrangements/community ครบ (Initiate/Adept — Simultaneous Showdown)
 function deriveBestHandFromResults(
-  results: RoundResult[], userId: string,
+  results: RoundResult[], userId: string, tierCBestFive = false,
 ): { bestHand: BestHandCandidate | null; tripleSweep: boolean } {
   let bestHand: BestHandCandidate | null = null
   let tripleSweep = false
@@ -155,10 +157,11 @@ function deriveBestHandFromResults(
     const piles: Array<{ cards: Card[]; row: Card[]; num: 1 | 2 | 3; won: boolean }> = [
       { cards: arr.pile1, row: r.community.row1, num: 1, won: r.pile1Winner === userId },
       { cards: arr.pile2, row: r.community.row2, num: 2, won: r.pile2Winner === userId },
-      { cards: arr.pile3.slice(0, 3), row: r.community.row3, num: 3, won: r.pile3Winner === userId },
+      { cards: tierCBestFive ? arr.pile3 : arr.pile3.slice(0, 3), row: r.community.row3, num: 3, won: r.pile3Winner === userId },
     ]
     for (const p of piles) {
-      const hand = evaluateHand([...p.cards, ...p.row])
+      const eligible=[...p.cards,...p.row]
+      const hand = tierCBestFive && p.num===3 ? evaluateBestFive(eligible) : evaluateHand(eligible)
       if (!bestHand || hand.score > bestHand.hand.score) {
         bestHand = { hand, cards: [...p.cards, ...p.row].map(c => cardKey(c).toUpperCase()), pile: p.num, won: p.won }
       }
@@ -706,6 +709,18 @@ export async function submitArrangement(
   const state = matchStates.get(roomId)
   if (!state || state.phase !== 'arrangement') return
 
+  if (state.tier === 'initiate') {
+    const dealt: Card[] = ((state as any)._cardsMap as Record<string, Card[]> | undefined)?.[state.humanPlayerId] ?? []
+    const submitted = [...arrangement.pile1, ...arrangement.pile2, ...arrangement.pile3]
+    const dealtKeys = dealt.map(cardKey).sort()
+    const submittedKeys = submitted.map(cardKey).sort()
+    const hasCanonicalShape = arrangement.pile1.length === 3 && arrangement.pile2.length === 3 && arrangement.pile3.length === 5
+    if (!hasCanonicalShape || dealtKeys.length !== 11 || submittedKeys.length !== 11 || dealtKeys.some((key, index) => key !== submittedKeys[index])) {
+      io.to(roomId).emit('arrangement_rejected', { roomId, reason: 'Tier C Ready must lock all 11 dealt cards in a 3-3-5 arrangement.' })
+      return
+    }
+  }
+
   state.humanArrangement = arrangement
   state.phase = 'showdown'
 
@@ -715,11 +730,11 @@ export async function submitArrangement(
   // ตรวจ Foul ทุกคน
   const fouled: Record<string, boolean> = {}
   const foulReasons: Record<string, string> = {}
-  const humanFoul = checkFoul(arrangement, community)
+  const humanFoul = state.tier === 'initiate' ? checkTierCFoul(arrangement, community) : checkFoul(arrangement, community)
   fouled[state.humanPlayerId] = humanFoul.isFoul
   if (humanFoul.isFoul && humanFoul.reason) foulReasons[state.humanPlayerId] = humanFoul.reason
   AI_CONFIGS.forEach(ai => {
-    const aiFoul = checkFoul(aiArrangements[ai.id], community)
+    const aiFoul = state.tier === 'initiate' ? checkTierCFoul(aiArrangements[ai.id], community) : checkFoul(aiArrangements[ai.id], community)
     fouled[ai.id] = aiFoul.isFoul
     if (aiFoul.isFoul && aiFoul.reason) foulReasons[ai.id] = aiFoul.reason
   })
@@ -749,12 +764,13 @@ export async function submitArrangement(
   await delay(3500)
 
   // ── Resolve ทุก Pile พร้อมกัน ────────────────────────────
-  const p1Winner = resolvePile(1, allArrangements, community, fouled)
-  const p2Winner = resolvePile(2, allArrangements, community, fouled)
-  const p3Winner = resolvePile(3, allArrangements, community, fouled)
+  const tierCBestFive = state.tier === 'initiate'
+  const p1Winner = resolvePile(1, allArrangements, community, fouled, tierCBestFive)
+  const p2Winner = resolvePile(2, allArrangements, community, fouled, tierCBestFive)
+  const p3Winner = resolvePile(3, allArrangements, community, fouled, tierCBestFive)
   const hand1W = p1Winner ? evaluateHand([...allArrangements[p1Winner].pile1, ...community.row1]) : null
   const hand2W = p2Winner ? evaluateHand([...allArrangements[p2Winner].pile2, ...community.row2]) : null
-  const hand3W = p3Winner ? evaluateHand([...allArrangements[p3Winner].pile3.slice(0,3), ...community.row3]) : null
+  const hand3W = p3Winner ? evaluateBestFive([...allArrangements[p3Winner].pile3, ...community.row3]) : null
 
   // ── Settle token ก่อน emit ────────────────────────────────
   // ย้ายขึ้นมาก่อน emit เพราะ Tier C ต้องส่ง pot/feeRake/tokenDeltas ไปกับ showdown_result
@@ -871,7 +887,7 @@ export async function submitArrangement(
     // End-of-Match Stats Recording (games_played/won, xp, streak, best_hands, debt recovery)
     // แทนที่ recordGameResults() เดิม — Initiate ใช้ Simultaneous Showdown, derive จาก state.results ได้ตรงๆ
     const { bestHand: initiateBestHand, tripleSweep: initiateTripleSweep } =
-      deriveBestHandFromResults(state.results, state.humanPlayerId)
+      deriveBestHandFromResults(state.results, state.humanPlayerId, true)
     await recordMatchStats([{
       userId: state.humanPlayerId,
       tier: 'initiate',

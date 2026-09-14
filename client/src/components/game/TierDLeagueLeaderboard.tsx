@@ -1,0 +1,124 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { Animated, Image, ImageSourcePropType, LayoutAnimation, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, UIManager, View } from 'react-native'
+import { audio } from '../../audio/AudioManager'
+import { AudioEvent } from '../../audio/audioEvents'
+
+export type LeagueRankEntry = { userId:string; displayName:string; avatarUrl:string|null; rank:number; leaguePoints:number; isMock?:boolean }
+export type LeagueRankSnapshot = { enabled:boolean; entries:LeagueRankEntry[]; currentUser:{rank:number|null;leaguePoints:number}; previousDisplayedRank:number|null }
+
+const TROPHIES:Record<string,ImageSourcePropType>={
+ Bronze:require('../../../assets/league/Bronze League Trophy.png'),Silver:require('../../../assets/league/Silver League Trophy.png'),Gold:require('../../../assets/league/Gold League Trophy.png'),
+ Platinum:require('../../../assets/league/Platinum League Trophy.png'),Diamond:require('../../../assets/league/Diamond League Trophy.png'),Elite:require('../../../assets/league/Elite League Trophy.png'),
+ Master:require('../../../assets/league/Master League Trophy.png'),Grandmaster:require('../../../assets/league/Grandmaster League Trophy.png'),Champion:require('../../../assets/league/Champion League Trophy.png'),
+ Legend:require('../../../assets/league/Legend League Trophy.png'),
+}
+const LEAGUES=[{name:'Bronze',start:1,end:50},{name:'Silver',start:51,end:100},{name:'Gold',start:101,end:150},{name:'Platinum',start:151,end:200},{name:'Diamond',start:201,end:250},{name:'Elite',start:251,end:350},{name:'Master',start:351,end:500},{name:'Grandmaster',start:501,end:700},{name:'Legend',start:701,end:1000},{name:'Mythic',start:1001,end:Number.MAX_SAFE_INTEGER}]
+function leagueFor(level:number){const league=LEAGUES.find(entry=>level>=entry.start&&level<=entry.end)??LEAGUES[0];return {name:league.name,trophy:TROPHIES[league.name]??TROPHIES.Champion}}
+
+export async function fetchTierDLeagueRanking(serverUrl:string, accessToken:string):Promise<LeagueRankSnapshot>{
+ const response=await fetch(`${serverUrl}/tier-d/leaderboard`,{headers:{Authorization:`Bearer ${accessToken}`}})
+ if(!response.ok)throw new Error('Could not load League ranking.')
+ return response.json()
+}
+
+export function TierDLeagueLeaderboard({serverUrl,accessToken,userId,level,previousRank,onClose}:{serverUrl:string;accessToken:string;userId:string;level:number;previousRank:number|null;onClose:()=>void}){
+ const [snapshot,setSnapshot]=useState<LeagueRankSnapshot>()
+ const [displayRank,setDisplayRank]=useState<number|null>(previousRank)
+ const [error,setError]=useState('')
+ const timer=useRef<ReturnType<typeof setTimeout>|null>(null)
+ const trophyGlow=useRef(new Animated.Value(0)).current
+ const rankPulse=useRef(new Animated.Value(0)).current
+ const league=leagueFor(level)
+
+ useEffect(()=>{const loop=Animated.loop(Animated.sequence([Animated.timing(trophyGlow,{toValue:1,duration:850,useNativeDriver:true}),Animated.timing(trophyGlow,{toValue:0,duration:850,useNativeDriver:true})]));loop.start();return()=>loop.stop()},[trophyGlow])
+
+ useEffect(()=>{
+  let live=true
+  void fetchTierDLeagueRanking(serverUrl,accessToken).then(next=>{
+   if(!live)return
+   setSnapshot(next)
+   const target=next.currentUser.rank
+   if(target===null){setDisplayRank(null);return}
+   const start=previousRank??target
+   setDisplayRank(start)
+   let current=start
+   const complete=()=>audio.play(AudioEvent.RANK_COMPLETE)
+   const step=()=>{
+    if(!live||current===target)return
+    current+=target<current?-1:1
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut)
+    setDisplayRank(current)
+    rankPulse.setValue(0)
+    Animated.sequence([Animated.timing(rankPulse,{toValue:1,duration:140,useNativeDriver:false}),Animated.timing(rankPulse,{toValue:0,duration:190,useNativeDriver:false})]).start()
+    audio.play(AudioEvent.RANK_TICK)
+    if(current!==target)timer.current=setTimeout(step,333)
+    else complete()
+   }
+   if(current!==target)timer.current=setTimeout(step,333)
+   else complete()
+  }).catch(e=>live&&setError(e instanceof Error?e.message:'Could not load League ranking.'))
+  return()=>{live=false;if(timer.current)clearTimeout(timer.current)}
+ },[accessToken,previousRank,rankPulse,serverUrl])
+
+ const entries=useMemo(()=>{
+  if(!snapshot)return[]
+  const rows=snapshot.entries.filter(row=>row.userId!==userId)
+  const me=snapshot.entries.find(row=>row.userId===userId)
+  if(!me||displayRank===null)return snapshot.entries
+  const insert=Math.max(0,Math.min(rows.length,displayRank-1))
+  const shown=[...rows]
+  shown.splice(insert,0,{...me,rank:displayRank})
+  return shown.slice(0,20).map((row,index)=>row.userId===userId?row:{...row,rank:index+1})
+ },[displayRank,snapshot,userId])
+
+ return <View style={s.screen}><View style={s.panel}>
+  <TouchableOpacity style={s.close} onPress={onClose}><Text style={s.closeText}>CLOSE</Text></TouchableOpacity>
+  <View style={s.trophyWrap}><Animated.View style={[s.goldAura,{opacity:trophyGlow,transform:[{scale:trophyGlow.interpolate({inputRange:[0,1],outputRange:[.82,1.18]})}]}]}/><Animated.Text style={[s.sparkles,{opacity:trophyGlow}]}>✦  ✧  ✦</Animated.Text><Image source={league.trophy} resizeMode="contain" style={s.trophy}/></View>
+  <View style={s.header}><Text style={s.title}>{league.name.toUpperCase()} LEAGUE · TOP 20</Text><Text style={s.speed}>RANKED BY CUMULATIVE LEAGUE POINTS</Text></View>
+  {error?<Text style={s.error}>{error}</Text>:!snapshot?<Text style={s.state}>LOADING RANKING…</Text>:!snapshot.enabled?<View style={s.disabled}><Text style={s.disabledTitle}>RANKING PREPARING</Text><Text style={s.state}>The League board opens when the eligible launch group is ready.</Text></View>:<>
+   <View style={s.columns}><Text style={s.colRank}>RANK</Text><Text style={s.colName}>PLAYER</Text><Text style={s.colPoints}>POINTS</Text></View>
+   <ScrollView style={s.scroll} contentContainerStyle={s.list}>{entries.map(row=>{const isMe=row.userId===userId;return <Animated.View key={row.userId} style={[s.row,isMe?s.me:s.rival,isMe&&{backgroundColor:rankPulse.interpolate({inputRange:[0,1],outputRange:['rgba(123,72,10,.96)','rgba(255,205,72,.96)']})}]}><Text style={[s.rank,row.rank<=3&&s.medal,isMe&&s.meText]}>#{row.rank}</Text>{row.avatarUrl?<Image source={{uri:row.avatarUrl}} style={s.avatar}/>:<View style={[s.avatarFallback,isMe&&s.meAvatar]}><Text style={s.avatarText}>{row.displayName.slice(0,1).toUpperCase()}</Text></View>}<Text style={[s.name,isMe&&s.meText]} numberOfLines={1}>{row.displayName}{isMe?'  · YOU':row.isMock?'  · RIVAL':''}</Text><Text style={[s.points,isMe&&s.mePoints]}>{row.leaguePoints.toLocaleString()} LP</Text></Animated.View>})}</ScrollView>
+   {displayRank!==null?<Text style={s.footer}>YOUR RANK #{displayRank}  ·  {snapshot.currentUser.leaguePoints.toLocaleString()} LP</Text>:null}
+  </>}
+ </View></View>
+}
+
+if(Platform.OS==='android'&&UIManager.setLayoutAnimationEnabledExperimental)UIManager.setLayoutAnimationEnabledExperimental(true)
+
+const s=StyleSheet.create({
+ screen:{flex:1,backgroundColor:'#07150d',padding:16,justifyContent:'center'},
+ panel:{width:'100%',maxWidth:520,maxHeight:'92%',alignSelf:'center',backgroundColor:'#102d1d',borderWidth:1.5,borderColor:'#FFD76A',borderRadius:16,padding:14},
+ header:{alignItems:'center',marginBottom:10},
+ title:{color:'#FFD76A',fontSize:20,fontWeight:'900',letterSpacing:1,textShadowColor:'#9a5f00',textShadowRadius:9},
+ speed:{color:'#a9d5bf',fontSize:9,fontWeight:'800',marginTop:2},
+ close:{position:'absolute',right:12,top:12,zIndex:8,borderWidth:1,borderColor:'#FFD76A',borderRadius:8,paddingHorizontal:10,paddingVertical:7},
+ closeText:{color:'#FFD76A',fontSize:9,fontWeight:'900'},
+ columns:{flexDirection:'row',paddingHorizontal:8,paddingBottom:5,borderBottomWidth:1,borderBottomColor:'rgba(255,215,106,.35)'},
+ colRank:{width:48,color:'#8eb7c7',fontSize:9,fontWeight:'900'},
+ colName:{flex:1,color:'#8eb7c7',fontSize:9,fontWeight:'900'},
+ colPoints:{width:76,textAlign:'right',color:'#8eb7c7',fontSize:9,fontWeight:'900'},
+ trophyWrap:{height:92,alignItems:'center',justifyContent:'center'},
+ trophy:{width:88,height:88,zIndex:3},
+ goldAura:{position:'absolute',width:90,height:90,borderRadius:45,backgroundColor:'rgba(255,211,80,.42)',shadowColor:'#FFD76A',shadowOpacity:1,shadowRadius:24,elevation:10},
+ sparkles:{position:'absolute',zIndex:4,color:'#fff5b5',fontSize:28,fontWeight:'900',textShadowColor:'#FFD76A',textShadowRadius:16},
+ scroll:{flexShrink:1},
+ list:{gap:4,paddingVertical:7},
+ row:{height:40,flexDirection:'row',alignItems:'center',paddingHorizontal:8,borderRadius:8,borderWidth:1},
+ rival:{backgroundColor:'rgba(20,83,48,.92)',borderColor:'rgba(91,181,117,.35)'},
+ me:{borderWidth:2,borderColor:'#FFE58A',shadowColor:'#FFD76A',shadowOpacity:.8,shadowRadius:7,elevation:5},
+ meText:{color:'#fff8d6',textShadowColor:'#704000',textShadowRadius:3},
+ mePoints:{color:'#fffbd8'},
+ meAvatar:{backgroundColor:'#9b6414',borderWidth:1,borderColor:'#fff0a0'},
+ rank:{width:48,color:'#F5F2E8',fontWeight:'900'},
+ medal:{color:'#FFD76A'},
+ avatar:{width:26,height:26,borderRadius:13,marginRight:8},
+ avatarFallback:{width:26,height:26,borderRadius:13,marginRight:8,alignItems:'center',justifyContent:'center',backgroundColor:'#28583c'},
+ avatarText:{color:'#F5F2E8',fontSize:11,fontWeight:'900'},
+ name:{flex:1,color:'#F5F2E8',fontSize:11,fontWeight:'800'},
+ points:{width:76,textAlign:'right',color:'#8DFFB5',fontWeight:'900'},
+ footer:{color:'#FFD76A',fontWeight:'900',textAlign:'center',paddingTop:8},
+ state:{color:'#C8C4B0',textAlign:'center',lineHeight:20},
+ disabled:{paddingVertical:42,gap:8},
+ disabledTitle:{color:'#FFD76A',fontWeight:'900',fontSize:16,textAlign:'center'},
+ error:{color:'#ff9f9f',textAlign:'center',paddingVertical:36},
+})

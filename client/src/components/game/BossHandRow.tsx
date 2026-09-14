@@ -23,6 +23,10 @@ export interface BossHandRowProps {
   cardW?: number
   cardH?: number
   overlap?: number
+  /** Compact table layout for two AI seats: P1/P2 above, P3 below. */
+  twoRows?: boolean
+  /** Tier D already identifies its three groups by their table position. */
+  showPileLabels?: boolean
 }
 
 const BossHandRow: React.FC<BossHandRowProps> = ({
@@ -33,15 +37,15 @@ const BossHandRow: React.FC<BossHandRowProps> = ({
   cardW = 24,
   cardH = 34,
   overlap = -16,
+  twoRows = false,
+  showPileLabels = true,
 }) => {
   // offset เริ่มต้นของแต่ละกองใน array revealed แบบ flatten
   const startIdx = [0, pileSizes[0], pileSizes[0] + pileSizes[1]]
 
-  return (
-    <View style={styles.frame}>
-      {pileSizes.map((cnt, pi) => (
+  const pile = (cnt:number, pi:number) => (
         <View key={pi} style={styles.pileGroup}>
-          <Text style={styles.pileLabel}>P{pi + 1}</Text>
+          {showPileLabels ? <Text style={styles.pileLabel}>P{pi + 1}</Text> : null}
           <View style={styles.row}>
             {Array.from({ length: cnt }).map((_, ci) => {
               const code = revealed[startIdx[pi] + ci]
@@ -65,7 +69,11 @@ const BossHandRow: React.FC<BossHandRowProps> = ({
             })}
           </View>
         </View>
-      ))}
+      )
+
+  return (
+    <View style={[styles.frame,twoRows&&styles.twoRowFrame]}>
+      {twoRows ? <><View style={styles.topRow}>{pile(pileSizes[0],0)}{pile(pileSizes[1],1)}</View><View style={styles.bottomRow}>{pile(pileSizes[2],2)}</View></> : pileSizes.map(pile)}
     </View>
   )
 }
@@ -84,6 +92,10 @@ const styles = StyleSheet.create({
     borderColor: '#c9a84c',
     borderRadius: 10,
   },
+  // Override the normal one-row frame: topRow and bottomRow are vertical siblings.
+  twoRowFrame: { flexDirection: 'column', gap: 3, paddingVertical: 3 },
+  topRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center', gap: 6 },
+  bottomRow: { alignItems: 'center' },
   pileGroup: { alignItems: 'center' },
   pileLabel: { fontSize: 8, color: '#FFD76A', fontWeight: '800', marginBottom: 2 },
   row: { flexDirection: 'row' },

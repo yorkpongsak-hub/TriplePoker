@@ -259,7 +259,7 @@ const styles = StyleSheet.create({
   skinCardActive: { borderColor: C.green, borderWidth: 2 },
   skinCardLocked: { opacity: 0.48 },
   skinImage: { width: '100%', height: 112 },
-  skinLock: { ...StyleSheet.absoluteFillObject, bottom: 37, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.48)' },
+  skinLock: { ...StyleSheet.absoluteFill, bottom: 37, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.48)' },
   skinLockText: { fontSize: 23 },
   activeBadge: { position: 'absolute', top: 5, right: 5, color: '#081C12', backgroundColor: C.green, borderRadius: 5, paddingHorizontal: 5, paddingVertical: 2, fontSize: 8, fontWeight: '900' },
   skinName: { color: C.text, fontSize: 10, fontWeight: '800', paddingHorizontal: 7, marginTop: 5 },

@@ -30,6 +30,8 @@ export interface LegendaryCardVFXProps {
   onFinish?: () => void
   /** เพิ่มช่วงค้างก่อน fade-out โดยไม่เปลี่ยนจังหวะเปิดตัว */
   extraHoldMs?: number
+  /** Guarantees that the full-screen presentation remains visible for this long. */
+  minimumDurationMs?: number
   /** QA-only override. Production reads the player's persisted preference. */
   reduceMotionOverride?: boolean
 }
@@ -39,8 +41,11 @@ export default function LegendaryCardVFX({
   subtitle = 'TRIPLE SWEEP',
   onFinish,
   extraHoldMs = 0,
+  minimumDurationMs = 0,
   reduceMotionOverride,
 }: LegendaryCardVFXProps) {
+  const normalHoldMs = Math.max(extraHoldMs, minimumDurationMs - TOTAL_DURATION)
+  const reducedHoldMs = Math.max(extraHoldMs, minimumDurationMs - 1400)
   const [canSkip, setCanSkip] = useState(false)
   const [reduceMotion, setReduceMotion] = useState<boolean | null>(reduceMotionOverride ?? null)
   const ownsLock = useRef(false)
@@ -107,7 +112,7 @@ export default function LegendaryCardVFX({
         fxOpacity.value = withTiming(0, { duration: 260 })
         titleOpacity.value = withTiming(0, { duration: 200 })
         fadeOutTimer = setTimeout(finish, 260)
-      }, 1400 + extraHoldMs)
+      }, 1400 + reducedHoldMs)
       return () => {
         mounted.current = false
         if (finishTimer.current) clearTimeout(finishTimer.current)
@@ -121,25 +126,25 @@ export default function LegendaryCardVFX({
 
     overlayOpacity.value = withSequence(
       withTiming(0.86, { duration: 260, easing: Easing.out(Easing.quad) }),
-      withDelay(2640 + extraHoldMs, withTiming(0, { duration: 700, easing: Easing.in(Easing.quad) })),
+      withDelay(2640 + normalHoldMs, withTiming(0, { duration: 700, easing: Easing.in(Easing.quad) })),
     )
 
     fxOpacity.value = withSequence(
       withDelay(120, withTiming(1, { duration: 400, easing: easeOut })),
-      withDelay(2360 + extraHoldMs, withTiming(0, { duration: 600 })),
+      withDelay(2360 + normalHoldMs, withTiming(0, { duration: 600 })),
     )
     fxScale.value = withDelay(120, withTiming(1, { duration: 500, easing: easeOut }))
 
     titleOpacity.value = withSequence(
       withDelay(850, withTiming(1, { duration: 360, easing: easeOut })),
-      withDelay(1730 + extraHoldMs, withTiming(0, { duration: 550 })),
+      withDelay(1730 + normalHoldMs, withTiming(0, { duration: 550 })),
     )
     titleY.value = withDelay(850, withTiming(0, { duration: 420, easing: easeOut }))
 
     skipTimer.current = setTimeout(() => {
       if (mounted.current && !finished.current) setCanSkip(true)
     }, SKIP_DELAY)
-    finishTimer.current = setTimeout(finish, TOTAL_DURATION + extraHoldMs)
+    finishTimer.current = setTimeout(finish, TOTAL_DURATION + normalHoldMs)
 
     return () => {
       mounted.current = false
@@ -151,7 +156,7 @@ export default function LegendaryCardVFX({
         ownsLock.current = false
       }
     }
-  }, [reduceMotion, extraHoldMs])
+  }, [reduceMotion, normalHoldMs, reducedHoldMs])
 
   const overlayStyle = useAnimatedStyle(() => ({ opacity: overlayOpacity.value }))
   const fxStyle = useAnimatedStyle(() => ({
@@ -206,23 +211,24 @@ export default function LegendaryCardVFX({
 
 const styles = StyleSheet.create({
   root: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 1000,
     elevation: 1000,
+    backgroundColor: '#000',
   },
   backdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: '#000',
   },
   // Full-screen animated WebP background.
   vfxLayer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 0,
     overflow: 'hidden',
   },
 
   fxFrame: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
 
   fxImage: {
@@ -232,7 +238,7 @@ const styles = StyleSheet.create({
 
   // Foreground text layer.
   stage: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 1,
     alignItems: 'center',
     justifyContent: 'center',

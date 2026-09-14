@@ -442,7 +442,7 @@ const styles = StyleSheet.create({
   },
   cardSel:    { borderColor: '#6ec87a', borderWidth: 2, transform: [{ translateY: -10 }] },
   cardSelVip: { borderColor: '#6ec87a', borderWidth: 2 }, // เด้งทำผ่าน Reanimated แทน transform static
-  discardMark: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(52,5,5,0.24)' },
+  discardMark: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(52,5,5,0.24)' },
   discardMarkText: { color: '#FF4D4D', fontSize: 42, lineHeight: 44, fontWeight: '900', textShadowColor: '#240000', textShadowRadius: 3 },
   fallbackTxt: { fontSize: 8 },
 })

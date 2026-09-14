@@ -400,11 +400,8 @@ const GameTableLive: React.FC = () => {
   const [flowBuyIn, setFlowBuyIn]     = useState(0)
   const [burnToast, setBurnToast]     = useState<string | null>(null)
 
-  // ── Discard
-  const [showDiscard, setShowDiscard]         = useState(false)
   const [buyInAmount, setBuyInAmount]       = useState(0)
   const [showLockup, setShowLockup]         = useState(false)
-  const [discardSelected, setDiscardSelected] = useState<number[]>([])
 
   // ── VFX
   const winPulse      = useRef(new Animated.Value(1)).current
@@ -508,6 +505,11 @@ const GameTableLive: React.FC = () => {
 
     const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: true, reconnectionDelay: 1000 })
     socketRef.current = socket
+    socket.on('arrangement_rejected', (data: { reason?: string }) => {
+      setIsReady(false)
+      setBurnToast(data.reason ?? 'Arrangement rejected. Please arrange all 11 cards and press Ready again.')
+      setTimeout(() => setBurnToast(null), 4000)
+    })
 
     let startRequested = false
     socket.on('connect', () => {
@@ -566,7 +568,6 @@ const GameTableLive: React.FC = () => {
       setContinueCountdown(SHOWDOWN_TIMER_SEC)
       continueValRef.current = SHOWDOWN_TIMER_SEC
       if (continueTimerRef.current) clearInterval(continueTimerRef.current)
-      setShowDiscard(false); setDiscardSelected([])
       // ต้อง stopAnimation ก่อน setValue เสมอ กัน native-driven timing ที่ยังค้างจาก handleContinue ชนกัน
       fadeCards.stopAnimation(() => { fadeCards.setValue(0) })
       setBlind([]); setDealCount(0)
@@ -629,7 +630,7 @@ const GameTableLive: React.FC = () => {
               arrangement: {
                 pile1: cur[0].map((c: CardData) => c.key),
                 pile2: cur[1].map((c: CardData) => c.key),
-                pile3: cur[2].slice(0, 3).map((c: CardData) => c.key),
+                pile3: cur[2].map((c: CardData) => c.key),
               },
             })
             return cur
@@ -901,34 +902,18 @@ const GameTableLive: React.FC = () => {
 
   const handleReady = () => {
     if (isReady || phase !== 'arrangement') return
-    playReadyButton() // SFX: กดปุ่ม READY
-    // Auto-select ใบที่ 4,5 (index 3,4) เป็น discard เพราะ autoSort เรียงไว้แล้ว
-    setShowDiscard(true); setDiscardSelected([3, 4])
-  }
-
-  const handleDiscardConfirm = () => {
-    if (discardSelected.length !== 2) return
     playReadyButton()
-    setShowDiscard(false); setIsReady(true)
+    setIsReady(true)
     if (timerRef.current) clearInterval(timerRef.current)
-    const pile3kept = piles[2].filter((_, i) => !discardSelected.includes(i))
     socketRef.current?.emit('player_ready', {
       roomId: ROOM_ID, playerId: PLAYER_ID,
       arrangement: {
         pile1: piles[0].map(c => c.key),
         pile2: piles[1].map(c => c.key),
-        pile3: pile3kept.map(c => c.key),
+        pile3: piles[2].map(c => c.key),
       },
     })
-  }
 
-  const toggleDiscard = (idx: number) => {
-    playCardArrange1()
-    setDiscardSelected(prev => {
-      if (prev.includes(idx)) return prev.filter(i => i !== idx)
-      if (prev.length >= 2) return prev
-      return [...prev, idx]
-    })
   }
 
   // ── Continue → emit player_continue รอ server
@@ -1352,35 +1337,6 @@ const GameTableLive: React.FC = () => {
             </View>
           )}
 
-          {/* ── DISCARD OVERLAY ── */}
-          {showDiscard && (
-            <View style={s.overlay}>
-              <Text style={s.discardTitle}>Choose 2 cards to discard from Pile 3</Text>
-              <Text style={s.discardSub}>({discardSelected.length}/2 cards selected)</Text>
-              <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'center', marginBottom: 20 }}>
-                {piles[2].map((card, idx) => {
-                  const isSel = discardSelected.includes(idx)
-                  return (
-                    <TouchableOpacity key={card.id} onPress={() => toggleDiscard(idx)} activeOpacity={0.8}
-                      style={[s.discardCard, isSel && s.discardCardSel]}>
-                      {CARD_IMG[card.key] && <Image source={CARD_IMG[card.key]} style={{ width: 56, height: 80 }} resizeMode="cover" />}
-                      {isSel && <View style={s.discardX}><Text style={s.discardXTxt}>✕</Text></View>}
-                    </TouchableOpacity>
-                  )
-                })}
-              </View>
-              <View style={{ flexDirection: 'row', gap: 10 }}>
-                <TouchableOpacity style={[s.discardBtn, { backgroundColor: '#1a3a1a' }]} onPress={() => setShowDiscard(false)}>
-                  <Text style={s.discardBtnTxt}>← Back</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[s.discardBtn, { backgroundColor: discardSelected.length === 2 ? '#1a5e20' : '#2a2a2a' }]}
-                  onPress={handleDiscardConfirm} disabled={discardSelected.length !== 2}>
-                  <Text style={s.discardBtnTxt} numberOfLines={1}>Confirm discard ✓</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
-
           {/* ── COUNTDOWN OVERLAY ── */}
           {/* ค้าง mount ไว้เสมอ toggle แค่ opacity — ห้ามใช้ && unmount ตรงนี้ เพราะ countAnim ใช้ native driver
               ถ้า unmount ระหว่าง animation กำลังเล่นอยู่จะชน native attach (Animated node already attached to a view) */}
@@ -1773,7 +1729,7 @@ const s = StyleSheet.create({
   webFrame:      { width: 390, height: 920, borderRadius: 40, borderWidth: 3, borderColor: '#333', overflow: 'hidden' },
   gameContainer: { flex: 1, flexDirection: 'column' },
   gameArea:      { flex: 90, backgroundColor: '#6aaf7f', overflow: 'hidden', position: 'relative' },
-  feltOverlay:   { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.2)' },
+  feltOverlay:   { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.2)' },
   logoWatermark: { alignItems: 'center', justifyContent: 'center' },
 
   studioLogo: { width: 28, height: 28, opacity: 0.9 },
@@ -1847,14 +1803,6 @@ const s = StyleSheet.create({
   continueBtnTxt:    { color: '#fff', fontSize: 13, fontWeight: '800', letterSpacing: 2 },
 
   // Discard
-  discardTitle:   { fontSize: 14, color: '#c9a84c', fontWeight: '800', marginBottom: 6, textAlign: 'center' },
-  discardSub:     { fontSize: 11, color: 'rgba(201,168,76,0.5)', marginBottom: 16, letterSpacing: 1 },
-  discardCard:    { width: 56, height: 80, borderRadius: 6, overflow: 'hidden', borderWidth: 2, borderColor: 'rgba(201,168,76,0.3)' },
-  discardCardSel: { borderColor: '#f87171', borderWidth: 3, opacity: 0.6 },
-  discardX:       { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(248,113,113,0.4)' },
-  discardXTxt:    { fontSize: 28, color: '#f87171', fontWeight: '900' },
-  discardBtn:     { flex: 1, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(201,168,76,0.2)', minWidth: 150 },
-  discardBtnTxt:  { color: '#fff', fontSize: 12, fontWeight: '700', letterSpacing: 0.5 },
 
   // Countdown
   countdownLabel: { fontSize: 13, color: '#c9a84c', letterSpacing: 4, fontWeight: '800', marginBottom: 10 },

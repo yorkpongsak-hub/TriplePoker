@@ -1088,7 +1088,10 @@ const GameTableLive: React.FC = () => {
         const findWinner = (record: Record<string, string[] | null>) => Object.entries(record ?? {}).find(([, c]) => c !== null)?.[0]
         const w1 = findWinner(data.pileReveals.pile1)
         const w2 = findWinner(data.pileReveals.pile2)
-        setPileWinners({ ...(w1 ? { 1: w1 } : {}), ...(w2 ? { 2: w2 } : {}) })
+        const winners: Record<number, string> = {}
+        if (w1) winners[1] = w1
+        if (w2) winners[2] = w2
+        setPileWinners(winners)
       }
       if (data.foulMap) setHasFoul(data.foulMap)
       if (data.foulReasons) setFoulReasons(data.foulReasons)
@@ -3222,7 +3225,7 @@ const s = StyleSheet.create({
   webFrame:      { width: 390, height: 920, borderRadius: 40, borderWidth: 3, borderColor: '#333', overflow: 'hidden' },
   gameContainer: { flex: 1, flexDirection: 'column' },
   gameArea:      { flex: 90, backgroundColor: '#6aaf7f', overflow: 'hidden', position: 'relative' },
-  feltOverlay:   { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.2)' },
+  feltOverlay:   { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.2)' },
   logoWatermark: { alignItems: 'center', justifyContent: 'center' },
 
   studioLogo: { width: 28, height: 28, opacity: 0.9 },

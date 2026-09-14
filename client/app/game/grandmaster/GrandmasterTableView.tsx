@@ -798,7 +798,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
             width={width} height={height} localSeat={local.seat} delayMs={index * 2000} hidden
           />)}
 
-          <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { alignItems: 'center', justifyContent: 'center', zIndex: 55 }]}>
+          <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', zIndex: 55 }]}>
             <FlyingCoins ref={flyingCoinsRef} />
           </View>
 
@@ -918,7 +918,7 @@ const styles = StyleSheet.create({
   queueBanner: { position: 'absolute', top: 10, alignSelf: 'center', zIndex: 20, paddingHorizontal: 14, paddingVertical: 6, borderRadius: 14, backgroundColor: 'rgba(8,20,13,0.94)', borderWidth: 1, borderColor: '#FFD76A' },
   queueText: { color: '#FFD76A', fontSize: 9, fontWeight: '900', letterSpacing: 1 },
   root: { flex: 1, backgroundColor: '#07150D' },
-  darkWash: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(3,10,6,0.28)' },
+  darkWash: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(3,10,6,0.28)' },
   safe: { flex: 1 },
   header: { height: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 10, backgroundColor: 'rgba(5,14,9,0.88)', borderBottomWidth: 1, borderBottomColor: 'rgba(255,215,106,0.34)' },
   backButton: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 17, borderWidth: 1, borderColor: '#3A5A44' },
@@ -935,12 +935,12 @@ const styles = StyleSheet.create({
   waitingDotsRow: { flexDirection: 'row', gap: 3, alignItems: 'center', marginLeft: 2 },
   waitingDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#FFD76A' },
   tableArea: { flex: 1, position: 'relative', overflow: 'hidden' },
-  dealOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 45, alignItems: 'center', justifyContent: 'center' },
+  dealOverlay: { ...StyleSheet.absoluteFill, zIndex: 45, alignItems: 'center', justifyContent: 'center' },
   dealCard: { position: 'absolute', width: 25, height: 36, borderRadius: 5, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,215,106,0.65)', backgroundColor: '#091808' },
   dealCardImage: { width: 25, height: 36 },
   dealingText: { position: 'absolute', top: '55%', color: 'rgba(255,215,106,0.72)', fontSize: 9, fontWeight: '900', letterSpacing: 1.5 },
-  awardOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 60, alignItems: 'center', justifyContent: 'center' },
-  callRevealOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 90, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(2,7,5,0.78)' },
+  awardOverlay: { ...StyleSheet.absoluteFill, zIndex: 60, alignItems: 'center', justifyContent: 'center' },
+  callRevealOverlay: { ...StyleSheet.absoluteFill, zIndex: 90, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(2,7,5,0.78)' },
   callRevealTitle: { color: '#FFD76A', fontSize: 20, fontWeight: '900', letterSpacing: 1.2, textAlign: 'center' },
   foldActionTitle: { color: '#FF7A7A' },
   callRevealSub: { color: '#8DFFB5', fontSize: 10, fontWeight: '900', letterSpacing: 1.5, marginTop: 5, marginBottom: 18 },

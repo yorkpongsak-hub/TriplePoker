@@ -22,9 +22,12 @@ interface Props {
   playerName?: string
   onClose: () => void
   reduceMotionOverride?: boolean
+  /** Ad placeholders use a shorter mandatory viewing period than celebrations. */
+  minimumDurationMs?: number
+  closeLabel?: string
 }
 
-export default function RoyalStraightFlushVFX({ playerName = 'PLAYER', onClose, reduceMotionOverride }: Props) {
+export default function RoyalStraightFlushVFX({ playerName = 'PLAYER', onClose, reduceMotionOverride, minimumDurationMs = SKIP_DELAY_MS, closeLabel = 'SKIP' }: Props) {
   const [reduceMotion, setReduceMotion] = useState<boolean | null>(reduceMotionOverride ?? null)
   const [canClose, setCanClose] = useState(false)
   const backdrop = useRef(new Animated.Value(0)).current
@@ -42,7 +45,7 @@ export default function RoyalStraightFlushVFX({ playerName = 'PLAYER', onClose, 
 
   useEffect(() => {
     if (reduceMotion === null) return
-    const skipTimer = setTimeout(() => setCanClose(true), SKIP_DELAY_MS)
+    const skipTimer = setTimeout(() => setCanClose(true), minimumDurationMs)
     Animated.parallel([
       Animated.timing(backdrop, { toValue: 0.88, duration: 280, useNativeDriver: true }),
       Animated.timing(reveal, { toValue: 1, duration: 420, useNativeDriver: true }),
@@ -61,7 +64,7 @@ export default function RoyalStraightFlushVFX({ playerName = 'PLAYER', onClose, 
       Animated.timing(glow, { toValue: 0.35, duration: 900, useNativeDriver: true }),
     ])).start()
     return () => { clearTimeout(skipTimer); loopRef.current?.stop(); backdrop.stopAnimation(); reveal.stopAnimation(); fan.stopAnimation(); glow.stopAnimation() }
-  }, [reduceMotion])
+  }, [reduceMotion, minimumDurationMs])
 
   if (reduceMotion === null) return null
 
@@ -95,16 +98,16 @@ export default function RoyalStraightFlushVFX({ playerName = 'PLAYER', onClose, 
     </Animated.View>
 
     {canClose && (
-      <Pressable accessibilityRole="button" accessibilityLabel="Skip Royal Straight Flush celebration" onPress={onClose} style={({ pressed }) => [styles.close, pressed && styles.closePressed]}>
-        <Text style={styles.closeText}>SKIP</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel={closeLabel} onPress={onClose} style={({ pressed }) => [styles.close, pressed && styles.closePressed]}>
+        <Text style={styles.closeText}>{closeLabel}</Text>
       </Pressable>
     )}
   </View>
 }
 
 const styles = StyleSheet.create({
-  root: { ...StyleSheet.absoluteFillObject, zIndex: 1200, elevation: 1200, alignItems: 'center', justifyContent: 'center' },
-  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: '#020805' },
+  root: { ...StyleSheet.absoluteFill, zIndex: 1200, elevation: 1200, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' },
+  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: '#000' },
   glow: { position: 'absolute', width: 330, height: 330, borderRadius: 165, backgroundColor: '#E8B94C', shadowColor: '#FFD76A', shadowOpacity: 1, shadowRadius: 60, elevation: 28 },
   content: { alignItems: 'center', width: '100%', paddingHorizontal: 18, marginTop: -30 },
   eyebrow: { color: '#E8B94C', fontSize: 11, fontWeight: '900', letterSpacing: 4, marginBottom: 8 },

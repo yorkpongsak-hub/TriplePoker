@@ -30,7 +30,7 @@ interface TimerState {
 export function useTimer({ totalSec, onExpire, autoStart = true }: UseTimerOptions) {
   const [remaining, setRemaining] = useState(totalSec);
   const [isRunning, setIsRunning] = useState(autoStart);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const onExpireRef = useRef(onExpire);
   onExpireRef.current = onExpire;
 

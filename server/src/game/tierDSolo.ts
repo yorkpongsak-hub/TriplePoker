@@ -1,9 +1,11 @@
 import { AI_CONFIGS, type AIConfig } from './aiEngine'
 import { createDeck, shuffleDeck, type Card } from './deck'
 import { compareHands, evaluateBestFive, evaluateSoloG2BestFive, type BestFiveResult } from './handEvaluator'
+import { TIER_D_PILE_BASE_SCORES, tierDBotCountForLevel } from './tierDLeague'
+import { comboBonus, generateMissions, generateOpenChallenge, missionResult, pileWinScore, type Mission, type OpenChallenge } from './leagueGameplay'
 
 export const TIER_D = 'D' as const
-export const TIER_D_GAME_POINTS = { 1: 2, 2: 3, 3: 4 } as const
+export const TIER_D_GAME_POINTS = TIER_D_PILE_BASE_SCORES
 /** Awarded once when the same seat wins G1, G2 and G3 in one match. */
 export const TIER_D_TRIPLE_SWEEP_BONUS = 5
 
@@ -36,7 +38,16 @@ export interface TierDLevelState {
   /** All eleven cards are dealt before arranging, exactly as on the canonical table. */
   dealtHands: Record<string, Card[]>
   arrangements: Record<string, TierDArrangement | undefined>
+  /** A player may reveal any physical layout; an out-of-order G1/G2/G3 layout is a foul. */
+  fouled: Record<string, boolean>
   communityPiles: TierDCommunityPiles
+  /** Shared and visible from deal time; never changes for this Match. */
+  comboBotId?: string
+  comboBonuses?: Record<string, number>
+  missions: Mission[]
+  openChallenge?: OpenChallenge
+  /** Bronze only: piles exposed before arrangement for the approved tutorial curve. */
+  guidedRevealPiles: TierDGameNumber[]
   /** Undealt cards remain authoritative so a Swap can draw a real card. */
   drawPile: Card[]
 }
@@ -51,6 +62,9 @@ export interface TierDGameResolution {
   tiedSeatIds: string[]
   hands: Record<string, BestFiveResult>
   bonusPoints?: number
+  missionScores: Record<string, number>
+  missionPenalties: Record<string, number>
+  fouled: Record<string, boolean>
 }
 
 export interface TierDLevelResolution {
@@ -63,9 +77,7 @@ export interface TierDLevelResolution {
 
 export function tierDBotCount(level: number): number {
   assertLevel(level)
-  if (level <= 100) return 1
-  if (level <= 400) return 2
-  return 3
+  return tierDBotCountForLevel(level)
 }
 
 /** Configurable level bands; AI consumers can use `skill` as their policy weight. */
@@ -83,7 +95,7 @@ export function tierDDifficulty(level: number): TierDDifficulty {
 }
 
 /** Starts a Tier D level with one human and the level-appropriate number of AI seats. */
-export function createTierDLevel(level: number, humanId: string, random: () => number = Math.random): TierDLevelState {
+export function createTierDLevel(level: number, humanId: string, random: () => number = Math.random, lockedRules?: { comboBotId?: string; missions?: Mission[]; openChallenge?: OpenChallenge; guidedRevealPiles?: TierDGameNumber[] }): TierDLevelState {
   const difficulty = tierDDifficulty(level)
   const bots = tierDBotCount(level)
   const seats: TierDSeat[] = [{ id: humanId, isBot: false, difficulty }]
@@ -98,7 +110,12 @@ export function createTierDLevel(level: number, humanId: string, random: () => n
     const bot: AIConfig = { ...base, id: `${base.id}_tier_d_${level}_${index + 1}`, name }
     seats.push({ id: `tier-d-bot-${index + 1}`, isBot: true, bot, difficulty })
   }
+  const aiSeats = seats.filter(seat => seat.isBot)
+  const comboBotId = bots >= 2 ? (aiSeats.some(seat => seat.id === lockedRules?.comboBotId) ? lockedRules!.comboBotId : aiSeats[Math.floor(random() * aiSeats.length)].id) : undefined
   const scores = Object.fromEntries(seats.map(seat => [seat.id, 0])) as Record<string, number>
+  const missions = lockedRules?.missions ?? generateMissions(level, random)
+  const openChallenge = level > 1000 && lockedRules && 'openChallenge' in lockedRules ? lockedRules.openChallenge : generateOpenChallenge(level, random)
+  const guidedRevealPiles: TierDGameNumber[] = lockedRules?.guidedRevealPiles ?? (level <= 20 ? [1, 2, 3] : level <= 40 ? [1, 2] : level <= 50 ? [1] : [])
   // 4 seats × 11 cards + 6 community cards is still a single standard deck.
   const deck = shuffleWith(deckCopy(), random)
   let cursor = 0
@@ -108,13 +125,25 @@ export function createTierDLevel(level: number, humanId: string, random: () => n
   cursor += 6
   const arrangements: Record<string, TierDArrangement | undefined> = {}
   // Bots arrange immediately. Human cards are intentionally left uncommitted until READY.
-  for (const seat of seats) if (seat.isBot) arrangements[seat.id] = arrangeTierDBot(dealtHands[seat.id], communityPiles, seat.difficulty.skill, random)
+  for (const seat of seats) if (seat.isBot) arrangements[seat.id] = arrangeTierDBot(dealtHands[seat.id], communityPiles, seat.difficulty.skill, random, !comboBotId || seat.id === comboBotId ? missions : [], seat.id === comboBotId)
   const games: TierDGameState[] = [1, 2, 3].map(game => ({
     game: game as TierDGameNumber,
     hands: Object.fromEntries(seats.map(seat => [seat.id, cardsForGame(arrangements[seat.id] ?? defaultTierDArrangement(dealtHands[seat.id]), game as TierDGameNumber)])),
     communityCards: communityPiles[`pile${game}` as keyof TierDCommunityPiles], auctionCards: {}, resolved: false,
   }))
-  return { tier: TIER_D, level, seats, scores, games, gameResults: [], dealtHands, arrangements, communityPiles, drawPile: deck.slice(cursor) }
+  const fouled = Object.fromEntries(seats.map(seat => [seat.id, false])) as Record<string, boolean>
+  const state: TierDLevelState = { tier: TIER_D, level, seats, scores, games, gameResults: [], dealtHands, arrangements, fouled, communityPiles, missions, comboBotId, openChallenge, guidedRevealPiles, drawPile: deck.slice(cursor) }
+  assertTierDCardConservation(state)
+  return state
+}
+
+/** Physical-card invariant. Game hands/arrangements are views over these cards, not extra cards. */
+export function assertTierDCardConservation(level: TierDLevelState): true {
+  const physical=[...Object.values(level.dealtHands).flat(),...level.communityPiles.pile1,...level.communityPiles.pile2,...level.communityPiles.pile3,...level.drawPile]
+  if(physical.length!==52)throw new Error(`Tier D card conservation failed: expected 52 physical cards, received ${physical.length}`)
+  const identities=physical.map(cardIdentity)
+  if(new Set(identities).size!==52)throw new Error('Tier D card conservation failed: duplicate or missing card identity')
+  return true
 }
 
 /** Exchange a chosen dealt card with one real card from the remaining deck. */
@@ -126,9 +155,10 @@ export function swapTierDHandCard(level: TierDLevelState, seatId: string, cardIn
   const replaced = hand[cardIndex]
   hand[cardIndex] = drawn
   level.drawPile.push(replaced)
+  assertTierDCardConservation(level)
 }
 
-/** Validate and commit an eleven-card Tier D arrangement. No Tier C foul rule applies. */
+/** Validate and commit the physical layout. An invalid G1 < G2 < G3 order is revealed as a foul, never rearranged. */
 export function submitTierDArrangement(level: TierDLevelState, seatId: string, arrangement: TierDArrangement): void {
   const dealt = level.dealtHands[seatId]
   if (!dealt) throw new Error('Unknown Tier D seat')
@@ -137,11 +167,11 @@ export function submitTierDArrangement(level: TierDLevelState, seatId: string, a
   const expected = dealt.map(cardIdentity).sort().join('|')
   const received = [...arrangement.pile1, ...arrangement.pile2, ...arrangement.pile3].map(cardIdentity).sort().join('|')
   if (expected !== received) throw new Error('Tier D arrangement must use each dealt card exactly once')
-  // READY deliberately does not pre-block an out-of-order arrangement. Players
-  // own this strategic mistake (and may use an Undo item while arranging); the
-  // live game proceeds rather than trapping them behind a validation dialog.
+  const ordered = ([1, 2, 3] as const).map(game => evaluatePile(arrangement, level.communityPiles, game))
+  level.fouled[seatId] = compareHands(ordered[0], ordered[1]) >= 0 || compareHands(ordered[1], ordered[2]) >= 0
   level.arrangements[seatId] = { pile1: [...arrangement.pile1], pile2: [...arrangement.pile2], pile3: [...arrangement.pile3] }
   for (const game of level.games) game.hands[seatId] = cardsForGame(level.arrangements[seatId]!, game.game)
+  assertTierDCardConservation(level)
 }
 
 /** One fresh deal per G keeps every 1–4 seat game inside a standard 52-card deck. */
@@ -165,12 +195,12 @@ export function assignTierDAuctionCard(game: TierDGameState, seatId: string, car
   game.auctionCards[seatId] = card
 }
 
-export function resolveTierDGame(level: TierDLevelState, gameNumber: TierDGameNumber): TierDGameResolution {
+export function resolveTierDGame(level: TierDLevelState, gameNumber: TierDGameNumber, options?: { doubledSeatId?: string; doubledPile?: TierDGameNumber }): TierDGameResolution {
   const game = level.games[gameNumber - 1]
   if (game.resolved) throw new Error('Tier D game already resolved')
-  const eligible = level.seats
+  const eligible = level.seats.filter(seat => !level.fouled[seat.id])
   const hands: Record<string, BestFiveResult> = {}
-  for (const seat of eligible) {
+  for (const seat of level.seats) {
     hands[seat.id] = game.game === 2
       ? evaluateSoloG2BestFive(game.hands[seat.id], game.communityCards, game.auctionCards[seat.id])
       : evaluateBestFive([...game.hands[seat.id], ...game.communityCards])
@@ -180,26 +210,87 @@ export function resolveTierDGame(level: TierDLevelState, gameNumber: TierDGameNu
     return !current || compareHands(hand, current) > 0 ? hand : current
   }, undefined)
   const tiedSeatIds = best ? eligible.filter(seat => compareHands(hands[seat.id], best) === 0).map(seat => seat.id) : []
-  // Exact poker ties award no pile points. This is deterministic and avoids an arbitrary seat-order winner.
-  const winnerId = tiedSeatIds.length === 1 ? tiedSeatIds[0] : null
-  const points = winnerId ? TIER_D_GAME_POINTS[gameNumber] : 0
+  // Canon exception: a Player tie beats every AI tied for the best hand.
+  // AI-only ties remain ties and award no pile.
+  const human = eligible.find(seat => !seat.isBot)
+  const winnerId = human && tiedSeatIds.includes(human.id) ? human.id : tiedSeatIds.length === 1 ? tiedSeatIds[0] : null
+  const doubled = !!winnerId && options?.doubledSeatId === winnerId && options.doubledPile === gameNumber
+  const points = winnerId ? pileWinScore(level.level, gameNumber, hands[winnerId].rank, doubled) : 0
   if (winnerId) level.scores[winnerId] += points
+  const mission = level.missions.find(entry => entry.pile === gameNumber)
+  const missionScores = Object.fromEntries(eligible.map(seat => [seat.id, 0])) as Record<string, number>
+  const missionPenalties = Object.fromEntries(eligible.map(seat => [seat.id, 0])) as Record<string, number>
+  if (mission) for (const seat of eligible) {
+    const result = missionResult(mission, hands[seat.id].rank)
+    missionScores[seat.id] = result.score; missionPenalties[seat.id] = result.penalty
+    level.scores[seat.id] += result.score + result.penalty
+  }
   game.resolved = true
-  const resolution: TierDGameResolution = { game: gameNumber, points, winnerId, tiedSeatIds, hands }
+  const resolution: TierDGameResolution = { game: gameNumber, points, winnerId, tiedSeatIds, hands, missionScores, missionPenalties, fouled: { ...level.fouled } }
   level.gameResults.push(resolution)
   if (gameNumber === 3 && winnerId && level.gameResults.length === 3 && level.gameResults.every(result => result.winnerId === winnerId)) {
     level.scores[winnerId] += TIER_D_TRIPLE_SWEEP_BONUS
     resolution.bonusPoints = TIER_D_TRIPLE_SWEEP_BONUS
   }
+  assertTierDCardConservation(level)
   return resolution
+}
+
+/** Roll Combo/Super Combo only after G3 is committed, never on provisional reveal. */
+export function commitTierDCombo(level: TierDLevelState, random: () => number = Math.random, committedThrough = 3): Record<string, number> {
+  if (committedThrough === 3 && level.gameResults.length !== 3) throw new Error('Commit all three piles before Combo resolution')
+  if (level.comboBonuses) return level.comboBonuses
+  const bonuses = Object.fromEntries(level.seats.map(seat => [seat.id, 0])) as Record<string, number>
+  if (level.missions.length < 2 || level.missions.some(mission => mission.pile > committedThrough || !level.gameResults.some(result => result.game === mission.pile))) return bonuses
+  for (const seat of level.seats) {
+    if (level.fouled[seat.id]) continue
+    const complete = level.missions.map(missionEntry => {
+      const result = level.gameResults.find(gameResult => gameResult.game === missionEntry.pile)!
+      return missionResult(missionEntry, result.hands[seat.id].rank).complete
+    })
+    const bonus = comboBonus(level.missions, complete, random)
+    bonuses[seat.id] = bonus
+    level.scores[seat.id] += bonus
+  }
+  level.comboBonuses = bonuses
+  return bonuses
+}
+
+/** Undo cancels the current provisional result without generating reverse VFX. */
+export function rollbackTierDGame(level: TierDLevelState, gameNumber: TierDGameNumber, scoreSnapshot: Record<string, number>): void {
+  const latest = level.gameResults[level.gameResults.length - 1]
+  if (!latest || latest.game !== gameNumber) throw new Error('Only the current provisional pile can be undone')
+  level.scores = { ...scoreSnapshot }
+  level.gameResults.pop()
+  level.games[gameNumber - 1].resolved = false
+  assertTierDCardConservation(level)
+}
+
+/** Resubmit after Undo while preserving every already committed earlier pile. */
+export function submitTierDUndoArrangement(level: TierDLevelState, seatId: string, arrangement: TierDArrangement, unlockedFrom: TierDGameNumber): void {
+  const previous = level.arrangements[seatId]
+  if (!previous) throw new Error('No arrangement is available to Undo')
+  for (let pile = 1 as TierDGameNumber; pile < unlockedFrom; pile = (pile + 1) as TierDGameNumber) {
+    const key = `pile${pile}` as keyof TierDArrangement
+    if (previous[key].map(cardIdentity).join('|') !== arrangement[key].map(cardIdentity).join('|')) throw new Error(`G${pile} is already committed`)
+  }
+  const committedResults = level.gameResults
+  level.gameResults = []
+  try { submitTierDArrangement(level, seatId, arrangement) }
+  finally { level.gameResults = committedResults }
 }
 
 export function resolveTierDLevel(level: TierDLevelState, humanId: string): TierDLevelResolution {
   if (level.games.some(game => !game.resolved)) throw new Error('Resolve all Tier D games before resolving the level')
   const topScore = Math.max(...Object.values(level.scores))
   const tiedSeatIds = level.seats.filter(seat => level.scores[seat.id] === topScore).map(seat => seat.id)
-  const winnerId = tiedSeatIds.length === 1 ? tiedSeatIds[0] : null
-  return { gameResults: [...level.gameResults], scores: { ...level.scores }, winnerId, tiedSeatIds, playerWon: winnerId === humanId }
+  const winnerId = tiedSeatIds.includes(humanId) ? humanId : tiedSeatIds.length === 1 ? tiedSeatIds[0] : null
+  return { gameResults: [...level.gameResults], scores: { ...level.scores }, winnerId, tiedSeatIds, playerWon: tiedSeatIds.includes(humanId) }
+}
+
+/** Open Challenge is a Level-pass gate: every Open Match must be swept. */
+export function openChallengeMatchPassed(level: TierDLevelState, humanId: string): boolean {
+  return level.level <= 1000 || !level.openChallenge || level.gameResults.length === 3 && level.gameResults.every(result => result.winnerId === humanId)
 }
 
 export type TierDProgress = { level: number; currentWinStreak: number; bestWinStreak: number }
@@ -219,8 +310,12 @@ function assertLevel(level: number): void {
 }
 function deckCopy(): Card[] { return createDeck() }
 function cardIdentity(card: Card) { return `${card.rank}-${card.suit}` }
-function defaultTierDArrangement(cards: Card[]): TierDArrangement {
+export function defaultTierDArrangement(cards: Card[]): TierDArrangement {
   return { pile1: cards.slice(0, 3), pile2: cards.slice(3, 6), pile3: cards.slice(6, 11) }
+}
+function evaluatePile(arrangement: TierDArrangement, community: TierDCommunityPiles, game: TierDGameNumber): BestFiveResult {
+  const cards = cardsForGame(arrangement, game)
+  return game === 2 ? evaluateSoloG2BestFive(cards, community.pile2) : evaluateBestFive([...cards, ...community[`pile${game}` as keyof TierDCommunityPiles]])
 }
 
 /**
@@ -229,7 +324,7 @@ function defaultTierDArrangement(cards: Card[]): TierDArrangement {
  * scoring legal plan it can reliably recognise. This changes decision quality,
  * never card dealing, hidden information, or the core ordering rule.
  */
-export function arrangeTierDBot(cards: Card[], community: TierDCommunityPiles, skill: number, random: () => number = Math.random): TierDArrangement {
+export function arrangeTierDBot(cards: Card[], community: TierDCommunityPiles, skill: number, random: () => number = Math.random, missions: readonly Mission[] = [], comboFocus = false): TierDArrangement {
   type Candidate = { arrangement: TierDArrangement; total: number }
   const candidates: Candidate[] = []
   forEachCombination(cards, 3, pile1 => {
@@ -239,9 +334,9 @@ export function arrangeTierDBot(cards: Card[], community: TierDCommunityPiles, s
       const h1 = evaluateBestFive([...pile1, ...community.pile1])
       const h2 = evaluateBestFive([...pile2, ...community.pile2])
       const h3 = evaluateBestFive([...pile3, ...community.pile3])
-      if (compareHands(h1, h2) > 0 || compareHands(h2, h3) > 0) return
-      // Keep later piles valuable, while reserving meaningful G1/G2 strength.
-      candidates.push({ arrangement: { pile1, pile2, pile3 }, total: h1.score * 2 + h2.score * 3 + h3.score * 4 })
+      if (compareHands(h1, h2) >= 0 || compareHands(h2, h3) >= 0) return
+      const arrangement = { pile1, pile2, pile3 }
+      candidates.push({ arrangement, total: tierDBotHandsUtility([h1,h2,h3], skill, missions, comboFocus) })
     })
   })
   if (!candidates.length) return defaultTierDArrangement(cards)
@@ -249,6 +344,44 @@ export function arrangeTierDBot(cards: Card[], community: TierDCommunityPiles, s
   const recognition: Record<number, number> = { 1: .45, 2: .25, 3: .1, 4: .035, 5: .012, 6: .006, 7: .003, 8: .0015, 9: .0007, 10: .00025 }
   const window = Math.max(1, Math.ceil(candidates.length * (recognition[Math.min(10, Math.max(1, Math.floor(skill)))] ?? .0001)))
   return candidates[Math.min(window - 1, Math.floor(random() * window))].arrangement
+}
+
+/** Score only information legally available to the AI when it locks its layout. */
+export function tierDBotArrangementUtility(arrangement: TierDArrangement, community: TierDCommunityPiles, skill: number, missions: readonly Mission[] = [], comboFocus = false): number {
+  const hands=([1,2,3] as TierDGameNumber[]).map(game=>evaluatePile(arrangement,community,game))
+  return tierDBotHandsUtility(hands,skill,missions,comboFocus)
+}
+
+function tierDBotHandsUtility(hands: BestFiveResult[], skill: number, missions: readonly Mission[], comboFocus = false): number {
+  const base=[TIER_D_GAME_POINTS[1],TIER_D_GAME_POINTS[2],TIER_D_GAME_POINTS[3]]
+  const strength=hands.reduce((sum,hand,index)=>sum+base[index]*(hand.rankIndex+1+(hand.score%100000000000)/100000000000),0)
+  if((skill<4&&!comboFocus)||missions.length===0)return strength
+  const outcomes=missions.map(mission=>missionResult(mission,hands[mission.pile-1].rank))
+  const missionValue=outcomes.reduce((sum,result)=>sum+result.score+result.penalty,0)
+  const allComplete=outcomes.every(result=>result.complete)
+  const comboExpected=allComplete?(missions.length===2?6:missions.length===3?12.5:0):0
+  const strategyWeight=comboFocus?4:skill>=7?2:0.75
+  return strength+strategyWeight*(missionValue+(comboFocus||skill>=7?comboExpected:0))
+}
+
+/** Timeout fallback: first legal layout in deal order, with no score objective. */
+export function firstValidTierDArrangement(cards: Card[], community: TierDCommunityPiles): TierDArrangement {
+  let found: TierDArrangement | undefined
+  forEachCombination(cards, 3, pile1 => {
+    if (found) return
+    const afterP1 = withoutCards(cards, pile1)
+    forEachCombination(afterP1, 3, pile2 => {
+      if (found) return
+      const pile3 = withoutCards(afterP1, pile2)
+      const candidate = { pile1, pile2, pile3 }
+      const h1 = evaluatePile(candidate, community, 1)
+      const h2 = evaluatePile(candidate, community, 2)
+      const h3 = evaluatePile(candidate, community, 3)
+      if (compareHands(h1, h2) < 0 && compareHands(h2, h3) < 0) found = candidate
+    })
+  })
+  if (!found) throw new Error('No valid G1 < G2 < G3 arrangement exists for this deal')
+  return found
 }
 
 function forEachCombination(cards: readonly Card[], size: number, visit: (selection: Card[]) => void): void {

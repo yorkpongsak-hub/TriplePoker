@@ -1,6 +1,6 @@
-export type TierDRewardItem = 'single_card_swap' | 'full_redraw' | 'bomb_defuser'
+export type TierDRewardItem = 'shuffle' | 'swap' | 'double_pile' | 'freeze' | 'undo'
 export type TierDRewardMode = 'claim' | 'ad' | 'no_ads'
-export const TIER_D_REWARD_ITEMS: readonly TierDRewardItem[] = ['single_card_swap', 'full_redraw', 'bomb_defuser']
+export const TIER_D_REWARD_ITEMS: readonly TierDRewardItem[] = ['shuffle', 'swap', 'double_pile', 'freeze', 'undo']
 
 /** Achievement data (medals, trophies, rank, League Points) never passes through this multiplier. */
 export function tierDRewardQuantity(mode: TierDRewardMode, adCompleted: boolean): number {

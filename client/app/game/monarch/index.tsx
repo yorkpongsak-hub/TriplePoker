@@ -2453,11 +2453,11 @@ function SeatCard({ label, sub, small, avatarSource, avatarBorderColor, stillnes
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: COLOR.bg },
   battleOverlay: {
-    ...StyleSheet.absoluteFillObject, top: 48, zIndex: 40,
+    ...StyleSheet.absoluteFill, top: 48, zIndex: 40,
     backgroundColor: 'transparent', paddingHorizontal: 12,
   },
   showdownCountdownOverlay: {
-    ...StyleSheet.absoluteFillObject, zIndex: 58, backgroundColor: 'rgba(0,0,0,0.82)',
+    ...StyleSheet.absoluteFill, zIndex: 58, backgroundColor: 'rgba(0,0,0,0.82)',
     alignItems: 'center', justifyContent: 'center',
   },
   showdownCountdownLabel: { color: COLOR.gold, fontSize: 13, fontWeight: '800', letterSpacing: 4, marginBottom: 10 },
@@ -2487,7 +2487,7 @@ const styles = StyleSheet.create({
   },
   battleActionBtn: { flex: 1, maxWidth: 150 },
   preGfShade: {
-    ...StyleSheet.absoluteFillObject, top: 48, zIndex: 75, backgroundColor: 'rgba(0,0,0,0.78)',
+    ...StyleSheet.absoluteFill, top: 48, zIndex: 75, backgroundColor: 'rgba(0,0,0,0.78)',
     alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 18,
   },
   preGfCard: {
@@ -2522,7 +2522,7 @@ const styles = StyleSheet.create({
   preGfContinue: { marginTop: 9, paddingVertical: 11, borderRadius: 10, borderWidth: 1.5, borderColor: '#FFD76A', backgroundColor: '#102218', alignItems: 'center' },
   preGfContinueText: { color: '#FFD76A', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
   presentationShade: {
-    ...StyleSheet.absoluteFillObject, zIndex: 70, backgroundColor: 'rgba(0,0,0,0.65)',
+    ...StyleSheet.absoluteFill, zIndex: 70, backgroundColor: 'rgba(0,0,0,0.65)',
     alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20,
   },
   outcomeCard: {
@@ -2602,7 +2602,7 @@ const styles = StyleSheet.create({
     color: COLOR.gold, fontFamily: 'Cinzel_700Bold', fontSize: 22, letterSpacing: 3, textAlign: 'center',
   },
   // Batch 3B Task 3 — wash ทองเข้ม #FFC857 12% ซ้อนบน blackout ระหว่าง crown assembly
-  goldWash: { ...StyleSheet.absoluteFillObject, backgroundColor: '#FFC857' },
+  goldWash: { ...StyleSheet.absoluteFill, backgroundColor: '#FFC857' },
   crownWrap: { width: 240, height: 220, alignItems: 'center', justifyContent: 'center' },
   crownImgWrap: { width: 240, height: 220, alignItems: 'center', justifyContent: 'center' },
   crownImgAbsolute: { position: 'absolute', top: 0, left: 0 },

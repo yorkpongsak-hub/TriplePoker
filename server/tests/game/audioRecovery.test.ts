@@ -1,6 +1,7 @@
 const mockPlayers:any[]=[];
 const mockAppState={currentState:'active',addEventListener:jest.fn(()=>({remove:jest.fn()}))};
 const mockActivate=jest.fn(async()=>{});
+const mockPlatform={OS:'android'};
 const mockLoadSettings=jest.fn(async()=>({muted:false,master:1,categories:{BGM:1,UI:1,CARD:1,BOSS:1,RESULT:1}}));
 const mockCreate=jest.fn(()=>{
   const listeners=new Set<(s:any)=>void>();
@@ -10,7 +11,7 @@ const mockCreate=jest.fn(()=>{
     finish:()=>{p.playing=false;for(const fn of listeners)fn({didJustFinish:true,isLoaded:true});}};
   mockPlayers.push(p);return p;
 });
-jest.mock('../../../client/node_modules/react-native',()=>({AppState:mockAppState,Platform:{OS:'android'}}));
+jest.mock('../../../client/node_modules/react-native',()=>({AppState:mockAppState,Platform:mockPlatform}));
 jest.mock('../../../client/node_modules/expo-audio',()=>({createAudioPlayer:mockCreate,setAudioModeAsync:async()=>{},setIsAudioActiveAsync:mockActivate}));
 jest.mock('../../../client/src/audio/audioSettings',()=>({
   DEFAULT_AUDIO_SETTINGS:{muted:false,master:1,categories:{BGM:1,UI:1,CARD:1,BOSS:1,RESULT:1}},
@@ -26,7 +27,7 @@ jest.mock('../../../client/src/audio/audioRegistry',()=>({PRELOAD_AUDIO_EVENTS:[
 let audio:any;
 const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
 beforeEach(async()=>{
-  jest.useFakeTimers();jest.setSystemTime(100000);mockAppState.currentState='active';mockPlayers.length=0;mockAppState.addEventListener.mockClear();mockCreate.mockClear();mockActivate.mockClear();
+  jest.useFakeTimers();jest.setSystemTime(100000);mockPlatform.OS='android';mockAppState.currentState='active';mockPlayers.length=0;mockAppState.addEventListener.mockClear();mockCreate.mockClear();mockActivate.mockClear();
   (globalThis as any).__DEV__=false;
   jest.resetModules();audio=require('../../../client/src/audio/AudioManager').audio;await audio.initialize();
 });
@@ -37,6 +38,29 @@ test('critical effect ducks the music and restores it instead of retiring it',as
   audio.play('BOSS_REVEAL');await flush();jest.advanceTimersByTime(400);
   expect(bgm.playing).toBe(true);expect(bgm.remove).not.toHaveBeenCalled();
   mockPlayers.at(-1).finish();jest.advanceTimersByTime(650);expect(bgm.volume).toBe(1);
+});
+
+test('a stalled audio session cannot silence subsequent games indefinitely',async()=>{
+  mockActivate.mockImplementationOnce(()=>new Promise<void>(()=>{}));
+  audio.play('BOSS_REVEAL');await flush();
+  jest.advanceTimersByTime(1600);await flush();
+  expect(audio.getDebugState().activeAudio).toEqual([]);
+  expect(audio.play('BUTTON_CONFIRM')).toBe(true);await flush();
+  expect(audio.getDebugState().players.find((p:any)=>p.event==='BUTTON_CONFIRM').playing).toBe(true);
+});
+
+test('a user gesture recovers pending SFX even on a table with no BGM',async()=>{
+  audio.play('BUTTON_CONFIRM');await flush();const p=mockPlayers[0];
+  p.playing=false;p.currentTime=0;
+  audio.recoverOnInteraction();
+  expect(p.playing).toBe(true);
+});
+
+test('web SFX starts inside the gesture without waiting for a native activation promise',()=>{
+  mockPlatform.OS='web';mockActivate.mockClear();
+  audio.play('BUTTON_CONFIRM');
+  expect(mockPlayers[0].playing).toBe(true);
+  expect(mockActivate).not.toHaveBeenCalled();
 });
 test('unmuting restores the current screen music without another navigation',async()=>{
   audio.playBGM();await flush();audio.mute();audio.unmute();await flush();

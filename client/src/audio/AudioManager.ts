@@ -1,4 +1,4 @@
-import { AppState, AppStateStatus } from 'react-native'
+import { AppState, AppStateStatus, Platform } from 'react-native'
 import { setAudioModeAsync, setIsAudioActiveAsync } from 'expo-audio'
 import { createManagedPlayer, ManagedPlayer as AudioPlayer } from './playerFactory'
 import { audioRegistry, PRELOAD_AUDIO_EVENTS } from './audioRegistry'
@@ -20,8 +20,10 @@ type ActiveAudio = {
 }
 type Listener = (settings: AudioSettings) => void
 const PRIVATE_EVENTS = new Set([AudioEvent.PLAYER_TURN, AudioEvent.TIMER_WARNING, AudioEvent.TIMER_CRITICAL, AudioEvent.TIMER_PRESSURE, AudioEvent.TIMER_LONG])
-const RESULT_EVENTS = new Set([AudioEvent.PILE_WIN, AudioEvent.MATCH_WIN, AudioEvent.TRIPLE_SWEEP_CELEBRATION, AudioEvent.TIER_UNLOCK, AudioEvent.RARE_REACTION])
+const RESULT_EVENTS = new Set([AudioEvent.PILE_WIN, AudioEvent.MATCH_WIN, AudioEvent.TRIPLE_SWEEP_CELEBRATION, AudioEvent.RANK_COMPLETE, AudioEvent.TIER_UNLOCK, AudioEvent.RARE_REACTION])
 const CACHED_EVENTS = new Set<AudioEvent>(PRELOAD_AUDIO_EVENTS)
+const MAX_ONE_SHOT_MS = 3_000
+const ONE_SHOT_CLEANUP_GRACE_MS = 1_000
 
 class AudioManager {
   private settings: AudioSettings = DEFAULT_AUDIO_SETTINGS
@@ -95,10 +97,14 @@ class AudioManager {
     this.pruneDedupe(now)
     if (context.dedupeKey) {
       if (this.dedupeKeys.has(context.dedupeKey)) return false
-      this.dedupeKeys.set(context.dedupeKey, now)
     }
     if (definition.cooldownMs && now - (this.lastPlayed.get(event) ?? 0) < definition.cooldownMs) return false
     if (definition.category !== AudioCategory.BGM && this.hasBlockingPriority(definition.priority)) return false
+
+    // Reserve a server event only after it has passed cooldown/priority gates.
+    // Previously a temporarily blocked sound consumed its dedupe key for 30 minutes,
+    // so the legitimate retry was discarded and audio appeared to die at random.
+    if (context.dedupeKey) this.dedupeKeys.set(context.dedupeKey, now)
 
     if (definition.category === AudioCategory.TIMER) this.stopCategory(AudioCategory.TIMER, 120)
     if (RESULT_EVENTS.has(event)) this.stopCategory(AudioCategory.RESULT, 100)
@@ -117,6 +123,8 @@ class AudioManager {
       player.volume = definition.fadeInMs ? 0 : this.effectiveVolume(definition.category, baseVolume)
       const entry: ActiveAudio = { event, player, priority: definition.priority, baseVolume, startedAt: now }
       this.active.set(event, entry)
+      // Also expire players waiting on session activation, not only started sounds.
+      if (!player.loop) this.armOneShotSafetyTimer(entry)
       this.lastPlayed.set(event, now)
       if (!player.loop) {
         const subscription = player.addListener('playbackStatusUpdate', status => {
@@ -157,7 +165,8 @@ class AudioManager {
             }, 2000)
           }
         }
-      void this.ensureAudioSessionActive()
+      if (Platform.OS === 'web') start()
+      else void this.ensureAudioSessionActive()
         .then(start).catch(error => {
           this.warn(`Could not activate audio for ${event}`, error)
           this.release(event, player)
@@ -289,7 +298,14 @@ class AudioManager {
 
   /** Called synchronously inside a user gesture to recover browser autoplay denial. */
   recoverOnInteraction(): void {
-    if (!this.canPlay() || !this.resumeBgm) return
+    if (!this.canPlay()) return
+    for (const [event, pending] of this.active) {
+      if (audioRegistry[event].category === AudioCategory.BGM) continue
+      if (!pending.player.playing && pending.player.currentTime < 0.02) {
+        try { pending.player.play() } catch { this.release(event, pending.player) }
+      }
+    }
+    if (!this.resumeBgm) return
     const entry = this.active.get(this.resumeBgm)
     if (entry && !entry.player.playing && entry.player.isLoaded) {
       try { entry.player.play() } catch (error) { this.warn('Could not resume music on interaction', error) }
@@ -321,8 +337,15 @@ class AudioManager {
   }
 
   private ensureAudioSessionActive(): Promise<void> {
+    if (Platform.OS === 'web') return Promise.resolve()
     if (this.activationPromise) return this.activationPromise
-    const activation = setIsAudioActiveAsync(true)
+    const activation = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Audio session activation timed out')), 1500)
+      Promise.resolve().then(() => setIsAudioActiveAsync(true)).then(
+        () => { clearTimeout(timer); resolve() },
+        error => { clearTimeout(timer); reject(error) },
+      )
+    })
     this.activationPromise = activation
     void activation.finally(() => {
       if (this.activationPromise === activation) this.activationPromise = null
@@ -341,15 +364,15 @@ class AudioManager {
   private armOneShotSafetyTimer(entry: ActiveAudio): void {
     if (entry.safetyTimer) clearTimeout(entry.safetyTimer)
     const durationMs = Number.isFinite(entry.player.duration) && entry.player.duration > 0
-      ? entry.player.duration * 1000
-      : 8000
+      ? Math.min(MAX_ONE_SHOT_MS, entry.player.duration * 1000)
+      : MAX_ONE_SHOT_MS
     // ใช้ความยาวไฟล์จริงตัดสินว่า "บล็อกเสียงอื่น" นานแค่ไหน (hasBlockingPriority อ่านค่านี้) แยกจาก
     // เวลาที่ entry จะถูกเคลียร์ออกจาก active map จริง (safetyTimer ด้านล่าง) — เดิมสองอย่างนี้ผูกกัน
     // (บล็อกจนกว่า entry จะหายจาก active) ทำให้ถ้า Android ไม่ส่ง didJustFinish (คอมเมนต์เดิมด้านล่าง)
     // เสียงอื่นทั้งหมด (การ์ด/ปุ่ม/ชิป) เงียบไปได้นานถึง duration+2000ms หลัง Boss Reveal ทุกครั้ง
     entry.blockUntil = Date.now() + durationMs
     // Android อาจไม่ส่ง didJustFinish หลังเสีย audio focus จึงคืน priority/duck ตามความยาวไฟล์จริง
-    const timeoutMs = Math.min(120_000, Math.max(2500, durationMs + 2000))
+    const timeoutMs = Math.max(2500, durationMs + ONE_SHOT_CLEANUP_GRACE_MS)
     entry.safetyTimer = setTimeout(() => this.release(entry.event, entry.player), timeoutMs)
   }
 

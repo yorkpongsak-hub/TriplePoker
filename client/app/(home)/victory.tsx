@@ -252,7 +252,7 @@ const s = StyleSheet.create({
 
   // Full-screen token celebration behind all foreground UI.
   vfxBackground: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 0,
   },
 

@@ -40,7 +40,7 @@ import {
 import { broadcastTableUpdate } from "./lobbySocket";
 import { registerVipPlusSocket } from './vipPlusSocket';
 import { GAME_RESUME_EVENT, GAME_RESUME_RESULT_EVENT, isGameResumeRequest, type GameResumeResult } from './gameResumeProtocol';
-import { startTierDSolo, resumeTierDSolo, playTierDGame, useTierDItem, resumeTierDTimer } from '../game/tierDSoloRuntime';
+import { pauseTierDItemAd, resumeTierDItemAd, finishTierDRevealAnimation, finishTierDTripleSweepVfx, startTierDSolo, resumeTierDSolo, playTierDGame, stageTierDArrangement, useTierDItem, resumeTierDTimer, startTierDTimerAfterDeal, refreshTierDSoloInventory } from '../game/tierDSoloRuntime';
 
 // แปลง card key string (เช่น "10s", "jh") → Card object — ใช้ร่วมกันทุก handler ที่รับไพ่จาก client
 function toCards(keys: string[]) {
@@ -277,9 +277,16 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
     // OK while the reconnecting client receives no tier_d_state and stays on
     // CONNECTING SOLO.
     socket.on('tier_d_resume',(data:{roomId:string;playerId:string})=>{ socket.join(data.roomId); socket.emit('tier_d_resume_ack',{ok:resumeTierDSolo(io,data.roomId,data.playerId)}) })
+    socket.on('tier_d_ad_pause',(data:{roomId:string;playerId:string;item:'shuffle'|'swap'|'double_pile'|'freeze'|'undo'},ack?:(ok:boolean)=>void)=>{ack?.(pauseTierDItemAd(io,data.roomId,data.playerId,data.item))})
+    socket.on('tier_d_ad_resume',(data:{roomId:string;playerId:string})=>resumeTierDItemAd(io,data.roomId,data.playerId))
+    socket.on('tier_d_inventory_refresh',(data:{roomId:string;playerId:string})=>void refreshTierDSoloInventory(io,data.roomId,data.playerId))
     socket.on('tier_d_play',(data:{roomId:string;playerId:string;arrangement?:{pile1:string[];pile2:string[];pile3:string[]}})=>void playTierDGame(io,data.roomId,data.playerId,data.arrangement))
-    socket.on('tier_d_item_use',(data:{roomId:string;playerId:string;item:'single_card_swap'|'full_redraw'|'bomb_defuser';selectedCardKey?:string})=>void useTierDItem(io,data.roomId,data.playerId,data.item,data.selectedCardKey))
+    socket.on('tier_d_arrangement_update',(data:{roomId:string;playerId:string;arrangement:{pile1:string[];pile2:string[];pile3:string[]}})=>stageTierDArrangement(io,data.roomId,data.playerId,data.arrangement))
+    socket.on('tier_d_item_use',(data:{roomId:string;playerId:string;item:'shuffle'|'swap'|'double_pile'|'freeze'|'undo';selectedCardKey?:string;selectedPile?:1|2|3})=>void useTierDItem(io,data.roomId,data.playerId,data.item,data.selectedCardKey,data.selectedPile))
     socket.on('tier_d_timer_resume',(data:{roomId:string;playerId:string})=>resumeTierDTimer(io,data.roomId,data.playerId))
+    socket.on('tier_d_control_ready',(data:{roomId:string;playerId:string})=>startTierDTimerAfterDeal(io,data.roomId,data.playerId))
+    socket.on('tier_d_reveal_complete',(data:{roomId:string;playerId:string})=>finishTierDRevealAnimation(io,data.roomId,data.playerId))
+    socket.on('tier_d_triple_sweep_complete',(data:{roomId:string;playerId:string})=>finishTierDTripleSweepVfx(io,data.roomId,data.playerId))
     socket.on(GAME_RESUME_EVENT, async (request: unknown) => {
       if (!isGameResumeRequest(request)) return
       const fail = (status: Exclude<GameResumeResult, { ok: true }>['status']) =>

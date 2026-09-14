@@ -63,6 +63,8 @@ export const audioRegistry: Record<AudioEvent, AudioDefinition> = {
   [AudioEvent.AUCTION_BID]: def(auctionBidTick, AudioCategory.GAMEPLAY, AudioPriority.NORMAL, .55, { cooldownMs: 80 }),
   [AudioEvent.TOKEN_COMMIT]: def(raiseBid, AudioCategory.GAMEPLAY, AudioPriority.NORMAL, .60),
   [AudioEvent.TOKEN_REWARD]: def(pokerChip, AudioCategory.RESULT, AudioPriority.NORMAL, .58, { cooldownMs: 250 }),
+  [AudioEvent.RANK_TICK]: def(auctionBidTick, AudioCategory.UI, AudioPriority.NORMAL, .48, { cooldownMs: 250 }),
+  [AudioEvent.RANK_COMPLETE]: def(tripleSweepCongratulations, AudioCategory.RESULT, AudioPriority.VERY_HIGH, .78, { duckBgm: .30 }),
   [AudioEvent.ANTE]: def(ante, AudioCategory.GAMEPLAY, AudioPriority.NORMAL, .55, { cooldownMs: 250 }),
   [AudioEvent.AUTO_SORT]: def(autoSort, AudioCategory.UI, AudioPriority.LOW, .50, { cooldownMs: 150 }),
   [AudioEvent.CARD_SHUFFLE]: def(cardShuffle, AudioCategory.CARD, AudioPriority.NORMAL, .50, { cooldownMs: 500 }),

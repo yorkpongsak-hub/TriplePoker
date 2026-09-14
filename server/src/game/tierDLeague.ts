@@ -1,99 +1,55 @@
-/** Tier D leagues are player-progress brackets, never calendar seasons. */
-export const TIER_D_LEVELS_PER_LEAGUE = 50
-export const TIER_D_RELAX_LEVELS = 20
-export const TIER_D_RANKED_LEVELS = 30
-
-export type TierDLeaguePhase = 'relax' | 'ranked'
-export type TierDLeagueAwardRefs = {
-  /** Asset keys are intentionally unset until the approved Medal SVG assets land. */
-  medalSvgKey: string | null
-  trophyKeys: { 1: string | null; 2: string | null; 3: string | null }
-}
+/** Canonical League Mode progression. This module deliberately contains no
+ * leaderboard, seasonal, auction, or Ranked/Relax mechanics. */
+export type LeagueId = 'bronze' | 'silver' | 'gold' | 'platinum' | 'diamond' | 'elite' | 'master' | 'grandmaster' | 'legend' | 'mythic'
+export type TierUnlock = 'C' | 'B' | 'A' | 'A+'
 
 export interface TierDLeagueDefinition {
-  id: string
+  id: LeagueId
   name: string
   startLevel: number
-  endLevel: number
-  relaxEndLevel: number
-  rankedStartLevel: number
-  pointsPerRankedWin: number
-  finalized: boolean
-  finalRank: number | null
-  awardRefs: TierDLeagueAwardRefs
+  endLevel: number | null
+  aiOpponents: 1 | 2 | 3
+  arrangeSeconds: number | null
+  trophyLevel: number | null
+  unlocksTier?: TierUnlock
 }
 
-export interface TierDLeagueProgress {
-  league: TierDLeagueDefinition
-  levelInLeague: number
-  phase: TierDLeaguePhase
-  leaguePoints: number
-  rankedLeaderboardEligible: boolean
-  isFinalLevel: boolean
-}
+const LEAGUES: readonly TierDLeagueDefinition[] = [
+  { id: 'bronze', name: 'Bronze', startLevel: 1, endLevel: 50, aiOpponents: 1, arrangeSeconds: null, trophyLevel: 50 },
+  { id: 'silver', name: 'Silver', startLevel: 51, endLevel: 100, aiOpponents: 1, arrangeSeconds: 315, trophyLevel: 100 },
+  { id: 'gold', name: 'Gold', startLevel: 101, endLevel: 150, aiOpponents: 1, arrangeSeconds: 195, trophyLevel: 150 },
+  { id: 'platinum', name: 'Platinum', startLevel: 151, endLevel: 200, aiOpponents: 2, arrangeSeconds: 165, trophyLevel: 200 },
+  { id: 'diamond', name: 'Diamond', startLevel: 201, endLevel: 250, aiOpponents: 2, arrangeSeconds: 135, trophyLevel: 250 },
+  { id: 'elite', name: 'Elite', startLevel: 251, endLevel: 350, aiOpponents: 2, arrangeSeconds: 120, trophyLevel: 350, unlocksTier: 'C' },
+  { id: 'master', name: 'Master', startLevel: 351, endLevel: 500, aiOpponents: 3, arrangeSeconds: 105, trophyLevel: 500, unlocksTier: 'B' },
+  { id: 'grandmaster', name: 'Grandmaster', startLevel: 501, endLevel: 700, aiOpponents: 3, arrangeSeconds: 90, trophyLevel: 700, unlocksTier: 'A' },
+  { id: 'legend', name: 'Legend', startLevel: 701, endLevel: 1000, aiOpponents: 3, arrangeSeconds: 75, trophyLevel: 1000, unlocksTier: 'A+' },
+  { id: 'mythic', name: 'Mythic', startLevel: 1001, endLevel: null, aiOpponents: 3, arrangeSeconds: 60, trophyLevel: 1500 },
+]
 
-/** Kept separate from game rules so playtesting can change point awards alone. */
-export const tierDLeaguePointsConfig = {
-  rankedWinPoints: 10,
-  pointsForRankedWin: (context: { level: number; won: boolean }): number => context.won ? 10 : 0,
-} as const
-
-/**
- * The repository has no pre-existing League lore/name or League-medal assets.
- * Until approved assets are supplied, use intentionally neutral, stable names.
- */
+export const TIER_D_PILE_BASE_SCORES = { 1: 4, 2: 6, 3: 8 } as const
+/** Each League opens with ten non-ranked warm-up Levels. */
+export const TIER_D_LEAGUE_REST_LEVELS = 10
+export const TIER_D_LEAGUE_COMPETITION_LEVELS = 20
 export function getCurrentLeague(level: number): TierDLeagueDefinition {
   assertLevel(level)
-  const leagueNumber = Math.floor((level - 1) / TIER_D_LEVELS_PER_LEAGUE) + 1
-  const startLevel = (leagueNumber - 1) * TIER_D_LEVELS_PER_LEAGUE + 1
-  const endLevel = startLevel + TIER_D_LEVELS_PER_LEAGUE - 1
-  return {
-    id: `tier-d-league-${leagueNumber}`,
-    name: `League ${leagueNumber}`,
-    startLevel,
-    endLevel,
-    relaxEndLevel: startLevel + TIER_D_RELAX_LEVELS - 1,
-    rankedStartLevel: startLevel + TIER_D_RELAX_LEVELS,
-    pointsPerRankedWin: tierDLeaguePointsConfig.rankedWinPoints,
-    finalized: false,
-    finalRank: null,
-    awardRefs: { medalSvgKey: null, trophyKeys: { 1: null, 2: null, 3: null } },
-  }
+  return LEAGUES.find(league => level >= league.startLevel && (league.endLevel === null || level <= league.endLevel))!
 }
-
-export function getLeaguePhase(level: number): TierDLeaguePhase {
-  const league = getCurrentLeague(level)
-  return level <= league.relaxEndLevel ? 'relax' : 'ranked'
+export function tierDBotCountForLevel(level: number): 1 | 2 | 3 { return getCurrentLeague(level).aiOpponents }
+export function getArrangeTimerSeconds(level: number): number | null { return getCurrentLeague(level).arrangeSeconds }
+export function hasHandMultiplier(level: number): boolean { return level >= 51 }
+export function hasMissions(level: number): boolean { return level >= 51 }
+export function isLeagueFinalLevel(level: number): boolean { return getCurrentLeague(level).trophyLevel === level }
+export function tierUnlockForLevel(level: number): TierUnlock | undefined { return isLeagueFinalLevel(level) ? getCurrentLeague(level).unlocksTier : undefined }
+export type TierDCompetitionWindow={leagueId:LeagueId;cycle:number;startLevel:number;endLevel:number}
+/** Competition alternates rest 10 / compete 20. The final round stays active even when a League has fewer than 20 Levels remaining. */
+export function getTierDCompetitionWindow(level:number):TierDCompetitionWindow|undefined{
+  const league=getCurrentLeague(level);const offset=level-league.startLevel;const period=TIER_D_LEAGUE_REST_LEVELS+TIER_D_LEAGUE_COMPETITION_LEVELS
+  const cycle=Math.floor(offset/period)+1;const startLevel=league.startLevel+(cycle-1)*period+TIER_D_LEAGUE_REST_LEVELS;const nominalEndLevel=startLevel+TIER_D_LEAGUE_COMPETITION_LEVELS-1
+  const endLevel=league.endLevel===null?nominalEndLevel:Math.min(nominalEndLevel,league.endLevel)
+  if(level<startLevel||level>endLevel)return undefined
+  return {leagueId:league.id,cycle,startLevel,endLevel}
 }
-
-export function getLeagueProgress(level: number, leaguePoints = 0): TierDLeagueProgress {
-  if (!Number.isInteger(leaguePoints) || leaguePoints < 0) throw new Error('League Points must be a non-negative integer')
-  const league = getCurrentLeague(level)
-  const phase = getLeaguePhase(level)
-  return {
-    league,
-    levelInLeague: level - league.startLevel + 1,
-    phase,
-    leaguePoints,
-    rankedLeaderboardEligible: phase === 'ranked',
-    isFinalLevel: level === league.endLevel,
-  }
-}
-
-export function isLeagueFinalLevel(level: number): boolean { return getLeagueProgress(level).isFinalLevel }
-
-/** Relax earns no points. No loss penalties exist in this version. */
-export function getLeaguePointsAward(level: number, won: boolean): number {
-  if (getLeaguePhase(level) !== 'ranked') return 0
-  return tierDLeaguePointsConfig.pointsForRankedWin({ level, won })
-}
-
-/** Move into a new League with its League Points reset, preserving no prior league score. */
-export function nextLeaguePoints(levelJustCleared: number, won: boolean, currentPoints: number): number {
-  if (!won) return currentPoints
-  return isLeagueFinalLevel(levelJustCleared) ? 0 : currentPoints + getLeaguePointsAward(levelJustCleared, true)
-}
-
-function assertLevel(level: number): void {
-  if (!Number.isInteger(level) || level < 1) throw new Error('Tier D level must be a positive integer')
-}
+export function isTierDLeagueCompetitionActive(level: number): boolean { return !!getTierDCompetitionWindow(level) }
+export function isTierDCompetitionFinalLevel(level:number):boolean{return getTierDCompetitionWindow(level)?.endLevel===level}
+function assertLevel(level: number): void { if (!Number.isInteger(level) || level < 1) throw new Error('Tier D level must be a positive integer') }

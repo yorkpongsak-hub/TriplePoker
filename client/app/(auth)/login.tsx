@@ -62,14 +62,19 @@ export default function LoginScreen() {
     setIsLoading(true)
     setError(null)
     try {
-      const { error: authError } = await supabase.auth.signInWithOAuth({
+      const isWeb = Platform.OS === 'web' && typeof window !== 'undefined'
+      const { data: authData, error: authError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: 'triplepoker://auth/callback',
+          redirectTo: isWeb
+            ? `${window.location.origin}/login`
+            : 'triplepoker://auth/callback',
+          skipBrowserRedirect: isWeb,
           queryParams: { access_type: 'offline', prompt: 'consent' },
         },
       })
       if (authError) throw authError
+      if (isWeb && authData.url) window.location.assign(authData.url)
     } catch (e: any) {
       setError('Google sign-in failed. Please try again.')
     } finally {

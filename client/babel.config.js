@@ -4,7 +4,7 @@ module.exports = function(api) {
     presets: [['babel-preset-expo', { unstable_transformImportMeta: true }]],
     plugins: [
       './babel-plugin-sound-controls',
-      'react-native-reanimated/plugin',
+      'react-native-worklets/plugin',
     ],
   };
 };

@@ -97,7 +97,7 @@ export default function PileReveal({ result, myPlayerId, style }: PileRevealProp
       {/* Glow overlay */}
       <Animated.View
         style={[
-          StyleSheet.absoluteFillObject,
+          StyleSheet.absoluteFill,
           { backgroundColor: COLORS.gold, opacity: glowOpacity, borderRadius: 12 },
         ]}
       />

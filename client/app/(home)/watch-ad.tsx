@@ -26,11 +26,11 @@ import { View, Text, StyleSheet } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useAuthStore } from '../../src/store/authStore'
 import { watchAd } from '../../src/services/adRewards'
-import LegendaryCardVFX from '../../src/components/vfx/LegendaryCardVFX'
+import RoyalStraightFlushVFX from '../../src/components/vfx/RoyalStraightFlushVFX'
 
 // ธีมสีหลัก (Website Theme Spec v1.0) — เหมือนกับ victory.tsx
 const C = {
-  bgDark: '#0F2418',
+  bgDark: '#000',
   gold: '#FFD76A',
 }
 
@@ -64,7 +64,7 @@ export default function WatchAdScreen() {
           <Text style={s.msg}>{msg}</Text>
         </View>
       ) : (
-        <LegendaryCardVFX title="LEGENDARY VICTORY" subtitle="TRIPLE SWEEP" onFinish={handleVfxClose} />
+        <RoyalStraightFlushVFX playerName="ADVERTISEMENT" minimumDurationMs={5000} onClose={handleVfxClose} />
       )}
     </View>
   )
