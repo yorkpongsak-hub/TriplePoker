@@ -24,6 +24,7 @@ const RESULT_EVENTS = new Set([AudioEvent.PILE_WIN, AudioEvent.MATCH_WIN, AudioE
 const CACHED_EVENTS = new Set<AudioEvent>(PRELOAD_AUDIO_EVENTS)
 const MAX_ONE_SHOT_MS = 3_000
 const ONE_SHOT_CLEANUP_GRACE_MS = 1_000
+const ARRANGEMENT_EVENTS = new Set([AudioEvent.CARD_SELECT, AudioEvent.CARD_MOVE])
 
 class AudioManager {
   private settings: AudioSettings = DEFAULT_AUDIO_SETTINGS
@@ -99,7 +100,7 @@ class AudioManager {
       if (this.dedupeKeys.has(context.dedupeKey)) return false
     }
     if (definition.cooldownMs && now - (this.lastPlayed.get(event) ?? 0) < definition.cooldownMs) return false
-    if (definition.category !== AudioCategory.BGM && this.hasBlockingPriority(definition.priority)) return false
+    if (definition.category !== AudioCategory.BGM && !ARRANGEMENT_EVENTS.has(event) && this.hasBlockingPriority(definition.priority)) return false
 
     // Reserve a server event only after it has passed cooldown/priority gates.
     // Previously a temporarily blocked sound consumed its dedupe key for 30 minutes,
@@ -165,17 +166,18 @@ class AudioManager {
             }, 2000)
           }
         }
-      if (Platform.OS === 'web') start()
+      if (Platform.OS === 'web') { void player.seekTo(0).catch(error => this.warn('Could not rewind audio', error)); start() }
       else void this.ensureAudioSessionActive()
+        .then(() => this.active.get(event) === entry ? player.seekTo(0) : undefined)
         .then(start).catch(error => {
           this.warn(`Could not activate audio for ${event}`, error)
-          this.release(event, player)
+          this.release(event, player, true)
         })
       return true
     } catch (error) {
       this.warn(`Failed to play ${event}`, error)
       const failed = this.active.get(event)
-      if (failed) this.release(event, failed.player)
+      if (failed) this.release(event, failed.player, true)
       else if (definition.duckBgm !== undefined && ![...this.active.keys()].some(key => audioRegistry[key].duckBgm !== undefined)) this.restore(AudioCategory.BGM, 600)
       return false
     }
@@ -191,6 +193,16 @@ class AudioManager {
   }
 
   stopTimer(): void { this.stopCategory(AudioCategory.TIMER, 180) }
+
+  /** Recover focus without repeatedly allocating Android MediaSessions. */
+  prepareArrangement(): void {
+    for (const event of ARRANGEMENT_EVENTS) {
+      this.stop(event, 0)
+      this.lastPlayed.delete(event)
+    }
+    this.activationPromise = null
+    if (this.canPlay()) void this.ensureAudioSessionActive().catch(error => this.warn('Could not activate arrangement audio', error))
+  }
 
   /** Plays the common tap sound unless the pressed control already emitted a semantic sound. */
   playUiFeedback(): boolean {
@@ -357,7 +369,7 @@ class AudioManager {
     const cached = this.cachedPlayers.get(event)
     if (cached) return cached
     const player = createManagedPlayer(audioRegistry[event].source)
-    if (CACHED_EVENTS.has(event)) this.cachedPlayers.set(event, player)
+    this.cachedPlayers.set(event, player)
     return player
   }
 
@@ -433,7 +445,7 @@ class AudioManager {
     }, 40)
     this.fadeTimers.set(event, timer)
   }
-  private release(event: AudioEvent, player: AudioPlayer): void {
+  private release(event: AudioEvent, player: AudioPlayer, invalid = false): void {
     const entry = this.active.get(event)
     if (!entry || entry.player !== player) return
     const timer = this.fadeTimers.get(event)
@@ -443,14 +455,12 @@ class AudioManager {
     if (entry.safetyTimer) clearTimeout(entry.safetyTimer)
     if (entry.recoveryTimer) clearInterval(entry.recoveryTimer)
     try { entry.cleanup?.() } catch { /* already released */ }
-    try { player.pause() } catch { /* native player may already be invalid */ }
-    // Retire completed/invalid native instances so rapid replays cannot inherit stale seek state.
-    const wasCached = this.cachedPlayers.get(event) === player
-    if (wasCached) this.cachedPlayers.delete(event)
-    try { player.remove() } catch { /* evict even when native teardown fails */ }
-    if (wasCached && this.initialized) {
-      try { this.getOrCreatePlayer(event) }
-      catch (error) { this.warn(`Could not refresh cached player for ${event}`, error) }
+    try { player.pause() } catch { invalid = true }
+    // Keep one healthy player per event. Every constructor allocates an Android
+    // MediaSession; rebuilding after every tap can overwhelm session creation.
+    if (invalid || !this.initialized) {
+      if (this.cachedPlayers.get(event) === player) this.cachedPlayers.delete(event)
+      try { player.remove() } catch { /* native teardown may already have occurred */ }
     }
     if (audioRegistry[event].duckBgm !== undefined && ![...this.active.keys()].some(activeEvent => audioRegistry[activeEvent].duckBgm !== undefined)) {
       this.restore(AudioCategory.BGM, 600)

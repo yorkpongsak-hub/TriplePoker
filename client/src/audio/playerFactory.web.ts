@@ -29,6 +29,7 @@ export function createManagedPlayer(source:AudioSource):ManagedPlayer {
       void media.play().then(()=>{if(removed||attempt!==version)media.pause()}).catch(()=>{})
     },
     pause(){version++;media.pause()},
+    async seekTo(seconds){media.currentTime=seconds},
     remove(){removed=true;version++;listeners.clear();for(const name of ['loadeddata','timeupdate','ended','error'])media.removeEventListener(name,emit);media.pause();media.removeAttribute('src');media.load()},
     addListener(_event,listener){listeners.add(listener);return{remove:()=>listeners.delete(listener)}},
   }
