@@ -1,6 +1,6 @@
-export type TierDRewardItem = 'shuffle' | 'swap' | 'double_pile' | 'freeze' | 'undo'
+export type TierDRewardItem = 'shuffle' | 'swap' | 'double_pile' | 'freeze' | 'auto_sort' | 'undo'
 export type TierDRewardMode = 'claim' | 'ad' | 'no_ads'
-export const TIER_D_REWARD_ITEMS: readonly TierDRewardItem[] = ['shuffle', 'swap', 'double_pile', 'freeze', 'undo']
+export const TIER_D_REWARD_ITEMS: readonly TierDRewardItem[] = ['shuffle', 'swap', 'double_pile', 'freeze', 'auto_sort', 'undo']
 export type TierDLevelRewardPlan = { baseItemTypes: number; baseQuantityPerType: 1 | '1-2'; adBonusQuantity: 1 | 2 }
 
 /** Per-Level clear rewards are deliberately League-based, not client-selected. */

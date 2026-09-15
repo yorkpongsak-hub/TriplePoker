@@ -749,7 +749,7 @@ export default function LobbyScreen() {
       {/* ─── Header (fixed) ─── */}
       <View style={[s.headerRow, { paddingLeft: shopBtnLeftGap }]}>
         <MenuButton icon="profile" label="Profile" size="sm" onPress={() => router.push('/(home)/profile')} />
-        <Text style={s.header}>TriplePoker Lobby</Text>
+        <Text style={s.header}>TriplePoker : Rise Lobby</Text>
       </View>
 
       {/* ─── Menu Bar (fixed) — Feedback A2: เหลือ 4 ปุ่ม กระจายเต็มความกว้าง ไม่ scroll แล้ว ─── */}

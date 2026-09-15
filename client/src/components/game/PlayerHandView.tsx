@@ -52,7 +52,8 @@ export interface PlayerHandViewProps {
 // (เทสจริงพิสูจน์แล้วว่า VIP โผล่ ~17px ยังกดได้ ปลอดภัยที่จะลดพื้น Free ลงมา)
 const FREE_CW = 62; const FREE_CH = 90
 const FREE_HARD_MIN_CW = 54 // เพดานล่างสุดตอนจอแคบจริงๆ (ยอมย่อไพ่เป็นทางเลือกสุดท้าย)
-const FREE_MIN_EXPOSED = 22 // ส่วนที่โผล่ให้กด ต้องกว้างอย่างน้อยเท่านี้ (touch target)
+const FREE_MIN_EXPOSED = 20 // ส่วนที่โผล่ให้กด ต้องกว้างอย่างน้อยเท่านี้ (touch target)
+const FREE_MAX_EXPOSED = 38 // ลดระยะไพ่ซ้อนในมือผู้เล่นลง 2px
 const MAX_EXPOSED = 40      // ส่วนที่โผล่ต่อใบสูงสุด — กันไพ่ห่างเวิ้งว้าง (ใช้ร่วมกัน)
 // VIP mode: ค่าเดิมจาก Phase 2.1 แช่แข็งไว้ตรงนี้ (ห้ามแตะ — "ลงตัวแล้ว") แยกจาก Free เพื่อไม่ให้
 // การขยายไพ่ Free ใน Step 1 กระทบพัด VIP โดยไม่ตั้งใจ (เดิมทั้งสองโหมดใช้ค่าตั้งต้นชุดเดียวกัน)
@@ -73,7 +74,7 @@ const VIP_TOP_PAD = SELECT_LIFT // เผื่อพื้นที่ด้า
 // ~30% ของความสูงพัด Pile3 เอง + อยู่หน้า (zIndex สูงกว่า) เหมือนถือสำรับไพ่จริง
 const VIP_TOP_ROW_GAP = 48
 const VIP_ROW_OVERLAP_RATIO = 0.30
-const PILE_GAP = 8         // ช่องไฟระหว่างกอง
+const PILE_GAP = 6         // ช่องไฟระหว่างกอง
 const FRAME_H_PAD = 6      // paddingHorizontal ของกรอบทอง
 const FRAME_W_RATIO = 0.98 // กรอบทองกว้าง 98% ของจอ
 
@@ -311,7 +312,7 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
   // Free/VIP คำนวณ layout แยกอิสระกันคนละชุดค่าคงที่ — กันการขยายไพ่ Free (Step 1) กระทบพัด VIP
   const layoutTarget: LayoutTarget = isVip
     ? { cw: VIP_CW, ch: VIP_CH, hardMinCw: VIP_HARD_MIN_CW, minExposed: VIP_MIN_EXPOSED, maxExposed: MAX_EXPOSED }
-    : { cw: FREE_CW, ch: FREE_CH, hardMinCw: FREE_HARD_MIN_CW, minExposed: FREE_MIN_EXPOSED, maxExposed: MAX_EXPOSED }
+    : { cw: FREE_CW, ch: FREE_CH, hardMinCw: FREE_HARD_MIN_CW, minExposed: FREE_MIN_EXPOSED, maxExposed: FREE_MAX_EXPOSED }
   const paired = resolvedPiles.map((cards, idx) => ({ cards, pi: shown[idx] }))
   const layout = isVip
     ? computeLayout(screenW, pileSizes, layoutTarget)

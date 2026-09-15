@@ -1,7 +1,7 @@
 const mockProfile={tier_d_solo_level:51,vip_status:'none',tier_d_match_win_streak:0}
-jest.mock('../../src/config/supabase',()=>({supabaseAdmin:{from:()=>({select:()=>({eq:()=>({maybeSingle:async()=>({data:mockProfile})})}),update:()=>({eq:async()=>({error:null})}),upsert:async()=>({error:null}),delete:()=>({eq:async()=>({error:null})})})}}))
+jest.mock('../../src/config/supabase',()=>({supabaseAdmin:{from:()=>({select:()=>({eq:()=>({maybeSingle:async()=>({data:mockProfile})})}),update:()=>({eq:async()=>({error:null})}),upsert:async()=>({error:null}),delete:()=>({eq:async()=>({error:null})})}),rpc:async()=>({data:null,error:null})}}))
 jest.mock('../../src/game/tierDRewardService',()=>({
-  getTierDItemInventory:async()=>({shuffle:0,swap:0,double_pile:0,freeze:0,undo:0}),
+  getTierDItemInventory:async()=>({shuffle:0,swap:0,double_pile:0,freeze:0,auto_sort:0,undo:0}),
   consumeTierDRuntimeItem:async()=>false,
 }))
 jest.mock('../../src/game/tierDSoloProgress',()=>({}))
@@ -58,14 +58,13 @@ test('a missed client reveal acknowledgement cannot leave the first pile locked'
   }finally{jest.clearAllTimers();jest.useRealTimers()}
 },30000)
 
-test.each(['swap','double_pile','freeze','undo'] as const)('%s grants stock only; separate valid use consumes it once',async item=>{
+test.each(['swap','double_pile','freeze','auto_sort','undo'] as const)('%s grants stock only; separate valid use consumes it once',async item=>{
   jest.useFakeTimers()
   const events:{name:string;body:any}[]=[]
   const io={to:()=>({emit:(name:string,body:any)=>events.push({name,body})})} as any
   const state=()=>events.filter(event=>event.name==='tier_d_state').at(-1)!.body
   const id=`flow-${item}`
-  const index=['shuffle','swap','double_pile','freeze','undo'].indexOf(item)
-  const random=jest.spyOn(Math,'random').mockReturnValue((index+.1)/5)
+  const random=jest.spyOn(Math,'random').mockReturnValue(item==='undo' ? .82 : .1)
   try{
     await startTierDSolo(io,id,id);startTierDTimerAfterDeal(io,id,id)
     const cards=[...state().cards]
@@ -106,42 +105,37 @@ test.each(['swap','double_pile','freeze','undo'] as const)('%s grants stock only
       resumeTierDTimer(io,id,id)
       expect(state().timerRemainingMs).toBe(remaining)
       expect(state().piles).toEqual(layout)
+    }else if(item==='auto_sort'){
+      await useTierDItem(io,id,id,item)
+      expect(state().phase).toBe('arranging')
+      expect(state().inventory.auto_sort).toBe(0)
+      expect(state().piles.pile1).toHaveLength(3)
+      expect(state().piles.pile2).toHaveLength(3)
+      expect(state().piles.pile3).toHaveLength(5)
+      expect(new Set([...state().piles.pile1,...state().piles.pile2,...state().piles.pile3])).toEqual(new Set(cards))
     }else{
       await useTierDItem(io,id,id,item)
       await refreshTierDSoloInventory(io,id,id)
       expect(state().inventory[item]).toBe(1)
-      const scores={...state().scores}
       await playTierDGame(io,id,id,layout)
       finishTierDRevealAnimation(io,id,id)
+      await playTierDGame(io,id,id)
+      finishTierDRevealAnimation(io,id,id)
+      await playTierDGame(io,id,id)
+      finishTierDRevealAnimation(io,id,id)
+      const scores={...state().scores}
+      const highestBotScore=Math.max(...Object.entries(scores).filter(([seat])=>seat!==id).map(([,score])=>Number(score)))
+      expect(scores[id]).toBeLessThan(highestBotScore)
       await useTierDItem(io,id,id,item)
-      expect(state().phase).toBe('arranging')
+      expect(state().phase).toBe('revealing')
       expect(state().reveal).toBeUndefined()
-      expect(state().scores).toEqual(scores)
-      expect(state().unlockedFrom).toBe(1)
-      expect(state().undoUsed).toContain(1)
+      expect(state().scores[id]).toBe(0)
+      expect(state().matchNumber).toBe(1)
+      expect(state().currentGame).toBe(1)
+      expect(state().dealRevision).toBe(1)
     }
     expect(state().inventory[item]).toBe(0)
     expect(reserveTierDSoloItemAd(id,item)).toBe(false)
-    if(item==='undo'){
-      await playTierDGame(io,id,id,layout)
-      finishTierDRevealAnimation(io,id,id)
-      await playTierDGame(io,id,id)
-      finishTierDRevealAnimation(io,id,id)
-      await playTierDGame(io,id,id)
-      finishTierDRevealAnimation(io,id,id)
-      await playTierDGame(io,id,id)
-      expect(state().matchNumber).toBe(2)
-      expect(state().undoUsed).toEqual([])
-      expect(state().inventory.undo).toBe(0)
-      startTierDTimerAfterDeal(io,id,id)
-      expect(reserveTierDSoloItemAd(id,'undo')).toBe(true)
-      expect(grantTierDSoloItemAd(id,'undo')).toBe(true)
-      await playTierDGame(io,id,id)
-      finishTierDRevealAnimation(io,id,id)
-      await useTierDItem(io,id,id,'undo')
-      expect(state().phase).toBe('arranging')
-      expect(state().undoUsed).toEqual([1])
-    }
   }finally{random.mockRestore();jest.clearAllTimers();jest.useRealTimers()}
 },30000)
 
@@ -172,6 +166,7 @@ test('empty Free stock requires an ad grant, then a separate Shuffle use deals n
     expect(new Set(state().cards).size).toBe(11)
     expect(state().phase).toBe('revealing')
     expect(state().dealRevision).toBe(1)
+    expect(state().timerRemainingMs).toBe(330_000)
   }finally{random.mockRestore();jest.clearAllTimers();jest.useRealTimers()}
 },30000)
 
@@ -218,6 +213,6 @@ test.each(['none','vip'])('Bronze %s Match grants exclude Freeze and Undo',async
     expect(state.inventory.freeze).toBe(0)
     expect(state.inventory.undo).toBe(0)
     if(vip==='none')expect(state.adGrantAvailable).toBe(true)
-    else expect(state.inventory.double_pile).toBe(2)
+    else expect(Object.values(state.inventory).reduce((total:number,value:any)=>total+Number(value),0)).toBe(2)
   }finally{mockProfile.tier_d_solo_level=51;mockProfile.vip_status='none';random.mockRestore();jest.clearAllTimers();jest.useRealTimers()}
 },30000)

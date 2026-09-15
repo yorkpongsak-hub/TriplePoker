@@ -117,7 +117,7 @@ export default function StreakScreen() {
 
       <View style={s.brandBlock}>
         <Image source={streakCountdownFx} style={s.bannerFx} contentFit="contain" autoplay />
-        <Text style={s.brandTitle}>TriplePoker Winning Streak Bonus</Text>
+        <Text style={s.brandTitle}>TriplePoker : Rise Winning Streak Bonus</Text>
       </View>
 
       <View style={s.progressCard}>

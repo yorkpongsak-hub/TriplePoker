@@ -8,7 +8,7 @@ import {
   StyleSheet, StatusBar, ScrollView, Image, Alert,
 } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
-import { router, useFocusEffect } from 'expo-router'
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useAuthStore } from '../../src/store/authStore'
 import { useBgm } from '../../src/services/bgmService'
 import { AudioEvent } from '../../src/audio'
@@ -120,6 +120,7 @@ const ASCENDANT_TOKEN_MAX = 999_999
 type TabKey = 'stats' | 'bosses' | 'history' | 'lore'
 
 export default function ProfileScreen() {
+  const { editAvatar } = useLocalSearchParams<{ editAvatar?: string }>()
   useBgm(AudioEvent.PROFILE_BGM)
   const signOut = useAuthStore(s => s.signOut)
   const profile = useAuthStore(s => s.profile)
@@ -282,6 +283,9 @@ export default function ProfileScreen() {
 
   // --- Profile Picture (VIP real image) --- เก็บ path ใน DB, ขอ signed URL สดตอน render
   const [picModalVisible, setPicModalVisible] = useState(false)
+  useEffect(() => {
+    if (editAvatar === '1') setPicModalVisible(true)
+  }, [editAvatar])
   // Settings modal จริง — คืนปุ่ม Settings ให้เปิดหน้านี้แทน Onboarding (ย้าย "How to Play" ไปปุ่ม Demo ใน lobby แล้ว)
   const [settingsModalVisible, setSettingsModalVisible] = useState(false)
   const [profileImageSignedUrl, setProfileImageSignedUrl] = useState<string | null>(null)

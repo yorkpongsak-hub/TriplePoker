@@ -34,6 +34,7 @@ export function ActionButton({ icon, label, onPress, disabled, variant = 'normal
         styles.container,
         style,
         isWaiting && styles.waiting,
+        isDisabled && styles.disabled,
         pressed && !interactionDisabled && styles.pressed,
       ]}
     >
@@ -45,7 +46,6 @@ export function ActionButton({ icon, label, onPress, disabled, variant = 'normal
             <Text style={[styles.label, labelStyle]} numberOfLines={3}>{displayLabel}</Text>
           </View>
           {pressed && !interactionDisabled && <View style={styles.pressOverlay} pointerEvents="none" />}
-          {isDisabled && <View style={styles.disabledOverlay} pointerEvents="none" />}
           {!!costBadge && (
             <View style={styles.costBadge} pointerEvents="none">
               <Text style={styles.costBadgeText}>{costBadge}</Text>
@@ -71,6 +71,12 @@ const styles = StyleSheet.create({
   waiting: {
     opacity: 0.5,
   },
+  // A disabled button should remain visibly shaped like its artwork.  A full rectangular
+  // black overlay also covered the image's transparent margins, making the control look
+  // much larger than the button itself.
+  disabled: {
+    opacity: 0.52,
+  },
   pressed: {
     transform: [{ scale: 0.96 }],
   },
@@ -78,11 +84,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 0, left: 0, right: 0, bottom: 0,
     backgroundColor: 'rgba(0,0,0,0.15)',
-  },
-  disabledOverlay: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.55)',
   },
   // Patch 2026-07-18: label กึ่งกลางปุ่ม — เดิมชิดขอบล่าง (bottom 12%)
   labelSlot: {

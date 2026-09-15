@@ -5,17 +5,20 @@ import { useAuthStore } from '../../../src/store/authStore'
 import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
 
 const SERVER_URL=process.env.EXPO_PUBLIC_SERVER_URL||'http://localhost:3001'
-const VALID_ITEMS=['shuffle','swap','double_pile','freeze','undo'] as const
+const VALID_ITEMS=['shuffle','swap','double_pile','freeze','auto_sort','undo'] as const
 type ItemKey=typeof VALID_ITEMS[number]
 
 function eventId(){return typeof crypto!=='undefined'&&'randomUUID' in crypto?crypto.randomUUID():`tier-d-ad-${Date.now()}-${Math.random().toString(36).slice(2)}`}
 
 /** Rewarded-ad transition for an empty Tier D item. Provider verification replaces devMock in production. */
 export default function TierDItemAd(){
- const {item}=useLocalSearchParams<{item?:string}>();const token=useAuthStore(state=>state.session?.access_token);const [message,setMessage]=useState<string>()
+ const {item,placement}=useLocalSearchParams<{item?:string;placement?:string}>();const token=useAuthStore(state=>state.session?.access_token);const [message,setMessage]=useState<string>()
  const selected=VALID_ITEMS.includes(item as ItemKey)?item as ItemKey:undefined
  const claimId=useRef(eventId());const claiming=useRef(false)
  const back=()=>router.canGoBack()?router.back():router.replace('/game/tier-d')
+ // This is an interstitial placeholder until the production ad provider is wired.
+ // It deliberately grants no item and simply returns to the already-computed result.
+ if(placement==='level-result')return <View style={s.screen}><RoyalStraightFlushVFX playerName="ADVERTISEMENT" minimumDurationMs={5000} closeLabel="CONTINUE" onClose={back}/></View>
  const finish=async()=>{if(claiming.current)return;if(!selected||!token){setMessage('Unable to prepare this item reward.');return}claiming.current=true;setMessage('CLAIMING ITEM...');try{
    const response=await fetch(`${SERVER_URL}/tier-d/reward/item-ad-complete`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({item:selected,eventId:claimId.current,devMock:true})})
    const body=await response.json();if(!response.ok)throw new Error(body.error??'Ad reward unavailable')

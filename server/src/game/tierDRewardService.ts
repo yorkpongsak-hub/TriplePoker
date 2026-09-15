@@ -25,7 +25,7 @@ export async function getTierDLeagueAwards(userId: string) {
 export async function getTierDItemInventory(userId: string): Promise<Record<TierDRewardItem, number>> {
   const { data, error } = await supabaseAdmin.from('tier_d_item_inventory').select('item_key, quantity').eq('user_id', userId)
   if (error) throw error
-  const inventory: Record<TierDRewardItem, number> = { shuffle: 0, swap: 0, double_pile: 0, freeze: 0, undo: 0 }
+  const inventory: Record<TierDRewardItem, number> = { shuffle: 0, swap: 0, double_pile: 0, freeze: 0, auto_sort: 0, undo: 0 }
   for (const row of data ?? []) inventory[row.item_key as TierDRewardItem] = row.quantity
   return inventory
 }
@@ -80,8 +80,8 @@ export async function recordTierDPersonalBest(userId: string, elapsedMs: number)
 }
 
 /** Canonical Level record: elapsed wall time from Match 1 deal to Level clear. */
-export async function recordTierDLevelClearPersonalBest(userId: string, elapsedMs: number) {
-  const { data, error } = await supabaseAdmin.rpc('record_tier_d_level_clear_time', { p_user_id: userId, p_elapsed_ms: elapsedMs })
+export async function recordTierDLevelClearPersonalBest(userId: string, level: number, elapsedMs: number) {
+  const { data, error } = await supabaseAdmin.rpc('record_tier_d_level_clear_time', { p_user_id: userId, p_level: level, p_elapsed_ms: elapsedMs })
   if (error) throw error
   return data as number
 }

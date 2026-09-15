@@ -29,7 +29,7 @@ export async function getTierDLeaderboard(userId: string) {
   return buildTierDLeaderboardSnapshot(rows, userId)
 }
 
-const COMPETITION_ITEMS=['shuffle','swap','double_pile','freeze','undo'] as const
+const COMPETITION_ITEMS=['shuffle','swap','double_pile','freeze','auto_sort','undo'] as const
 function rewardCount(rank:number,isVip:boolean){return (rank<=3?3:rank<=10?2:1)+(isVip?1:0)}
 function randomCompetitionItems(count:number){return Array.from({length:count},()=>COMPETITION_ITEMS[Math.floor(Math.random()*COMPETITION_ITEMS.length)])}
 

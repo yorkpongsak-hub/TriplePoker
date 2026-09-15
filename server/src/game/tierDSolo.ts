@@ -340,6 +340,8 @@ export type TierDProgress = { level: number; currentWinStreak: number; bestWinSt
 /** Pure, item-agnostic progression. A win advances exactly one level; a loss never does. */
 export function applyTierDLevelOutcome(progress: TierDProgress, won: boolean): TierDProgress {
   if (!Number.isInteger(progress.level) || progress.level < 1) throw new Error('Tier D level must be a positive integer')
+  // Bronze is the guided teaching league: its visible AI cards must not earn streak credit.
+  if (progress.level < 51) return { level: won ? progress.level + 1 : progress.level, currentWinStreak: 0, bestWinStreak: progress.bestWinStreak }
   if (won) {
     const currentWinStreak = progress.currentWinStreak + 1
     return { level: progress.level + 1, currentWinStreak, bestWinStreak: Math.max(progress.bestWinStreak, currentWinStreak) }
@@ -426,6 +428,30 @@ export function firstValidTierDArrangement(cards: Card[], community: TierDCommun
   })
   if (!found) throw new Error('No valid G1 < G2 < G3 arrangement exists for this deal')
   return found
+}
+
+/**
+ * Inventory Auto Sort's canonical selector.  It shares Tier D's existing
+ * Best-5/7 evaluator and legal G1 < G2 < G3 rule; it never scores a match or
+ * presses Reveal.  `undefined` means no legal rearrangement can be made.
+ */
+export function strongestTierDArrangement(cards: Card[], community: TierDCommunityPiles): TierDArrangement | undefined {
+  let strongest: TierDArrangement | undefined
+  let strongestValue = -Infinity
+  forEachCombination(cards, 3, pile1 => {
+    const afterP1 = withoutCards(cards, pile1)
+    forEachCombination(afterP1, 3, pile2 => {
+      const pile3 = withoutCards(afterP1, pile2)
+      const candidate = { pile1, pile2, pile3 }
+      const hands = ([1, 2, 3] as TierDGameNumber[]).map(game => evaluatePile(candidate, community, game))
+      if (compareHands(hands[0], hands[1]) >= 0 || compareHands(hands[1], hands[2]) >= 0) return
+      // Preserve the normal pile-value emphasis while using the evaluator's
+      // full tie-breaking score to select a deterministic strongest legal plan.
+      const value = hands.reduce((total, hand, index) => total + TIER_D_GAME_POINTS[index + 1 as TierDGameNumber] * (hand.rankIndex * 1_000_000_000_000 + hand.score), 0)
+      if (value > strongestValue) { strongest = candidate; strongestValue = value }
+    })
+  })
+  return strongest
 }
 
 function forEachCombination(cards: readonly Card[], size: number, visit: (selection: Card[]) => void): void {

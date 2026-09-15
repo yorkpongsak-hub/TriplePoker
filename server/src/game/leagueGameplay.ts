@@ -43,11 +43,16 @@ export function generateOpenChallenge(level: number, random: () => number = Math
 
 export function missionResult(mission: Mission, hand: HandRank): { complete: boolean; score: number; penalty: number } {
   const handValue = handRankValue(hand)
-  const complete = handValue >= rankValue[mission.rank]
+  const targetValue = rankValue[mission.rank]
+  // Straight and Flush are the two endgame objectives: a stronger hand may still
+  // complete them. Earlier objectives teach precise strength allocation, so they
+  // require the requested rank exactly.
+  const higherRankAllowed = mission.rank === 'straight' || mission.rank === 'flush'
+  const complete = mission.negative ? handValue >= targetValue : handValue === targetValue || (higherRankAllowed && handValue > targetValue)
   if (mission.negative) return { complete, score: 0, penalty: complete ? 0 : mission.penalty! }
   if (!complete) return { complete, score: 0, penalty: 0 }
   const full = missionBonus[mission.rank]
-  return { complete, score: handValue === rankValue[mission.rank] ? full : Math.ceil(full / 2), penalty: 0 }
+  return { complete, score: handValue === targetValue ? full : Math.ceil(full / 2), penalty: 0 }
 }
 
 export function handMultiplier(level: number, hand: HandRank): number {

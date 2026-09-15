@@ -51,7 +51,7 @@ export async function tierDRewardRoutes(app: FastifyInstance) {
     if(error||!data.user) return reply.status(401).send({error:'INVALID_TOKEN'})
     const item=request.body?.item
     const eventId=request.body?.eventId
-    if(!item||!['shuffle','swap','double_pile','freeze','undo'].includes(item)||typeof eventId!=='string') return reply.status(400).send({error:'INVALID_ITEM_AD_CLAIM'})
+    if(!item||!['shuffle','swap','double_pile','freeze','auto_sort','undo'].includes(item)||typeof eventId!=='string') return reply.status(400).send({error:'INVALID_ITEM_AD_CLAIM'})
     if(process.env.NODE_ENV==='production'||request.body?.devMock!==true) return reply.status(503).send({error:'AD_PROVIDER_UNAVAILABLE'})
     const claimKey=`${data.user.id}:${eventId}`
     const previous=itemAdClaims.get(claimKey)

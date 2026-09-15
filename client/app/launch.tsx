@@ -26,7 +26,7 @@ export default function Launch() {
   const unlocked=advancedUnlocked(progress);
   const soloUnlocked=tierDUnlocked(progress);
   return <SafeAreaView style={s.page}><ScrollView contentContainerStyle={s.content}>
-    <View style={s.row}><Text style={s.eyebrow}>TRIPLEPOKER / FIRST MOVES</Text><Text style={{color:C.mint}}>SOLO</Text></View>
+    <View style={s.row}><Text style={s.eyebrow}>TRIPLEPOKER : RISE / FIRST MOVES</Text><Text style={{color:C.mint}}>SOLO</Text></View>
     <LanguagePicker/>
     <View style={{paddingVertical:12,gap:14}}>
       <Text style={s.title}>Three piles.{'\n'}One clever plan.</Text>
@@ -43,7 +43,7 @@ export default function Launch() {
       <Text style={s.body}>2. Each pile uses its two shared cards. Keep Pile 1 weakest and Pile 3 strongest.</Text>
       <Text style={s.body}>3. Win a pile for 1 point. Use your one seal for +1 on a win. Most points after three hands wins.</Text>
       <Text style={[s.body,{color:C.mint}]}>Take your time. A starter arrangement and free plan suggestions are always available.</Text>
-      <Text style={s.body}>Matches 1 and 2 use the practice view. From match 3, take your seat at the TriplePoker table with the same rules. You can switch back to practice any time.</Text>
+      <Text style={s.body}>Matches 1 and 2 use the practice view. From match 3, take your seat at the TriplePoker : Rise table with the same rules. You can switch back to practice any time.</Text>
     </View>
     <View style={s.panel}>
       <Text style={s.eyebrow}>YOUR JOURNEY</Text>
@@ -51,7 +51,7 @@ export default function Launch() {
       <Text style={s.body}>Discover the deeper tables by practicing the basics.</Text>
       <Text style={[s.body,{fontSize:12}]}>Advanced tables currently use English. Your learning screens keep your chosen language.</Text>
       <Text style={s.body}>{Math.min(progress.matches,2)} / 2 onboarding matches finished</Text>
-      {soloUnlocked&&<Button title="Play Tier D Solo" secondary onPress={()=>router.push('/game/tier-d/entry')}/>
+      {soloUnlocked&&<Button title="Play Tier D Solo" secondary onPress={()=>router.push('/game/tier-d/entry')}/>}
       <Text style={s.body}>{Math.min(progress.sealWins,2)} / 2 piles won with your seal</Text>
       <Text style={s.body}>{progress.lessonsPassed?'Complete':'Next'}: pass the four-question strategy check</Text>
       {practiceComplete(progress)&&!progress.lessonsPassed&&<Button title="Take the strategy check" secondary onPress={()=>{setLesson(0);setAnswer(null);}}/>}

@@ -396,7 +396,7 @@ const TIER_LADDER: { stars: string; letter: string; name: string; desc: string; 
   { stars: '★★', letter: 'C', name: 'Initiate', desc: 'Learn the flow -- you vs 3 AI' },
   { stars: '★★★', letter: 'B', name: 'Adept', desc: 'Real players join the table' },
   { stars: '★★★★', letter: 'A', name: 'Mastermind', desc: 'Fog of War · Blind Auction · Grand Finale Betting · The Nine Sentinels' },
-  { stars: '★★★★★', letter: 'A+', name: 'High Noble', desc: 'Face the Four Gods -- the elite of TriplePoker' },
+  { stars: '★★★★★', letter: 'A+', name: 'High Noble', desc: 'Face the Four Gods -- the elite of TriplePoker : Rise' },
   { stars: '★★★★★⚡', letter: '???', name: '???', desc: 'Something waits above...', locked: true },
 ]
 
@@ -418,7 +418,7 @@ function Slide4() {
           </View>
         ))}
       </View>
-      <Text style={styles.tagline}>Start simple. Go deep. Master TriplePoker.</Text>
+      <Text style={styles.tagline}>Start simple. Go deep. Master TriplePoker : Rise.</Text>
     </View>
   )
 }

@@ -27,6 +27,10 @@ const CACHED_EVENTS = new Set<AudioEvent>(PRELOAD_AUDIO_EVENTS)
 const MAX_ONE_SHOT_MS = 3_000
 const ONE_SHOT_CLEANUP_GRACE_MS = 1_000
 const ARRANGEMENT_EVENTS = new Set([AudioEvent.CARD_SELECT, AudioEvent.CARD_MOVE])
+// Android may need several seconds to reclaim audio focus while another app, Bluetooth,
+// or the system UI owns the audio session.  A short watchdog treats a recoverable delay
+// as a failure and discards both the tap and the screen BGM.
+const AUDIO_SESSION_ACTIVATION_TIMEOUT_MS = 5_000
 
 class AudioManager {
   private settings: AudioSettings = DEFAULT_AUDIO_SETTINGS
@@ -354,7 +358,7 @@ class AudioManager {
     if (Platform.OS === 'web') return Promise.resolve()
     if (this.activationPromise) return this.activationPromise
     const activation = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Audio session activation timed out')), 1500)
+      const timer = setTimeout(() => reject(new Error('Audio session activation timed out')), AUDIO_SESSION_ACTIVATION_TIMEOUT_MS)
       Promise.resolve().then(() => setIsAudioActiveAsync(true)).then(
         () => { clearTimeout(timer); resolve() },
         error => { clearTimeout(timer); reject(error) },

@@ -1,7 +1,7 @@
 import { tierDMissionAwareness } from './tierDMissionAwareness'
 import type { Server } from 'socket.io'
 import { wonTierDStreakMatch } from './tierDMatchStreak'
-import { commitTierDCombo, createTierDLevel, defaultTierDArrangement, openChallengeMatchPassed, resolveTierDGame, rollbackTierDGame, submitTierDArrangement, submitTierDUndoArrangement, swapTierDHandCard, type TierDArrangement, type TierDGameNumber, type TierDLevelState } from './tierDSolo'
+import { commitTierDCombo, createTierDLevel, defaultTierDArrangement, openChallengeMatchPassed, resolveTierDGame, strongestTierDArrangement, submitTierDArrangement, submitTierDUndoArrangement, swapTierDHandCard, type TierDArrangement, type TierDGameNumber, type TierDLevelState } from './tierDSolo'
 import { handRankLabel } from './handEvaluator'
 import { persistTierDLevelOutcome } from './tierDSoloProgress'
 import { supabaseAdmin } from '../config/supabase'
@@ -15,7 +15,7 @@ import { recordTierDCompetitionLevelWin } from './tierDLeaderboardService'
 type CardKeys = { pile1: string[]; pile2: string[]; pile3: string[] }
 type RevealHand = { privateCards: string[]; bestFive: string[]; unusedCards: string[]; rank: string }
 type ScoreBreakdown = { pileScore:number; multiplier:number; missionScore:number; penalty:number; doubled:boolean }
-type RevealPayload = { game: TierDGameNumber; winnerId: string|null; points: number; bonusPoints?: number; hands: Record<string, RevealHand>; breakdown:Record<string,ScoreBreakdown>; fouled:Record<string,boolean> }
+type RevealPayload = { missionSuccess?: boolean; game: TierDGameNumber; winnerId: string|null; points: number; bonusPoints?: number; hands: Record<string, RevealHand>; breakdown:Record<string,ScoreBreakdown>; fouled:Record<string,boolean> }
 type Session = {
   roomId: string; userId: string; state: TierDLevelState; currentGame: TierDGameNumber; matchNumber: 1|2|3
   cumulativeScores: Record<string,number>; openChallengePassed: boolean; arranged: boolean
@@ -48,8 +48,8 @@ const sessions = new Map<string, Session>()
 // Keeps active play working before migration 060; DB persists across server restarts.
 const matchWinStreaks = new Map<string, number>()
 const cardKey=(c:Card)=>`${c.rank.toLowerCase()}${({spades:'s',hearts:'h',diamonds:'d',clubs:'c'}[c.suit])}`
-const TIER_D_ITEMS: TierDRewardItem[]=['shuffle','swap','double_pile','freeze','undo']
-const emptyMatchInventory=():Record<TierDRewardItem,number>=>({shuffle:0,swap:0,double_pile:0,freeze:0,undo:0})
+const TIER_D_ITEMS: TierDRewardItem[]=['shuffle','swap','double_pile','freeze','auto_sort','undo']
+const emptyMatchInventory=():Record<TierDRewardItem,number>=>({shuffle:0,swap:0,double_pile:0,freeze:0,auto_sort:0,undo:0})
 const hasPersistentItems=(inventory:Record<TierDRewardItem,number>)=>TIER_D_ITEMS.some(item=>(inventory[item]??0)>0)
 const eligibleMatchItems=(level:number)=>TIER_D_ITEMS.filter(item=>level>50||!['freeze','undo'].includes(item))
 const rollVipMatchItems=(inventory:Record<TierDRewardItem,number>,isVip:boolean,level:number)=>{
@@ -139,11 +139,16 @@ function startMatchTimer(io: Server, s: Session, durationMs?: number) {
   if (seconds===null) { s.timerDeadlineAt=undefined;s.timerRemainingMs=undefined;return }
   const ms=durationMs??seconds*1000
   s.timerRemainingMs=ms;s.timerDeadlineAt=Date.now()+ms
-  s.timerHandle=setTimeout(()=>void expireMatchTimer(io,s),ms)
+  // A cleared timer may already be queued by the event loop. Only the currently
+  // registered handle may expire this Match; an old deadline cannot auto-reveal
+  // after the player has pressed Reveal or used an item that pauses the clock.
+  let handle: ReturnType<typeof setTimeout>
+  handle=setTimeout(()=>{if(s.timerHandle===handle)void expireMatchTimer(io,s)},ms)
+  s.timerHandle=handle
 }
 
 async function expireMatchTimer(io: Server, s: Session) {
-  if (!sessions.has(s.roomId) || s.timerPausedAt || s.autoResolving) return
+  if (!sessions.has(s.roomId) || s.timerPausedAt || s.systemPausedAt || s.adPausedAt || s.autoResolving) return
   s.autoResolving=true; s.timerRemainingMs=0; s.timerDeadlineAt=Date.now()
   try {
     if (!s.arranged) {
@@ -163,14 +168,15 @@ async function expireMatchTimer(io: Server, s: Session) {
 function waitForAutoReveal(ms:number){return new Promise<void>(resolve=>setTimeout(resolve,ms))}
 
 export async function startTierDSolo(io:Server,roomId:string,userId:string) {
-  if (!matchWinStreaks.has(userId)) {
-    const {data} = await supabaseAdmin.from('users').select('tier_d_match_win_streak').eq('user_id',userId).maybeSingle()
-    matchWinStreaks.set(userId, Math.max(0, data?.tier_d_match_win_streak??0))
-  }
   const existing=sessions.get(roomId);if(existing){clearMatchTimer(existing);clearRevealSafety(existing)}
   const {data}=await supabaseAdmin.from('users').select('tier_d_solo_level,vip_status').eq('user_id',userId).maybeSingle()
   const level=Math.max(1,data?.tier_d_solo_level??1);const state=createTierDLevel(level,userId)
-  const inventory=await getTierDItemInventory(userId).catch(()=>({shuffle:0,swap:0,double_pile:0,freeze:0,undo:0}))
+  if (level < 51) matchWinStreaks.set(userId, 0)
+  else if (!matchWinStreaks.has(userId)) {
+    const {data:streakProfile} = await supabaseAdmin.from('users').select('tier_d_match_win_streak').eq('user_id',userId).maybeSingle()
+    matchWinStreaks.set(userId, Math.max(0, streakProfile?.tier_d_match_win_streak??0))
+  }
+  const inventory=await getTierDItemInventory(userId).catch(()=>({shuffle:0,swap:0,double_pile:0,freeze:0,auto_sort:0,undo:0}))
   const startedAt=Date.now()
   const isVip=data?.vip_status==='vip'||data?.vip_status==='vip_pro'
   const s:Session={roomId,userId,state,currentGame:1,matchNumber:1,cumulativeScores:Object.fromEntries(state.seats.map(seat=>[seat.id,0])),openChallengePassed:true,arranged:false,inventory,matchInventory:rollVipMatchItems(inventory,isVip,level),isVip,adGrantUsed:false,levelStartedAt:startedAt,matchStartedAt:startedAt,frozenMs:0,timerStarted:false,undoUsed:new Set(),doubledPiles:new Set(),autoResolving:false}
@@ -193,6 +199,7 @@ export async function resumeTierDSolo(io:Server,roomId:string,userId:string):Pro
     const storedRemaining=snapshot.timerRemainingMs
     const remaining=storedRemaining===undefined?undefined:Math.max(0,storedRemaining-(snapshot.timerPausedAt||snapshot.systemPausedAt||snapshot.adPausedAt?0:elapsed))
     const s:Session={roomId,userId,state:snapshot.state as TierDLevelState,currentGame:snapshot.currentGame as TierDGameNumber,matchNumber:snapshot.matchNumber as 1|2|3,cumulativeScores:snapshot.cumulativeScores??{},openChallengePassed:snapshot.openChallengePassed??true,arranged:!!snapshot.arranged,inventory:persistedInventory,matchInventory:snapshot.matchInventory??emptyMatchInventory(),isVip:!!snapshot.isVip,levelStartedAt:snapshot.levelStartedAt??Date.now(),matchStartedAt:snapshot.matchStartedAt??Date.now(),adGrantUsed:!!snapshot.adGrantUsed,reservedAdItem:snapshot.reservedAdItem,committedThrough:snapshot.committedThrough,adPausedAt:snapshot.adPausedAt?Date.now():undefined,dealRevision:snapshot.dealRevision,frozenMs:snapshot.frozenMs??0,timerRemainingMs:remaining,timerPausedAt:snapshot.timerPausedAt?Date.now():undefined,systemPausedAt:snapshot.systemPausedAt?Date.now():undefined,timerStarted:!!snapshot.timerStarted,reveal:snapshot.reveal,provisionalScoreSnapshot:snapshot.provisionalScoreSnapshot,stagedArrangement:snapshot.stagedArrangement,tripleSweepPending:!!snapshot.tripleSweepPending,unlockedFrom:snapshot.unlockedFrom,undoUsed:new Set(snapshot.undoUsed??[]),doubledPiles:new Set(snapshot.doubledPiles??[]),autoResolving:!!snapshot.autoResolving}
+    if (s.state.level < 51) matchWinStreaks.set(userId, 0)
     sessions.set(roomId,s)
     if(s.timerStarted&&!s.timerPausedAt&&!s.systemPausedAt&&!s.adPausedAt&&!s.autoResolving)startMatchTimer(io,s,remaining)
     if(s.systemPausedAt)armRevealSafety(io,s,s.tripleSweepPending?9000:5000,!!s.tripleSweepPending)
@@ -231,27 +238,27 @@ export async function refreshTierDSoloInventory(io:Server,roomId:string,userId:s
 }
 
 function revealCurrentTierDGame(io: Server, s: Session, pauseForAnimation = true): void {
+  // Freeze the authoritative Match clock before resolving cards.  This keeps the
+  // deadline from advancing during any server work or socket delivery after Reveal.
+  if (pauseForAnimation) {
+    s.timerRemainingMs=remainingMs(s)??undefined
+    s.systemPausedAt=Date.now()
+    s.timerDeadlineAt=undefined
+    clearMatchTimer(s)
+  }
   s.provisionalScoreSnapshot={...s.state.scores}
   const game=s.currentGame;const result=resolveTierDGame(s.state,game,{doubledSeatId:s.userId,doubledPile:s.doubledPiles.has(game)?game:undefined})
   const breakdown=Object.fromEntries(s.state.seats.map(seat=>[seat.id,{pileScore:result.winnerId===seat.id?result.points:0,multiplier:handMultiplier(s.state.level,result.hands[seat.id].rank),missionScore:result.missionScores[seat.id]??0,penalty:result.missionPenalties[seat.id]??0,doubled:seat.id===s.userId&&s.doubledPiles.has(game)}]))
-  s.reveal={game,winnerId:result.winnerId,points:result.points,bonusPoints:result.bonusPoints,hands:Object.fromEntries(Object.entries(result.hands).map(([id,h])=>[id,{
+  s.reveal={missionSuccess:tierDMissionAwareness(s.state,s.userId,s.committedThrough??0).missions.some(m=>m.pile===game&&m.status==='success'),game,winnerId:result.winnerId,points:result.points,bonusPoints:result.bonusPoints,hands:Object.fromEntries(Object.entries(result.hands).map(([id,h])=>[id,{
     // These are the seat's physical cards. Community cards are moved into the
     // winner row by the client instead of being duplicated in every comparison.
     privateCards:s.state.arrangements[id]![`pile${game}`].map(cardKey),
     bestFive:h.bestFive.map(cardKey),unusedCards:h.unusedCards.map(cardKey),rank:handRankLabel(h),
   }])),breakdown,fouled:{...result.fouled}}
-  if (pauseForAnimation) {
-    s.timerRemainingMs=remainingMs(s)??undefined
-    s.systemPausedAt=Date.now()
-    clearMatchTimer(s)
-  }
   // Reveal G3 first so its Player-win voice can finish before the table-local
   // Triple Sweep arc. Keep the system pause until that two-second arc completes.
   if (pauseForAnimation && game===3 && result.winnerId===s.userId && result.bonusPoints) {
-    s.timerRemainingMs=remainingMs(s)??undefined
-    s.systemPausedAt=Date.now()
     s.tripleSweepPending=true
-    clearMatchTimer(s)
     armRevealSafety(io,s,9000,true)
     io.to(s.roomId).emit('tier_d_pile_reveal',s.reveal)
     emitState(io,s)
@@ -261,16 +268,16 @@ function revealCurrentTierDGame(io: Server, s: Session, pauseForAnimation = true
   io.to(s.roomId).emit('tier_d_pile_reveal',s.reveal);emitState(io,s)
 }
 
-export async function playTierDGame(io:Server,roomId:string,userId:string,arrangement?:CardKeys) {
-  const s=sessions.get(roomId);if(!s||s.userId!==userId||!s.timerStarted||s.timerPausedAt||s.systemPausedAt||s.adPausedAt||s.autoResolving)return
+export async function playTierDGame(io:Server,roomId:string,userId:string,arrangement?:CardKeys):Promise<boolean> {
+  const s=sessions.get(roomId);if(!s||s.userId!==userId||!s.timerStarted||s.timerPausedAt||s.systemPausedAt||s.adPausedAt||s.autoResolving)return false
   if(!s.arranged){
-    try { const resolved=arrangement?keyArrangement(s.state,userId,arrangement):(s.stagedArrangement??defaultTierDArrangement(s.state.dealtHands[userId]));if(s.unlockedFrom)submitTierDUndoArrangement(s.state,userId,resolved,s.unlockedFrom);else submitTierDArrangement(s.state,userId,resolved);s.stagedArrangement=undefined;s.arranged=true;s.unlockedFrom=undefined;revealCurrentTierDGame(io,s) }
-    catch(error){io.to(roomId).emit('tier_d_error',{message:error instanceof Error?error.message:'Invalid arrangement'})}
-    return
+    try { const resolved=arrangement?keyArrangement(s.state,userId,arrangement):(s.stagedArrangement??defaultTierDArrangement(s.state.dealtHands[userId]));if(s.unlockedFrom)submitTierDUndoArrangement(s.state,userId,resolved,s.unlockedFrom);else submitTierDArrangement(s.state,userId,resolved);s.stagedArrangement=undefined;s.arranged=true;s.unlockedFrom=undefined;revealCurrentTierDGame(io,s);return true }
+    catch(error){io.to(roomId).emit('tier_d_error',{message:error instanceof Error?error.message:'Invalid arrangement'});return false}
   }
-  if(!s.reveal){revealCurrentTierDGame(io,s);return}
-  if(s.currentGame<3){commitCurrentPile(io,s);s.reveal=undefined;s.provisionalScoreSnapshot=undefined;s.currentGame=(s.currentGame+1) as TierDGameNumber;revealCurrentTierDGame(io,s);return}
+  if(!s.reveal){revealCurrentTierDGame(io,s);return true}
+  if(s.currentGame<3){commitCurrentPile(io,s);s.reveal=undefined;s.provisionalScoreSnapshot=undefined;s.currentGame=(s.currentGame+1) as TierDGameNumber;revealCurrentTierDGame(io,s);return true}
   await finishMatch(io,s)
+  return true
 }
 
 /** Keep the server's timeout snapshot in sync with the cards currently shown to the player. */
@@ -309,7 +316,7 @@ async function finishMatch(io:Server,s:Session){
   if(bestMatchScoreSave.error)console.warn('[TIER_D_SOLO] Best match score persistence requires migration 066:',bestMatchScoreSave.error.code)
   for(const seat of s.state.seats)s.cumulativeScores[seat.id]=(s.cumulativeScores[seat.id]??0)+(s.state.scores[seat.id]??0)
   const matchWon=wonTierDStreakMatch(s.userId,s.state.seats.filter(seat=>seat.isBot).map(seat=>seat.id),s.state.gameResults)
-  const matchStreak=matchWon?(matchWinStreaks.get(s.userId)??0)+1:0
+  const matchStreak=s.state.level>=51&&matchWon?(matchWinStreaks.get(s.userId)??0)+1:0
   matchWinStreaks.set(s.userId,matchStreak)
   const streakSave=await supabaseAdmin.from('users').update({tier_d_match_win_streak:matchStreak}).eq('user_id',s.userId)
   if(streakSave.error)console.warn('[TIER_D_SOLO] Match streak persistence requires migration 060:',streakSave.error.code)
@@ -326,7 +333,7 @@ async function finishMatch(io:Server,s:Session){
   const rewardBaseline=playerWon?await getTierDRewardBaseline(s.userId).catch(()=>undefined):undefined
   const competition=playerWon?await recordTierDCompetitionLevelWin({userId:s.userId,level:s.state.level,points:s.cumulativeScores[s.userId]??0,isVip:s.isVip}).catch(()=>undefined):undefined
   const progress=await persistTierDLevelOutcome(s.userId,playerWon);const elapsedMs=Math.max(0,Date.now()-s.levelStartedAt)
-  const personalBestMs=playerWon?await recordTierDLevelClearPersonalBest(s.userId,elapsedMs).catch(()=>undefined):undefined
+  const personalBestMs=playerWon?await recordTierDLevelClearPersonalBest(s.userId,s.state.level,elapsedMs).catch(()=>undefined):undefined
   const rewardReasons=playerWon?[...(progress&&rewardBaseline&&progress.bestWinStreak>rewardBaseline.bestWinStreak?['LONGEST_STREAK']:[]),...(rewardBaseline&&(rewardBaseline.bestLevelClearTimeMs===null||elapsedMs<rewardBaseline.bestLevelClearTimeMs)?['FASTEST_CLEAR']:[]),...(s.state.level%10===0?['LEVEL_MILESTONE']:[])]:[]
   const reward=rewardReasons.length?await grantTierDLevelRandomItem(s.userId,s.state.level,s.isVip).catch(error=>{console.warn('[TIER_D_SOLO] level reward reservation failed',error);return undefined}):undefined
   io.to(s.roomId).emit('tier_d_complete',{matchWinStreak:matchStreak,level:s.state.level,playerWon,scores:s.cumulativeScores,highestAiScore,openChallengePassed:s.openChallengePassed,progress,reward,rewardEligible:rewardReasons.length>0,rewardReasons,competition,elapsedMs,personalBestMs});discardSession(s)
@@ -342,16 +349,42 @@ export async function useTierDItem(io:Server,roomId:string,userId:string,item:Ti
   }
   if(s.timerPausedAt)return
   if(item==='undo'){
-    if(s.state.level<=50){io.to(roomId).emit('tier_d_error',{message:'Undo unlocks after Bronze Guided Reveal.'});return}
-    if(!s.reveal||s.undoUsed.has(s.currentGame)||!s.provisionalScoreSnapshot){io.to(roomId).emit('tier_d_error',{message:'Undo is available once after the current pile reveal.'});return}
+    const playerScore=s.state.scores[s.userId]??0
+    const highestBotScore=Math.max(...s.state.seats.filter(seat=>seat.isBot).map(seat=>s.state.scores[seat.id]??0))
+    const canRedoMatch=s.matchNumber<=2&&s.currentGame===3&&s.reveal?.game===3&&playerScore<highestBotScore
+    if(!canRedoMatch){io.to(roomId).emit('tier_d_error',{message:'Undo is available only after losing Match 1 or Match 2 during the final Reveal.'});return}
     if(!await consume(io,s,item))return
-    rollbackTierDGame(s.state,s.currentGame,s.provisionalScoreSnapshot);s.undoUsed.add(s.currentGame);s.unlockedFrom=s.currentGame;s.stagedArrangement=undefined;s.arranged=false;s.reveal=undefined;s.provisionalScoreSnapshot=undefined;emitState(io,s);return
+    // cumulativeScores is updated only in finishMatch.  Replacing state here therefore
+    // restores the score at the start of this Match and leaves earlier Matches intact.
+    const missions=s.state.missions,openChallenge=s.state.openChallenge,guided=s.state.guidedRevealPiles
+    const identities=s.state.seats.filter(seat=>seat.isBot).map(seat=>seat.bot)
+    const fresh=createTierDLevel(s.state.level,userId,Math.random,{missions,openChallenge,guidedRevealPiles:guided,comboBotId:s.state.comboBotId})
+    fresh.seats.filter(seat=>seat.isBot).forEach((seat,index)=>{if(identities[index])seat.bot={...identities[index]!}})
+    clearRevealSafety(s)
+    s.dealRevision=(s.dealRevision??0)+1;s.committedThrough=0;s.state=fresh;s.currentGame=1
+    s.arranged=false;s.stagedArrangement=undefined;s.reveal=undefined;s.provisionalScoreSnapshot=undefined
+    s.unlockedFrom=undefined;s.undoUsed.clear();s.doubledPiles.clear();s.autoResolving=false;s.frozenMs=0
+    // A retry is a fresh deal of the same Match, so the player gets the full Match clock again.
+    const fullSeconds=getArrangeTimerSeconds(s.state.level)
+    s.timerRemainingMs=fullSeconds===null?undefined:fullSeconds*1000;s.timerDeadlineAt=undefined;s.systemPausedAt=Date.now();clearMatchTimer(s)
+    emitState(io,s);return
   }
   if(item==='double_pile'){
     const pile=selectedPile
     if(!pile||![1,2,3].includes(pile)||pile<s.currentGame||(s.reveal&&pile===s.currentGame)||s.doubledPiles.has(pile)){io.to(roomId).emit('tier_d_error',{message:'Select an unrevealed pile for ×2.'});return}
     if(!await consume(io,s,item))return
     s.doubledPiles.add(pile);emitState(io,s);return
+  }
+  if(item==='auto_sort'){
+    if(s.arranged||s.reveal||s.currentGame!==1){io.to(roomId).emit('tier_d_error',{message:'Auto Sort is available before Reveal G1.'});return}
+    let arrangement:TierDArrangement|undefined
+    try { arrangement=strongestTierDArrangement(s.state.dealtHands[userId],s.state.communityPiles) }
+    catch { arrangement=undefined }
+    if(!arrangement){io.to(roomId).emit('tier_d_error',{message:'Auto Sort could not find a legal arrangement for this deal.'});return}
+    // Consume only after the canonical selector succeeded; this leaves the player
+    // in arranging mode so the suggested layout can still be changed manually.
+    if(!await consume(io,s,item))return
+    s.stagedArrangement=arrangement;emitState(io,s);return
   }
   if(s.arranged||s.reveal){io.to(roomId).emit('tier_d_error',{message:'Shuffle and Swap are available only before Reveal G1.'});return}
   if(item==='swap'){
@@ -369,7 +402,10 @@ export async function useTierDItem(io:Server,roomId:string,userId:string,item:Ti
     const missions=s.state.missions,openChallenge=s.state.openChallenge,guided=s.state.guidedRevealPiles,identities=s.state.seats.filter(seat=>seat.isBot).map(seat=>seat.bot)
     const fresh=createTierDLevel(s.state.level,userId,Math.random,{missions,openChallenge,guidedRevealPiles:guided,comboBotId:s.state.comboBotId});fresh.seats.filter(seat=>seat.isBot).forEach((seat,index)=>{if(identities[index])seat.bot={...identities[index]!}})
     s.dealRevision=(s.dealRevision??0)+1;s.committedThrough=0;s.state=fresh;s.currentGame=1;s.arranged=false;s.stagedArrangement=undefined;s.reveal=undefined;s.provisionalScoreSnapshot=undefined
-    s.timerRemainingMs=remainingMs(s)??undefined;s.systemPausedAt=Date.now();clearMatchTimer(s);emitState(io,s)
+    // Shuffle is a fresh deal: restore the full Match clock rather than carrying
+    // forward time spent evaluating the discarded hand.
+    const fullSeconds=getArrangeTimerSeconds(s.state.level)
+    s.timerRemainingMs=fullSeconds===null?undefined:fullSeconds*1000;s.timerDeadlineAt=undefined;s.systemPausedAt=Date.now();clearMatchTimer(s);emitState(io,s)
   }
 }
 

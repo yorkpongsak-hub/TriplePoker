@@ -278,12 +278,12 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
     // OK while the reconnecting client receives no tier_d_state and stays on
     // CONNECTING SOLO.
     socket.on('tier_d_resume',async(data:{roomId:string;playerId:string})=>{ socket.join(data.roomId); const status=await resumeTierDSolo(io,data.roomId,data.playerId);socket.emit('tier_d_resume_ack',{ok:status==='RESUMED',status}) })
-    socket.on('tier_d_ad_pause',(data:{roomId:string;playerId:string;item:'shuffle'|'swap'|'double_pile'|'freeze'|'undo'},ack?:(ok:boolean)=>void)=>{ack?.(pauseTierDItemAd(io,data.roomId,data.playerId,data.item))})
+    socket.on('tier_d_ad_pause',(data:{roomId:string;playerId:string;item:'shuffle'|'swap'|'double_pile'|'freeze'|'auto_sort'|'undo'},ack?:(ok:boolean)=>void)=>{ack?.(pauseTierDItemAd(io,data.roomId,data.playerId,data.item))})
     socket.on('tier_d_ad_resume',(data:{roomId:string;playerId:string})=>resumeTierDItemAd(io,data.roomId,data.playerId))
     socket.on('tier_d_inventory_refresh',(data:{roomId:string;playerId:string})=>void refreshTierDSoloInventory(io,data.roomId,data.playerId))
-    socket.on('tier_d_play',(data:{roomId:string;playerId:string;arrangement?:{pile1:string[];pile2:string[];pile3:string[]}})=>void playTierDGame(io,data.roomId,data.playerId,data.arrangement))
+    socket.on('tier_d_play',(data:{roomId:string;playerId:string;arrangement?:{pile1:string[];pile2:string[];pile3:string[]}},ack?:(accepted:boolean)=>void)=>{void playTierDGame(io,data.roomId,data.playerId,data.arrangement).then(accepted=>ack?.(accepted))})
     socket.on('tier_d_arrangement_update',(data:{roomId:string;playerId:string;arrangement:{pile1:string[];pile2:string[];pile3:string[]}})=>stageTierDArrangement(io,data.roomId,data.playerId,data.arrangement))
-    socket.on('tier_d_item_use',(data:{roomId:string;playerId:string;item:'shuffle'|'swap'|'double_pile'|'freeze'|'undo';selectedCardKey?:string;selectedPile?:1|2|3})=>void useTierDItem(io,data.roomId,data.playerId,data.item,data.selectedCardKey,data.selectedPile))
+    socket.on('tier_d_item_use',(data:{roomId:string;playerId:string;item:'shuffle'|'swap'|'double_pile'|'freeze'|'auto_sort'|'undo';selectedCardKey?:string;selectedPile?:1|2|3})=>void useTierDItem(io,data.roomId,data.playerId,data.item,data.selectedCardKey,data.selectedPile))
     socket.on('tier_d_timer_resume',(data:{roomId:string;playerId:string})=>resumeTierDTimer(io,data.roomId,data.playerId))
     socket.on('tier_d_control_ready',(data:{roomId:string;playerId:string})=>startTierDTimerAfterDeal(io,data.roomId,data.playerId))
     socket.on('tier_d_reveal_complete',(data:{roomId:string;playerId:string})=>finishTierDRevealAnimation(io,data.roomId,data.playerId))

@@ -297,6 +297,12 @@ describe('Tier D Solo loop', () => {
     expect(applyTierDLevelOutcome({ level: 501, currentWinStreak: 4, bestWinStreak: 4 }, false)).toEqual({ level: 501, currentWinStreak: 0, bestWinStreak: 4 })
   })
 
+  test('Bronze clears never earn streak credit; Silver starts at the first Silver clear', () => {
+    expect(applyTierDLevelOutcome({ level: 1, currentWinStreak: 9, bestWinStreak: 9 }, true)).toEqual({ level: 2, currentWinStreak: 0, bestWinStreak: 9 })
+    expect(applyTierDLevelOutcome({ level: 50, currentWinStreak: 0, bestWinStreak: 0 }, true)).toEqual({ level: 51, currentWinStreak: 0, bestWinStreak: 0 })
+    expect(applyTierDLevelOutcome({ level: 51, currentWinStreak: 0, bestWinStreak: 0 }, true)).toEqual({ level: 52, currentWinStreak: 1, bestWinStreak: 1 })
+  })
+
   test('a tied final score favors the Player', () => {
     const state = createTierDLevel(1, 'human', random)
     for (const game of state.games) game.resolved = true

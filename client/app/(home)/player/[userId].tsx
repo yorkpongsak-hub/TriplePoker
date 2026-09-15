@@ -47,6 +47,8 @@ interface PlayerStats {
   win_rate: number
   title: { key: string; label: string }
 }
+interface TierDShowcase { stats:{tier_d_solo_level:number;tier_d_best_win_streak:number;tier_d_best_level_clear_time_ms:number|null;tier_d_best_match_score:number|null}|null; awards:{league_id:string;award_type:string;final_rank:number;final_points:number;league_name:string;awarded_at:string}[] }
+const formatTime=(ms?:number|null)=>ms==null?'—':`${Math.floor(ms/60000)}:${String(Math.floor(ms/1000)%60).padStart(2,'0')}`
 
 // เหมือน RowAvatar ใน stats.tsx — avatar_url มีได้ 3 แบบ (preset key / emoji ดิบ / ค่าที่ไม่รู้จัก)
 function PlayerAvatar({ avatarUrl }: { avatarUrl: string | null }) {
@@ -76,9 +78,11 @@ export default function PlayerProfileScreen() {
   // ThemedBackground ผูกกับ VIP status ของ "ผู้ที่กำลังดูหน้านี้" (viewer) ไม่ใช่ผู้เล่นที่ถูกดู —
   // ตาม pattern เดียวกับ stats.tsx/shop.tsx
   const viewerIsVip = useAuthStore(s => (s.profile?.vip_status ?? 'none') !== 'none')
+  const accessToken = useAuthStore(s => s.session?.access_token)
   const [player, setPlayer] = useState<PlayerStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [showcase, setShowcase] = useState<TierDShowcase | null>(null)
 
   const fetchPlayer = useCallback(async () => {
     if (!userId) return
@@ -98,6 +102,7 @@ export default function PlayerProfileScreen() {
   }, [userId])
 
   useEffect(() => { fetchPlayer() }, [fetchPlayer])
+  useEffect(() => { if(!userId||!accessToken)return; fetch(`${SERVER_URL}/tier-d/showcase/${userId}`,{headers:{Authorization:`Bearer ${accessToken}`}}).then(r=>r.ok?r.json():null).then(setShowcase).catch(()=>{}) }, [accessToken,userId])
 
   return (
     <ThemedBackground isVip={viewerIsVip}>
@@ -138,6 +143,19 @@ export default function PlayerProfileScreen() {
                 <StatRow label="Win Rate" value={`${player.win_rate.toFixed(1)}%`} color={C.green} />
                 <StatRow label="Token Balance" value={player.token_balance.toLocaleString('en-US')} color={C.gold} />
                 <StatRow label="Performance Score" value={player.performance_score.toLocaleString('en-US')} color={C.purple} />
+              </View>
+
+              <TouchableOpacity style={s.showcaseButton} onPress={() => router.push({ pathname: '/(home)/player/[userId]/showcase', params: { userId } })}>
+                <Text style={s.showcaseButtonText}>VIEW TROPHY SHOWCASE</Text>
+              </TouchableOpacity>
+
+              <Text style={s.historyTitle}>TIER D SHOWCASE</Text>
+              <View style={s.statsCard}>
+                <StatRow label="Solo Level" value={`LV. ${showcase?.stats?.tier_d_solo_level ?? 1}`} color={C.gold}/>
+                <StatRow label="Personal Best" value={formatTime(showcase?.stats?.tier_d_best_level_clear_time_ms)} color={C.green}/>
+                <StatRow label="Longest Streak" value={`${showcase?.stats?.tier_d_best_win_streak ?? 0} wins`} color={C.purple}/>
+                <StatRow label="Best Match Score" value={String(showcase?.stats?.tier_d_best_match_score ?? 0)} color={C.gold}/>
+                {showcase?.awards?.length?<View style={s.awards}><Text style={s.awardsTitle}>LEAGUE AWARDS</Text>{showcase.awards.map(award=><Text key={`${award.league_id}-${award.award_type}-${award.awarded_at}`} style={s.award}>{award.award_type==='trophy'?'🏆':'🏅'} {award.league_name.toUpperCase()} · #{award.final_rank} · {new Date(award.awarded_at).toLocaleDateString()}</Text>)}</View>:<Text style={s.noAwards}>NO LEAGUE AWARDS YET</Text>}
               </View>
 
               {/* Win History — ล่าสุด 20 รายการ (มติลุงเยาะ 2026-07-26) — layout จริงรอลุงออกแบบทีหลังเช่นกัน */}
@@ -216,4 +234,6 @@ const s = StyleSheet.create({
     marginTop: 18,
     marginBottom: 8,
   },
+  showcaseButton:{marginTop:14,borderWidth:1.5,borderColor:C.gold,borderRadius:10,paddingVertical:13,alignItems:'center',backgroundColor:'rgba(255,215,106,.12)'},showcaseButtonText:{color:C.gold,fontWeight:'900',fontSize:12,letterSpacing:1},
+  awards:{padding:10,gap:5},awardsTitle:{color:C.gold,fontSize:10,fontWeight:'900',letterSpacing:1},award:{color:C.textPrimary,fontSize:10,fontWeight:'800'},noAwards:{color:C.textDim,fontSize:10,textAlign:'center',padding:12},
 })

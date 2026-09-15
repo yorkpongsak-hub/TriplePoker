@@ -15,10 +15,13 @@ export default function MissionRail({state,matchKey,ready}:{state?:MissionRailSt
     return()=>{motion.stopAnimation();setIntro(false)}
   },[ready,matchKey,state?.missions.length,motion])
   if(!state?.missions.length)return null
+  // Do not draw the three empty pending circles during the initial deal. They
+  // read like stuck white pixels before any mission has actually resolved.
+  const resolvedMissions=state.missions.filter(m=>m.status!=='pending')
   return <View pointerEvents="none" style={s.wrap} accessibilityLabel={`${state.title}. ${state.detail}`}>
     <View style={[s.rail,state.failed&&s.missed]}>
       <Text style={s.title} numberOfLines={1} adjustsFontSizeToFit>{state.risk?'⚠':'◎'} {state.title}</Text>
-      <View style={s.markers}>{state.missions.map(m=><Text key={m.pile} accessibilityLabel={`G${m.pile}: ${m.provisional?'provisional ':''}${m.status}`} style={[s.marker,m.status==='success'&&s.success,m.status==='failed'&&s.failure,m.provisional&&s.provisional]}>{m.status==='pending'?'○':m.status==='success'?'●':'✕'}<Text style={s.index}>{m.pile}</Text></Text>)}</View>
+      {resolvedMissions.length>0?<View style={s.markers}>{resolvedMissions.map(m=><Text key={m.pile} accessibilityLabel={`G${m.pile}: ${m.provisional?'provisional ':''}${m.status}`} style={[s.marker,m.status==='success'&&s.success,m.status==='failed'&&s.failure,m.provisional&&s.provisional]}>{m.status==='success'?'●':'✕'}<Text style={s.index}>{m.pile}</Text></Text>)}</View>:null}
       <Text style={s.detail} numberOfLines={1} adjustsFontSizeToFit>{state.detail}</Text>
     </View>
     {intro?<Animated.View style={[s.intro,{opacity:motion.interpolate({inputRange:[0,.12,.75,1],outputRange:[0,1,1,0]}),transform:[{translateY:motion.interpolate({inputRange:[0,1],outputRange:[-12,0]})},{scale:motion.interpolate({inputRange:[0,1],outputRange:[1.06,1]})}]}]}><Text style={s.introTitle}>{state.missions.length===1?'MISSION!':`${state.missions.length} MISSIONS!`}</Text><Text style={s.introText}>{state.intro}</Text></Animated.View>:null}

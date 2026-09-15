@@ -4,13 +4,29 @@ import { Alert, AppState, Platform, View } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { StatusBar } from 'expo-status-bar'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { Asset } from 'expo-asset'
+import * as ExpoSplashScreen from 'expo-splash-screen'
 import { useFonts, Cinzel_400Regular, Cinzel_700Bold } from '@expo-google-fonts/cinzel'
 import { JetBrainsMono_400Regular, JetBrainsMono_600SemiBold } from '@expo-google-fonts/jetbrains-mono'
 import { useAuthStore } from '../src/store/authStore'
 import { useUserStore } from '../src/store/userStore'
+import GameSplash from '../src/components/ui/GameSplash'
+import { CARD_BACK_IMG, CARD_IMG } from '../src/components/game/cardAssets'
 import { PENDING_MATCH_KEY, PendingMatch } from '../src/utils/pendingMatch'
 import { audio } from '../src/audio'
+
+// Native Expo splash is deliberately short; the artwork-matched React splash follows it.
+void ExpoSplashScreen.preventAutoHideAsync().catch(() => undefined)
+
+const SPLASH_ARTWORK = require('../assets/images/splash_screen.png')
+const TABLE_ARTWORK = require('../assets/images/table_default.png')
+const BOOTSTRAP_ASSETS = Array.from(new Set([
+  SPLASH_ARTWORK,
+  TABLE_ARTWORK,
+  CARD_BACK_IMG,
+  ...Object.values(CARD_IMG),
+]))
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 const GAME_TABLE_ROUTES = new Set([
@@ -21,10 +37,33 @@ const GAME_TABLE_ROUTES = new Set([
 export default function RootLayout() {
   const segments = useSegments()
   const [fontsLoaded] = useFonts({ Cinzel_400Regular, Cinzel_700Bold, JetBrainsMono_400Regular, JetBrainsMono_600SemiBold })
+  const [audioReady, setAudioReady] = useState(false)
+  const [assetsReady, setAssetsReady] = useState(false)
+  const [showGameSplash, setShowGameSplash] = useState(true)
+  const authInitialized = useAuthStore(s => s.isInitialized)
 
   useEffect(() => {
+    let mounted = true
     void audio.initialize()
-    return () => audio.dispose()
+      .catch(error => console.warn('[bootstrap] audio initialization failed:', error))
+      .finally(() => { if (mounted) setAudioReady(true) })
+    return () => {
+      mounted = false
+      audio.dispose()
+    }
+  }, [])
+
+  useEffect(() => {
+    let mounted = true
+    // The visible launch screen and the first dealt table share these image resources.
+    void Asset.loadAsync(BOOTSTRAP_ASSETS)
+      .catch(error => console.warn('[bootstrap] asset preload failed:', error))
+      .finally(() => { if (mounted) setAssetsReady(true) })
+    return () => { mounted = false }
+  }, [])
+
+  useEffect(() => {
+    void ExpoSplashScreen.hideAsync().catch(() => undefined)
   }, [])
 
   const initAuth = useAuthStore(s => s.initAuth)
@@ -157,9 +196,7 @@ export default function RootLayout() {
     }
   }, [authUser, authProfile, session])
 
-  if (!fontsLoaded) {
-    return <View style={{ flex: 1, backgroundColor: '#0a0a0a' }} />
-  }
+  const loadingProgress = (Number(fontsLoaded) + Number(audioReady) + Number(assetsReady) + Number(authInitialized)) / 4
 
   return (
     <SafeAreaProvider>
@@ -181,6 +218,13 @@ export default function RootLayout() {
           borderColor: '#2a2a2a',
         }}>
           <Stack screenOptions={{ headerShown: false }} />
+          {showGameSplash && (
+            <GameSplash
+              progress={loadingProgress}
+              ready={fontsLoaded && audioReady && assetsReady && authInitialized}
+              onComplete={() => setShowGameSplash(false)}
+            />
+          )}
         </View>
       </View>
     </SafeAreaProvider>

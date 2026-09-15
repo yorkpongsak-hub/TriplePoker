@@ -218,7 +218,7 @@ export default function SetupProfileScreen() {
 
         {/* Header */}
         <Image source={triplePokerLogo} style={styles.logo} resizeMode="contain" />
-        <Text style={styles.brandTitle}>TRIPLEPOKER</Text>
+        <Text style={styles.brandTitle}>TRIPLEPOKER : RISE</Text>
         <Text style={styles.brandSub}>Create your identity</Text>
 
         {/* ─── Display Name + Preview (row) ─── */}

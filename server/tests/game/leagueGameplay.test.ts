@@ -28,7 +28,8 @@ describe('League gameplay canon rules', () => {
     expect(missions).toHaveLength(3); const negative = missions.find(mission => mission.negative)!; expect(negative.penalty).toBeGreaterThanOrEqual(-10); expect(negative.penalty).toBeLessThanOrEqual(-5)
   })
   test('mission bonuses, penalties, multiplier and x2 score follow Canon', () => {
-    expect(missionResult({ pile: 2, rank: 'two_pair' }, 'three_of_a_kind')).toMatchObject({ complete: true, score: 2, penalty: 0 })
+    expect(missionResult({ pile: 2, rank: 'two_pair' }, 'three_of_a_kind')).toMatchObject({ complete: false, score: 0, penalty: 0 })
+    expect(missionResult({ pile: 3, rank: 'straight' }, 'flush')).toMatchObject({ complete: true, score: 3, penalty: 0 })
     expect(missionResult({ pile: 3, rank: 'flush', negative: true, penalty: -7 }, 'straight')).toMatchObject({ complete: false, score: 0, penalty: -7 })
     expect(handMultiplier(51, 'flush')).toBe(1.5); expect(handMultiplier(1, 'flush')).toBe(1)
     expect(pileWinScore(51, 3, 'flush', true)).toBe(24); expect(pileWinScore(51, 3, 'four_of_a_kind', true)).toBe(32)
