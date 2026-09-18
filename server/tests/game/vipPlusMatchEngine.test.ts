@@ -113,6 +113,9 @@ async function preparedAuctionMatch() {
     started.state.hands[playerId] = controlled.deal.handsBySeat[seat as keyof typeof controlled.deal.handsBySeat]
     started.state.arrangements[playerId] = controlled.arrangements[seat]
   }
+  // ตรวจเฉพาะ event ของเกมที่ตั้ง fixture นี้ ไม่ปนไพ่เปิดเผยในเกมก่อนหน้า
+  // ไพ่ประมูลที่สุ่มใหม่อาจมีหน้าเดียวกับไพ่กองกลางของเกมเก่าได้
+  started.events.length = 0
   expect(beginVipPlusAuction(started.state.roomId)).toBe(true)
   return { ...started, controlled }
 }

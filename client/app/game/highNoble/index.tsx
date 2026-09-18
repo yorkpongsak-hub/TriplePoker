@@ -30,6 +30,7 @@ import { getReduceMotion } from '../../../src/utils/reduceMotion'
 import { clearPendingMatch, markPendingMatch } from '../../../src/utils/pendingMatch'
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
 import MonarchConquestBanner from '../../../src/components/game/MonarchConquestBanner'
+import { leaveAfterClassicSettlement } from '../../../src/ads/postSettlementExit'
 import { MINION_AVATAR } from '../../../src/constants/minionAvatars'
 import { ActionButton } from '../../../src/components/ui/ActionButton'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
@@ -304,6 +305,7 @@ const ServerLog = React.memo(({ socket, onMonarchWin }: { socket: Socket | null;
 // =================================================================
 const GameTableLive: React.FC = () => {
   const { bark, offer: offerBark } = useCharacterBarks()
+  const accessToken = useAuthStore(s => s.session?.access_token ?? null)
   const insets = useSafeAreaInsets()
   const isWeb  = Platform.OS === 'web'
   const socketRef = useRef<Socket | null>(null)
@@ -2574,7 +2576,7 @@ const GameTableLive: React.FC = () => {
                       },
                     } as any)
                   } else {
-                    router.push('/lobby')
+                    void leaveAfterClassicSettlement({accessToken,tier:'A_PLUS',outcome:'LOSS',exitReason:'BACK_TO_LOBBY',returnTo:'/lobby'})
                   }
                 }}
                 insetsBottom={insets.bottom}

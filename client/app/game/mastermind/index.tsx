@@ -33,6 +33,7 @@ import { getReduceMotion } from '../../../src/utils/reduceMotion'
 import { clearPendingMatch, markPendingMatch } from '../../../src/utils/pendingMatch'
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
 import MonarchConquestBanner from '../../../src/components/game/MonarchConquestBanner'
+import { leaveAfterClassicSettlement } from '../../../src/ads/postSettlementExit'
 import { MINION_AVATAR } from '../../../src/constants/minionAvatars'
 import { ActionButton } from '../../../src/components/ui/ActionButton'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
@@ -1137,12 +1138,13 @@ const GameTableLive: React.FC = () => {
   // Android hardware back — ยืนยันก่อนออกโต๊ะกลางเกม (มติลุงเยาะ 2026-08-13, pattern เดียวกับ
   // vipPlus/index.tsx's WAITING-screen back handler แต่ครอบคลุมกลางแมตช์ด้วย — ไม่มี Tier ไหนเคยมี
   // จริงมาก่อน ExitTableButton.tsx เดิมเป็น dead code ไม่มีไฟล์ไหนเรียกใช้) phase==='end' = แมตช์
-  // settle เรียบร้อยแล้วฝั่ง server ผ่าน MatchEndOverlay ปกติ (ห้องถูกลบไปแล้ว) ปล่อย default back
-  // ทำงานตรงๆ ไม่ต้องถาม/ไม่ต้องยิง player_leave ซ้ำ
+  // settled state must leave through MatchEndOverlay so the single post-
+  // settlement exit gateway can serialize navigation/ad policy. Do not let
+  // Android hardware back bypass that button and create an untracked exit.
   useEffect(() => {
     if (Platform.OS !== 'android') return
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (phase === 'end') return false
+      if (phase === 'end') return true
       Alert.alert(
         'Leave this table?',
         'Leaving during an active match counts as a forfeit. Your current stack will be settled and returned.',
@@ -2428,7 +2430,7 @@ const GameTableLive: React.FC = () => {
                       },
                     } as any)
                   } else {
-                    router.push({ pathname: '/lobby', params: { autoContinue: 'mastermind' } } as any)
+                    void leaveAfterClassicSettlement({accessToken,tier:'A',outcome:'LOSS',exitReason:'BACK_TO_LOBBY',returnTo:'/lobby?autoContinue=mastermind'})
                   }
                 }}
                 insetsBottom={insets.bottom}

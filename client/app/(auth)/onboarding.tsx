@@ -12,7 +12,6 @@ import {
 } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import { router } from 'expo-router'
-import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Image as ExpoImage } from 'expo-image'
 
 // ─── ธีมสีหลัก (Website Theme Spec v1.0) ─── (ใช้ comment ธรรมดา ไม่มี Unicode พิเศษ)
@@ -144,9 +143,9 @@ export default function OnboardingScreen() {
     setIndex(i)
   }
 
-  const handleFinish = async () => {
-    // ทั้ง Skip และ Let's Play ทำผลลัพธ์เดียวกัน -- mark ว่าเคยดูแล้ว ไม่ต้องโชว์ซ้ำอัตโนมัติอีก
-    await AsyncStorage.setItem('onboarding_seen', '1')
+  const handleFinish = () => {
+    // This is a read-only guide. Leaving must return to the entrance door and
+    // must not create a match, reset progress, or write an onboarding flag.
     router.replace('/game/tier-d/entry')
   }
 
@@ -168,9 +167,9 @@ export default function OnboardingScreen() {
     <View style={styles.root} onLayout={handleRootLayout}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
 
-      {/* Skip -- มุมขวาบนทุกหน้า */}
+      {/* Close -- มุมขวาบนทุกหน้า */}
       <Pressable style={styles.skipBtn} onPress={handleFinish} hitSlop={10}>
-        <Text style={styles.skipText}>Skip</Text>
+        <Text style={styles.skipText}>Close</Text>
       </Pressable>
 
       <ScrollView
@@ -198,7 +197,7 @@ export default function OnboardingScreen() {
         ))}
       </View>
 
-      {/* Bottom nav: Back / Next-or-Let's Play */}
+      {/* Bottom nav: Back / Next-or-Close Guide */}
       <View style={styles.navRow}>
         <Pressable
           onPress={handleBack}
@@ -209,7 +208,7 @@ export default function OnboardingScreen() {
         </Pressable>
 
         <Pressable onPress={handleNext} style={[styles.navBtn, styles.nextBtn]}>
-          <Text style={styles.nextBtnText}>{index === TOTAL_SLIDES - 1 ? "Let's Play!" : 'Next'}</Text>
+          <Text style={styles.nextBtnText}>{index === TOTAL_SLIDES - 1 ? 'Close Guide' : 'Next'}</Text>
         </Pressable>
       </View>
     </View>

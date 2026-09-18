@@ -106,14 +106,14 @@ describe('recordMatchStats — streak_claimed_milestone bookkeeping', () => {
     expect(fields.streak_claimed_milestone).toBe(0)
   })
 
-  test('resets to 0 when a completed 7-day cycle naturally loops back to day 1', async () => {
+  test('holds Day 8 for its explicit claim; the claim transaction starts the next cycle', async () => {
     selectData = [freshUserRow({
       streak_count: 7, last_played_date: daysAgoBangkok(1), best_streak_count: 7,
       streak_claimed_milestone: 7, streak_shields: 2, streak_7days_badge: true,
     })]
     await recordMatchStats([input()])
     const fields = mockUpdate.mock.calls[0][0]
-    expect(fields.streak_count).toBe(1)
-    expect(fields.streak_claimed_milestone).toBe(0)
+    expect(fields.streak_count).toBe(8)
+    expect(fields.streak_claimed_milestone).toBe(7)
   })
 })

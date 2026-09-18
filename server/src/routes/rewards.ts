@@ -11,6 +11,9 @@ import { supabase, supabaseAdmin } from '../config/supabase'
 import { gameConfig } from '../config/gameConfig'
 import { redis } from '../config/redis'
 import { economyService } from '../economy/economyService'
+import { markRewardedAdCompleted } from '../game/adPolicyService'
+import { membershipFromVipStatus, canRequestRewardedAd } from '../game/adPolicy'
+import { adProvider } from '../game/adProvider'
 
 async function requireUserId(request: FastifyRequest, reply: FastifyReply): Promise<string | null> {
   const token = request.headers.authorization?.replace('Bearer ', '')
@@ -28,15 +31,25 @@ async function requireUserId(request: FastifyRequest, reply: FastifyReply): Prom
   return data.user.id
 }
 
-function randomInt(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min
-}
-
 export default async function rewardsRoutes(fastify: FastifyInstance) {
+  fastify.get('/rewards/token-rescue-status', async (request, reply) => {
+    const userId = await requireUserId(request, reply); if (!userId) return
+    const cooldownKey = `ad_reward_cooldown:${userId}`
+    const [ttl, profile] = await Promise.all([
+      redis.ttl(cooldownKey),
+      supabaseAdmin.from('users').select('vip_status').eq('user_id', userId).maybeSingle(),
+    ])
+    const membership=membershipFromVipStatus(profile.data?.vip_status)
+    if (!canRequestRewardedAd(membership,'TOKEN_RESCUE')) return reply.send({ eligible:false, reason:'PRO_PLUS_NOT_AD_ELIGIBLE' })
+    return reply.send({ eligible: ttl <= 0 && await adProvider.forcedInterstitialAvailable(), retryAfterSeconds: Math.max(0,ttl) })
+  })
   // ── POST /rewards/watch-ad ──────────────────────────────────────────
-  fastify.post('/rewards/watch-ad', async (request, reply) => {
+  fastify.post<{ Body: { devMock?: boolean; googleTestEarned?: boolean } }>('/rewards/watch-ad', async (request, reply) => {
     const userId = await requireUserId(request, reply)
     if (!userId) return
+    const { data: profile } = await supabaseAdmin.from('users').select('vip_status').eq('user_id', userId).maybeSingle()
+    if (!canRequestRewardedAd(membershipFromVipStatus(profile?.vip_status),'TOKEN_RESCUE')) return reply.status(403).send({ error:'PRO_PLUS_NOT_AD_ELIGIBLE' })
+    if (!await adProvider.verifyRewardedCompletion({ devMock: request.body?.devMock, googleTestEarned: request.body?.googleTestEarned })) return reply.status(503).send({ error:'AD_PROVIDER_UNAVAILABLE' })
 
     const cooldownKey = `ad_reward_cooldown:${userId}`
     const cooldownSeconds = gameConfig.dailyEconomy.adRewardCooldownHours * 3600
@@ -46,8 +59,9 @@ export default async function rewardsRoutes(fastify: FastifyInstance) {
       return reply.status(429).send({ error: 'AD_COOLDOWN_ACTIVE', retryAfterSeconds })
     }
 
-    const { min, max } = gameConfig.dailyEconomy.adRewardToken
-    const tokensAwarded = randomInt(min, max)
+    // Rescue covers no more than Match 1 G1+G2; it deliberately excludes G3,
+    // future Matches and side bets.
+    const tokensAwarded = gameConfig.tokenPot.tiers.initiate.pile1 + gameConfig.tokenPot.tiers.initiate.pile2
 
     try {
       await economyService.mint({
@@ -69,6 +83,7 @@ export default async function rewardsRoutes(fastify: FastifyInstance) {
       .eq('user_id', userId)
       .single()
 
+    await markRewardedAdCompleted(userId).catch(() => undefined)
     return reply.send({
       success: true,
       tokensAwarded,

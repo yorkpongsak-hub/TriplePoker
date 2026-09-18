@@ -8,7 +8,8 @@
 
 const mockGetUser = jest.fn()
 const mockSingle = jest.fn()
-const mockEq = jest.fn(() => ({ single: mockSingle }))
+const mockMaybeSingle = jest.fn(() => Promise.resolve({ data: { vip_status: 'none' }, error: null }))
+const mockEq = jest.fn(() => ({ single: mockSingle, maybeSingle: mockMaybeSingle }))
 const mockSelect = jest.fn(() => ({ eq: mockEq }))
 const mockFrom = jest.fn(() => ({ select: mockSelect }))
 
@@ -44,6 +45,7 @@ const AUTH_USER = { id: 'user-uuid-123' }
 beforeEach(() => {
   mockGetUser.mockReset()
   mockSingle.mockReset()
+  mockMaybeSingle.mockReset().mockResolvedValue({ data: { vip_status: 'none' }, error: null })
   mockEq.mockClear()
   mockSelect.mockClear()
   mockFrom.mockClear()
@@ -76,7 +78,7 @@ describe('POST /rewards/watch-ad', () => {
     mockRedisTtl.mockResolvedValueOnce(1800)
 
     const app = await buildApp()
-    const res = await app.inject({ method: 'POST', url: '/rewards/watch-ad', headers: { authorization: 'Bearer good' } })
+    const res = await app.inject({ method: 'POST', url: '/rewards/watch-ad', headers: { authorization: 'Bearer good' }, payload: { devMock: true } })
     expect(res.statusCode).toBe(429)
     expect(res.json()).toEqual({ error: 'AD_COOLDOWN_ACTIVE', retryAfterSeconds: 1800 })
     expect(mockMint).not.toHaveBeenCalled()
@@ -90,12 +92,11 @@ describe('POST /rewards/watch-ad', () => {
     mockSingle.mockResolvedValueOnce({ data: { token_balance: 1150 }, error: null })
 
     const app = await buildApp()
-    const res = await app.inject({ method: 'POST', url: '/rewards/watch-ad', headers: { authorization: 'Bearer good' } })
+    const res = await app.inject({ method: 'POST', url: '/rewards/watch-ad', headers: { authorization: 'Bearer good' }, payload: { devMock: true } })
     expect(res.statusCode).toBe(200)
     const json = res.json()
     expect(json.success).toBe(true)
-    expect(json.tokensAwarded).toBeGreaterThanOrEqual(50)
-    expect(json.tokensAwarded).toBeLessThanOrEqual(100)
+    expect(json.tokensAwarded).toBe(30)
     expect(json.newTokenBalance).toBe(1150)
 
     const mintCall = mockMint.mock.calls[0][0]
@@ -112,7 +113,7 @@ describe('POST /rewards/watch-ad', () => {
     mockMint.mockRejectedValueOnce(new Error('ledger down'))
 
     const app = await buildApp()
-    const res = await app.inject({ method: 'POST', url: '/rewards/watch-ad', headers: { authorization: 'Bearer good' } })
+    const res = await app.inject({ method: 'POST', url: '/rewards/watch-ad', headers: { authorization: 'Bearer good' }, payload: { devMock: true } })
     expect(res.statusCode).toBe(500)
     expect(mockRedisDel).toHaveBeenCalledWith(`ad_reward_cooldown:${AUTH_USER.id}`)
     await app.close()

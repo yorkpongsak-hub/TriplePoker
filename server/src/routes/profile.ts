@@ -307,6 +307,15 @@ export async function profileRoutes(app: FastifyInstance) {
   // บังคับดูโฆษณาก่อนเรียก endpoint นี้เองสำหรับสมาชิกฟรี (ผ่านหน้า /watch-ad?mode=gate) — endpoint
   // นี้ไม่เช็ค VIP/ad เลย เพราะเป็นแค่ "ให้รางวัลถ้ามีสิทธิ์" ล้วนๆ ไม่ใช่ gate
   app.post('/profile/claim-streak-reward', async (request, reply) => {
+    const compatibilityToken = request.headers.authorization?.replace('Bearer ', '')
+    if (!compatibilityToken) return reply.status(401).send({ error: 'Unauthorized' })
+    const compatibilityAuth = await supabase.auth.getUser(compatibilityToken)
+    if (compatibilityAuth.error || !compatibilityAuth.data.user) return reply.status(401).send({ error: 'Invalid token' })
+    // Replaced by /daily-streak/claim. Keep this endpoint as an explicit
+    // non-rewarding compatibility response so an old client cannot mint the
+    // former 3/5/7 milestone reward beside the new daily reward.
+    return reply.status(410).send({ error: 'DAILY_STREAK_REPLACED' })
+    /*
     const token = request.headers.authorization?.replace('Bearer ', '')
     if (!token) return reply.status(401).send({ error: 'Unauthorized' })
     const { data: authData, error: authError } = await supabase.auth.getUser(token)
@@ -356,6 +365,6 @@ export async function profileRoutes(app: FastifyInstance) {
       milestone,
       tokensAwarded: tokenAmount,
       newTokenBalance: updated?.token_balance ?? null,
-    })
+    }) */
   })
 }

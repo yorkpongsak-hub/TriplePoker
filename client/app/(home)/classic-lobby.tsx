@@ -55,6 +55,11 @@ const TIER_ROWS: Tier[][] = [
   ['last_boss'],
 ];
 
+const TIER_CEILING_ORDER = ['D', 'initiate', 'adept', 'mastermind', 'highNoble', 'grandmaster'] as const;
+const TIER_TO_CEILING: Partial<Record<Tier, typeof TIER_CEILING_ORDER[number]>> = {
+  initiate: 'initiate', adept: 'adept', mastermind: 'mastermind', high_noble: 'highNoble', grandmaster: 'grandmaster',
+};
+
 // LobbyMatchmaking_Spec_v1_1 — M:SS format สำหรับ countdown ของ waiting_2nd stage (2 นาที)
 const formatMMSS = (totalSeconds: number): string => {
   const m = Math.floor(totalSeconds / 60);
@@ -311,9 +316,14 @@ export default function LobbyScreen() {
   // endpoint ให้เครดิตทันทีแทนการรอดูโฆษณาจริง จนกว่าจะมีบัญชี AdMob/Ad Unit ID มาต่อ SDK จริง
   // Patch 2026-08-14: เชื่อมเข้าหน้า /watch-ad กลาง (มี RoyalStraightFlushVFX) แทน Alert เดิม —
   // ทุกจุดที่ดูโฆษณาในแอปใช้หน้าเดียวกันหมด (ยกเลิก pending auto-enter table เหมือนพฤติกรรมเดิม)
-  const handleWatchAd = () => {
+  const handleWatchAd = async () => {
     setInsufficientTier(null);
     pendingEnterRef.current = null;
+    if (!accessToken) return;
+    try {
+      const status=await fetch(`${SERVER_URL}/rewards/token-rescue-status`,{headers:{Authorization:`Bearer ${accessToken}`}}).then(response=>response.json())
+      if(!status.eligible){setInsufficientTier(null);return}
+    } catch { return }
     router.push({ pathname: '/(home)/watch-ad', params: { returnTo: '/(home)/classic-lobby' } } as any);
   };
 
@@ -439,8 +449,8 @@ export default function LobbyScreen() {
   };
 
   const requireAdGate = (actionKey: keyof typeof AD_GATE_RESUME_ACTIONS) => {
-    if (isVip) { AD_GATE_RESUME_ACTIONS[actionKey](); return; }
-    router.push({ pathname: '/(home)/watch-ad', params: { returnTo: `/(home)/classic-lobby?autoEnter=${actionKey}`, mode: 'gate' } } as any);
+    // Forced ads are permitted only at post-game natural breaks, never before a table.
+    AD_GATE_RESUME_ACTIONS[actionKey]();
   };
 
   // กลับมาจากหน้าโฆษณาแล้ว (query param 'autoEnter') — เรียก action เดิมต่อทันที แล้วเคลียร์ param
@@ -557,7 +567,10 @@ export default function LobbyScreen() {
 
   const renderTierButton = (tier: Tier, fullWidth: boolean) => {
     const cfg = TIER_CONFIG[tier];
-    const locked = !isEligible(tier, tokenBalance, profile?.tier_unlocked_max);
+    const ceiling = profile?.tier_unlocked_max ?? 'D';
+    const requiredCeiling = TIER_TO_CEILING[tier];
+    const progressionLocked = requiredCeiling !== undefined && TIER_CEILING_ORDER.indexOf(ceiling as typeof TIER_CEILING_ORDER[number]) < TIER_CEILING_ORDER.indexOf(requiredCeiling);
+    const locked = progressionLocked || !isEligible(tier, tokenBalance, profile?.tier_unlocked_max);
     const isSelected = selected === tier;
     const buyInKey = TIER_TO_BUYIN_KEY[tier];
     return (
@@ -760,10 +773,11 @@ export default function LobbyScreen() {
         <MenuButton icon="ranking" label="Ranking" size="sm" onPress={() => router.push('/(home)/stats')} vipShimmer={isVip} />
       </View>
 
-      {/* Tier selector: D / C+B / A+A+ / S / S+. */}
+      {/* Tier selector: D Solo / C+B / A+A+ / S / S+. */}
       <ScrollView style={s.tierSelector} contentContainerStyle={{ gap: 6 }} nestedScrollEnabled>
-        <TouchableOpacity style={[s.tierBtn, s.tierBtnFull]} onPress={handleHowToPlay}>
-          <View style={[s.badgeDot, { backgroundColor: COLOR.goldPrimary }]} /><Text style={s.tierBtnTxt}>[D] Demo (How to Play)</Text>
+        <TouchableOpacity style={[s.tierBtn, s.tierBtnFull]} onPress={() => router.push('/game/tier-d/entry')}>
+          <View style={[s.badgeDot, { backgroundColor: COLOR.goldPrimary }]} /><Text style={s.tierBtnTxt}>[D] Tier D Solo</Text>
+          <Text style={s.buyInLabel}>Continue your Solo level journey</Text>
         </TouchableOpacity>
         {TIER_ROWS.map((row, ri) => <View key={ri} style={s.tierRow}>{row.map(tier => renderTierButton(tier, true))}</View>)}
       </ScrollView>

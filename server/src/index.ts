@@ -12,6 +12,8 @@ import rewardsRoutes from './routes/rewards'
 import badgeRoutes from './routes/badges'
 import tierDLeaderboardRoutes from './routes/tierDLeaderboard'
 import { tierDRewardRoutes } from './routes/tierDRewards'
+import { adRoutes } from './routes/ads'
+import { dailyStreakRoutes } from './routes/dailyStreak'
 import { startSovereignLifecycleRuntime } from './arena/sovereign/sovereignLifecycleRuntime'
 import { registerGameSocket } from './sockets/gameSocket'
 import { registerArenaSocket } from './arena/realtime/arenaSocket'
@@ -46,6 +48,8 @@ app.register(rewardsRoutes)
 app.register(badgeRoutes)
 app.register(tierDLeaderboardRoutes)
 app.register(tierDRewardRoutes)
+app.register(adRoutes)
+app.register(dailyStreakRoutes)
 
 // Health check
 app.get('/health', async () => ({

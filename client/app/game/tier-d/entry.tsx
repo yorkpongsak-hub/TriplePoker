@@ -7,5 +7,5 @@ import { useAuthStore } from '../../../src/store/authStore'
 // resume/start effect remains the sole source of Tier D game state.
 export default function TierDEntry() {
   const level = useAuthStore(state => state.profile?.tier_d_solo_level ?? undefined)
-  return <DoorEntryTransition level={level} onFinish={() => router.replace('/game/tier-d')} />
+  return <DoorEntryTransition level={level} onFinish={() => router.replace('/game/tier-d')} onHowToPlay={() => router.push('/(auth)/onboarding')} />
 }

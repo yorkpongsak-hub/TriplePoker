@@ -15,6 +15,7 @@ import GameSplash from '../src/components/ui/GameSplash'
 import { CARD_BACK_IMG, CARD_IMG } from '../src/components/game/cardAssets'
 import { PENDING_MATCH_KEY, PendingMatch } from '../src/utils/pendingMatch'
 import { audio } from '../src/audio'
+import { adProvider } from '../src/ads/adProvider'
 
 // Native Expo splash is deliberately short; the artwork-matched React splash follows it.
 void ExpoSplashScreen.preventAutoHideAsync().catch(() => undefined)
@@ -51,6 +52,12 @@ export default function RootLayout() {
       mounted = false
       audio.dispose()
     }
+  }, [])
+
+  useEffect(() => {
+    void adProvider.initialize()
+      .then(() => Promise.all([adProvider.preloadRewarded(), adProvider.preloadInterstitial()]))
+      .catch((error: unknown) => console.warn('[ads] unavailable; gameplay continues', error))
   }, [])
 
   useEffect(() => {

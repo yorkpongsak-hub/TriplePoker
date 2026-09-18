@@ -27,6 +27,8 @@ export interface BossHandRowProps {
   twoRows?: boolean
   /** Tier D already identifies its three groups by their table position. */
   showPileLabels?: boolean
+  /** The outer hand frame can be hidden without changing individual card borders. */
+  showFrame?: boolean
 }
 
 const BossHandRow: React.FC<BossHandRowProps> = ({
@@ -39,6 +41,7 @@ const BossHandRow: React.FC<BossHandRowProps> = ({
   overlap = -16,
   twoRows = false,
   showPileLabels = true,
+  showFrame = true,
 }) => {
   // offset เริ่มต้นของแต่ละกองใน array revealed แบบ flatten
   const startIdx = [0, pileSizes[0], pileSizes[0] + pileSizes[1]]
@@ -72,7 +75,7 @@ const BossHandRow: React.FC<BossHandRowProps> = ({
       )
 
   return (
-    <View style={[styles.frame,twoRows&&styles.twoRowFrame]}>
+    <View style={[styles.frame,twoRows&&styles.twoRowFrame,!showFrame&&styles.frameBorderHidden]}>
       {twoRows ? <><View style={styles.topRow}>{pile(pileSizes[0],0)}{pile(pileSizes[1],1)}</View><View style={styles.bottomRow}>{pile(pileSizes[2],2)}</View></> : pileSizes.map(pile)}
     </View>
   )
@@ -105,6 +108,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(201,168,76,.5)',
     overflow: 'hidden',
   },
+  frameBorderHidden: { borderWidth: 0, backgroundColor: 'transparent' },
 })
 
 export default BossHandRow

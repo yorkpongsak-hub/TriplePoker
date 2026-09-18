@@ -59,7 +59,8 @@ test('arranging cards stays audible during a critical cue and recovers a stalled
 test('a stalled audio session cannot silence subsequent games indefinitely',async()=>{
   mockActivate.mockImplementationOnce(()=>new Promise<void>(()=>{}));
   audio.play('BOSS_REVEAL');await flush();
-  jest.advanceTimersByTime(1600);await flush();
+  // Session activation currently has a five-second timeout (Metro buffering).
+  jest.advanceTimersByTime(5100);await flush();
   expect(audio.getDebugState().activeAudio).toEqual([]);
   expect(audio.play('BUTTON_CONFIRM')).toBe(true);await flush();
   expect(audio.getDebugState().players.find((p:any)=>p.event==='BUTTON_CONFIRM').playing).toBe(true);

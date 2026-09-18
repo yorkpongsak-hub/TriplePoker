@@ -1,6 +1,6 @@
 import fs from 'fs'
 import path from 'path'
-import { tierDLevelRewardPlan, tierDRewardQuantity } from '../../src/game/tierDRewards'
+import { tierDLevelRewardPlan, tierDRewardQuantity, levelRewardSchedule } from '../../src/game/tierDRewards'
 describe('Tier D rewards', () => {
   test('free claim is x1; successful ad and No-Ads are x2; failed ad never doubles', () => {
     expect(tierDRewardQuantity('claim', false)).toBe(1); expect(tierDRewardQuantity('ad', true)).toBe(2)
@@ -14,6 +14,10 @@ describe('Tier D rewards', () => {
     expect(tierDLevelRewardPlan(351)).toEqual({ baseItemTypes: 2, baseQuantityPerType: '1-2', adBonusQuantity: 2 })
     expect(tierDLevelRewardPlan(1000)).toEqual({ baseItemTypes: 2, baseQuantityPerType: '1-2', adBonusQuantity: 2 })
     expect(tierDLevelRewardPlan(1001)).toEqual({ baseItemTypes: 3, baseQuantityPerType: 1, adBonusQuantity: 2 })
+  })
+  test('level tens are milestones and Second Deal is never a normal pool item',()=>{
+    expect(levelRewardSchedule(10,()=>.9)).toEqual({kind:'milestone',quantity:1})
+    expect(['undo','shuffle','double_pile','swap','auto_sort','freeze']).not.toContain('second_deal')
   })
   test('migration makes duplicate grants and achievements idempotent and keeps achievement out of item multiplier', () => {
     const sql = fs.readFileSync(path.resolve(__dirname, '../../../supabase/migrations/051_tier_d_awards_rewards.sql'), 'utf8')

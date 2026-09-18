@@ -10,7 +10,7 @@ type GameSplashProps = {
 // Artwork coordinates: splash_screen.png is 740 × 1314. These are mapped through cover below.
 const ARTWORK = { width: 740, height: 1314 }
 const SPLASH_IMAGE = require('../../../assets/images/splash_screen.png')
-const LOADING_BAR = { x: 151, y: 1169, width: 438, height: 11 }
+const LOADING_BAR = { x: 151, y: 1196, width: 438, height: 11 }
 
 const RAYS = [
   { x: 288, y: 685, width: 9, height: 254, rotate: '-28deg', delay: 0 },

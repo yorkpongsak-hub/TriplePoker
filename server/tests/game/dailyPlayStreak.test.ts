@@ -1,45 +1,21 @@
 import { computeDailyPlayStreak } from '../../src/game/matchStatsService'
 
-describe('7-day daily play streak', () => {
-  test.each([
-    [1, 100, 5], [2, 150, 5], [3, 200, 10], [4, 250, 10],
-    [5, 300, 15], [6, 400, 20], [7, 700, 35],
-  ])('day %i grants %i Token and %i XP', (day, token, xp) => {
-    const previousDate = day === 1 ? null : `2026-08-${String(day).padStart(2, '0')}`
-    const today = `2026-08-${String(day + 1).padStart(2, '0')}`
-    const result = computeDailyPlayStreak(day - 1, day - 1, previousDate, 0, false, today)
-    expect(result).toMatchObject({ cycleDay: day, tokenReward: token, xpReward: xp, rewarded: true })
+describe('eight-day Daily Streak eligibility', () => {
+  test.each([1,2,3,4,5,6,7,8])('advances through Day %i without auto-minting a reward', day => {
+    const prior=day-1, previousDate=day===1?null:`2026-09-${String(day).padStart(2,'0')}`, today=`2026-09-${String(day+1).padStart(2,'0')}`
+    const result=computeDailyPlayStreak(prior,prior,previousDate,0,false,today,'FREE')
+    expect(result).toMatchObject({cycleDay:day,tokenReward:0,xpReward:0,rewarded:true})
   })
-
-  it('does not grant a second reward on the same Bangkok day', () => {
-    expect(computeDailyPlayStreak(3, 3, '2026-08-02', 1, false, '2026-08-02')).toEqual({
-      cycleDay: 3, bestStreak: 3, shields: 1, tokenReward: 0, xpReward: 0,
-      shieldUsed: false, badgeUnlocked: false, rewarded: false,
-    })
+  test('VIP Pro protects one missed day, Pro Plus protects two, Free protects none',()=>{
+    expect(computeDailyPlayStreak(3,3,'2026-09-01',0,false,'2026-09-03','FREE')).toMatchObject({cycleDay:1,shields:0})
+    expect(computeDailyPlayStreak(3,3,'2026-09-01',0,false,'2026-09-03','VIP_PRO')).toMatchObject({cycleDay:4,shields:0,shieldUsed:true})
+    expect(computeDailyPlayStreak(3,3,'2026-09-01',0,false,'2026-09-04','VIP_PRO_PLUS')).toMatchObject({cycleDay:4,shields:0,shieldUsed:true})
   })
-
-  it('loops from day 7 back to day 1 on the following day', () => {
-    expect(computeDailyPlayStreak(7, 7, '2026-08-01', 2, true, '2026-08-02'))
-      .toMatchObject({ cycleDay: 1, bestStreak: 7, tokenReward: 100, xpReward: 5, shields: 2 })
+  test('second consecutive missed day breaks VIP Pro but not Pro Plus with two protections',()=>{
+    expect(computeDailyPlayStreak(4,4,'2026-09-01',1,false,'2026-09-03','VIP_PRO')).toMatchObject({cycleDay:1})
+    expect(computeDailyPlayStreak(4,4,'2026-09-01',1,false,'2026-09-03','VIP_PRO_PLUS')).toMatchObject({cycleDay:5,shields:0})
   })
-
-  it('does not waste a shield when a completed cycle starts over after a missed day', () => {
-    expect(computeDailyPlayStreak(7, 7, '2026-07-31', 1, true, '2026-08-02'))
-      .toMatchObject({ cycleDay: 1, shields: 1, shieldUsed: false })
-  })
-
-  it('uses one shield for exactly one missed day', () => {
-    expect(computeDailyPlayStreak(3, 3, '2026-07-31', 1, false, '2026-08-02'))
-      .toMatchObject({ cycleDay: 4, shields: 0, shieldUsed: true })
-  })
-
-  it('resets to day 1 when a missed day is not protected', () => {
-    expect(computeDailyPlayStreak(5, 5, '2026-07-31', 0, false, '2026-08-02'))
-      .toMatchObject({ cycleDay: 1, shields: 0, shieldUsed: false })
-  })
-
-  it('unlocks the permanent badge and grants one shield on day 7, capped at two', () => {
-    expect(computeDailyPlayStreak(6, 6, '2026-08-01', 2, false, '2026-08-02'))
-      .toMatchObject({ cycleDay: 7, shields: 2, badgeUnlocked: true, tokenReward: 700, xpReward: 35 })
+  test('Day 8 stays available for claim; next unclaimed play starts a safe new cycle',()=>{
+    expect(computeDailyPlayStreak(8,8,'2026-09-01',2,true,'2026-09-02','VIP_PRO_PLUS')).toMatchObject({cycleDay:1,shields:2})
   })
 })

@@ -256,11 +256,7 @@ export default function ProfileScreen() {
       return
     }
     await handleCloseTierUnlock()
-    // Free members (ไม่ใช่ VIP/VIP Pro) เจอโฆษณาทันทีหลังปิด Tier Unlock (มติลุงเยาะ 2026-08-14)
-    // VIP ทุกระดับข้ามโฆษณาเสมอ — ใช้ isVip เดิม (vipStatus !== 'none') ไม่สร้าง selector ใหม่
-    if (!isVip) {
-      router.push({ pathname: '/(home)/watch-ad', params: { returnTo: '/(home)/profile' } } as any)
-    }
+    // Unlock celebrations are never an advertising break.
   }
 
   const handleChooseBeyondPath = async (path: BeyondPath) => {
@@ -342,7 +338,11 @@ export default function ProfileScreen() {
   }
 
   const handlePlay = () => {
-    router.push('/(home)/lobby')
+    router.push('/(home)/classic-lobby')
+  }
+
+  const handleTierDSolo = () => {
+    router.push('/game/tier-d/entry')
   }
 
   const handleShop = () => {
@@ -548,6 +548,10 @@ export default function ProfileScreen() {
             vipShimmer={isVip}
             labelStyle={s.playLabel}
           />
+          <TouchableOpacity style={s.tierDSoloLink} onPress={handleTierDSolo} activeOpacity={0.8}>
+            <Text style={s.tierDSoloLinkText}>[D] CONTINUE TIER D SOLO</Text>
+            <Text style={s.tierDSoloLinkSub}>Advanced Tiers are available from the Lobby after you unlock them.</Text>
+          </TouchableOpacity>
         </View>
 
         {/* ═══════════════ TABS (ย้ายขึ้นมาต่อจากปุ่ม Play — ผู้เล่นเห็นสถิติง่ายขึ้น) ═══════════════ */}
@@ -834,6 +838,9 @@ const s = StyleSheet.create({
   ascendantHintText: { color: C.gold, fontSize: 11, fontWeight: '800', letterSpacing: 0.3, textAlign: 'center' },
 
   playHeroWrap: { marginTop: 16 },
+  tierDSoloLink: { marginTop: 8, borderWidth: 1, borderColor: C.green, borderRadius: 10, paddingVertical: 10, alignItems: 'center', backgroundColor: 'rgba(141,255,181,0.08)' },
+  tierDSoloLinkText: { color: C.green, fontSize: 13, fontWeight: '900', letterSpacing: 0.5 },
+  tierDSoloLinkSub: { color: C.textSec, fontSize: 9, fontWeight: '700', marginTop: 3, textAlign: 'center' },
   // Batch 2 (VIP-02) — ปุ่มใหม่ทั้งหมด ไม่แตะ style เดิมของปุ่มอื่น
   vipPlusEntryBtn: {
     marginTop: 16,

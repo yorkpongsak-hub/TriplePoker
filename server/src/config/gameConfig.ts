@@ -58,21 +58,11 @@ export const gameConfig = {
       free: 200,                // +200 Token เมื่อดูโฆษณาครั้งแรกของวัน
       vip:  300,                // +300 Token อัตโนมัติสำหรับ VIP
     },
-    // ได้เมื่อเล่นจบอย่างน้อย 1 แมตช์ในวันนั้น (Asia/Bangkok), ไม่ใช่แค่เปิดแอป
-    // วันที่ 7 จบรอบและวันถัดไปวนกลับวันที่ 1
+    // Daily Streak eligibility is earned by one completed game in Bangkok time.
+    // Claim rewards are issued separately and atomically by the daily-streak route.
     playStreak: {
-      rewards: [
-        { token: 100, xp: 5 },
-        { token: 150, xp: 5 },
-        { token: 200, xp: 10 },
-        { token: 250, xp: 10 },
-        { token: 300, xp: 15 },
-        { token: 400, xp: 20 },
-        { token: 700, xp: 35 },
-      ],
-      cycleDays: 7,
-      maxShields: 2,
-      day7ShieldBonus: 1,
+      cycleDays: 8,
+      dailyBaseToken: 10, // Initiate Match 1, G1 stake; validated against tokenPot below.
     },
     // Streak Milestone Bonus (มติลุงเยาะ 2026-08-14) — แยกจาก playStreak.rewards ข้างบนโดยสิ้นเชิง
     // (XP ต่อวันยังแจกอัตโนมัติเหมือนเดิมทุกประการ ไม่แตะ) แทนที่เฉพาะ TOKEN ที่เคยแจกอัตโนมัติทุกวัน
@@ -670,6 +660,10 @@ export function validateGameConfig(): void {
     if (rangeMinToken != null && gateMinToken !== rangeMinToken) {
       errors.push(`progressionGate.${tier}.minToken (${gateMinToken}) ≠ tierRanges.${tier}.min (${rangeMinToken}) — ต้อง align กันเสมอ`);
     }
+  }
+
+  if (gameConfig.dailyEconomy.playStreak.dailyBaseToken !== gameConfig.tokenPot.tiers.initiate.pile1) {
+    errors.push('dailyEconomy.playStreak.dailyBaseToken must equal Initiate Match 1 G1 base stake');
   }
 
   if (errors.length > 0) {

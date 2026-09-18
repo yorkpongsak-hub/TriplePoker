@@ -1,4 +1,5 @@
 import { AI_CONFIGS, type AIConfig } from './aiEngine'
+import { assertCardZones, evaluateSharedPile, isSharedArrangementFoul } from './sharedCardRules'
 import { createDeck, shuffleDeck, type Card } from './deck'
 import { compareHands, evaluateBestFive, evaluateSoloG2BestFive, type BestFiveResult } from './handEvaluator'
 import { TIER_D_PILE_BASE_SCORES, getCurrentLeague, tierDBotCountForLevel, type LeagueId } from './tierDLeague'
@@ -9,6 +10,7 @@ export const TIER_D_GAME_POINTS = TIER_D_PILE_BASE_SCORES
 /** Awarded once when the same seat wins G1, G2 and G3 in one match. */
 export const TIER_D_TRIPLE_SWEEP_BONUS = 5
 
+/** Legacy name: this is a PILE index, not a Game or Match index. */
 export type TierDGameNumber = 1 | 2 | 3
 export type TierDSeat = { id: string; isBot: boolean; bot?: AIConfig; difficulty: TierDDifficulty }
 export type TierDDifficulty = { band: 'rookie' | 'steady' | 'skilled' | 'elite' | 'master' | 'endless'; skill: number }
@@ -184,6 +186,11 @@ export function assertTierDCardConservation(level: TierDLevelState): true {
   if(physical.length!==52)throw new Error(`Tier D card conservation failed: expected 52 physical cards, received ${physical.length}`)
   const identities=physical.map(cardIdentity)
   if(new Set(identities).size!==52)throw new Error('Tier D card conservation failed: duplicate or missing card identity')
+  assertCardZones({ hands: Object.values(level.dealtHands).flat(), community: Object.values(level.communityPiles).flat(), deck: level.drawPile })
+  for (const [seat, arrangement] of Object.entries(level.arrangements)) if (arrangement) {
+    const cards = Object.values(arrangement).flat().map(cardIdentity).sort().join('|')
+    if (cards !== level.dealtHands[seat].map(cardIdentity).sort().join('|')) throw new Error('Arrangement ownership does not match dealt hand')
+  }
   return true
 }
 
@@ -208,8 +215,7 @@ export function submitTierDArrangement(level: TierDLevelState, seatId: string, a
   const expected = dealt.map(cardIdentity).sort().join('|')
   const received = [...arrangement.pile1, ...arrangement.pile2, ...arrangement.pile3].map(cardIdentity).sort().join('|')
   if (expected !== received) throw new Error('Tier D arrangement must use each dealt card exactly once')
-  const ordered = ([1, 2, 3] as const).map(game => evaluatePile(arrangement, level.communityPiles, game))
-  level.fouled[seatId] = compareHands(ordered[0], ordered[1]) >= 0 || compareHands(ordered[1], ordered[2]) >= 0
+  level.fouled[seatId] = isSharedArrangementFoul(arrangement, level.communityPiles)
   level.arrangements[seatId] = { pile1: [...arrangement.pile1], pile2: [...arrangement.pile2], pile3: [...arrangement.pile3] }
   for (const game of level.games) game.hands[seatId] = cardsForGame(level.arrangements[seatId]!, game.game)
   assertTierDCardConservation(level)
@@ -358,8 +364,12 @@ export function defaultTierDArrangement(cards: Card[]): TierDArrangement {
   return { pile1: cards.slice(0, 3), pile2: cards.slice(3, 6), pile3: cards.slice(6, 11) }
 }
 function evaluatePile(arrangement: TierDArrangement, community: TierDCommunityPiles, game: TierDGameNumber): BestFiveResult {
-  const cards = cardsForGame(arrangement, game)
-  return game === 2 ? evaluateSoloG2BestFive(cards, community.pile2) : evaluateBestFive([...cards, ...community[`pile${game}` as keyof TierDCommunityPiles]])
+  return evaluateSharedPile(arrangement, community, game)
+}
+
+/** Random traversal stops at the first legal layout, without scoring/optimizing it. */
+export function automaticTierDArrangement(cards: Card[], community: TierDCommunityPiles, random: () => number = Math.random): TierDArrangement {
+  return firstValidTierDArrangement(shuffleWith([...cards], random), community)
 }
 
 /**

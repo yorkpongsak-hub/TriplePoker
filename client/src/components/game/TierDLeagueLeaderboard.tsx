@@ -5,6 +5,8 @@ import { audio } from '../../audio/AudioManager'
 import { AudioEvent } from '../../audio/audioEvents'
 import { supabase } from '../../services/supabaseService'
 import { AvatarDisplay, PRESET_AVATARS } from '../profile/AvatarPicker'
+import { formatInteger, t } from '../../i18n'
+import { useI18n } from '../../i18n/store'
 
 export type LeagueRankEntry = { userId:string; displayName:string; avatarUrl:string|null; languageCode?:string|null; rank:number; leaguePoints:number; longestWinStreak:number; isMock?:boolean }
 export type LeagueRankSnapshot = { enabled:boolean; entries:LeagueRankEntry[]; currentUser:{rank:number|null;leaguePoints:number}; previousDisplayedRank:number|null }
@@ -27,11 +29,13 @@ export async function fetchTierDLeagueRanking(serverUrl:string, accessToken:stri
  return response.json()
 }
 
-export function TierDLeagueLeaderboard({serverUrl,accessToken,userId,level,previousRank,onClose}:{serverUrl:string;accessToken:string;userId:string;level:number;previousRank:number|null;onClose:()=>void}){
+export function TierDLeagueLeaderboard({serverUrl,accessToken,userId,level,previousRank,onClose,entryMode='manualView',onAutoComplete}:{serverUrl:string;accessToken:string;userId:string;level:number;previousRank:number|null;onClose:()=>void;entryMode?:'manualView'|'autoReward';onAutoComplete?:()=>void}){
+ const locale=useI18n(state=>state.locale)
  const [snapshot,setSnapshot]=useState<LeagueRankSnapshot>()
  const [displayRank,setDisplayRank]=useState<number|null>(previousRank)
  const [error,setError]=useState('')
- const timer=useRef<ReturnType<typeof setTimeout>|null>(null)
+ const timer=useRef<ReturnType<typeof setTimeout>|null>(null); const autoTimer=useRef<ReturnType<typeof setTimeout>|null>(null)
+ const onAutoCompleteRef=useRef(onAutoComplete);onAutoCompleteRef.current=onAutoComplete
  const trophyGlow=useRef(new Animated.Value(0)).current
  const rankPulse=useRef(new Animated.Value(0)).current
  const league=leagueFor(level)
@@ -62,9 +66,12 @@ export function TierDLeagueLeaderboard({serverUrl,accessToken,userId,level,previ
    }
    if(current!==target)timer.current=setTimeout(step,333)
    else complete()
+   if(entryMode==='autoReward') autoTimer.current=setTimeout(()=>onAutoCompleteRef.current?.(),Math.abs((previousRank??target)-target)*333+3000)
   }).catch(e=>live&&setError(e instanceof Error?e.message:'Could not load League ranking.'))
-  return()=>{live=false;if(timer.current)clearTimeout(timer.current)}
- },[accessToken,previousRank,rankPulse,serverUrl])
+  return()=>{live=false;if(timer.current)clearTimeout(timer.current);if(autoTimer.current)clearTimeout(autoTimer.current)}
+ // onAutoComplete is normally an inline parent callback. Keeping it out of this
+ // request effect prevents a parent timer render from polling the leaderboard.
+ },[accessToken,entryMode,previousRank,rankPulse,serverUrl])
 
  const entries=useMemo(()=>{
   if(!snapshot)return[]
@@ -78,14 +85,14 @@ export function TierDLeagueLeaderboard({serverUrl,accessToken,userId,level,previ
  },[displayRank,snapshot,userId])
 
  return <View style={s.screen}><View style={s.panel}>
-  <TouchableOpacity style={s.close} onPress={onClose}><Text style={s.closeText}>CLOSE</Text></TouchableOpacity>
-  <View style={s.header}><Text style={s.title}>TOP 20</Text><Text style={s.leagueTitle}>{league.name.toUpperCase()} LEAGUE</Text></View>
+  {entryMode==='manualView'?<TouchableOpacity accessibilityLabel={t('common.close',{},locale)} style={s.close} onPress={onClose}><Text style={s.closeText}>{t('common.close',{},locale)}</Text></TouchableOpacity>:null}
+  <View style={s.header}><Text style={s.title}>{t('ranking.top20',{},locale)}</Text><Text style={s.leagueTitle}>{league.name.toUpperCase()} {t('game.league',{},locale)}</Text></View>
   <View style={s.trophyWrap}><Animated.View style={[s.goldAura,{opacity:trophyGlow,transform:[{scale:trophyGlow.interpolate({inputRange:[0,1],outputRange:[.82,1.18]})}]}]}/><Animated.Text style={[s.sparkles,{opacity:trophyGlow}]}>✦  ✧  ✦</Animated.Text><Image source={league.trophy} resizeMode="contain" style={s.trophy}/></View>
-  <Text style={s.speed}>RANKED BY CUMULATIVE LEAGUE POINTS</Text>
-  {error?<Text style={s.error}>{error}</Text>:!snapshot?<Text style={s.state}>LOADING RANKING…</Text>:!snapshot.enabled?<View style={s.disabled}><Text style={s.disabledTitle}>RANKING PREPARING</Text><Text style={s.state}>The League board opens when the eligible launch group is ready.</Text></View>:<>
-   <View style={s.columns}><Text style={s.colRank}>RANK</Text><Text style={s.colName}>PLAYER</Text><Text style={s.colStreak}>STREAK</Text><Text style={s.colPoints}>POINTS</Text></View>
-   <ScrollView style={s.scroll} contentContainerStyle={s.list}>{entries.map(row=>{const isMe=row.userId===userId;const preset=row.avatarUrl?PRESET_AVATARS.find(item=>item.key===row.avatarUrl):undefined;const avatar=preset?<AvatarDisplay config={{type:'preset',presetKey:preset.key,frameKey:'default'}} size={26} showFrame={false}/>:row.avatarUrl&&/^(https?:|data:)/i.test(row.avatarUrl)?<Image source={{uri:row.avatarUrl}} style={s.avatar}/>:<View style={[s.avatarFallback,isMe&&s.meAvatar]}><Text style={s.avatarText}>{row.displayName.slice(0,1).toUpperCase()}</Text></View>;return <Pressable key={row.userId} accessibilityRole="button" accessibilityLabel={`View ${row.displayName}'s profile`} onPress={()=>router.push({pathname:'/(home)/player/[userId]',params:{userId:row.userId}})}><Animated.View style={[s.row,isMe?s.me:s.rival,isMe&&{backgroundColor:rankPulse.interpolate({inputRange:[0,1],outputRange:['rgba(123,72,10,.96)','rgba(255,205,72,.96)']})}]}><Text style={[s.rank,row.rank<=3&&s.medal,isMe&&s.meText]}>#{row.rank}</Text><View style={s.avatarSlot}>{avatar}</View><Text style={[s.name,isMe&&s.meText]} numberOfLines={1}>{row.displayName}{isMe?'  · YOU':row.isMock?'  · RIVAL':''}</Text><Text accessibilityLabel={`Language ${row.languageCode??'en'}`} style={s.flag}>{languageFlag[row.languageCode??'en']??languageFlag.en}</Text><Text style={[s.streak,isMe&&s.meText]}>🔥{row.longestWinStreak}</Text><Text style={[s.points,isMe&&s.mePoints]}>{row.leaguePoints.toLocaleString()} LP</Text></Animated.View></Pressable>})}</ScrollView>
-   {displayRank!==null?<Text style={s.footer}>YOUR RANK #{displayRank}  ·  {snapshot.currentUser.leaguePoints.toLocaleString()} LP</Text>:null}
+  <Text style={s.speed}>{t('ranking.top20',{},locale)}</Text>
+  {error?<Text style={s.error}>{error}</Text>:!snapshot?<Text style={s.state}>{t('common.loading',{},locale)}</Text>:!snapshot.enabled?<View style={s.disabled}><Text style={s.disabledTitle}>{t('common.comingSoon',{},locale)}</Text><Text style={s.state}>{t('ranking.top20',{},locale)}</Text></View>:<>
+   <View style={s.columns}><Text style={s.colRank}>{t('ranking.rank',{rank:''},locale).replace('#','')}</Text><Text style={s.colName}>{t('ranking.player',{},locale)}</Text><Text style={s.colStreak}>{t('ranking.streak',{},locale)}</Text><Text style={s.colPoints}>{t('ranking.points',{},locale)}</Text></View>
+   <ScrollView style={s.scroll} contentContainerStyle={s.list}>{entries.map(row=>{const isMe=row.userId===userId;const preset=row.avatarUrl?PRESET_AVATARS.find(item=>item.key===row.avatarUrl):undefined;const avatar=preset?<AvatarDisplay config={{type:'preset',presetKey:preset.key,frameKey:'default'}} size={26} showFrame={false}/>:row.avatarUrl&&/^(https?:|data:)/i.test(row.avatarUrl)?<Image source={{uri:row.avatarUrl}} style={s.avatar}/>:<View style={[s.avatarFallback,isMe&&s.meAvatar]}><Text style={s.avatarText}>{row.displayName.slice(0,1).toUpperCase()}</Text></View>;return <Pressable key={row.userId} accessibilityRole="button" accessibilityLabel={`View ${row.displayName}'s profile`} onPress={()=>router.push({pathname:'/(home)/player/[userId]',params:{userId:row.userId}})}><Animated.View style={[s.row,isMe?s.me:s.rival,isMe&&entryMode==='autoReward'&&s.autoMe,isMe&&{backgroundColor:rankPulse.interpolate({inputRange:[0,1],outputRange:['rgba(123,72,10,.96)','rgba(255,205,72,.96)']})}]}><Text style={[s.rank,row.rank<=3&&s.medal,isMe&&s.meText]}>#{row.rank}</Text><View style={s.avatarSlot}>{avatar}</View><Text style={[s.name,isMe&&s.meText]} numberOfLines={1}>{row.displayName}{isMe?'  · YOU':row.isMock?'  · RIVAL':''}</Text><Text accessibilityLabel={`Language ${row.languageCode??'en'}`} style={s.flag}>{languageFlag[row.languageCode??'en']??languageFlag.en}</Text><Text style={[s.streak,isMe&&s.meText]}>🔥{row.longestWinStreak}</Text><Text style={[s.points,isMe&&s.mePoints]}>{row.leaguePoints.toLocaleString()} LP</Text></Animated.View></Pressable>})}</ScrollView>
+   {displayRank!==null?<Text style={s.footer}>{t('ranking.rank',{rank:displayRank},locale)}  ·  {formatInteger(snapshot.currentUser.leaguePoints,locale)} LP</Text>:null}
   </>}
  </View></View>
 }
@@ -112,7 +119,7 @@ const s=StyleSheet.create({
  list:{gap:4,paddingVertical:7},
  row:{height:40,flexDirection:'row',alignItems:'center',paddingHorizontal:8,borderRadius:8,borderWidth:1},
  rival:{backgroundColor:'rgba(20,83,48,.92)',borderColor:'rgba(91,181,117,.35)'},
- me:{borderWidth:2,borderColor:'#FFE58A',shadowColor:'#FFD76A',shadowOpacity:.8,shadowRadius:7,elevation:5},
+ me:{borderWidth:2,borderColor:'#FFE58A',shadowColor:'#FFD76A',shadowOpacity:.8,shadowRadius:7,elevation:5},autoMe:{borderStyle:'dashed',borderWidth:2,borderColor:'#fff3a5'},
  meText:{color:'#fff8d6',textShadowColor:'#704000',textShadowRadius:3},
  mePoints:{color:'#fffbd8'},
  meAvatar:{backgroundColor:'#9b6414',borderWidth:1,borderColor:'#fff0a0'},

@@ -11,12 +11,13 @@ export type WatchAdResult =
   | { ok: false; reason: 'cooldown'; retryAfterSeconds: number }
   | { ok: false; reason: 'error' }
 
-export async function watchAd(accessToken: string | null): Promise<WatchAdResult> {
+export async function watchAd(accessToken: string | null, proof: { devMock?: boolean; googleTestEarned?: boolean } = {}): Promise<WatchAdResult> {
   if (!accessToken) return { ok: false, reason: 'error' }
   try {
     const res = await fetch(`${SERVER_URL}/rewards/watch-ad`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(proof),
     })
     const json = await res.json()
     if (res.status === 429) {

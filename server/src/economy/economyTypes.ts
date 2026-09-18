@@ -43,6 +43,7 @@ export type EconomyReason =
   | 'STREAK_MILESTONE_BONUS'
   | 'AD_REWARD'
   | 'TIER_D_LEVEL_500_UNLOCK'
+  | 'TIER_D_LEVEL_250_TIER_C_UNLOCK'
   | 'OTHER'
 
 export interface AccountRef {

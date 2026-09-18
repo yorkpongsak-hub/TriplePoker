@@ -29,6 +29,7 @@ import { useUserStore } from '../../../src/store/userStore'
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
 import MonarchConquestBanner from '../../../src/components/game/MonarchConquestBanner'
 import { ActionButton } from '../../../src/components/ui/ActionButton'
+import { leaveAfterClassicSettlement } from '../../../src/ads/postSettlementExit'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
 import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
 import PlayerHandView from '../../../src/components/game/PlayerHandView'
@@ -257,6 +258,7 @@ const ServerLog = React.memo(({ socket, onMonarchWin }: { socket: Socket | null;
 // =================================================================
 const GameTableLive: React.FC = () => {
   const { bark, offer: offerBark } = useCharacterBarks()
+  const accessToken = useAuthStore(s => s.session?.access_token ?? null)
   const insets = useSafeAreaInsets()
   const isWeb  = Platform.OS === 'web'
   const socketRef = useRef<Socket | null>(null)
@@ -1059,7 +1061,7 @@ const GameTableLive: React.FC = () => {
         },
       } as any)
     } else {
-      router.push('/lobby')
+      void leaveAfterClassicSettlement({accessToken,tier:'B',outcome:'LOSS',exitReason:'BACK_TO_LOBBY',returnTo:'/lobby'})
     }
   }
 

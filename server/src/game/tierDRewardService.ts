@@ -56,6 +56,14 @@ export async function getTierDRewardBaseline(userId:string){
 export async function grantTierDLevelRandomItem(userId: string, level: number, isVip: boolean) {
   const { data, error } = await supabaseAdmin.rpc('grant_tier_d_level_random_item', { p_user_id: userId, p_level: level, p_quantity: 1, p_is_vip: isVip })
   if (error) throw error
+  const reward = data as TierDLevelReward
+  return reward.items.length ? reward : undefined
+}
+
+/** Claims a previously reserved Level Clear reward. VIP calls this directly. */
+export async function claimTierDLevelReward(userId: string, level: number) {
+  const { data, error } = await supabaseAdmin.rpc('claim_tier_d_level_reward', { p_user_id: userId, p_level: level })
+  if (error) throw error
   return data as TierDLevelReward
 }
 

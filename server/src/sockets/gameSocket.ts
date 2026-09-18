@@ -8,6 +8,7 @@
 // ============================================================
 
 import { Server, Socket } from "socket.io";
+import { tierDOwnerRegistrar } from "./tierDOwnerGuard";
 import { SpectatorService } from '../spectator/spectatorService';
 import { dealCards, validateDeal } from "../game/cardEngine";
 import { startMatch, submitArrangement, submitArrangementRound2, resolveContinue, submitAuctionBid, submitDiscard, submitGrandFinaleAction, settleAndEndSoloMatch, buildSoloLedgerArg, markSoloPlayerDisconnected, clearSoloDisconnectGrace, resendSoloStateToPlayer } from "../game/gameLoop";
@@ -272,22 +273,26 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
   }, 3_000);
 
   io.on("connection", (socket: Socket) => {
-    socket.on('tier_d_start', async (data:{roomId:string;playerId:string})=>{ socket.join(data.roomId); await startTierDSolo(io,data.roomId,data.playerId) })
+    const tierDOn=tierDOwnerRegistrar(socket,async token=>{
+      const {data,error}=await supabase.auth.getUser(token)
+      return error?undefined:data.user?.id
+    })
+    tierDOn('tier_d_start', async (data:{roomId:string;playerId:string})=>{ socket.join(data.roomId); await startTierDSolo(io,data.roomId,data.playerId) })
     // A fresh socket after an Expo reload must join before resumeTierDSolo emits
     // its room-scoped authoritative state. Without this, the resume ACK says
     // OK while the reconnecting client receives no tier_d_state and stays on
     // CONNECTING SOLO.
-    socket.on('tier_d_resume',async(data:{roomId:string;playerId:string})=>{ socket.join(data.roomId); const status=await resumeTierDSolo(io,data.roomId,data.playerId);socket.emit('tier_d_resume_ack',{ok:status==='RESUMED',status}) })
-    socket.on('tier_d_ad_pause',(data:{roomId:string;playerId:string;item:'shuffle'|'swap'|'double_pile'|'freeze'|'auto_sort'|'undo'},ack?:(ok:boolean)=>void)=>{ack?.(pauseTierDItemAd(io,data.roomId,data.playerId,data.item))})
-    socket.on('tier_d_ad_resume',(data:{roomId:string;playerId:string})=>resumeTierDItemAd(io,data.roomId,data.playerId))
-    socket.on('tier_d_inventory_refresh',(data:{roomId:string;playerId:string})=>void refreshTierDSoloInventory(io,data.roomId,data.playerId))
-    socket.on('tier_d_play',(data:{roomId:string;playerId:string;arrangement?:{pile1:string[];pile2:string[];pile3:string[]}},ack?:(accepted:boolean)=>void)=>{void playTierDGame(io,data.roomId,data.playerId,data.arrangement).then(accepted=>ack?.(accepted))})
-    socket.on('tier_d_arrangement_update',(data:{roomId:string;playerId:string;arrangement:{pile1:string[];pile2:string[];pile3:string[]}})=>stageTierDArrangement(io,data.roomId,data.playerId,data.arrangement))
-    socket.on('tier_d_item_use',(data:{roomId:string;playerId:string;item:'shuffle'|'swap'|'double_pile'|'freeze'|'auto_sort'|'undo';selectedCardKey?:string;selectedPile?:1|2|3})=>void useTierDItem(io,data.roomId,data.playerId,data.item,data.selectedCardKey,data.selectedPile))
-    socket.on('tier_d_timer_resume',(data:{roomId:string;playerId:string})=>resumeTierDTimer(io,data.roomId,data.playerId))
-    socket.on('tier_d_control_ready',(data:{roomId:string;playerId:string})=>startTierDTimerAfterDeal(io,data.roomId,data.playerId))
-    socket.on('tier_d_reveal_complete',(data:{roomId:string;playerId:string})=>finishTierDRevealAnimation(io,data.roomId,data.playerId))
-    socket.on('tier_d_triple_sweep_complete',(data:{roomId:string;playerId:string})=>finishTierDTripleSweepVfx(io,data.roomId,data.playerId))
+    tierDOn('tier_d_resume',async(data:{roomId:string;playerId:string})=>{ socket.join(data.roomId); const status=await resumeTierDSolo(io,data.roomId,data.playerId);socket.emit('tier_d_resume_ack',{ok:status==='RESUMED',status}) })
+    tierDOn('tier_d_ad_pause',(data:{roomId:string;playerId:string;item:'shuffle'|'swap'|'double_pile'|'freeze'|'auto_sort'|'undo'},ack?:(ok:boolean)=>void)=>{ack?.(pauseTierDItemAd(io,data.roomId,data.playerId,data.item))})
+    tierDOn('tier_d_ad_resume',(data:{roomId:string;playerId:string})=>resumeTierDItemAd(io,data.roomId,data.playerId))
+    tierDOn('tier_d_inventory_refresh',(data:{roomId:string;playerId:string})=>refreshTierDSoloInventory(io,data.roomId,data.playerId))
+    tierDOn('tier_d_play',(data:{roomId:string;playerId:string;arrangement?:{pile1:string[];pile2:string[];pile3:string[]}},ack?:(accepted:boolean)=>void)=>{return playTierDGame(io,data.roomId,data.playerId,data.arrangement).then(accepted=>ack?.(accepted))})
+    tierDOn('tier_d_arrangement_update',(data:{roomId:string;playerId:string;arrangement:{pile1:string[];pile2:string[];pile3:string[]}})=>stageTierDArrangement(io,data.roomId,data.playerId,data.arrangement))
+    tierDOn('tier_d_item_use',(data:{roomId:string;playerId:string;item:'shuffle'|'swap'|'double_pile'|'freeze'|'auto_sort'|'undo';selectedCardKey?:string;selectedPile?:1|2|3;gameId:string;matchNumber:number;requestId:string;dealRevision:number},ack?:(ok:boolean)=>void)=>{return useTierDItem(io,data.roomId,data.playerId,data.item,data.selectedCardKey,data.selectedPile,data).then(ok=>ack?.(ok))})
+    tierDOn('tier_d_timer_resume',(data:{roomId:string;playerId:string})=>resumeTierDTimer(io,data.roomId,data.playerId))
+    tierDOn('tier_d_control_ready',(data:{roomId:string;playerId:string})=>startTierDTimerAfterDeal(io,data.roomId,data.playerId))
+    tierDOn('tier_d_reveal_complete',(data:{roomId:string;playerId:string})=>finishTierDRevealAnimation(io,data.roomId,data.playerId))
+    tierDOn('tier_d_triple_sweep_complete',(data:{roomId:string;playerId:string})=>finishTierDTripleSweepVfx(io,data.roomId,data.playerId))
     socket.on(GAME_RESUME_EVENT, async (request: unknown) => {
       if (!isGameResumeRequest(request)) return
       const fail = (status: Exclude<GameResumeResult, { ok: true }>['status']) =>

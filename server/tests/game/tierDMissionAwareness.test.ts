@@ -13,19 +13,19 @@ test('one Mission on G2 has no Combo messaging and keeps its location',()=>{
 })
 test('G1/G3 Combo tracks provisional reveal, Undo and committed progress',()=>{
   const state=stateFor([{pile:3,rank:'flush'},{pile:1,rank:'one_pair'}])
-  result(state,1)
+  result(state,1,'one_pair')
   expect(tierDMissionAwareness(state,'p',0).missions[0]).toMatchObject({status:'success',provisional:true})
   expect(tierDMissionAwareness(state,'p',0).detail).toBe('COMBO +5–7')
   state.gameResults=[]
   expect(tierDMissionAwareness(state,'p',0).missions[0].status).toBe('pending')
-  result(state,1)
+  result(state,1,'one_pair')
   expect(tierDMissionAwareness(state,'p',1).detail).toBe('1 TO GO')
   result(state,3)
   expect(tierDMissionAwareness(state,'p',3).detail).toBe('COMBO!')
 })
 test.each([false,true])('negative Mission success/failure maps Super Combo (failure=%s)',failed=>{
   const state=stateFor([{pile:1,rank:'one_pair'},{pile:2,rank:'three_of_a_kind',negative:true,penalty:-8},{pile:3,rank:'flush'}])
-  result(state,1);result(state,2,failed?'high_card':'flush');result(state,3)
+  result(state,1,'one_pair');result(state,2,failed?'high_card':'flush');result(state,3)
   const view=tierDMissionAwareness(state,'p',3)
   expect(view.detail).toBe(failed?'SUPER COMBO MISSED':'SUPER COMBO!')
   expect(view.risk).toBe(true);expect(view.missions[1].label).toBe('⚠ TRIPS+ · FAIL -8')
@@ -34,8 +34,8 @@ test.each([false,true])('negative Mission success/failure maps Super Combo (fail
 })
 test('Super Combo progress and failure never offer normal Combo for two successes',()=>{
   const state=stateFor([{pile:1,rank:'one_pair'},{pile:2,rank:'one_pair'},{pile:3,rank:'flush'}])
-  result(state,1);expect(tierDMissionAwareness(state,'p',1).detail).toBe('2 TO GO')
-  result(state,2);expect(tierDMissionAwareness(state,'p',2).detail).toBe('1 TO GO')
+  result(state,1,'one_pair');expect(tierDMissionAwareness(state,'p',1).detail).toBe('2 TO GO')
+  result(state,2,'one_pair');expect(tierDMissionAwareness(state,'p',2).detail).toBe('1 TO GO')
   result(state,3,'high_card');expect(tierDMissionAwareness(state,'p',3).detail).toBe('SUPER COMBO MISSED')
   expect(commitTierDCombo(state,()=>.99).p).toBe(0)
 })
@@ -47,7 +47,7 @@ test('new Match resets progress; hidden G3 does not leak its provisional outcome
 })
 test('Combo awards once when both Missions are committed, never rerolls on later commit',()=>{
   const state=stateFor([{pile:1,rank:'one_pair'},{pile:2,rank:'one_pair'}])
-  result(state,1);result(state,2)
+  result(state,1,'one_pair');result(state,2,'one_pair')
   const random=jest.fn(()=>0)
   expect(commitTierDCombo(state,random,1).p).toBe(0)
   expect(random).not.toHaveBeenCalled()

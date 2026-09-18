@@ -33,6 +33,7 @@ import { useUserStore } from '../../../src/store/userStore'
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
 import MonarchConquestBanner from '../../../src/components/game/MonarchConquestBanner'
 import { ActionButton } from '../../../src/components/ui/ActionButton'
+import { leaveAfterClassicSettlement } from '../../../src/ads/postSettlementExit'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
 import { GuideOverlay } from '../../../src/components/onboarding/GuideOverlay'
 import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
@@ -1426,7 +1427,7 @@ const GameTableLive: React.FC = () => {
                       },
                     } as any)
                   } else {
-                    router.replace({ pathname: '/(home)/lobby', params: { autoContinue: 'initiate' } } as any)
+                    void leaveAfterClassicSettlement({accessToken,tier:'C',outcome:'LOSS',exitReason:'BACK_TO_LOBBY',returnTo:'/(home)/lobby?autoContinue=initiate'})
                   }
                 }}
                 insetsBottom={insets.bottom}

@@ -18,6 +18,7 @@ import { useAuthStore } from '../../src/store/authStore'
 import { getTierProgress, TierProgress } from '../../src/config/tierConfig'
 import { AudioEvent } from '../../src/audio'
 import { useBgm } from '../../src/services/bgmService'
+import { leaveAfterClassicSettlement, type ClassicAdTier } from '../../src/ads/postSettlementExit'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 const tokenDropGif = require('../../assets/fx/vfx_you_win.webp')
@@ -65,6 +66,7 @@ export default function VictoryScreen() {
   const autoContinue = params.autoContinue
 
   const isGuest = useAuthStore(s => s.session?.user?.is_anonymous === true)
+  const accessToken = useAuthStore(s => s.session?.access_token)
 
   const [loaded, setLoaded] = useState(false)
   const [percentile, setPercentile] = useState<number>(0)
@@ -160,10 +162,13 @@ export default function VictoryScreen() {
   const progressStyle = useAnimatedStyle(() => ({ opacity: progressOpacity.value }))
   const progressFillStyle = useAnimatedStyle(() => ({ width: progressFillWidth.value }))
 
-  const goToWatchAd = () => router.push({
-    pathname: '/(home)/watch-ad',
-    params: { returnTo: `/(home)/top10?tier=${tier}${autoContinue ? `&autoContinue=${autoContinue}` : ''}` },
-  } as any)
+  const goToWatchAd = async () => {
+    const returnTo=`/(home)/top10?tier=${tier}${autoContinue ? `&autoContinue=${autoContinue}` : ''}`
+    const tierToAdTier:Record<string,ClassicAdTier>={initiate:'C',adept:'B',mastermind:'A',highNoble:'A_PLUS'}
+    const adTier=tierToAdTier[tier]
+    if(!adTier){router.push(returnTo as any);return}
+    await leaveAfterClassicSettlement({accessToken,tier:adTier,outcome:'WIN',exitReason:'CONTINUE',returnTo})
+  }
 
   if (!loaded) {
     return (

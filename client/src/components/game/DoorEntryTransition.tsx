@@ -9,6 +9,8 @@ import { AvatarDisplay, PRESET_AVATARS } from '../profile/AvatarPicker'
 import { BADGES } from '../../../assets/badges/BADGE_MANIFEST'
 import { TierDLeagueLeaderboard } from './TierDLeagueLeaderboard'
 import { TierDRecordsBoard } from './TierDRecordsBoard'
+import { t } from '../../i18n'
+import { useI18n } from '../../i18n/store'
 
 const DOOR_IMAGE = require('../../../assets/images/game_entrance.png')
 const APP_LOGO = require('../../../assets/images/triple_poker_icon.png')
@@ -44,24 +46,12 @@ const ROYAL_FLUSH = [
   { value: 'k', rotate: '5deg', offsetY: 5 },
   { value: 'a', rotate: '10deg', offsetY: 12 },
 ] as const
-const ENTRY_MESSAGES = [
-  'GOOD LUCK. PLAY YOUR BEST HAND.',
-  'TRUST YOUR READ. THE TABLE IS READY.',
-  'MAY THE CARDS FALL IN YOUR FAVOR.',
-  'STAY SHARP AND ENJOY THE GAME.',
-  'ONE GREAT HAND CAN CHANGE EVERYTHING.',
-  'PLAY CALM. PLAY BOLD.',
-  'YOUR NEXT VICTORY STARTS HERE.',
-  'READ THE PILES. MAKE YOUR MOVE.',
-  'FORTUNE FAVORS A CLEAR MIND.',
-  'HAVE FUN AND AIM FOR THE SWEEP.',
-] as const
-
 /**
  * Presentation-only Tier D entry.  The image already includes the Rise emblem,
  * so its two clipped halves carry the emblem apart without rendering a duplicate.
  */
-export default function DoorEntryTransition({ onFinish, level }: { onFinish: () => void; level?: number }) {
+export default function DoorEntryTransition({ onFinish, onHowToPlay, level }: { onFinish: () => void; onHowToPlay?: () => void; level?: number }) {
+  const locale = useI18n(state => state.locale)
   const { width, height } = useWindowDimensions()
   const profile = useAuthStore(state => state.profile)
   const user = useAuthStore(state => state.user)
@@ -148,27 +138,35 @@ export default function DoorEntryTransition({ onFinish, level }: { onFinish: () 
   return <Animated.View style={[styles.root, { opacity: fade }]} pointerEvents="auto">
     <View style={styles.casino}><View style={styles.tableGlow}/></View>
     {!started ? <>
-      <Pressable accessibilityRole="button" accessibilityLabel="Change profile picture" style={styles.playerCard} onPress={() => router.push({ pathname: '/(home)/profile', params: { editAvatar: '1' } })}>
+      <View style={styles.playerCard}>
         <EntryIcon source={ENTRY_ICON_SHEET_1} index={0} style={styles.profileIcon}/>
-        <View style={styles.honorAvatar}>{equippedBadge ? <Image source={equippedBadge} resizeMode="contain" style={styles.equippedBadge}/> : null}<AvatarFrame size={56} active={false}>{avatar}</AvatarFrame></View>
-        <View style={styles.playerIdentity}><Text numberOfLines={1} style={styles.playerName}>{profile?.display_name ?? 'PLAYER'}</Text><Text style={styles.honorLabel}>{profile?.equipped_badge_key ? profile.equipped_badge_key.replaceAll('_',' ').toUpperCase() : 'HONOR FRAME'}</Text><Text style={styles.changeAvatarLink}>✎ CHANGE AVATAR</Text></View>
-      </Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="Change profile picture" style={styles.avatarAction} onPress={() => router.push({ pathname: '/(home)/profile', params: { editAvatar: '1' } })}>
+          <View style={styles.honorAvatar}>{equippedBadge ? <Image source={equippedBadge} resizeMode="contain" style={styles.equippedBadge}/> : null}<AvatarFrame size={56} active={false}>{avatar}</AvatarFrame></View>
+        </Pressable>
+        <View style={styles.playerIdentity}><Text numberOfLines={1} style={styles.playerName}>{profile?.display_name ?? 'PLAYER'}</Text><Text numberOfLines={1} style={styles.honorLabel}>{profile?.equipped_badge_key ? profile.equipped_badge_key.replaceAll('_',' ').toUpperCase() : 'HONOR FRAME'}</Text></View>
+      </View>
       <View style={styles.personalBestBoard}>
         <Pressable accessibilityRole="button" accessibilityLabel="Open Personal Best Top 50" style={styles.personalBestTitleRow} onPress={() => setRecordsBoard('pb')}><EntryIcon source={ENTRY_ICON_SHEET_2} index={1} style={styles.boardIcon}/><Text style={styles.personalBestTitle}>PERSONAL BEST</Text></Pressable>
         <StatRow label="FASTEST TIME" value={formatTime(profile?.tier_d_best_match_time_ms)}/>
         <Pressable accessibilityRole="button" accessibilityLabel="Open longest streak Top 50" style={styles.streakRow} onPress={() => setRecordsBoard('streak')}><EntryIcon source={ENTRY_ICON_SHEET_2} index={0} style={styles.streakIcon}/><StatRow label="LONGEST STREAK" value={String(profile?.tier_d_best_win_streak ?? 0)}/></Pressable>
         <StatRow label="BEST MATCH SCORE" value={String(profile?.tier_d_best_match_score ?? 0)}/>
       </View>
-      <Pressable accessibilityRole="button" accessibilityLabel="Open league Top 20" style={styles.top20Button} onPress={() => setLeaderboardOpen(true)}><EntryIcon source={ENTRY_ICON_SHEET_1} index={2} style={styles.entryButtonIcon}/></Pressable>
-      <Pressable accessibilityRole="button" accessibilityLabel="Open your trophy showcase" style={styles.showcaseMark} onPress={() => router.push('/(home)/profile')}><EntryIcon source={ENTRY_ICON_SHEET_2} index={2} style={styles.entryButtonIcon}/></Pressable>
-      <Text style={styles.readyLevel}>{level ? `LEVEL ${level}` : 'NEXT LEVEL'}</Text>
-      <View style={styles.readyArea}><Pressable accessibilityRole="button" accessibilityLabel="Start Level" style={styles.nextLevelButton} onPress={() => setStarted(true)}><Text style={styles.nextLevelText}>GO GO GO</Text></Pressable></View>
+      <View pointerEvents="none" accessibilityElementsHidden style={styles.entryIconColumn}>
+        <EntryIcon source={ENTRY_ICON_SHEET_1} index={0} style={styles.entryColumnIcon}/>
+        <EntryIcon source={ENTRY_ICON_SHEET_1} index={1} style={styles.entryColumnIcon}/>
+        <EntryIcon source={ENTRY_ICON_SHEET_1} index={2} style={styles.entryColumnIcon}/>
+        <EntryIcon source={ENTRY_ICON_SHEET_2} index={0} style={styles.entryColumnIcon}/>
+        <EntryIcon source={ENTRY_ICON_SHEET_2} index={1} style={styles.entryColumnIcon}/>
+        <EntryIcon source={ENTRY_ICON_SHEET_2} index={2} style={styles.entryColumnIcon}/>
+      </View>
+      <Text style={styles.readyLevel}>{level ? t('entry.level', { level }, locale) : t('common.continue', {}, locale)}</Text>
+      <View style={styles.readyArea}><Pressable accessibilityRole="button" accessibilityLabel={t('entry.openDoor', {}, locale)} style={styles.nextLevelButton} onPress={() => setStarted(true)}><Text style={styles.nextLevelText}>{t('entry.openDoor', {}, locale)}</Text></Pressable>{onHowToPlay?<Pressable accessibilityRole="button" accessibilityLabel={t('entry.howToPlay', {}, locale)} style={styles.howToPlayButton} onPress={onHowToPlay}><Text style={styles.howToPlayText}>{t('entry.howToPlay', {}, locale)}</Text></Pressable>:null}</View>
     </> : null}
     {started ? <><LeagueTrophyCabinet side="left"/><LeagueTrophyCabinet side="right"/></> : null}
     <Animated.View pointerEvents="none" style={[styles.brand, { opacity: entryCopyOpacity }]}>
       <Image source={APP_LOGO} resizeMode="contain" style={styles.appLogo}/>
       <Text style={styles.appName}>TriplePoker : Rise</Text>
-      <Text style={styles.brandLevel}>{level ? `LEVEL ${level}` : 'NEXT LEVEL'}</Text>
+      <Text style={styles.brandLevel}>{level ? t('entry.level', { level }, locale) : t('common.continue', {}, locale)}</Text>
     </Animated.View>
     <Animated.View style={[styles.royal, royalStyle]} pointerEvents="none">
       <View style={styles.royalGlow}/>
@@ -313,18 +311,18 @@ const styles = StyleSheet.create({
   appLogo: { width: 99, height: 99, borderRadius: 22 },
   appName: { marginTop: 30, color: '#fff1bb', fontSize: 23, fontWeight: '900', letterSpacing: 1.1, textShadowColor: '#6f4200', textShadowRadius: 11 },
   brandLevel: { marginTop: 6, color: '#fff1bb', fontSize: 18, fontWeight: '900', letterSpacing: 2, textShadowColor: '#7b4700', textShadowRadius: 11 },
-  playerCard: { position: 'absolute', top: '6%', left: 14, zIndex: 20, flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: '48%' },
-  profileIcon: { width: 35, height: 34, marginRight: -5 },
+  playerCard: { position: 'absolute', top: '6%', left: 14, zIndex: 20, width: 104, alignItems: 'center' },
+  profileIcon: { position: 'absolute', left: -4, top: 10, width: 35, height: 34 },
+  avatarAction: { borderRadius: 34 },
   honorAvatar: { width: 68, height: 68, alignItems: 'center', justifyContent: 'center' },
   equippedBadge: { position: 'absolute', width: 68, height: 68, opacity: .92 },
-  playerIdentity: { gap: 2, maxWidth: 120 },
-  playerName: { color: '#fff6d6', fontSize: 13, fontWeight: '900', textShadowColor: '#000', textShadowRadius: 6 },
-  honorLabel: { color: '#ffd76a', fontSize: 8, fontWeight: '900', letterSpacing: .6 },
-  changeAvatarLink: { color: '#9deac0', fontSize: 8, fontWeight: '900', letterSpacing: .45, marginTop: 2, textDecorationLine: 'underline' },
+  playerIdentity: { alignItems: 'center', gap: 2, width: '100%', marginTop: 3 },
+  playerName: { color: '#fff6d6', fontSize: 13, fontWeight: '900', textAlign: 'center', textShadowColor: '#000', textShadowRadius: 6 },
+  honorLabel: { color: '#ffd76a', fontSize: 8, fontWeight: '900', letterSpacing: .6, textAlign: 'center' },
   profilePhoto: { width: 56, height: 56, borderRadius: 28 },
   profileInitial: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', backgroundColor: '#183526', borderWidth: 1, borderColor: '#ffd76a' },
   profileInitialText: { color: '#fff6d6', fontSize: 23, fontWeight: '900' },
-  personalBestBoard: { position: 'absolute', top: '15%', right: 14, zIndex: 20, width: 152, padding: 9, borderRadius: 10, backgroundColor: 'rgba(5,17,11,.88)', borderWidth: 1, borderColor: 'rgba(255,215,106,.7)', gap: 4 },
+  personalBestBoard: { position: 'absolute', top: '6%', right: 10, zIndex: 20, width: 152, padding: 9, borderRadius: 10, backgroundColor: 'rgba(5,17,11,.88)', borderWidth: 1, borderColor: 'rgba(255,215,106,.7)', gap: 4 },
   personalBestTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 2 },
   personalBestTitle: { color: '#ffd76a', fontSize: 9, fontWeight: '900', letterSpacing: .8, textAlign: 'center', marginBottom: 2 },
   boardIcon: { width: 24, height: 19, marginRight: 2 },
@@ -333,13 +331,14 @@ const styles = StyleSheet.create({
   statRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 5 },
   statLabel: { color: '#bfd7c5', fontSize: 7, fontWeight: '800' },
   statValue: { color: '#fff2b2', fontSize: 8, fontWeight: '900' },
-  readyArea: { position: 'absolute', left: 24, right: 24, bottom: '6.5%', zIndex: 20, alignItems: 'center' },
+  readyArea: { position: 'absolute', left: 24, right: 24, bottom: '6.5%', zIndex: 20, alignItems: 'center', gap: 13 },
   readyLevel: { position: 'absolute', top: '59%', left: 24, right: 24, zIndex: 20, color: '#fff1bb', fontSize: 21, fontWeight: '900', letterSpacing: 2, textAlign: 'center', textShadowColor: '#7b4700', textShadowRadius: 11 },
   nextLevelButton: { minWidth: 200, alignItems: 'center', paddingHorizontal: 24, paddingVertical: 13, borderRadius: 10, backgroundColor: '#ffd76a', borderWidth: 1.5, borderColor: '#fff4bc', shadowColor: '#ffd76a', shadowOpacity: .7, shadowRadius: 12, elevation: 9 },
   nextLevelText: { color: '#17311f', fontSize: 14, fontWeight: '900', letterSpacing: 1.5 },
-  top20Button: { position: 'absolute', top: '6%', right: 14, zIndex: 21, width: 48, height: 38, borderRadius: 9, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,215,106,.72)', backgroundColor: 'rgba(5,17,11,.8)' },
-  showcaseMark: { position: 'absolute', top: '38%', right: 14, zIndex: 20, opacity: .92 },
-  entryButtonIcon: { width: 48, height: 38 },
+  howToPlayButton: { paddingHorizontal: 14, paddingVertical: 5 },
+  howToPlayText: { color: 'rgba(255,241,187,.76)', fontSize: 11, fontWeight: '800', letterSpacing: 1.1, textDecorationLine: 'underline' },
+  entryIconColumn: { position: 'absolute', top: '22%', left: 14, zIndex: 21, gap: 9, alignItems: 'center' },
+  entryColumnIcon: { width: 52, height: 42 },
   entryIconCrop: { width: 48, height: 38, overflow: 'hidden' },
   entryIconSprite: { position: 'absolute', top: 0, width: 144, height: 38 },
   // The opened showcase legs end around 60% of the portrait screen; keep the encouragement below them.
@@ -348,3 +347,15 @@ const styles = StyleSheet.create({
   royalGlow: { position: 'absolute', width: 280, height: 120, borderRadius: 60, backgroundColor: 'rgba(255,213,102,.22)', shadowColor: '#ffe4a0', shadowOpacity: 0.95, shadowRadius: 28, elevation: 12 },
   card: { shadowColor: '#ffe6a3', shadowOpacity: 0.72, shadowRadius: 10, elevation: 12 },
 })
+const ENTRY_MESSAGES = [
+  'GOOD LUCK. PLAY YOUR BEST HAND.',
+  'TRUST YOUR READ. THE TABLE IS READY.',
+  'MAY THE CARDS FALL IN YOUR FAVOR.',
+  'STAY SHARP AND ENJOY THE GAME.',
+  'ONE GREAT HAND CAN CHANGE EVERYTHING.',
+  'PLAY CALM. PLAY BOLD.',
+  'YOUR NEXT VICTORY STARTS HERE.',
+  'READ THE PILES. MAKE YOUR MOVE.',
+  'FORTUNE FAVORS A CLEAR MIND.',
+  'HAVE FUN AND AIM FOR THE SWEEP.',
+] as const

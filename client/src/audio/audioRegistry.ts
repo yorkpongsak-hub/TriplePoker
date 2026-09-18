@@ -29,6 +29,7 @@ const pileWinVoice = require('../../assets/audio/sfx/result/sfx_match_win.mp3')
 /** Applause-only result cue; intentionally distinct from the spoken pile-win voice. */
 const levelWinApplause = require('../../assets/audio/sfx/result/sfx_congratulation2.mp3')
 const tripleSweepCongratulations = require('../../assets/audio/sfx/result/sfx_congratulation.mp3')
+const top20Complete = require('../../assets/audio/sfx/result/sfx_top20.wav')
 const tierUnlock = require('../../assets/audio/sfx/result/tier_unlock.mp3')
 const rareReaction = require('../../assets/audio/sfx/result/rare_reaction.mp3')
 const bossThunder = require('../../assets/audio/sfx/boss/boss_thunder.mp3')
@@ -66,7 +67,7 @@ export const audioRegistry: Record<AudioEvent, AudioDefinition> = {
   [AudioEvent.TOKEN_COMMIT]: def(raiseBid, AudioCategory.GAMEPLAY, AudioPriority.NORMAL, .60),
   [AudioEvent.TOKEN_REWARD]: def(pokerChip, AudioCategory.RESULT, AudioPriority.NORMAL, .58, { cooldownMs: 250 }),
   [AudioEvent.RANK_TICK]: def(auctionBidTick, AudioCategory.UI, AudioPriority.NORMAL, .48, { cooldownMs: 250 }),
-  [AudioEvent.RANK_COMPLETE]: def(tripleSweepCongratulations, AudioCategory.RESULT, AudioPriority.VERY_HIGH, .78, { duckBgm: .30 }),
+  [AudioEvent.RANK_COMPLETE]: def(top20Complete, AudioCategory.RESULT, AudioPriority.VERY_HIGH, .78, { duckBgm: .30 }),
   [AudioEvent.ANTE]: def(ante, AudioCategory.GAMEPLAY, AudioPriority.NORMAL, .55, { cooldownMs: 250 }),
   [AudioEvent.AUTO_SORT]: def(autoSort, AudioCategory.UI, AudioPriority.LOW, .50, { cooldownMs: 150 }),
   [AudioEvent.CARD_SHUFFLE]: def(cardShuffle, AudioCategory.CARD, AudioPriority.NORMAL, .50, { cooldownMs: 500 }),

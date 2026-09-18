@@ -9,7 +9,7 @@ export async function countryRoutes(app:FastifyInstance) {
     const {data,error}=await supabase.auth.getUser(token)
     if(error||!data.user)return reply.status(401).send({error:'Unauthorized'})
     const language=request.body?.language
-    if(typeof language!=='string'||!['en','th','zh','ja','ko','vi','id','es','pt','fr'].includes(language))return reply.status(400).send({error:'INVALID_LANGUAGE'})
+    if(typeof language!=='string'||!['en','th','zh-CN','zh','ja','ko','vi','id','es','pt','fr'].includes(language))return reply.status(400).send({error:'INVALID_LANGUAGE'})
     const {error:writeError}=await supabaseAdmin.from('player_language_preferences').upsert({user_id:data.user.id,language_code:language,updated_at:new Date().toISOString()},{onConflict:'user_id'})
     if(writeError)return reply.status(503).send({error:'LANGUAGE_UNAVAILABLE'})
     return {language_code:language}

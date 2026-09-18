@@ -10,7 +10,6 @@ import {
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
-import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '../../src/services/supabaseService'
 import { useAuthStore } from '../../src/store/authStore'
 import AvatarPicker, { AvatarConfig, AvatarDisplay, PRESET_AVATARS, VipStatus } from '../../src/components/profile/AvatarPicker'
@@ -19,6 +18,24 @@ const triplePokerLogo = require('../../assets/images/triple_poker_icon.png')
 
 // ต้องตรงกับ server/src/constants/avatarPresets.ts DEFAULT_AVATAR_KEY
 const DEFAULT_AVATAR_KEY = 'wolf'
+const SERVER_REQUEST_TIMEOUT_MS = 15_000
+
+// A development phone can lose its route to the local API (especially when Metro
+// runs through WSL/LAN). Never leave the profile CTA in a permanent spinner.
+async function serverFetch(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), SERVER_REQUEST_TIMEOUT_MS)
+  try {
+    return await fetch(url, { ...init, signal: controller.signal })
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error('Could not reach the game server. Check that it is running, then try again.')
+    }
+    throw error
+  } finally {
+    clearTimeout(timeout)
+  }
+}
 
 // ─── ธีมสีหลักของแอป ──────────────────────────────────────
 const C = {
@@ -59,8 +76,6 @@ export default function SetupProfileScreen() {
   })
   const [vipStatus, setVipStatus] = useState<VipStatus>('none')
   const [isSaving, setIsSaving] = useState(false)
-  // Patch 2026-07-18: สมาชิกเก่า = มี display_name ใน DB อยู่แล้วตอนเปิดหน้า — ใช้ตัดสินข้าม Onboarding
-  const [isExistingMember, setIsExistingMember] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   // Guest Play (มติลุงเยาะ 2026-08-14) — guest (Anonymous Sign-In) ที่มาตั้งชื่อจากหน้านี้ ยังไม่มี
@@ -87,7 +102,7 @@ export default function SetupProfileScreen() {
         .select('display_name, avatar_url, vip_status')
         .eq('user_id', session.user.id)
         .maybeSingle()
-      if (data?.display_name) { setDisplayName(data.display_name); setIsExistingMember(true) }
+      if (data?.display_name) setDisplayName(data.display_name)
       if (data?.vip_status) setVipStatus(data.vip_status as VipStatus)
       // avatar_url เก่าบางบัญชีเป็น emoji ดิบ (ก่อนระบบ preset) ไม่ตรง key ไหนเลย — เช็คก่อน
       // ไม่งั้น fall back ไป default preset เฉยๆ (กัน crash ไม่ต้องพยายาม render emoji เก่า)
@@ -151,7 +166,7 @@ export default function SetupProfileScreen() {
       // server จริง — เดิมหน้านี้เขียน display_name ลง Supabase ตรงๆ ไม่เคยเรียก nameValidator.ts
       // เลยสักครั้ง (dead code จากมุมผู้เล่นจริง) ต้องผ่าน endpoint นี้ก่อนถึงจะบันทึกชื่อได้
       const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
-      const registerRes = await fetch(`${SERVER_URL}/auth/register`, {
+      const registerRes = await serverFetch(`${SERVER_URL}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({ displayName: displayName.trim() }),
@@ -164,7 +179,7 @@ export default function SetupProfileScreen() {
 
       // 4) บันทึก avatar preset แยก ผ่าน POST /profile/avatar เท่านั้น (endpoint /auth/register
       // ข้างบนจัดการแค่ display_name) — server validate VIP/VIP PRO tier อีกชั้น กัน bypass client-side lock
-      const avatarRes = await fetch(`${SERVER_URL}/profile/avatar`, {
+      const avatarRes = await serverFetch(`${SERVER_URL}/profile/avatar`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({ avatarKey: avatarConfig.presetKey ?? DEFAULT_AVATAR_KEY }),
@@ -194,14 +209,9 @@ export default function SetupProfileScreen() {
         })
       }
 
-      // ผู้เล่นใหม่ (ยังไม่เคยดู Onboarding) -- ไปหน้า Onboarding ก่อน แล้วค่อยเข้าหน้าหลัก
-      // Patch 2026-07-18: สมาชิกเก่า (มีชื่อใน DB อยู่แล้ว) ข้าม Onboarding เสมอ — flag ฝั่งเครื่อง
-      // เชื่อถือไม่ได้ (clear cache/ลงแอปใหม่/เปลี่ยนเครื่องแล้วหาย) + เซ็ต flag คืนให้ด้วยกันหลุดซ้ำ
-      const onboardingSeen = await AsyncStorage.getItem('onboarding_seen')
-      if (isExistingMember && onboardingSeen !== '1') {
-        await AsyncStorage.setItem('onboarding_seen', '1')
-      }
-      router.replace(isExistingMember ? '/(home)/profile' : '/(auth)/onboarding')
+      // Solo Levels now teach the first moves in context.  The slideshow remains
+      // available from the entrance door as an optional guide, never a gate.
+      router.replace('/game/tier-d/entry')
 
     } catch (e: any) {
       setError(e?.message ?? 'Unexpected error')
