@@ -18,7 +18,7 @@ import {
   Image, Pressable, StyleSheet, Text, useWindowDimensions, View,
 } from 'react-native'
 import Animated, {
-  useAnimatedStyle, useSharedValue, withTiming,
+  useAnimatedStyle, useSharedValue, withRepeat, withTiming,
 } from 'react-native-reanimated'
 import { CARD_IMG } from './cardAssets'
 
@@ -45,6 +45,8 @@ export interface PlayerHandViewProps {
   // นี้เลย — opt-in เหมือน pattern leftSlot ของ GameTopBar) ไม่แตะ Free mode/exposed calc
   handFanAngleScale?: number
   discardMarked?: { pi: number; ci: number } | null
+  /** Early Tier D lesson: cards that currently form a winning shown-AI pile. */
+  winningCardKeys?: string[][]
 }
 
 // ── ค่าคงที่ layout ──
@@ -141,10 +143,14 @@ function computeLayout(screenW: number, pileSizes: number[], target: LayoutTarge
 
 // ── ไพ่ 1 ใบในโหมด Free (แถวตรง overlap) ──
 const FreeCard: React.FC<{
-  code: string; first: boolean; selected: boolean; discardMarked: boolean; onPress: () => void
+  code: string; first: boolean; selected: boolean; discardMarked: boolean; winning: boolean; onPress: () => void
   cw: number; ch: number; overlapML: number; zIndex: number
   images: Record<string, any>
-}> = ({ code, first, selected, discardMarked, onPress, cw, ch, overlapML, zIndex, images }) => (
+}> = ({ code, first, selected, discardMarked, winning, onPress, cw, ch, overlapML, zIndex, images }) => {
+  const pulse = useSharedValue(1)
+  useEffect(() => { pulse.value = winning ? withRepeat(withTiming(.42, { duration: 620 }), -1, true) : 1 }, [pulse, winning])
+  const pulseStyle = useAnimatedStyle(() => ({ opacity: pulse.value }))
+  return (
   <Pressable
     onPress={onPress}
     style={[
@@ -152,6 +158,7 @@ const FreeCard: React.FC<{
       { width: cw, height: ch },
       !first && { marginLeft: overlapML },
       selected && styles.cardSel,
+      winning && styles.cardWin,
       { zIndex },
     ]}
   >
@@ -159,24 +166,28 @@ const FreeCard: React.FC<{
       ? <Image source={images[code]} style={{ width: cw, height: ch }} resizeMode="cover" />
       : <Text style={styles.fallbackTxt}>{code}</Text>}
     {discardMarked && <View pointerEvents="none" style={styles.discardMark}><Text style={styles.discardMarkText}>×</Text></View>}
+    {winning && <Animated.View pointerEvents="none" style={[styles.cardWinGlow, pulseStyle]} />}
   </Pressable>
-)
+)}
 
 // ── ไพ่ 1 ใบในโหมด VIP (pivot-rotation fan + เด้งตอนเลือกด้วย Reanimated) ──
 // ทุกใบวางที่ตำแหน่ง base เดียวกัน (left/top เท่ากันหมด, ผู้เรียกเป็นคนกึ่งกลางไว้แล้ว) แล้วปล่อยให้
 // transform 3 ชั้น (translateY(R) → rotate → translateY(-R)) หมุนรอบจุดหมุนสมมติที่อยู่ R px ใต้ตัวการ์ด
 // เป็นตัวกวาดแต่ละใบออกเป็นพัดจริง (แทน marginLeft คงที่ + rotate รอบจุดศูนย์กลางตัวเองแบบเดิม)
 const FanCard: React.FC<{
-  code: string; selected: boolean; discardMarked: boolean; onPress: () => void
+  code: string; selected: boolean; discardMarked: boolean; winning: boolean; onPress: () => void
   cw: number; ch: number; zIndex: number
   angleDeg: number; R: number; left: number; top: number
   images: Record<string, any>
-}> = ({ code, selected, discardMarked, onPress, cw, ch, zIndex, angleDeg, R, left, top, images }) => {
+}> = ({ code, selected, discardMarked, winning, onPress, cw, ch, zIndex, angleDeg, R, left, top, images }) => {
   const lift = useSharedValue(0)
   // เด้งขึ้นตอนถูกเลือก (Reanimated v4 — withTiming)
   useEffect(() => {
     lift.value = withTiming(selected ? -SELECT_LIFT : 0, { duration: 140 })
   }, [selected])
+  const pulse = useSharedValue(1)
+  useEffect(() => { pulse.value = winning ? withRepeat(withTiming(.42, { duration: 620 }), -1, true) : 1 }, [pulse, winning])
+  const pulseStyle = useAnimatedStyle(() => ({ opacity: pulse.value }))
 
   const aStyle = useAnimatedStyle(() => ({
     // RN typing เข้มกับ transform array ที่ปนหลาย key — cast ผ่าน (ค่าถูกต้องตอน runtime)
@@ -203,12 +214,14 @@ const FanCard: React.FC<{
           styles.card,
           { width: cw, height: ch },
           selected && styles.cardSelVip,
+          winning && styles.cardWin,
         ]}
       >
         {images[code]
           ? <Image source={images[code]} style={{ width: cw, height: ch }} resizeMode="cover" />
           : <Text style={styles.fallbackTxt}>{code}</Text>}
         {discardMarked && <View pointerEvents="none" style={styles.discardMark}><Text style={styles.discardMarkText}>×</Text></View>}
+        {winning && <Animated.View pointerEvents="none" style={[styles.cardWinGlow, pulseStyle]} />}
       </Pressable>
     </AspectView>
   )
@@ -223,7 +236,8 @@ const PileColumn: React.FC<{
   images: Record<string, any>
   fanAngleScale?: number
   discardMarked?: { pi: number; ci: number } | null
-}> = ({ cards, pi, isVip, selected, onCardPress, cw, ch, exposed, images, fanAngleScale = 1, discardMarked }) => {
+  winningCardKeys?: string[]
+}> = ({ cards, pi, isVip, selected, onCardPress, cw, ch, exposed, images, fanAngleScale = 1, discardMarked, winningCardKeys = [] }) => {
   const n = cards.length
   const center = n > 1 ? (n - 1) / 2 : 0
 
@@ -249,6 +263,7 @@ const PileColumn: React.FC<{
                 code={card.key}
                 selected={isSel}
                 discardMarked={discardMarked?.pi === pi && discardMarked?.ci === ci}
+                winning={winningCardKeys.includes(card.key)}
                 onPress={() => onCardPress(pi, ci)}
                 cw={cw} ch={ch} zIndex={ci}
                 angleDeg={angleDeg} R={R}
@@ -276,6 +291,7 @@ const PileColumn: React.FC<{
               first={ci === 0}
               selected={isSel}
               discardMarked={discardMarked?.pi === pi && discardMarked?.ci === ci}
+              winning={winningCardKeys.includes(card.key)}
               onPress={() => onCardPress(pi, ci)}
               cw={cw} ch={ch} overlapML={overlapML} zIndex={ci}
               images={images}
@@ -294,6 +310,7 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
   cardImages = CARD_IMG,
   handFanAngleScale = 1,
   discardMarked = null,
+  winningCardKeys,
 }) => {
   const { width: screenW } = useWindowDimensions()
 
@@ -353,6 +370,7 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
         images={cardImages}
         fanAngleScale={handFanAngleScale}
         discardMarked={discardMarked}
+        winningCardKeys={winningCardKeys?.[p.pi]}
       />
     )
 
@@ -385,6 +403,7 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
           cw={cw} ch={ch} exposed={exposed}
           images={cardImages}
           discardMarked={discardMarked}
+          winningCardKeys={winningCardKeys?.[pi]}
         />
   )
 
@@ -443,6 +462,8 @@ const styles = StyleSheet.create({
   },
   cardSel:    { borderColor: '#6ec87a', borderWidth: 2, transform: [{ translateY: -10 }] },
   cardSelVip: { borderColor: '#6ec87a', borderWidth: 2 }, // เด้งทำผ่าน Reanimated แทน transform static
+  cardWin: { borderColor: '#FFF2A5', borderWidth: 2, shadowColor: '#FFD469', shadowOpacity: .9, shadowRadius: 9, elevation: 7 },
+  cardWinGlow: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, borderWidth: 2, borderColor: '#FFF7C7', borderRadius: 4, backgroundColor: 'rgba(255,211,105,.17)' },
   discardMark: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(52,5,5,0.24)' },
   discardMarkText: { color: '#FF4D4D', fontSize: 42, lineHeight: 44, fontWeight: '900', textShadowColor: '#240000', textShadowRadius: 3 },
   fallbackTxt: { fontSize: 8 },

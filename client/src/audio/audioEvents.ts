@@ -51,6 +51,8 @@ export enum AudioEvent {
   TIMER_LONG = 'TIMER_LONG',
   MATCH_WIN = 'MATCH_WIN',
   TRIPLE_SWEEP_CELEBRATION = 'TRIPLE_SWEEP_CELEBRATION',
+  /** Short impact synchronized with the lightning peak in the local Triple Sweep VFX. */
+  TRIPLE_SWEEP_THUNDER = 'TRIPLE_SWEEP_THUNDER',
   TIER_UNLOCK = 'TIER_UNLOCK',
   BOSS_REVEAL = 'BOSS_REVEAL',
   MONARCH_REVEAL = 'MONARCH_REVEAL',

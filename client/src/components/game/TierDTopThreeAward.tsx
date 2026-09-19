@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Animated, Image, Pressable, StyleSheet, Text, View } from 'react-native'
+import { GameActionButton } from '../ui/GameActionButton'
 import { audio } from '../../audio/AudioManager'
 import { AudioEvent } from '../../audio/audioEvents'
 
@@ -53,9 +54,7 @@ export function TierDTopThreeAward({ level, rank, onCollected }: { level: number
       <Text style={s.rankLabel}>YOUR FINAL RANK</Text>
       <Animated.View style={[s.trophyWrap, trophyStyle]}><Image source={TROPHIES[league]} resizeMode="contain" style={s.trophy}/></Animated.View>
       <Text style={s.reward}>LEAGUE TROPHY AWARDED</Text>
-      <Pressable disabled={collecting} onPress={claim} style={[s.collect, collecting && s.collectDisabled]}>
-        <Text style={s.collectText}>{collecting ? 'COLLECTING…' : 'COLLECT TROPHY'}</Text>
-      </Pressable>
+      <GameActionButton disabled={collecting} label={collecting ? 'COLLECTING…' : 'COLLECT TROPHY'} variant="prestige" animation="prestige" onPress={claim} style={s.collect} />
     </View>
   </View>
 }
@@ -72,7 +71,7 @@ const s = StyleSheet.create({
   trophyWrap: { width: 158, height: 154, alignItems: 'center', justifyContent: 'center', marginVertical: 8 },
   trophy: { width: 150, height: 150 },
   reward: { color: '#8DFFB5', fontSize: 12, fontWeight: '900', letterSpacing: .8, marginBottom: 18 },
-  collect: { alignSelf: 'stretch', alignItems: 'center', backgroundColor: '#FFD76A', borderRadius: 12, paddingVertical: 15, shadowColor: '#FFD76A', shadowOpacity: .7, shadowRadius: 12, elevation: 10 },
+  collect: { alignSelf: 'stretch' },
   collectDisabled: { opacity: .72 },
   collectText: { color: '#163A25', fontSize: 15, fontWeight: '900', letterSpacing: 1 },
 })

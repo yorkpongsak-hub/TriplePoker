@@ -27,8 +27,10 @@ export function canShowForcedInterstitial(input: { membership: Membership; natur
 
 export const DAILY_STREAK_MULTIPLIERS = [1, 1, 2, 1, 2, 1, 2, 3] as const
 export const NORMAL_ITEM_WEIGHTS = [
-  { item: 'undo', weight: 5 }, { item: 'shuffle', weight: 8 }, { item: 'double_pile', weight: 12 },
-  { item: 'swap', weight: 18 }, { item: 'auto_sort', weight: 27 }, { item: 'freeze', weight: 30 },
+  // Central normal-item reward pool. Swap is deliberately scarce because its
+  // card replacement effect has more strategic leverage than utility items.
+  { item: 'undo', weight: 8 }, { item: 'shuffle', weight: 14 }, { item: 'double_pile', weight: 16 },
+  { item: 'swap', weight: 4 }, { item: 'auto_sort', weight: 26 }, { item: 'freeze', weight: 32 },
 ] as const
 export const SOCIAL_ITEM_WEIGHTS = [{ item: 'heart', weight: 50 }, { item: 'rose', weight: 50 }] as const
 

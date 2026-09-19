@@ -15,7 +15,9 @@ import type { TierDRewardItem } from './tierDRewards'
 import { getArrangeTimerSeconds } from './tierDLeague'
 import { handMultiplier } from './leagueGameplay'
 import { recordTierDCompetitionLevelWin } from './tierDLeaderboardService'
+import { addMiniTournamentPoints } from './tierDMiniTournamentService'
 import { grantTierCGraduationReward } from './tierDLevel250'
+import { analyzeTierDCompletedMatch } from './tierDAnalysis'
 
 type CardKeys = { pile1: string[]; pile2: string[]; pile3: string[] }
 type RevealHand = { privateCards: string[]; bestFive: string[]; unusedCards: string[]; rank: string }
@@ -350,6 +352,17 @@ async function finishMatch(io:Server,s:Session){
   clearMatchTimer(s)
   clearRevealSafety(s)
   commitCurrentPile(io,s)
+  // This is emitted once, after G3 is committed, and is never persisted with
+  // the resumable match snapshot.  Free members receive score-only data.
+  const visibleBeforeReveal=new Set<TierDGameNumber>([...s.state.guidedRevealPiles,...(s.state.openChallenge?.revealedPiles??[])])
+  const knownOpponents=Object.fromEntries(s.state.seats.filter(seat=>seat.isBot).flatMap(seat=>{
+    const layout=s.state.arrangements[seat.id]
+    if(!layout||![1,2,3].every(game=>visibleBeforeReveal.has(game as TierDGameNumber)))return []
+    return [[seat.id,layout]]
+  }))
+  const analysis=analyzeTierDCompletedMatch(s.state,s.userId,s.matchNumber,knownOpponents)
+  const analysisPayload={matchNumber:analysis.matchNumber,actualScore:analysis.actualScore,bestScore:analysis.bestScore,actualWins:analysis.actualWins,bestWins:analysis.bestWins,actualMissionCount:analysis.actualMissionCount,bestMissionCount:analysis.bestMissionCount,actualCombo:analysis.actualCombo,bestCombo:analysis.bestCombo,pile:analysis.pile,...(s.isVip?{community:Object.fromEntries(Object.entries(analysis.community).map(([key,cards])=>[key,cards.map(cardKey)])),actual:Object.fromEntries(Object.entries(analysis.actual).map(([key,cards])=>[key,cards.map(cardKey)])),best:Object.fromEntries(Object.entries(analysis.best).map(([key,cards])=>[key,cards.map(cardKey)]))}: {})}
+  io.to(s.roomId).emit('tier_d_analysis_snapshot',analysisPayload)
   const playerMatchScore=s.state.scores[s.userId]??0
   const bestMatchScoreSave=await supabaseAdmin.rpc('record_tier_d_best_match_score',{p_user_id:s.userId,p_score:playerMatchScore})
   if(bestMatchScoreSave.error)console.warn('[TIER_D_SOLO] Best match score persistence requires migration 066:',bestMatchScoreSave.error.code)
@@ -372,6 +385,7 @@ async function finishMatch(io:Server,s:Session){
   const playerWon=(s.state.level<=1000||s.openChallengePassed)&&(s.cumulativeScores[s.userId]??0)>=highestAiScore
   const rewardBaseline=playerWon?await getTierDRewardBaseline(s.userId).catch(()=>undefined):undefined
   const competition=playerWon?await recordTierDCompetitionLevelWin({userId:s.userId,level:s.state.level,points:s.cumulativeScores[s.userId]??0,isVip:s.isVip}).catch(()=>undefined):undefined
+  if(playerWon)await addMiniTournamentPoints(s.userId,s.cumulativeScores[s.userId]??0).catch(error=>console.warn('[TIER_D_SOLO] mini tournament score update failed',error))
   const progress=await persistTierDLevelOutcome(s.userId,playerWon);const elapsedMs=Math.max(0,Date.now()-s.levelStartedAt)
   // The progress RPC advances a cleared Lv.250 to Lv.251.  Grant the Tier C
   // graduation package only after that durable progression write succeeds.

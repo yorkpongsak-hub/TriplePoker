@@ -12,6 +12,9 @@ import rewardsRoutes from './routes/rewards'
 import badgeRoutes from './routes/badges'
 import tierDLeaderboardRoutes from './routes/tierDLeaderboard'
 import { tierDRewardRoutes } from './routes/tierDRewards'
+import { tierDItemOfferRoutes } from './routes/tierDItemOffers'
+import { tierDMiniTournamentRoutes } from './routes/tierDMiniTournament'
+import { lockExpiredMiniTournaments } from './game/tierDMiniTournamentService'
 import { adRoutes } from './routes/ads'
 import { dailyStreakRoutes } from './routes/dailyStreak'
 import { startSovereignLifecycleRuntime } from './arena/sovereign/sovereignLifecycleRuntime'
@@ -48,6 +51,8 @@ app.register(rewardsRoutes)
 app.register(badgeRoutes)
 app.register(tierDLeaderboardRoutes)
 app.register(tierDRewardRoutes)
+app.register(tierDItemOfferRoutes)
+app.register(tierDMiniTournamentRoutes)
 app.register(adRoutes)
 app.register(dailyStreakRoutes)
 
@@ -73,6 +78,9 @@ const start = async () => {
     registerGameSocket(io, spectatorService)
     registerArenaSocket(io)
     startSovereignLifecycleRuntime()
+    // 24-hour Mini Tournament settlement is server-driven; API reads only act
+    // as an idempotent fallback if this worker was temporarily unavailable.
+    setInterval(() => { void lockExpiredMiniTournaments().catch(error => app.log.error(error, 'Mini tournament deadline sweep failed')) }, 60_000)
 
     console.log(`TriplePoker Server running on port ${port}`)
   } catch (err) {

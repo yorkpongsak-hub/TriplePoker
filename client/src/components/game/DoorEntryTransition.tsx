@@ -9,15 +9,16 @@ import { AvatarDisplay, PRESET_AVATARS } from '../profile/AvatarPicker'
 import { BADGES } from '../../../assets/badges/BADGE_MANIFEST'
 import { TierDLeagueLeaderboard } from './TierDLeagueLeaderboard'
 import { TierDRecordsBoard } from './TierDRecordsBoard'
+import { GameActionButton } from '../ui/GameActionButton'
 import { t } from '../../i18n'
 import { useI18n } from '../../i18n/store'
+import Svg, { Circle, Path, Rect } from 'react-native-svg'
+import { TierDItemOfferCard } from './TierDItemOfferCard'
 
 const DOOR_IMAGE = require('../../../assets/images/game_entrance.png')
 const APP_LOGO = require('../../../assets/images/triple_poker_icon.png')
 const TROPHY_SHOWCASE = require('../../../assets/images/trophy_showcase.png')
 const LEAGUE_MEDAL = require('../../../assets/images/triplepoker_coin.png')
-const ENTRY_ICON_SHEET_1 = require('../../../assets/images/Item_Icon3.png')
-const ENTRY_ICON_SHEET_2 = require('../../../assets/images/Item_Icon4.png')
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 type LeagueAward = { league_id: string; award_type: 'medal' | 'trophy' }
 type TrophyLeague = { id: string; trophy: ImageSourcePropType }
@@ -139,28 +140,29 @@ export default function DoorEntryTransition({ onFinish, onHowToPlay, level }: { 
     <View style={styles.casino}><View style={styles.tableGlow}/></View>
     {!started ? <>
       <View style={styles.playerCard}>
-        <EntryIcon source={ENTRY_ICON_SHEET_1} index={0} style={styles.profileIcon}/>
+        <EntryIcon glyph="profile" style={styles.profileIcon}/>
         <Pressable accessibilityRole="button" accessibilityLabel="Change profile picture" style={styles.avatarAction} onPress={() => router.push({ pathname: '/(home)/profile', params: { editAvatar: '1' } })}>
           <View style={styles.honorAvatar}>{equippedBadge ? <Image source={equippedBadge} resizeMode="contain" style={styles.equippedBadge}/> : null}<AvatarFrame size={56} active={false}>{avatar}</AvatarFrame></View>
         </Pressable>
         <View style={styles.playerIdentity}><Text numberOfLines={1} style={styles.playerName}>{profile?.display_name ?? 'PLAYER'}</Text><Text numberOfLines={1} style={styles.honorLabel}>{profile?.equipped_badge_key ? profile.equipped_badge_key.replaceAll('_',' ').toUpperCase() : 'HONOR FRAME'}</Text></View>
       </View>
       <View style={styles.personalBestBoard}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Open Personal Best Top 50" style={styles.personalBestTitleRow} onPress={() => setRecordsBoard('pb')}><EntryIcon source={ENTRY_ICON_SHEET_2} index={1} style={styles.boardIcon}/><Text style={styles.personalBestTitle}>PERSONAL BEST</Text></Pressable>
-        <StatRow label="FASTEST TIME" value={formatTime(profile?.tier_d_best_match_time_ms)}/>
-        <Pressable accessibilityRole="button" accessibilityLabel="Open longest streak Top 50" style={styles.streakRow} onPress={() => setRecordsBoard('streak')}><EntryIcon source={ENTRY_ICON_SHEET_2} index={0} style={styles.streakIcon}/><StatRow label="LONGEST STREAK" value={String(profile?.tier_d_best_win_streak ?? 0)}/></Pressable>
-        <StatRow label="BEST MATCH SCORE" value={String(profile?.tier_d_best_match_score ?? 0)}/>
+        <Pressable accessibilityRole="button" accessibilityLabel={t('entry.personalBest', {}, locale)} style={styles.personalBestTitleRow} onPress={() => setRecordsBoard('pb')}><EntryIcon glyph="trophy" style={styles.boardIcon}/><Text style={styles.personalBestTitle}>{t('entry.personalBest', {}, locale)}</Text></Pressable>
+        <StatRow label={t('entry.fastestTime', {}, locale)} value={formatTime(profile?.tier_d_best_match_time_ms)}/>
+        <Pressable accessibilityRole="button" accessibilityLabel={t('entry.longestStreak', {}, locale)} style={styles.streakRow} onPress={() => setRecordsBoard('streak')}><StatRow label={t('entry.longestStreak', {}, locale)} value={String(profile?.tier_d_best_win_streak ?? 0)}/></Pressable>
+        <StatRow label={t('entry.bestMatchScore', {}, locale)} value={String(profile?.tier_d_best_match_score ?? 0)}/>
       </View>
       <View pointerEvents="none" accessibilityElementsHidden style={styles.entryIconColumn}>
-        <EntryIcon source={ENTRY_ICON_SHEET_1} index={0} style={styles.entryColumnIcon}/>
-        <EntryIcon source={ENTRY_ICON_SHEET_1} index={1} style={styles.entryColumnIcon}/>
-        <EntryIcon source={ENTRY_ICON_SHEET_1} index={2} style={styles.entryColumnIcon}/>
-        <EntryIcon source={ENTRY_ICON_SHEET_2} index={0} style={styles.entryColumnIcon}/>
-        <EntryIcon source={ENTRY_ICON_SHEET_2} index={1} style={styles.entryColumnIcon}/>
-        <EntryIcon source={ENTRY_ICON_SHEET_2} index={2} style={styles.entryColumnIcon}/>
+        <EntryIcon glyph="profile" style={styles.entryColumnIcon}/>
+        <EntryIcon glyph="crown" style={styles.entryColumnIcon}/>
+        <EntryIcon glyph="cards" style={styles.entryColumnIcon}/>
+        <EntryIcon glyph="flame" style={styles.entryColumnIcon}/>
+        <EntryIcon glyph="trophy" style={styles.entryColumnIcon}/>
+        <EntryIcon glyph="chart" style={styles.entryColumnIcon}/>
       </View>
       <Text style={styles.readyLevel}>{level ? t('entry.level', { level }, locale) : t('common.continue', {}, locale)}</Text>
-      <View style={styles.readyArea}><Pressable accessibilityRole="button" accessibilityLabel={t('entry.openDoor', {}, locale)} style={styles.nextLevelButton} onPress={() => setStarted(true)}><Text style={styles.nextLevelText}>{t('entry.openDoor', {}, locale)}</Text></Pressable>{onHowToPlay?<Pressable accessibilityRole="button" accessibilityLabel={t('entry.howToPlay', {}, locale)} style={styles.howToPlayButton} onPress={onHowToPlay}><Text style={styles.howToPlayText}>{t('entry.howToPlay', {}, locale)}</Text></Pressable>:null}</View>
+      <View style={styles.readyArea}><GameActionButton size="large" label={t('entry.openDoor', {}, locale)} onPress={() => setStarted(true)} style={styles.entryAction}/>{onHowToPlay?<GameActionButton size="small" variant="secondary" animation="none" label={t('entry.howToPlay', {}, locale)} onPress={onHowToPlay} style={styles.guideAction}/>:null}</View>
+      <TierDItemOfferCard placement="ENTRANCE_DOOR"/>
     </> : null}
     {started ? <><LeagueTrophyCabinet side="left"/><LeagueTrophyCabinet side="right"/></> : null}
     <Animated.View pointerEvents="none" style={[styles.brand, { opacity: entryCopyOpacity }]}>
@@ -236,12 +238,24 @@ function formatTime(milliseconds?: number | null) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
 }
 
-/** Each supplied image is a three-icon horizontal sheet; crop one compact tile. */
-function EntryIcon({ source, index, style }: { source: ImageSourcePropType; index: 0 | 1 | 2; style?: any }) {
+type EntryGlyph = 'profile' | 'crown' | 'cards' | 'flame' | 'trophy' | 'chart'
+
+/** Uniform native SVG icons replace the misaligned legacy image-sprite crops. */
+function EntryIcon({ glyph, style }: { glyph: EntryGlyph; style?: any }) {
   const dimensions = StyleSheet.flatten(style)
   const width = dimensions?.width ?? 48
   const height = dimensions?.height ?? 38
-  return <View pointerEvents="none" style={[styles.entryIconCrop, { width, height }, style]}><Image source={source} resizeMode="stretch" style={[styles.entryIconSprite, { left: -index * width, width: width * 3, height }]}/></View>
+  const gold = '#FFD76A'
+  const stroke = { stroke: gold, strokeWidth: 2.4, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, fill: 'none' }
+  return <View pointerEvents="none" style={[styles.entryIconSvg, { width, height }, style]}><Svg width={width} height={height} viewBox="0 0 48 48">
+    <Circle cx="24" cy="24" r="21" stroke="rgba(255,215,106,.42)" strokeWidth="1.5" fill="rgba(4,17,12,.58)"/>
+    {glyph === 'profile' ? <><Circle cx="24" cy="18" r="6" {...stroke}/><Path d="M12 38c2-7 7-10 12-10s10 3 12 10" {...stroke}/></> : null}
+    {glyph === 'crown' ? <Path d="M10 34 13 17l8 7 3-11 3 11 8-7 3 17H10Zm3 4h22" {...stroke}/> : null}
+    {glyph === 'cards' ? <><Rect x="10" y="15" width="20" height="25" rx="3" {...stroke}/><Rect x="18" y="9" width="20" height="25" rx="3" {...stroke}/><Path d="m28 16 3 4 3-4M31 15v10" {...stroke}/></> : null}
+    {glyph === 'flame' ? <Path d="M26 7c2 8-6 9-3 16 1 3 4 3 5 0 4 5 2 15-5 17-8-2-10-10-6-17 1 5 5 4 5 0 0-5-2-8 4-16Z" {...stroke}/> : null}
+    {glyph === 'trophy' ? <><Path d="M15 11h18v10c0 7-4 11-9 11s-9-4-9-11V11Z" {...stroke}/><Path d="M15 15H9c0 7 3 10 8 10m16-10h6c0 7-3 10-8 10M24 32v6m-7 2h14" {...stroke}/></> : null}
+    {glyph === 'chart' ? <><Path d="M11 37h27M14 32l8-9 6 5 8-12" {...stroke}/><Path d="M31 16h5v5" {...stroke}/></> : null}
+  </Svg></View>
 }
 
 function LeagueTrophyCabinet({ side }: { side: 'left' | 'right' }) {
@@ -326,12 +340,13 @@ const styles = StyleSheet.create({
   personalBestTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 2 },
   personalBestTitle: { color: '#ffd76a', fontSize: 9, fontWeight: '900', letterSpacing: .8, textAlign: 'center', marginBottom: 2 },
   boardIcon: { width: 24, height: 19, marginRight: 2 },
-  streakRow: { flexDirection: 'row', alignItems: 'center' },
-  streakIcon: { width: 20, height: 16, marginRight: 2 },
-  statRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 5 },
-  statLabel: { color: '#bfd7c5', fontSize: 7, fontWeight: '800' },
-  statValue: { color: '#fff2b2', fontSize: 8, fontWeight: '900' },
+  streakRow: { alignSelf: 'stretch' },
+  statRow: { minHeight: 13, flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 6 },
+  statLabel: { width: 96, color: '#bfd7c5', fontSize: 7, fontWeight: '800', lineHeight: 11 },
+  statValue: { width: 32, color: '#fff2b2', fontSize: 8, fontWeight: '900', lineHeight: 11, textAlign: 'right', fontVariant: ['tabular-nums'] },
   readyArea: { position: 'absolute', left: 24, right: 24, bottom: '6.5%', zIndex: 20, alignItems: 'center', gap: 13 },
+  entryAction: { width: 236 },
+  guideAction: { width: 160 },
   readyLevel: { position: 'absolute', top: '59%', left: 24, right: 24, zIndex: 20, color: '#fff1bb', fontSize: 21, fontWeight: '900', letterSpacing: 2, textAlign: 'center', textShadowColor: '#7b4700', textShadowRadius: 11 },
   nextLevelButton: { minWidth: 200, alignItems: 'center', paddingHorizontal: 24, paddingVertical: 13, borderRadius: 10, backgroundColor: '#ffd76a', borderWidth: 1.5, borderColor: '#fff4bc', shadowColor: '#ffd76a', shadowOpacity: .7, shadowRadius: 12, elevation: 9 },
   nextLevelText: { color: '#17311f', fontSize: 14, fontWeight: '900', letterSpacing: 1.5 },
@@ -339,8 +354,7 @@ const styles = StyleSheet.create({
   howToPlayText: { color: 'rgba(255,241,187,.76)', fontSize: 11, fontWeight: '800', letterSpacing: 1.1, textDecorationLine: 'underline' },
   entryIconColumn: { position: 'absolute', top: '22%', left: 14, zIndex: 21, gap: 9, alignItems: 'center' },
   entryColumnIcon: { width: 52, height: 42 },
-  entryIconCrop: { width: 48, height: 38, overflow: 'hidden' },
-  entryIconSprite: { position: 'absolute', top: 0, width: 144, height: 38 },
+  entryIconSvg: { alignItems: 'center', justifyContent: 'center' },
   // The opened showcase legs end around 60% of the portrait screen; keep the encouragement below them.
   entryCopy: { position: 'absolute', top: '85%', left: 14, right: '50%', alignItems: 'flex-start', zIndex: 4 },
   entryMessage: { marginTop: 8, color: '#e5d4a0', fontSize: 16, lineHeight: 21, fontWeight: '800', letterSpacing: .7, textAlign: 'left', textShadowColor: '#000', textShadowRadius: 7 },

@@ -1,5 +1,7 @@
 import React, { useEffect, useRef } from 'react'
 import { Animated, Easing, StyleSheet, Text, View } from 'react-native'
+import { audio } from '../../audio/AudioManager'
+import { AudioEvent } from '../../audio/audioEvents'
 
 const LABEL = 'TRIPLE SWEEP'
 const DURATION_MS = 3500
@@ -8,6 +10,7 @@ const DURATION_MS = 3500
 export default function TripleSweepArc({ scores, onFinish }: { scores: { game: 1|2|3; points: number }[]; onFinish: () => void }) {
   const progress = useRef(new Animated.Value(0)).current
   const finish = useRef(onFinish)
+  const scoreKey = scores.map(score => `${score.game}-${score.points}`).join(':')
   finish.current = onFinish
 
   useEffect(() => {
@@ -20,6 +23,14 @@ export default function TripleSweepArc({ scores, onFinish }: { scores: { game: 1
     animation.start(({ finished }) => { if (finished) finish.current() })
     return () => animation.stop()
   }, [progress])
+
+  useEffect(() => {
+    // The lightning lanes peak just after their initial flash. Keep this cue
+    // local and deduped: a remount or delayed render must not create a second
+    // thunder hit for the same already-settled Triple Sweep.
+    const thunder = setTimeout(() => audio.play(AudioEvent.TRIPLE_SWEEP_THUNDER, { dedupeKey: `tier-d:triple-sweep-thunder:${scoreKey}` }), 260)
+    return () => clearTimeout(thunder)
+  }, [scoreKey])
 
   const opacity = progress.interpolate({
     inputRange: [0, .10, .55, 1],

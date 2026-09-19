@@ -22,7 +22,7 @@ type ActiveAudio = {
 }
 type Listener = (settings: AudioSettings) => void
 const PRIVATE_EVENTS = new Set([AudioEvent.PLAYER_TURN, AudioEvent.TIMER_WARNING, AudioEvent.TIMER_CRITICAL, AudioEvent.TIMER_PRESSURE, AudioEvent.TIMER_LONG])
-const RESULT_EVENTS = new Set([AudioEvent.PILE_WIN, AudioEvent.MATCH_WIN, AudioEvent.TRIPLE_SWEEP_CELEBRATION, AudioEvent.RANK_COMPLETE, AudioEvent.TIER_UNLOCK, AudioEvent.RARE_REACTION])
+const RESULT_EVENTS = new Set([AudioEvent.PILE_WIN, AudioEvent.MATCH_WIN, AudioEvent.TRIPLE_SWEEP_CELEBRATION, AudioEvent.TRIPLE_SWEEP_THUNDER, AudioEvent.RANK_COMPLETE, AudioEvent.TIER_UNLOCK, AudioEvent.RARE_REACTION])
 const CACHED_EVENTS = new Set<AudioEvent>(PRELOAD_AUDIO_EVENTS)
 const MAX_ONE_SHOT_MS = 3_000
 const ONE_SHOT_CLEANUP_GRACE_MS = 1_000

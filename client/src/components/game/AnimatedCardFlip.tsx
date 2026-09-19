@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Animated, StyleSheet, View, type ViewStyle } from 'react-native'
+import { Animated, Image, StyleSheet, View, type ViewStyle } from 'react-native'
 import Card, { type Suit, type Value } from './Card'
+import { CARD_BACK_IMG } from './cardAssets'
 
 export function AnimatedCardFlip({ cardKey, delay = 0, width = 48, height = 70, style, startOffset }: { cardKey: string; delay?: number; width?: number; height?: number; style?: ViewStyle; startOffset?: { x: number; y: number } }) {
   const motion = useRef(new Animated.Value(0)).current; const [faceUp, setFaceUp] = useState(false)
@@ -27,6 +28,6 @@ export function AnimatedCardFlip({ cardKey, delay = 0, width = 48, height = 70, 
   // The middle control point creates the short card-table arc used for cards
   // joining a resolved hand, rather than a flat slide across the felt.
   const enterY = motion.interpolate({ inputRange: [0, .46, 1], outputRange: [startOffset?.y ?? 0, -18, 0] })
-  return <Animated.View style={[s.card, style, { transform: [{ perspective: 900 }, { translateX: enterX }, { translateY: enterY }, { translateY: lift }, { rotateY }, { scale }] }]}>{faceUp ? <Card variant="face" suit={suit} value={value} width={width} height={height} /> : <Card variant="back" width={width} height={height} />}</Animated.View>
+  return <Animated.View style={[s.card, style, { transform: [{ perspective: 900 }, { translateX: enterX }, { translateY: enterY }, { translateY: lift }, { rotateY }, { scale }] }]}>{faceUp ? <Card variant="face" suit={suit} value={value} width={width} height={height} /> : <Image source={CARD_BACK_IMG} resizeMode="cover" style={{ width, height, borderRadius: Math.round(width * .14) }}/>}</Animated.View>
 }
 const s = StyleSheet.create({ card: { backfaceVisibility: 'hidden' } })

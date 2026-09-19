@@ -7,7 +7,7 @@ jest.mock('../../src/game/tierDRewardService',()=>({
 jest.mock('../../src/game/tierDSoloProgress',()=>({}))
 jest.mock('../../src/game/tierDLeaderboardService',()=>({}))
 
-import {pauseTierDItemAd,resumeTierDItemAd,startTierDSolo,startTierDTimerAfterDeal,reserveTierDSoloItemAd,grantTierDSoloItemAd,refreshTierDSoloInventory,useTierDItem as useItem,stageTierDArrangement,playTierDGame as play,finishTierDRevealAnimation,resumeTierDTimer} from '../../src/game/tierDSoloRuntime'
+import {pauseTierDItemAd,resumeTierDItemAd,startTierDSolo,startTierDTimerAfterDeal,reserveTierDSoloItemAd,restoreTierDSoloItemAd,grantTierDSoloItemAd,refreshTierDSoloInventory,useTierDItem as useItem,stageTierDArrangement,playTierDGame as play,finishTierDRevealAnimation,resumeTierDTimer} from '../../src/game/tierDSoloRuntime'
 import * as solo from '../../src/game/tierDSolo'
 jest.mock('../../src/game/tierDItemPersistence',()=>({getTierDFreezeDurations:async()=>[],commitTierDItem:async()=>{}}))
 const mockLatest=new Map<string,any>()
@@ -66,7 +66,7 @@ test('a missed client reveal acknowledgement cannot leave the first pile locked'
     await playTierDGame(io,id,id)
     expect(state().currentGame).toBe(1)
     expect(state().phase).toBe('revealing')
-    jest.advanceTimersByTime(5001)
+    jest.advanceTimersByTime(9001)
     expect(state().phase).toBe('revealed')
     expect(state().systemPausedAt).toBeUndefined()
   }finally{jest.clearAllTimers();jest.useRealTimers()}
@@ -93,6 +93,29 @@ test('one expired Match timer auto-reveals only the pile awaiting input',async()
     await playTierDGame(io,id,id)
     expect(state().currentGame).toBe(2)
     expect(state().reveal?.game).toBe(2)
+  }finally{jest.clearAllTimers();jest.useRealTimers()}
+},30000)
+
+test('a manual Reveal invalidates its pending timer and cannot auto-reveal a later pile',async()=>{
+  jest.useFakeTimers()
+  const events:any[]=[]
+  const io={to:()=>({emit:(name:string,body:any)=>{if(name==='tier_d_state')events.push(body)}})} as any
+  const state=()=>events.at(-1)
+  const id='manual-reveal-cancels-timer'
+  try{
+    await startTierDSolo(io,id,id)
+    startTierDTimerAfterDeal(io,id,id)
+    await playTierDGame(io,id,id)
+    expect(state().currentGame).toBe(1)
+    expect(state().phase).toBe('revealing')
+    // A timeout callback scheduled before the manual action must no longer own
+    // this Match. Advancing beyond its original deadline cannot reveal G2/G3.
+    jest.advanceTimersByTime(330_001)
+    expect(state().currentGame).toBe(1)
+    // The reveal safety fallback may finish the already-manual G1 animation,
+    // but it must never turn the old deadline into a G2/G3 action.
+    expect(state().phase).toBe('revealed')
+    expect(state().currentGame).toBe(1)
   }finally{jest.clearAllTimers();jest.useRealTimers()}
 },30000)
 
@@ -181,6 +204,25 @@ test('empty Free stock requires an ad grant, then a separate Shuffle use deals n
     expect(state().cards).toEqual(before)
     expect(state().cards).toEqual(before)
   }finally{random.mockRestore();jest.clearAllTimers();jest.useRealTimers()}
+},30000)
+
+test('a selected-item ad reservation is pinned, rejects stale selection, and restores safely',async()=>{
+  jest.useFakeTimers()
+  const io={to:()=>({emit:()=>{}})} as any
+  const id='selected-ad-pinned-item'
+  try{
+    await startTierDSolo(io,id,id)
+    startTierDTimerAfterDeal(io,id,id)
+    expect(pauseTierDItemAd(io,id,id,'swap')).toBe(true)
+    expect(reserveTierDSoloItemAd(id,'swap')).toBe(true)
+    // A duplicate/stale callback may not replace Swap with a different item.
+    expect(reserveTierDSoloItemAd(id,'shuffle')).toBe(false)
+    expect(grantTierDSoloItemAd(id,'shuffle')).toBe(false)
+    restoreTierDSoloItemAd(id,'swap')
+    expect(reserveTierDSoloItemAd(id,'shuffle')).toBe(true)
+    expect(grantTierDSoloItemAd(id,'shuffle')).toBe(true)
+    expect(grantTierDSoloItemAd(id,'shuffle')).toBe(false)
+  }finally{jest.clearAllTimers();jest.useRealTimers()}
 },30000)
 
 test('item ad pauses the Match until returning, including claim and cancellation',async()=>{

@@ -4,6 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router'
 import { useAuthStore } from '../../../src/store/authStore'
 import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
 import { adProvider } from '../../../src/ads/adProvider'
+import { GameActionButton } from '../../../src/components/ui/GameActionButton'
 
 const SERVER_URL=process.env.EXPO_PUBLIC_SERVER_URL||'http://localhost:3001'
 const REWARD_FREE_FX=require('../../../assets/fx/reward_free.webp')
@@ -22,13 +23,13 @@ export default function TierDItemAd(){
  // Policy approval happened before navigating here. If no native ad is ready,
  // continue immediately rather than creating ad debt or blocking the transition.
  const forced=async()=>{const result=await adProvider.showInterstitial();if(result.shown&&token)await fetch(`${SERVER_URL}/ads/forced-complete`,{method:'POST',headers:{Authorization:`Bearer ${token}`}}).catch(()=>{});finishForced()}
- if(placement==='forced')return <View style={s.screen}><Pressable style={s.claimButton} onPress={forced}><Text style={s.claimText}>CONTINUE</Text></Pressable></View>
+ if(placement==='forced')return <View style={s.screen}><GameActionButton label="CONTINUE" onPress={forced} style={s.action}/></View>
  const finish=async()=>{if(claiming.current)return;if(!selected||!token){setMessage('Unable to prepare this item reward.');return}claiming.current=true;setMessage('LOADING AD...');const earned=await adProvider.showRewarded('SELECTED_ITEM_REFILL');if(!earned.earned){claiming.current=false;setMessage('AD UNAVAILABLE — TRY AGAIN LATER');return}setMessage('CLAIMING ITEM...');try{
    const response=await fetch(`${SERVER_URL}/tier-d/reward/item-ad-complete`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({item:selected,eventId:claimId.current,devMock:adProvider.mode==='mock'&&__DEV__,googleTestEarned:adProvider.mode==='google_test'})})
    const body=await response.json();if(!response.ok)throw new Error(body.error??'Ad reward unavailable')
    const granted=String(body.itemKey).replaceAll('_',' ').toUpperCase();setGrantedItem(granted);setMessage(`+1 ${granted} ADDED TO INVENTORY`);setTimeout(back,2200)
   }catch(error){claiming.current=false;setMessage(error instanceof Error?error.message:'Ad reward unavailable')}}
  if(!selected)return <View style={s.screen}><Text style={s.title}>Invalid item reward.</Text></View>
- return <View style={s.screen}>{!message?<View style={s.claimPanel}><Text style={s.title}>REFILL {selected.replaceAll('_',' ').toUpperCase()} ×1</Text><Pressable onPress={finish} style={s.claimButton}><Text style={s.claimText}>WATCH AD</Text></Pressable></View>:<View style={s.claimPanel}>{grantedItem?<><Image source={REWARD_FREE_FX} resizeMode="contain" style={s.rewardFx}/><Text style={s.title}>{message}</Text></>:<Text style={s.title}>{message}</Text>}{!claiming.current&&!grantedItem?<Pressable onPress={finish} style={s.claimButton}><Text style={s.claimText}>RETRY CLAIM</Text></Pressable>:null}</View>}</View>
+ return <View style={s.screen}>{!message?<View style={s.claimPanel}><Text style={s.title}>REFILL {selected.replaceAll('_',' ').toUpperCase()} ×1</Text><GameActionButton label="WATCH AD" variant="prestige" animation="prestige" onPress={finish} style={s.action}/></View>:<View style={s.claimPanel}>{grantedItem?<><Image source={REWARD_FREE_FX} resizeMode="contain" style={s.rewardFx}/><Text style={s.title}>{message}</Text></>:<Text style={s.title}>{message}</Text>}{!claiming.current&&!grantedItem?<GameActionButton label="RETRY CLAIM" onPress={finish} style={s.action}/>:null}</View>}</View>
 }
-const s=StyleSheet.create({screen:{flex:1,backgroundColor:'#000',alignItems:'center',justifyContent:'center'},claimPanel:{alignItems:'center',gap:18,padding:24},rewardFx:{width:260,height:146},title:{color:'#FFD76A',fontSize:18,fontWeight:'900',textAlign:'center'},claimButton:{paddingHorizontal:22,paddingVertical:14,borderRadius:9,borderWidth:2,borderColor:'#FFD76A',backgroundColor:'#3b2b0c'},claimText:{color:'#FFF2B0',fontWeight:'900',fontSize:14}})
+const s=StyleSheet.create({screen:{flex:1,backgroundColor:'#000',alignItems:'center',justifyContent:'center'},claimPanel:{alignItems:'center',gap:18,padding:24},rewardFx:{width:260,height:146},title:{color:'#FFD76A',fontSize:18,fontWeight:'900',textAlign:'center'},action:{width:230}})

@@ -87,6 +87,9 @@ export const audioRegistry: Record<AudioEvent, AudioDefinition> = {
   [AudioEvent.TIMER_LONG]: def(timerLong, AudioCategory.TIMER, AudioPriority.HIGH, .45, { loop: true, fadeOutMs: 200 }),
   [AudioEvent.MATCH_WIN]: def(levelWinApplause, AudioCategory.RESULT, AudioPriority.VERY_HIGH, .80, { duckBgm: .35 }),
   [AudioEvent.TRIPLE_SWEEP_CELEBRATION]: def(tripleSweepCongratulations, AudioCategory.RESULT, AudioPriority.VERY_HIGH, .72, { cooldownMs: 2500, duckBgm: .30 }),
+  // Reuse the bundled electric crack, but give the local Triple Sweep a
+  // separate policy so boss reveal tuning cannot change its impact or cadence.
+  [AudioEvent.TRIPLE_SWEEP_THUNDER]: def(bossThunder, AudioCategory.RESULT, AudioPriority.HIGH, .62, { cooldownMs: 3000, duckBgm: .42 }),
   [AudioEvent.TIER_UNLOCK]: def(tierUnlock, AudioCategory.RESULT, AudioPriority.VERY_HIGH, .80, { duckBgm: .25 }),
   [AudioEvent.BOSS_REVEAL]: def(bossThunder, AudioCategory.BOSS, AudioPriority.CRITICAL, .90, { duckBgm: .25 }),
   [AudioEvent.MONARCH_REVEAL]: def(bossThunder, AudioCategory.BOSS, AudioPriority.CRITICAL, .68, { duckBgm: .3 }),

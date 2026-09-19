@@ -16,7 +16,14 @@ export async function adRoutes(app: FastifyInstance) {
     const userId = await userIdFrom(request); if (!userId) return reply.status(401).send({ error: 'UNAUTHORIZED' })
     const naturalBreak = request.body?.naturalBreak
     if (!naturalBreak || !BREAKS.includes(naturalBreak)) return reply.status(400).send({ error: 'INVALID_NATURAL_BREAK' })
-    if (naturalBreak === 'CLASSIC_POST_SETTLEMENT_EXIT' && (!CLASSIC_TIERS.includes(request.body?.tier as typeof CLASSIC_TIERS[number]) || request.body?.outcome !== 'LOSS' || request.body?.exitReason !== 'BACK_TO_LOBBY')) return reply.status(400).send({ error: 'INVALID_CLASSIC_EXIT_CONTEXT' })
+    // Forced interstitials are an advanced-table, post-settlement exit policy.
+    // Never insert them in Tier D, gameplay, reveal or reward paths.
+    if (naturalBreak === 'TIER_D_LEVEL_COMPLETE' || naturalBreak === 'TIER_D_RETRY' || naturalBreak === 'TIER_D_EXIT_TO_LOBBY' || naturalBreak === 'TIER_D_TOP20_CONTINUE') return reply.send({ showForcedInterstitial: false })
+    const tier = request.body?.tier as typeof CLASSIC_TIERS[number]
+    const validClassicExit = CLASSIC_TIERS.includes(tier)
+      && ((naturalBreak === 'CLASSIC_GAME_SETTLED' && request.body?.outcome === 'WIN' && request.body?.exitReason === 'CONTINUE')
+        || (naturalBreak === 'CLASSIC_POST_SETTLEMENT_EXIT' && request.body?.outcome === 'LOSS' && request.body?.exitReason === 'BACK_TO_LOBBY'))
+    if (!validClassicExit) return reply.status(400).send({ error: 'INVALID_CLASSIC_EXIT_CONTEXT' })
     try { return reply.send({ showForcedInterstitial: await considerForcedInterstitial(userId, naturalBreak) }) }
     catch { return reply.send({ showForcedInterstitial: false }) }
   })

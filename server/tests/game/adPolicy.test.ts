@@ -31,6 +31,16 @@ test('daily schedule and weighted pools keep social items separate from the six 
   expect(canRequestRewardedAd('VIP_PRO_PLUS','RANDOM_ITEM')).toBe(false)
 })
 
+test('Swap remains the scarcest normal strategic-item drop', () => {
+  const weights=Object.fromEntries(NORMAL_ITEM_WEIGHTS.map(({item,weight})=>[item,weight]))
+  expect(weights).toMatchObject({undo:8,shuffle:14,double_pile:16,swap:4,auto_sort:26,freeze:32})
+  expect(weights.swap).toBeLessThan(weights.undo)
+  expect(weights.swap).toBeLessThan(weights.shuffle)
+  expect(weights.swap).toBeLessThan(weights.double_pile)
+  expect(weights.swap).toBeLessThan(weights.auto_sort)
+  expect(weights.swap).toBeLessThan(weights.freeze)
+})
+
 test.each([3,5,7,8])('Pro Plus receives exactly one additional social item on Day %i', day => {
   const proPlus=getDailyStreakReward(day,'VIP_PRO_PLUS',10,()=>0)
   expect(proPlus.items).toHaveLength(DAILY_STREAK_MULTIPLIERS[day-1])
