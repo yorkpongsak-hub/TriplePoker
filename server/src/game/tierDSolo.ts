@@ -4,6 +4,7 @@ import { createDeck, shuffleDeck, type Card } from './deck'
 import { compareHands, evaluateBestFive, evaluateSoloG2BestFive, type BestFiveResult } from './handEvaluator'
 import { TIER_D_PILE_BASE_SCORES, getCurrentLeague, tierDBotCountForLevel, type LeagueId } from './tierDLeague'
 import { comboBonus, generateMissions, generateOpenChallenge, missionResult, pileWinScore, type Mission, type OpenChallenge } from './leagueGameplay'
+import { TIER_D_RISE_SOLO_PERSONALITIES, TIER_D_RISE_SOLO_SEAT_PERSONALITIES, tierDRiseCandidateFraction, tierDRiseVisiblePileWeights, type TierDRiseSoloPersonality, type TierDRiseVisibleContext } from './tierDRiseSoloPersonality'
 
 export const TIER_D = 'D' as const
 export const TIER_D_GAME_POINTS = TIER_D_PILE_BASE_SCORES
@@ -12,7 +13,7 @@ export const TIER_D_TRIPLE_SWEEP_BONUS = 5
 
 /** Legacy name: this is a PILE index, not a Game or Match index. */
 export type TierDGameNumber = 1 | 2 | 3
-export type TierDSeat = { id: string; isBot: boolean; bot?: AIConfig; difficulty: TierDDifficulty }
+export type TierDSeat = { id: string; isBot: boolean; bot?: AIConfig; difficulty: TierDDifficulty; risePersonality?: TierDRiseSoloPersonality }
 export type TierDDifficulty = { band: 'rookie' | 'steady' | 'skilled' | 'elite' | 'master' | 'endless'; skill: number }
 
 /**
@@ -144,11 +145,13 @@ export function createTierDLevel(level: number, humanId: string, random: () => n
     // The personality remains from the established AI architecture; only its
     // display identity is a fresh English Solo opponent name. Splicing makes
     // duplicate names impossible when future configs add more bot seats.
+    const risePersonality = level >= 1000 ? TIER_D_RISE_SOLO_SEAT_PERSONALITIES[index] : undefined
+    const riseConfig = risePersonality ? TIER_D_RISE_SOLO_PERSONALITIES[risePersonality] : undefined
     const base = AI_CONFIGS[(level + index) % AI_CONFIGS.length]
     const nameIndex = Math.floor(random() * availableNames.length)
     const name = availableNames.splice(nameIndex, 1)[0] ?? `Opponent ${index + 1}`
-    const bot: AIConfig = { ...base, id: `${base.id}_tier_d_${level}_${index + 1}`, name }
-    seats.push({ id: `tier-d-bot-${index + 1}`, isBot: true, bot, difficulty })
+    const bot: AIConfig = { ...base, id: `${base.id}_tier_d_${level}_${index + 1}`, name: riseConfig?.displayName ?? name, personality: riseConfig?.aiPersonality ?? base.personality }
+    seats.push({ id: `tier-d-bot-${index + 1}`, isBot: true, bot, difficulty, risePersonality })
   }
   const aiSeats = seats.filter(seat => seat.isBot)
   const comboBotId = bots >= 2 && level >= 201 ? (aiSeats.some(seat => seat.id === lockedRules?.comboBotId) ? lockedRules!.comboBotId : aiSeats[Math.floor(random() * aiSeats.length)].id) : undefined
@@ -167,7 +170,8 @@ export function createTierDLevel(level: number, humanId: string, random: () => n
   // Bots arrange immediately. Human cards are intentionally left uncommitted until READY.
   for (const seat of seats) if (seat.isBot) {
     const missionAware = tierDAiMissionsEnabled(level) && (!comboBotId || seat.id === comboBotId)
-    arrangements[seat.id] = arrangeTierDBot(dealtHands[seat.id], communityPiles, seat.difficulty.skill, random, missionAware ? missions : [], seat.id === comboBotId, tierDAiCandidateFraction(level))
+    const candidateFraction = seat.risePersonality ? tierDRiseCandidateFraction(level, seat.risePersonality) : tierDAiCandidateFraction(level)
+    arrangements[seat.id] = arrangeTierDBot(dealtHands[seat.id], communityPiles, seat.difficulty.skill, random, missionAware ? missions : [], seat.id === comboBotId, candidateFraction, seat.risePersonality ? { personality: seat.risePersonality, visible: { community: communityPiles } } : undefined)
   }
   const games: TierDGameState[] = [1, 2, 3].map(game => ({
     game: game as TierDGameNumber,
@@ -378,8 +382,8 @@ export function automaticTierDArrangement(cards: Card[], community: TierDCommuni
  * scoring legal plan it can reliably recognise. This changes decision quality,
  * never card dealing, hidden information, or the core ordering rule.
  */
-export function arrangeTierDBot(cards: Card[], community: TierDCommunityPiles, skill: number, random: () => number = Math.random, missions: readonly Mission[] = [], comboFocus = false, candidateFraction = .90): TierDArrangement {
-  type Candidate = { arrangement: TierDArrangement; total: number }
+export function arrangeTierDBot(cards: Card[], community: TierDCommunityPiles, skill: number, random: () => number = Math.random, missions: readonly Mission[] = [], comboFocus = false, candidateFraction = .90, rise?: { personality: TierDRiseSoloPersonality; visible: TierDRiseVisibleContext }): TierDArrangement {
+  type Candidate = { arrangement: TierDArrangement; total: number; hands: BestFiveResult[] }
   const candidates: Candidate[] = []
   forEachCombination(cards, 3, pile1 => {
     const afterP1 = withoutCards(cards, pile1)
@@ -390,14 +394,20 @@ export function arrangeTierDBot(cards: Card[], community: TierDCommunityPiles, s
       const h3 = evaluateBestFive([...pile3, ...community.pile3])
       if (compareHands(h1, h2) >= 0 || compareHands(h2, h3) >= 0) return
       const arrangement = { pile1, pile2, pile3 }
-      candidates.push({ arrangement, total: tierDBotHandsUtility([h1,h2,h3], skill, missions, comboFocus) })
+      const hands = [h1,h2,h3]
+      candidates.push({ arrangement, hands, total: tierDBotHandsUtility(hands, skill, missions, comboFocus, rise) })
     })
   })
   if (!candidates.length) return defaultTierDArrangement(cards)
   candidates.sort((a, b) => b.total - a.total)
   const boundedFraction = Math.min(1, Math.max(.01, candidateFraction))
   const window = Math.max(1, Math.ceil(candidates.length * boundedFraction))
-  return candidates[Math.min(window - 1, Math.floor(random() * window))].arrangement
+  const selected = candidates[Math.min(window - 1, Math.floor(random() * window))]
+  if (rise && process.env.NODE_ENV === 'development') {
+    const ranks = selected.hands.map(hand => hand.rank).join('/')
+    console.debug(`[TIER_D_RISE_AI] personality=${rise.personality} reason=${riseDecisionReason(rise.personality, selected.hands, missions)} ranks=${ranks} pool=${window}/${candidates.length}`)
+  }
+  return selected.arrangement
 }
 
 /** Score only information legally available to the AI when it locks its layout. */
@@ -406,9 +416,19 @@ export function tierDBotArrangementUtility(arrangement: TierDArrangement, commun
   return tierDBotHandsUtility(hands,skill,missions,comboFocus)
 }
 
-function tierDBotHandsUtility(hands: BestFiveResult[], skill: number, missions: readonly Mission[], comboFocus = false): number {
+function tierDBotHandsUtility(hands: BestFiveResult[], skill: number, missions: readonly Mission[], comboFocus = false, rise?: { personality: TierDRiseSoloPersonality; visible: TierDRiseVisibleContext }): number {
   const base=[TIER_D_GAME_POINTS[1],TIER_D_GAME_POINTS[2],TIER_D_GAME_POINTS[3]]
-  const strength=hands.reduce((sum,hand,index)=>sum+base[index]*(hand.rankIndex+1+(hand.score%100000000000)/100000000000),0)
+  const normalized = hands.map(hand => hand.rankIndex + 1 + (hand.score % 100000000000) / 100000000000)
+  let strength=hands.reduce((sum,hand,index)=>sum+base[index]*normalized[index],0)
+  if (rise) {
+    const config = TIER_D_RISE_SOLO_PERSONALITIES[rise.personality]
+    const weights = tierDRiseVisiblePileWeights(rise.personality, rise.visible)
+    strength = normalized.reduce((sum, value, index) => sum + base[index] * weights[index] * value, 0)
+    const weakest = Math.min(...normalized), strongest = Math.max(...normalized)
+    strength += config.ceilingWeight * normalized[2] * normalized[2]
+      + config.weakPileWeight * weakest
+      - config.balanceWeight * (strongest - weakest)
+  }
   if((skill<4&&!comboFocus)||missions.length===0)return strength
   const outcomes=missions.map(mission=>missionResult(mission,hands[mission.pile-1].rank))
   const missionValue=outcomes.reduce((sum,result)=>sum+result.score+result.penalty,0)
@@ -416,8 +436,15 @@ function tierDBotHandsUtility(hands: BestFiveResult[], skill: number, missions: 
   const comboExpected=allComplete?(missions.length===2?6:missions.length===3?12.5:0):0
   // Even the specialist treats Combo as a preference, not an optimizer. Normal
   // opponents only model Combo EV at the Mythic ceiling.
-  const strategyWeight=comboFocus?1.5:skill>=5?0.75:0.5
+  const strategyWeight=(comboFocus?1.5:skill>=5?0.75:0.5)*(rise ? TIER_D_RISE_SOLO_PERSONALITIES[rise.personality].comboWeight : 1)
   return strength+strategyWeight*(missionValue+(comboFocus||skill>=5?comboExpected:0))
+}
+
+function riseDecisionReason(personality: TierDRiseSoloPersonality, hands: BestFiveResult[], missions: readonly Mission[]): string {
+  if (personality === 'reaper') return missions.length ? 'G3 ceiling and combo upside' : 'G3 ceiling'
+  if (personality === 'crag') return 'weak-pile protection and balance'
+  const strongest = hands.reduce((best, hand, index) => hand.rankIndex > hands[best].rankIndex ? index : best, 0)
+  return `visible-board adaptation toward G${strongest + 1}`
 }
 
 /** Timeout fallback: first legal layout in deal order, with no score objective. */
