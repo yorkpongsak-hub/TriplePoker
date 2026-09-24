@@ -311,9 +311,9 @@ describe('Tier D Solo loop', () => {
     expect(resolveTierDLevel(state, 'human')).toMatchObject({ winnerId: 'human', playerWon: true })
   })
 
-  test('Open Challenge begins at Lv. 1001 and requires the Player to sweep every pile in its Match', () => {
+  test('legacy Open Challenge helper remains compatible but Rise no longer generates it', () => {
     expect(createTierDLevel(1000, 'human', () => 0).openChallenge).toBeUndefined()
-    expect(createTierDLevel(1001, 'human', () => 0).openChallenge).toBeDefined()
+    expect(createTierDLevel(1001, 'human', () => 0).openChallenge).toBeUndefined()
     const state = createTierDLevel(1001, 'human', random)
     state.openChallenge = { revealedPiles: [1, 2] }
     state.gameResults = [{ game: 1, winnerId: 'human' }, { game: 2, winnerId: 'tier-d-bot-1' }, { game: 3, winnerId: 'human' }] as any

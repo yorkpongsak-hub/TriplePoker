@@ -5,6 +5,8 @@ import { compareHands, evaluateBestFive, evaluateSoloG2BestFive, type BestFiveRe
 import { TIER_D_PILE_BASE_SCORES, getCurrentLeague, tierDBotCountForLevel, type LeagueId } from './tierDLeague'
 import { comboBonus, generateMissions, generateOpenChallenge, missionResult, pileWinScore, type Mission, type OpenChallenge } from './leagueGameplay'
 import { TIER_D_RISE_SOLO_PERSONALITIES, TIER_D_RISE_SOLO_SEAT_PERSONALITIES, tierDRiseCandidateFraction, tierDRiseVisiblePileWeights, type TierDRiseSoloPersonality, type TierDRiseVisibleContext } from './tierDRiseSoloPersonality'
+import { createTierDDuelState, tierDDuelActive, tierDDuelRoster, tierDInitialHandStrength, type TierDDuelState } from './tierDRiseDuel'
+import { selectTierDRiseSuperCombo, type TierDRiseSuperComboId, type TierDRiseSuperComboDifficulty } from './tierDRiseSuperCombo'
 
 export const TIER_D = 'D' as const
 export const TIER_D_GAME_POINTS = TIER_D_PILE_BASE_SCORES
@@ -80,6 +82,9 @@ export interface TierDLevelState {
   comboBonuses?: Record<string, number>
   missions: Mission[]
   openChallenge?: OpenChallenge
+  /** Rise Lv.1000+ replaces Open Challenge with three locked 1v1 Duels. */
+  duel?: TierDDuelState
+  riseSuperCombo?: { id: TierDRiseSuperComboId; difficulty: TierDRiseSuperComboDifficulty }
   /** Bronze only: piles exposed before arrangement for the approved tutorial curve. */
   guidedRevealPiles: TierDGameNumber[]
   /** Undealt cards remain authoritative so a Swap can draw a real card. */
@@ -136,7 +141,7 @@ export function tierDAiCandidateFraction(level: number): number {
 export function tierDAiMissionsEnabled(level: number): boolean { return level >= 161 }
 
 /** Starts a Tier D level with one human and the level-appropriate number of AI seats. */
-export function createTierDLevel(level: number, humanId: string, random: () => number = Math.random, lockedRules?: { comboBotId?: string; missions?: Mission[]; openChallenge?: OpenChallenge; guidedRevealPiles?: TierDGameNumber[] }): TierDLevelState {
+export function createTierDLevel(level: number, humanId: string, random: () => number = Math.random, lockedRules?: { comboBotId?: string; missions?: Mission[]; riseSuperCombo?: TierDLevelState['riseSuperCombo']; openChallenge?: OpenChallenge; guidedRevealPiles?: TierDGameNumber[] }): TierDLevelState {
   const difficulty = tierDDifficulty(level)
   const bots = tierDBotCount(level)
   const seats: TierDSeat[] = [{ id: humanId, isBot: false, difficulty }]
@@ -156,8 +161,9 @@ export function createTierDLevel(level: number, humanId: string, random: () => n
   const aiSeats = seats.filter(seat => seat.isBot)
   const comboBotId = bots >= 2 && level >= 201 ? (aiSeats.some(seat => seat.id === lockedRules?.comboBotId) ? lockedRules!.comboBotId : aiSeats[Math.floor(random() * aiSeats.length)].id) : undefined
   const scores = Object.fromEntries(seats.map(seat => [seat.id, 0])) as Record<string, number>
-  const missions = lockedRules?.missions ?? generateMissions(level, random)
-  const openChallenge = level > 1000 && lockedRules && 'openChallenge' in lockedRules ? lockedRules.openChallenge : generateOpenChallenge(level, random)
+  const riseSelection = tierDDuelActive(level) && !lockedRules?.missions ? selectTierDRiseSuperCombo(level, random) : undefined
+  const missions = lockedRules?.missions ?? riseSelection?.missions ?? generateMissions(level, random)
+  const openChallenge = tierDDuelActive(level) ? undefined : level > 1000 && lockedRules && 'openChallenge' in lockedRules ? lockedRules.openChallenge : generateOpenChallenge(level, random)
   const guidedRevealPiles: TierDGameNumber[] = lockedRules?.guidedRevealPiles ?? (level <= 20 ? [1, 2, 3] : level <= 40 ? [1, 2] : level <= 50 ? [1] : [])
   // 4 seats × 11 cards + 6 community cards is still a single standard deck.
   const deck = shuffleWith(deckCopy(), random)
@@ -179,7 +185,15 @@ export function createTierDLevel(level: number, humanId: string, random: () => n
     communityCards: communityPiles[`pile${game}` as keyof TierDCommunityPiles], auctionCards: {}, resolved: false,
   }))
   const fouled = Object.fromEntries(seats.map(seat => [seat.id, false])) as Record<string, boolean>
-  const state: TierDLevelState = { tier: TIER_D, level, seats, scores, games, gameResults: [], dealtHands, arrangements, fouled, communityPiles, missions, comboBotId, openChallenge, guidedRevealPiles, drawPile: deck.slice(cursor) }
+  let duel: TierDDuelState | undefined
+  if (tierDDuelActive(level)) {
+    const roster=tierDDuelRoster(level,random)
+    aiSeats.forEach((seat,index)=>{const config=roster[index];seat.bot={...config,id:`${config.id}_tier_d_${level}_${index+1}`};seat.risePersonality=config.personality==='cipher'?'cypher':config.personality==='reaper'||config.personality==='crag'?config.personality:undefined})
+    const opponents=aiSeats.map(seat=>({id:seat.id,name:seat.bot!.name,emoji:seat.bot!.emoji,aiConfigId:roster[aiSeats.indexOf(seat)].id}))
+    const strengths=Object.fromEntries(aiSeats.map(seat=>[seat.id,tierDInitialHandStrength(arrangements[seat.id]!,communityPiles)]))
+    duel=createTierDDuelState(level,opponents,strengths,random)
+  }
+  const state: TierDLevelState = { tier: TIER_D, level, seats, scores, games, gameResults: [], dealtHands, arrangements, fouled, communityPiles, missions, comboBotId, openChallenge, duel, riseSuperCombo:lockedRules?.riseSuperCombo??(riseSelection?{id:riseSelection.id,difficulty:riseSelection.difficulty}:undefined), guidedRevealPiles, drawPile: deck.slice(cursor) }
   assertTierDCardConservation(state)
   return state
 }
@@ -225,6 +239,26 @@ export function submitTierDArrangement(level: TierDLevelState, seatId: string, a
   assertTierDCardConservation(level)
 }
 
+/** Reuses the one authoritative deal while opening the next locked Rise Duel. */
+export function resetTierDForNextDuel(level: TierDLevelState, random: () => number = Math.random): void {
+  if (!level.duel || level.duel.current >= 2) throw new Error('No next Rise Duel')
+  level.duel.current = (level.duel.current + 1) as 1 | 2
+  level.duel.phase = 'REARRANGE'
+  level.scores = Object.fromEntries(level.seats.map(seat => [seat.id, 0]))
+  level.gameResults = []
+  level.comboBonuses = undefined
+  level.fouled = Object.fromEntries(level.seats.map(seat => [seat.id, false]))
+  // A defeated opponent whose card was purchased never plays again. Its old
+  // arrangement is intentionally discarded; do not synchronously solve a new
+  // eleven-card arrangement for an eliminated seat during the socket action.
+  level.games = ([1, 2, 3] as TierDGameNumber[]).map(game => ({
+    game,
+    hands: Object.fromEntries(level.seats.map(seat => [seat.id, cardsForGame(level.arrangements[seat.id] ?? defaultTierDArrangement(level.dealtHands[seat.id]), game)])),
+    communityCards: level.communityPiles[`pile${game}` as keyof TierDCommunityPiles], auctionCards: {}, resolved: false,
+  }))
+  assertTierDCardConservation(level)
+}
+
 /** One fresh deal per G keeps every 1–4 seat game inside a standard 52-card deck. */
 export function dealTierDGame(game: TierDGameNumber, seats: readonly TierDSeat[], random: () => number = Math.random): TierDGameState {
   const deck = shuffleWith(deckCopy(), random)
@@ -249,7 +283,8 @@ export function assignTierDAuctionCard(game: TierDGameState, seatId: string, car
 export function resolveTierDGame(level: TierDLevelState, gameNumber: TierDGameNumber, options?: { doubledSeatId?: string; doubledPile?: TierDGameNumber }): TierDGameResolution {
   const game = level.games[gameNumber - 1]
   if (game.resolved) throw new Error('Tier D game already resolved')
-  const eligible = level.seats.filter(seat => !level.fouled[seat.id])
+  const duelOpponentId=level.duel?.order[level.duel.current]?.id
+  const eligible = level.seats.filter(seat => !level.fouled[seat.id] && (!duelOpponentId || !seat.isBot || seat.id===duelOpponentId))
   const hands: Record<string, BestFiveResult> = {}
   for (const seat of level.seats) {
     hands[seat.id] = game.game === 2
@@ -269,12 +304,12 @@ export function resolveTierDGame(level: TierDLevelState, gameNumber: TierDGameNu
   const points = winnerId ? pileWinScore(level.level, gameNumber, hands[winnerId].rank, doubled) : 0
   if (winnerId) level.scores[winnerId] += points
   const mission = level.missions.find(entry => entry.pile === gameNumber)
-  const missionScores = Object.fromEntries(eligible.map(seat => [seat.id, 0])) as Record<string, number>
-  const missionPenalties = Object.fromEntries(eligible.map(seat => [seat.id, 0])) as Record<string, number>
-  if (mission) for (const seat of eligible.filter(seat => !seat.isBot || tierDAiMissionsEnabled(level.level))) {
+  const missionScores = Object.fromEntries(level.seats.map(seat => [seat.id, 0])) as Record<string, number>
+  const missionPenalties = Object.fromEntries(level.seats.map(seat => [seat.id, 0])) as Record<string, number>
+  if (mission) for (const seat of level.seats.filter(seat => !seat.isBot || tierDAiMissionsEnabled(level.level))) {
     const result = missionResult(mission, hands[seat.id].rank)
     missionScores[seat.id] = result.score; missionPenalties[seat.id] = result.penalty
-    level.scores[seat.id] += result.score + result.penalty
+    if (eligible.some(candidate => candidate.id === seat.id)) level.scores[seat.id] += result.score + result.penalty
   }
   game.resolved = true
   const resolution: TierDGameResolution = { game: gameNumber, points, winnerId, tiedSeatIds, hands, missionScores, missionPenalties, fouled: { ...level.fouled } }

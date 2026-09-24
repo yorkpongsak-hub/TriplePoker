@@ -3,7 +3,7 @@ import type { TierDLevelState } from './tierDSolo'
 
 /** สถานะภารกิจจากผลจริง แยกผลชั่วคราวออกจากผลที่ Commit แล้ว */
 export function tierDMissionAwareness(state: TierDLevelState, seatId: string, committedThrough: number, hideProvisional = false) {
-  const names = { high_card: 'HIGH CARD', one_pair: 'PAIR', two_pair: 'TWO PAIR', three_of_a_kind: 'TRIPS', straight: 'STRAIGHT', flush: 'FLUSH' }
+  const names = { high_card: 'HIGH CARD', one_pair: 'PAIR', two_pair: 'TWO PAIR', three_of_a_kind: 'TRIPS', straight: 'STRAIGHT', flush: 'FLUSH', full_house: 'FULL HOUSE', four_of_a_kind: 'FOUR OF A KIND', straight_flush: 'STRAIGHT FLUSH', royal_flush: 'ROYAL FLUSH' }
   const missions = [...state.missions].sort((a,b)=>a.pile-b.pile).map(mission => {
     const result = state.gameResults.find(result=>result.game===mission.pile)
     const evaluated = result && (!hideProvisional || mission.pile<=committedThrough)
@@ -11,8 +11,9 @@ export function tierDMissionAwareness(state: TierDLevelState, seatId: string, co
     const status = !evaluated ? 'pending' : success ? 'success' : 'failed'
     const provisional = !!evaluated && mission.pile>committedThrough
     const reward = missionResult({...mission,negative:false},mission.rank).score
+    const forcedLabel = mission.rank === 'high_card' ? `${names[mission.rank]} ONLY` : `${names[mission.rank]}+`
     return {pile:mission.pile,status,provisional,negative:!!mission.negative,
-      label:mission.negative?`⚠ ${names[mission.rank]}+ · FAIL ${mission.penalty}`:`${names[mission.rank]} +${reward}`}
+      label:mission.negative?`⚠ ${forcedLabel} · FAIL ${mission.penalty}`:`${names[mission.rank]} +${reward}`}
   })
   const count=missions.length
   const failed=missions.some(m=>m.status==='failed'&&!m.provisional)

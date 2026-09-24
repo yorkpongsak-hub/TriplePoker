@@ -42,7 +42,7 @@ import {
 import { broadcastTableUpdate } from "./lobbySocket";
 import { registerVipPlusSocket } from './vipPlusSocket';
 import { GAME_RESUME_EVENT, GAME_RESUME_RESULT_EVENT, isGameResumeRequest, type GameResumeResult } from './gameResumeProtocol';
-import { pauseTierDItemAd, resumeTierDItemAd, finishTierDRevealAnimation, finishTierDTripleSweepVfx, startTierDSolo, resumeTierDSolo, playTierDGame, stageTierDArrangement, useTierDItem, resumeTierDTimer, startTierDTimerAfterDeal, refreshTierDSoloInventory } from '../game/tierDSoloRuntime';
+import { pauseTierDItemAd, resumeTierDItemAd, finishTierDRevealAnimation, finishTierDTripleSweepVfx, startTierDSolo, resumeTierDSolo, playTierDGame, stageTierDArrangement, useTierDItem, resumeTierDTimer, startTierDTimerAfterDeal, refreshTierDSoloInventory, continueTierDDuel } from '../game/tierDSoloRuntime';
 
 // แปลง card key string (เช่น "10s", "jh") → Card object — ใช้ร่วมกันทุก handler ที่รับไพ่จาก client
 function toCards(keys: string[]) {
@@ -293,6 +293,7 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
     tierDOn('tier_d_control_ready',(data:{roomId:string;playerId:string})=>startTierDTimerAfterDeal(io,data.roomId,data.playerId))
     tierDOn('tier_d_reveal_complete',(data:{roomId:string;playerId:string})=>finishTierDRevealAnimation(io,data.roomId,data.playerId))
     tierDOn('tier_d_triple_sweep_complete',(data:{roomId:string;playerId:string})=>finishTierDTripleSweepVfx(io,data.roomId,data.playerId))
+    tierDOn('tier_d_duel_continue',(data:{roomId:string;playerId:string;swap?:{playerCard:string;opponentCard:string}},ack?:(ok:boolean)=>void)=>ack?.(continueTierDDuel(io,data.roomId,data.playerId,data.swap)))
     socket.on(GAME_RESUME_EVENT, async (request: unknown) => {
       if (!isGameResumeRequest(request)) return
       const fail = (status: Exclude<GameResumeResult, { ok: true }>['status']) =>

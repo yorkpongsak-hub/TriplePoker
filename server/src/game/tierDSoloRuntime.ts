@@ -5,7 +5,8 @@ import { domainItem, itemPolicyError, newMatchItemState, resolveGameRules, type 
 import { commitTierDItem, getTierDFreezeDurations } from './tierDItemPersistence'
 import type { Server } from 'socket.io'
 import { wonTierDStreakMatch } from './tierDMatchStreak'
-import { commitTierDCombo, createTierDLevel, defaultTierDArrangement, openChallengeMatchPassed, resolveTierDGame, submitTierDArrangement, submitTierDUndoArrangement, swapTierDHandCard, type TierDArrangement, type TierDGameNumber, type TierDLevelState } from './tierDSolo'
+import { commitTierDCombo, createTierDLevel, defaultTierDArrangement, openChallengeMatchPassed, resetTierDForNextDuel, resolveTierDGame, submitTierDArrangement, submitTierDUndoArrangement, swapTierDHandCard, type TierDArrangement, type TierDGameNumber, type TierDLevelState } from './tierDSolo'
+import { exchangeTierDDuelCard, tierDMatchesPerLevel, tierDNextDuelG1Stake } from './tierDRiseDuel'
 import { handRankLabel } from './handEvaluator'
 import { persistTierDLevelOutcome } from './tierDSoloProgress'
 import { supabaseAdmin } from '../config/supabase'
@@ -18,6 +19,8 @@ import { recordTierDCompetitionLevelWin } from './tierDLeaderboardService'
 import { addMiniTournamentPoints } from './tierDMiniTournamentService'
 import { grantTierCGraduationReward } from './tierDLevel250'
 import { analyzeTierDCompletedMatch } from './tierDAnalysis'
+import { escrowBuyIn, settleEscrow } from './gameLoop'
+import { calculateTierDDuelPayout, tierDDuelWon } from './tierDRiseDuel'
 
 type CardKeys = { pile1: string[]; pile2: string[]; pile3: string[] }
 type RevealHand = { privateCards: string[]; bestFive: string[]; unusedCards: string[]; rank: string }
@@ -45,9 +48,10 @@ type Session = {
   tripleSweepPending?: boolean
   unlockedFrom?: TierDGameNumber; undoUsed: Set<TierDGameNumber>; doubledPiles: Set<TierDGameNumber>; autoResolving: boolean
   snapshotWrite?: Promise<void>
+  escrowId?: string
 }
 type SessionSnapshot = {
-  gameId?: string; items?: MatchItemState; itemRevision?: number
+  gameId?: string; escrowId?: string; items?: MatchItemState; itemRevision?: number
   freezeDurations?: number[]; matchFreezeDurations?: number[]; lastFreezeDuration?: number
   version: 1; savedAt: number; roomId: string; state: TierDLevelState; currentGame: TierDGameNumber; matchNumber: 1|2|3
   cumulativeScores: Record<string,number>; openChallengePassed: boolean; arranged: boolean; inventory: Record<TierDRewardItem,number>; matchInventory: Record<TierDRewardItem,number>
@@ -73,7 +77,7 @@ const rollVipMatchItems=(inventory:Record<TierDRewardItem,number>,isVip:boolean,
 const visibleInventory=(s:Session)=>Object.fromEntries(TIER_D_ITEMS.map(item=>[item,(s.inventory[item]??0)+(s.matchInventory[item]??0)])) as Record<TierDRewardItem,number>
 
 function snapshotOf(s:Session):SessionSnapshot {
-  return JSON.parse(JSON.stringify({version:1,savedAt:Date.now(),gameId:s.gameId,items:s.items,itemRevision:s.itemRevision,freezeDurations:s.freezeDurations,matchFreezeDurations:s.matchFreezeDurations,lastFreezeDuration:s.lastFreezeDuration,roomId:s.roomId,state:s.state,currentGame:s.currentGame,matchNumber:s.matchNumber,cumulativeScores:s.cumulativeScores,openChallengePassed:s.openChallengePassed,arranged:s.arranged,inventory:s.inventory,matchInventory:s.matchInventory,isVip:s.isVip,levelStartedAt:s.levelStartedAt,matchStartedAt:s.matchStartedAt,adGrantUsed:s.adGrantUsed,reservedAdItem:s.reservedAdItem,committedThrough:s.committedThrough,adPausedAt:s.adPausedAt,dealRevision:s.dealRevision,frozenMs:s.frozenMs,timerRemainingMs:remainingMs(s)??undefined,timerPausedAt:s.timerPausedAt,systemPausedAt:s.systemPausedAt,timerStarted:s.timerStarted,reveal:s.reveal,provisionalScoreSnapshot:s.provisionalScoreSnapshot,stagedArrangement:s.stagedArrangement,tripleSweepPending:s.tripleSweepPending,unlockedFrom:s.unlockedFrom,undoUsed:[...s.undoUsed],doubledPiles:[...s.doubledPiles],autoResolving:s.autoResolving}))
+  return JSON.parse(JSON.stringify({version:1,savedAt:Date.now(),gameId:s.gameId,escrowId:s.escrowId,items:s.items,itemRevision:s.itemRevision,freezeDurations:s.freezeDurations,matchFreezeDurations:s.matchFreezeDurations,lastFreezeDuration:s.lastFreezeDuration,roomId:s.roomId,state:s.state,currentGame:s.currentGame,matchNumber:s.matchNumber,cumulativeScores:s.cumulativeScores,openChallengePassed:s.openChallengePassed,arranged:s.arranged,inventory:s.inventory,matchInventory:s.matchInventory,isVip:s.isVip,levelStartedAt:s.levelStartedAt,matchStartedAt:s.matchStartedAt,adGrantUsed:s.adGrantUsed,reservedAdItem:s.reservedAdItem,committedThrough:s.committedThrough,adPausedAt:s.adPausedAt,dealRevision:s.dealRevision,frozenMs:s.frozenMs,timerRemainingMs:remainingMs(s)??undefined,timerPausedAt:s.timerPausedAt,systemPausedAt:s.systemPausedAt,timerStarted:s.timerStarted,reveal:s.reveal,provisionalScoreSnapshot:s.provisionalScoreSnapshot,stagedArrangement:s.stagedArrangement,tripleSweepPending:s.tripleSweepPending,unlockedFrom:s.unlockedFrom,undoUsed:[...s.undoUsed],doubledPiles:[...s.doubledPiles],autoResolving:s.autoResolving}))
 }
 function persistSession(s:Session) {
   const snapshot=snapshotOf(s)
@@ -122,17 +126,20 @@ function emitState(io:Server,s:Session) {
       return [`pile${game}`,visibleBotPiles.has(game)?cards.map(cardKey):cards.map(()=>'')]
     }))]
   }))
+  const duel=s.state.duel
+  const currentDuelOpponent=duel?.order[duel.current]
   io.to(s.roomId).emit('tier_d_state',{
     roomId:s.roomId, gameId:s.gameId, itemUsageByMatch:s.items.usage, preG1LockedAt:s.items.preG1LockedAt, xX:s.items.xX,
     freezeExpiresAt:s.items.freezeExpiresAt, freezeDuration:s.matchFreezeDurations[0]??s.freezeDurations[0], foulPendingRecovery:!!s.items.foulPendingRecovery,
     itemEligibility:Object.fromEntries(TIER_D_ITEMS.map(item=>[item,itemEligibility(s,item)])),
-    level:s.state.level, matchNumber:s.matchNumber, totalMatches:rulesFor(s).matchesPerGame, currentGame:s.currentGame,
+    level:s.state.level, matchNumber:s.state.duel?1:s.matchNumber, totalMatches:tierDMatchesPerLevel(s.state.level), currentGame:s.currentGame,
     matchWinStreak:matchWinStreaks.get(s.userId)??0,
-    seats:s.state.seats.map(x=>({id:x.id,isBot:x.isBot,name:x.bot?.name??'You',emoji:x.bot?.emoji??'🙂'})),
+    seats:s.state.seats.filter(x=>!duel||!x.isBot||x.id===currentDuelOpponent?.id).map(x=>({id:x.id,isBot:x.isBot,name:x.bot?.name??'You',emoji:x.bot?.emoji??'🙂'})),
+    duel:duel?{...duel,queue:duel.order.slice(duel.current+1),currentOpponent:currentDuelOpponent,revealedOpponentCards:duel.phase==='SWAP'?s.state.dealtHands[currentDuelOpponent!.id].map(cardKey):undefined}:undefined,
     cards:s.state.dealtHands[s.userId].map(cardKey),
     piles:playerPiles ? Object.fromEntries(Object.entries(playerPiles).map(([pile,cards])=>[pile,cards.map(cardKey)])) : undefined,
     community:{ pile1:s.state.communityPiles.pile1.map(cardKey), pile2:s.state.communityPiles.pile2.map(cardKey), pile3:s.state.communityPiles.pile3.map(cardKey) },
-    missionRail:tierDMissionAwareness(s.state,s.userId,s.committedThrough??0,!!s.tripleSweepPending), missions:s.state.missions, openChallenge:s.state.openChallenge, guidedRevealPiles:s.state.guidedRevealPiles, botPreviewPiles, fouled:s.state.fouled,
+    missionRail:tierDMissionAwareness(s.state,s.userId,s.committedThrough??0,!!s.tripleSweepPending), missions:s.state.missions, riseSuperCombo:s.state.riseSuperCombo, openChallenge:s.state.openChallenge, guidedRevealPiles:s.state.guidedRevealPiles, botPreviewPiles, fouled:s.state.fouled,
     scores, phase:s.timerPausedAt?'frozen':s.systemPausedAt?'revealing':s.items.foulPendingRecovery?'foul_pending_recovery':s.arranged?(s.reveal?'revealed':'ready'):'arranging',
     completedPiles:s.state.gameResults.filter(result=>!s.reveal||result.game<s.currentGame).map(result=>({game:result.game,winnerId:result.winnerId,points:result.points})), reveal:s.reveal, tripleSweepPending:!!s.tripleSweepPending,
     adPausedAt:s.adPausedAt, dealRevision:s.dealRevision??0, inventory:visibleInventory(s), adGrantAvailable:!s.isVip&&!s.adGrantUsed&&!s.reservedAdItem, matchStartedAt:s.matchStartedAt, timerRemainingMs:remainingMs(s), timerDeadlineAt:s.timerDeadlineAt,
@@ -192,6 +199,8 @@ export async function startTierDSolo(io:Server,roomId:string,userId:string) {
   if(existing){clearMatchTimer(existing);clearRevealSafety(existing);clearTimeout(existing.freezeHandle);await existing.snapshotWrite}
   const {data}=await supabaseAdmin.from('users').select('tier_d_solo_level,vip_status').eq('user_id',userId).maybeSingle()
   const level=Math.max(1,data?.tier_d_solo_level??1);const state=createTierDLevel(level,userId)
+  const escrow=state.duel?await escrowBuyIn(userId,roomId,'initiate',state.duel.buyIn):undefined
+  if(escrow&&!escrow.ok){io.to(roomId).emit('tier_d_error',{message:escrow.reason==='INSUFFICIENT_TOKENS'?'Insufficient Token for Rise Duel Buy-in.':'Unable to lock Rise Duel Buy-in.'});return}
   if (level < 51) matchWinStreaks.set(userId, 0)
   else if (!matchWinStreaks.has(userId)) {
     const {data:streakProfile} = await supabaseAdmin.from('users').select('tier_d_match_win_streak').eq('user_id',userId).maybeSingle()
@@ -200,9 +209,10 @@ export async function startTierDSolo(io:Server,roomId:string,userId:string) {
   const inventory=await getTierDItemInventory(userId).catch(()=>({shuffle:0,swap:0,double_pile:0,freeze:0,auto_sort:0,undo:0}))
   const startedAt=Date.now()
   const isVip=data?.vip_status==='vip'||data?.vip_status==='vip_pro'
-  const s:Session={gameId:randomUUID(),items:newMatchItemState(),itemRevision:0,freezeDurations:await getTierDFreezeDurations(userId).catch(()=>[]),matchFreezeDurations:[],roomId,userId,state,currentGame:1,matchNumber:1,cumulativeScores:Object.fromEntries(state.seats.map(seat=>[seat.id,0])),openChallengePassed:true,arranged:false,inventory,matchInventory:rollVipMatchItems(inventory,isVip,level),isVip,adGrantUsed:false,levelStartedAt:startedAt,matchStartedAt:startedAt,frozenMs:0,timerStarted:false,undoUsed:new Set(),doubledPiles:new Set(),autoResolving:false}
+  const s:Session={gameId:randomUUID(),escrowId:escrow&&escrow.ok?escrow.escrowId:undefined,items:newMatchItemState(),itemRevision:0,freezeDurations:await getTierDFreezeDurations(userId).catch(()=>[]),matchFreezeDurations:[],roomId,userId,state,currentGame:1,matchNumber:1,cumulativeScores:Object.fromEntries(state.seats.map(seat=>[seat.id,0])),openChallengePassed:true,arranged:false,inventory,matchInventory:rollVipMatchItems(inventory,isVip,level),isVip,adGrantUsed:false,levelStartedAt:startedAt,matchStartedAt:startedAt,frozenMs:0,timerStarted:false,undoUsed:new Set(),doubledPiles:new Set(),autoResolving:false}
   s.matchFreezeDurations=Array.from({length:s.matchInventory.freeze},rollFreezeDuration)
-  sessions.set(roomId,s);emitState(io,s)
+    if(s.state.duel)s.matchNumber=1
+    sessions.set(roomId,s);emitState(io,s)
 }
 export async function resumeTierDSolo(io:Server,roomId:string,userId:string):Promise<'RESUMED'|'NOT_FOUND'|'ERROR'> {
   const live=sessions.get(roomId)
@@ -224,8 +234,9 @@ export async function resumeTierDSolo(io:Server,roomId:string,userId:string):Pro
     // after the persisted item expiration on reconnect.
     const freezeActive = snapshot.items?.freezeExpiresAt !== undefined || snapshot.timerPausedAt !== undefined
     const remaining=storedRemaining===undefined?undefined:Math.max(0,storedRemaining-(freezeActive||snapshot.systemPausedAt||snapshot.adPausedAt?0:elapsed))
-    const s:Session={gameId:snapshot.gameId??randomUUID(),items:snapshot.items??legacyItemState(snapshot),itemRevision:snapshot.itemRevision??0,freezeDurations:await getTierDFreezeDurations(userId).catch(()=>[]),matchFreezeDurations:snapshot.matchFreezeDurations??Array.from({length:snapshot.matchInventory?.freeze??0},rollFreezeDuration),lastFreezeDuration:snapshot.lastFreezeDuration,roomId,userId,state:snapshot.state as TierDLevelState,currentGame:snapshot.currentGame as TierDGameNumber,matchNumber:snapshot.matchNumber as 1|2|3,cumulativeScores:snapshot.cumulativeScores??{},openChallengePassed:snapshot.openChallengePassed??true,arranged:!!snapshot.arranged,inventory:persistedInventory,matchInventory:snapshot.matchInventory??emptyMatchInventory(),isVip:!!snapshot.isVip,levelStartedAt:snapshot.levelStartedAt??Date.now(),matchStartedAt:snapshot.matchStartedAt??Date.now(),adGrantUsed:!!snapshot.adGrantUsed,reservedAdItem:snapshot.reservedAdItem,committedThrough:snapshot.committedThrough,adPausedAt:snapshot.adPausedAt?Date.now():undefined,dealRevision:snapshot.dealRevision,frozenMs:snapshot.frozenMs??0,timerRemainingMs:remaining,timerPausedAt:snapshot.timerPausedAt,systemPausedAt:snapshot.systemPausedAt?Date.now():undefined,timerStarted:!!snapshot.timerStarted,reveal:snapshot.reveal,provisionalScoreSnapshot:snapshot.provisionalScoreSnapshot,stagedArrangement:snapshot.stagedArrangement,tripleSweepPending:!!snapshot.tripleSweepPending,unlockedFrom:snapshot.unlockedFrom,undoUsed:new Set(snapshot.undoUsed??[]),doubledPiles:new Set(snapshot.doubledPiles??[]),autoResolving:false}
+    const s:Session={gameId:snapshot.gameId??randomUUID(),escrowId:snapshot.escrowId,items:snapshot.items??legacyItemState(snapshot),itemRevision:snapshot.itemRevision??0,freezeDurations:await getTierDFreezeDurations(userId).catch(()=>[]),matchFreezeDurations:snapshot.matchFreezeDurations??Array.from({length:snapshot.matchInventory?.freeze??0},rollFreezeDuration),lastFreezeDuration:snapshot.lastFreezeDuration,roomId,userId,state:snapshot.state as TierDLevelState,currentGame:snapshot.currentGame as TierDGameNumber,matchNumber:snapshot.matchNumber as 1|2|3,cumulativeScores:snapshot.cumulativeScores??{},openChallengePassed:snapshot.openChallengePassed??true,arranged:!!snapshot.arranged,inventory:persistedInventory,matchInventory:snapshot.matchInventory??emptyMatchInventory(),isVip:!!snapshot.isVip,levelStartedAt:snapshot.levelStartedAt??Date.now(),matchStartedAt:snapshot.matchStartedAt??Date.now(),adGrantUsed:!!snapshot.adGrantUsed,reservedAdItem:snapshot.reservedAdItem,committedThrough:snapshot.committedThrough,adPausedAt:snapshot.adPausedAt?Date.now():undefined,dealRevision:snapshot.dealRevision,frozenMs:snapshot.frozenMs??0,timerRemainingMs:remaining,timerPausedAt:snapshot.timerPausedAt,systemPausedAt:snapshot.systemPausedAt?Date.now():undefined,timerStarted:!!snapshot.timerStarted,reveal:snapshot.reveal,provisionalScoreSnapshot:snapshot.provisionalScoreSnapshot,stagedArrangement:snapshot.stagedArrangement,tripleSweepPending:!!snapshot.tripleSweepPending,unlockedFrom:snapshot.unlockedFrom,undoUsed:new Set(snapshot.undoUsed??[]),doubledPiles:new Set(snapshot.doubledPiles??[]),autoResolving:false}
     assertTierDCardConservation(s.state)
+    if(s.state.duel)s.matchNumber=1
     if(live){clearMatchTimer(live);clearRevealSafety(live);clearTimeout(live.freezeHandle)}
     if (s.state.level < 51) matchWinStreaks.set(userId, 0)
     sessions.set(roomId,s)
@@ -360,20 +371,30 @@ async function finishMatch(io:Server,s:Session){
     if(!layout||![1,2,3].every(game=>visibleBeforeReveal.has(game as TierDGameNumber)))return []
     return [[seat.id,layout]]
   }))
-  const analysis=analyzeTierDCompletedMatch(s.state,s.userId,s.matchNumber,knownOpponents)
+  const analysis=analyzeTierDCompletedMatch(s.state,s.userId,s.state.duel?(s.state.duel.current+1) as 1|2|3:s.matchNumber,knownOpponents)
   const analysisPayload={matchNumber:analysis.matchNumber,actualScore:analysis.actualScore,bestScore:analysis.bestScore,actualWins:analysis.actualWins,bestWins:analysis.bestWins,actualMissionCount:analysis.actualMissionCount,bestMissionCount:analysis.bestMissionCount,actualCombo:analysis.actualCombo,bestCombo:analysis.bestCombo,pile:analysis.pile,...(s.isVip?{community:Object.fromEntries(Object.entries(analysis.community).map(([key,cards])=>[key,cards.map(cardKey)])),actual:Object.fromEntries(Object.entries(analysis.actual).map(([key,cards])=>[key,cards.map(cardKey)])),best:Object.fromEntries(Object.entries(analysis.best).map(([key,cards])=>[key,cards.map(cardKey)]))}: {})}
   io.to(s.roomId).emit('tier_d_analysis_snapshot',analysisPayload)
-  const playerMatchScore=s.state.scores[s.userId]??0
-  const bestMatchScoreSave=await supabaseAdmin.rpc('record_tier_d_best_match_score',{p_user_id:s.userId,p_score:playerMatchScore})
-  if(bestMatchScoreSave.error)console.warn('[TIER_D_SOLO] Best match score persistence requires migration 066:',bestMatchScoreSave.error.code)
+  if(!s.state.duel){
+    const bestMatchScoreSave=await supabaseAdmin.rpc('record_tier_d_best_match_score',{p_user_id:s.userId,p_score:s.state.scores[s.userId]??0})
+    if(bestMatchScoreSave.error)console.warn('[TIER_D_SOLO] Best match score persistence requires migration 066:',bestMatchScoreSave.error.code)
+  }
   for(const seat of s.state.seats)s.cumulativeScores[seat.id]=(s.cumulativeScores[seat.id]??0)+(s.state.scores[seat.id]??0)
+  if(s.state.duel){
+    const duel=s.state.duel;const opponent=duel.order[duel.current]
+    const playerScore=s.state.scores[s.userId]??0;const opponentScore=s.state.scores[opponent.id]??0
+    const won=tierDDuelWon(playerScore,opponentScore)
+    duel.results.push({opponentId:opponent.id,playerScore,opponentScore,won})
+    if(!won)duel.phase='FAILED'
+    else if(duel.current<2){duel.phase='SWAP';duel.swapScoreCost=tierDNextDuelG1Stake(s.state.level);s.autoResolving=false;s.reveal=undefined;emitState(io,s);return}
+    else duel.phase='COMPLETE'
+  }
   const matchWon=wonTierDStreakMatch(s.userId,s.state.seats.filter(seat=>seat.isBot).map(seat=>seat.id),s.state.gameResults)
   const matchStreak=s.state.level>=51&&matchWon?(matchWinStreaks.get(s.userId)??0)+1:0
   matchWinStreaks.set(s.userId,matchStreak)
   const streakSave=await supabaseAdmin.from('users').update({tier_d_match_win_streak:matchStreak}).eq('user_id',s.userId)
   if(streakSave.error)console.warn('[TIER_D_SOLO] Match streak persistence requires migration 060:',streakSave.error.code)
   s.openChallengePassed=s.state.level > 1000 ? s.openChallengePassed&&openChallengeMatchPassed(s.state,s.userId) : true
-  if(s.matchNumber<3){
+  if(!s.state.duel&&s.matchNumber<3){
     s.items=newMatchItemState();s.matchFreezeDurations=[];clearTimeout(s.freezeHandle)
     s.reservedAdItem=undefined
     const identities=s.state.seats.filter(seat=>seat.isBot).map(seat=>seat.bot)
@@ -382,7 +403,17 @@ async function finishMatch(io:Server,s:Session){
   }
   const aiScores=s.state.seats.filter(seat=>seat.isBot).map(seat=>s.cumulativeScores[seat.id]??0)
   const highestAiScore=Math.max(...aiScores)
-  const playerWon=(s.state.level<=1000||s.openChallengePassed)&&(s.cumulativeScores[s.userId]??0)>=highestAiScore
+  const playerWon=s.state.duel?s.state.duel.phase==='COMPLETE':(s.state.level<=1000||s.openChallengePassed)&&(s.cumulativeScores[s.userId]??0)>=highestAiScore
+  if(s.state.duel){
+    const bestMatchScoreSave=await supabaseAdmin.rpc('record_tier_d_best_match_score',{p_user_id:s.userId,p_score:s.cumulativeScores[s.userId]??0})
+    if(bestMatchScoreSave.error)console.warn('[TIER_D_SOLO] Best match score persistence requires migration 066:',bestMatchScoreSave.error.code)
+  }
+  let duelPayout
+  if(s.state.duel&&s.escrowId){
+    duelPayout=playerWon?calculateTierDDuelPayout(s.cumulativeScores,s.state.duel.totalPot):{payouts:Object.fromEntries(s.state.seats.map(seat=>[seat.id,0])),burned:s.state.duel.buyIn,pot:s.state.duel.totalPot}
+    const finalStack=duelPayout.payouts[s.userId]??0
+    await settleEscrow(s.userId,s.escrowId,finalStack,{tier:'tier_d_duel',burnAmount:duelPayout.burned,npcNets:s.state.duel.order.map(opponent=>({npcId:opponent.aiConfigId,amount:(duelPayout!.payouts[opponent.id]??0)-s.state.duel!.buyIn}))})
+  }
   const rewardBaseline=playerWon?await getTierDRewardBaseline(s.userId).catch(()=>undefined):undefined
   const competition=playerWon?await recordTierDCompetitionLevelWin({userId:s.userId,level:s.state.level,points:s.cumulativeScores[s.userId]??0,isVip:s.isVip}).catch(()=>undefined):undefined
   if(playerWon)await addMiniTournamentPoints(s.userId,s.cumulativeScores[s.userId]??0).catch(error=>console.warn('[TIER_D_SOLO] mini tournament score update failed',error))
@@ -394,7 +425,26 @@ async function finishMatch(io:Server,s:Session){
     : undefined
   const personalBestMs=playerWon?await recordTierDLevelClearPersonalBest(s.userId,s.state.level,elapsedMs).catch(()=>undefined):undefined
   const reward=playerWon?await grantTierDLevelRandomItem(s.userId,s.state.level,s.isVip).catch(error=>{console.warn('[TIER_D_SOLO] level reward reservation failed',error);return undefined}):undefined
-  io.to(s.roomId).emit('tier_d_complete',{matchWinStreak:matchStreak,level:s.state.level,playerWon,scores:s.cumulativeScores,highestAiScore,openChallengePassed:s.openChallengePassed,progress,reward,rewardEligible:!!reward,rewardReasons:reward?[s.state.level%10===0?'LEVEL_MILESTONE':'RANDOM_LEVEL_REWARD']:[],competition,elapsedMs,personalBestMs,tierCGraduation});discardSession(s)
+  io.to(s.roomId).emit('tier_d_complete',{matchWinStreak:matchStreak,level:s.state.level,playerWon,scores:s.cumulativeScores,highestAiScore,openChallengePassed:s.openChallengePassed,duel:s.state.duel,duelPayout,progress,reward,rewardEligible:!!reward,rewardReasons:reward?[s.state.level%10===0?'LEVEL_MILESTONE':'RANDOM_LEVEL_REWARD']:[],competition,elapsedMs,personalBestMs,tierCGraduation});discardSession(s)
+}
+
+/** Accepts either Skip or one ownership-changing 1-for-1 purchase after a won Duel. */
+export function continueTierDDuel(io:Server,roomId:string,userId:string,swap?:{playerCard:string;opponentCard:string}):boolean{
+  const s=sessions.get(roomId);const duel=s?.state.duel
+  if(!s||s.userId!==userId||!duel||duel.phase!=='SWAP'||duel.current>=2)return false
+  try{
+    if(swap){
+      const opponentId=duel.order[duel.current].id
+      const playerIndex=s.state.dealtHands[userId].findIndex(card=>cardKey(card)===swap.playerCard)
+      const opponentIndex=s.state.dealtHands[opponentId].findIndex(card=>cardKey(card)===swap.opponentCard)
+      exchangeTierDDuelCard(s.state,userId,opponentId,playerIndex,opponentIndex)
+      duel.scoreSpent+=duel.swapScoreCost;s.cumulativeScores[userId]=(s.cumulativeScores[userId]??0)-duel.swapScoreCost
+    }
+    resetTierDForNextDuel(s.state)
+    s.items=newMatchItemState();s.matchNumber=1;s.currentGame=1;s.arranged=false;s.stagedArrangement=s.state.arrangements[userId];s.reveal=undefined;s.provisionalScoreSnapshot=undefined;s.committedThrough=0;s.timerStarted=false;s.timerDeadlineAt=undefined;s.timerRemainingMs=undefined;s.systemPausedAt=undefined;s.autoResolving=false;s.undoUsed.clear();s.doubledPiles.clear()
+    startMatchTimer(io,s)
+    emitState(io,s);return true
+  }catch(error){io.to(roomId).emit('tier_d_error',{message:error instanceof Error?error.message:'Duel transition failed'});return false}
 }
 
 const rulesFor=(s:Session)=>resolveGameRules({tier:'D',gameMode:'SOLO',playerCount:s.state.seats.length})
@@ -443,7 +493,7 @@ export async function useTierDItem(io:Server,roomId:string,userId:string,item:Ti
     }
     if(item==='shuffle'){
       const old=candidate.state
-      candidate.state=createTierDLevel(old.level,userId,Math.random,{missions:old.missions,openChallenge:old.openChallenge,guidedRevealPiles:old.guidedRevealPiles,comboBotId:old.comboBotId})
+      candidate.state=createTierDLevel(old.level,userId,Math.random,{missions:old.missions,riseSuperCombo:old.riseSuperCombo,openChallenge:old.openChallenge,guidedRevealPiles:old.guidedRevealPiles,comboBotId:old.comboBotId})
       candidate.state.seats.forEach((seat,index)=>{seat.bot=old.seats[index].bot})
       candidate.dealRevision=(s.dealRevision??0)+1;candidate.stagedArrangement=undefined
       candidate.timerRemainingMs=(getArrangeTimerSeconds(old.level)??0)*1000;candidate.systemPausedAt=Date.now();candidate.timerDeadlineAt=undefined

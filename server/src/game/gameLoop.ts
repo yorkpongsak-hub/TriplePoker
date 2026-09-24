@@ -277,10 +277,11 @@ type EscrowResult =
 // ไม่ต้อง rollback อะไร — ตัด class of bug ที่ rollback เองก็ล้มตาม (connection เดียวกันที่พังไปแล้ว)
 // ทำให้ token หายลอยโดยไม่มี escrow record อ้างอิงเลย
 export async function escrowBuyIn(
-  userId: string, roomId: string, tier: string,
+  userId: string, roomId: string, tier: string, amountOverride?: number,
 ): Promise<EscrowResult> {
   const validTier = toEscrowTier(tier)
-  const buyInAmount = gameConfig.buyIn[validTier]
+  const buyInAmount = amountOverride ?? gameConfig.buyIn[validTier]
+  if (!Number.isInteger(buyInAmount) || buyInAmount <= 0) return { ok: false, reason: 'SERVER_ERROR' }
   try {
     // กู้คืน escrow เก่าที่ค้างเกิน 60 นาทีก่อนเสมอ — กันเคส escrow ค้างจาก session ก่อนหน้าบัง single-active-escrow ด้านล่างอยู่ทั้งที่จริงๆ จบไปนานแล้ว
     await recoverStaleEscrow(userId)
@@ -576,9 +577,9 @@ function usesTokenFlow(tier: string): tier is TokenFlowTier {
 // เท่านั้น ขยายทีละ Tier ตามรอบถัดไป (Round 1: Initiate, Round 3: Mastermind) — Adept ไม่ผ่าน gate
 // นี้เลยเพราะอยู่คนละ engine (MultiMatchState, ดู settleAdeptMatchViaLedger) ห้ามใส่ highNoble/lastBoss
 // เพิ่มจนกว่าจะทำรอบของมันเอง (ดู plan — finalizeGrandFinale()'s settle call ใช้ร่วมกับ 2 tier นี้ด้วย)
-type LedgerSettlementTier = 'initiate' | 'mastermind'
+type LedgerSettlementTier = 'initiate' | 'mastermind' | 'tier_d_duel'
 export function usesLedgerSettlement(tier: string): tier is LedgerSettlementTier {
-  return tier === 'initiate' || tier === 'mastermind'
+  return tier === 'initiate' || tier === 'mastermind' || tier === 'tier_d_duel'
 }
 
 // Central Economy Ledger — สร้าง ledger param ให้ settleEscrow() ตัวเดียวใช้ร่วมกันทุกจุดที่จบแมตช์

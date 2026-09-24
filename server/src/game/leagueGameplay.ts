@@ -2,22 +2,29 @@ import type { HandRank } from './handEvaluator'
 import { getCurrentLeague, TIER_D_PILE_BASE_SCORES, type LeagueId } from './tierDLeague'
 
 export type Pile = 1 | 2 | 3
-export type MissionRank = Extract<HandRank, 'high_card' | 'one_pair' | 'two_pair' | 'three_of_a_kind' | 'straight' | 'flush'>
-export type Mission = { pile: Pile; rank: MissionRank; negative?: boolean; penalty?: number }
+export type MissionRank = Extract<HandRank, 'high_card' | 'one_pair' | 'two_pair' | 'three_of_a_kind' | 'straight' | 'flush' | 'full_house' | 'four_of_a_kind' | 'straight_flush' | 'royal_flush'>
+export type Mission = { pile: Pile; rank: MissionRank; negative?: boolean; penalty?: number; superComboChallenge?: boolean }
 export type OpenChallenge = { revealedPiles: Pile[] }
 
-const rankValue: Record<MissionRank, number> = { high_card: 0, one_pair: 1, two_pair: 2, three_of_a_kind: 3, straight: 4, flush: 5 }
-const missionBonus: Record<MissionRank, number> = { high_card: 1, one_pair: 2, two_pair: 3, three_of_a_kind: 4, straight: 6, flush: 8 }
+const rankValue: Record<MissionRank, number> = { high_card: 0, one_pair: 1, two_pair: 2, three_of_a_kind: 3, straight: 4, flush: 5, full_house: 6, four_of_a_kind: 7, straight_flush: 8, royal_flush: 9 }
+const missionBonus: Record<MissionRank, number> = { high_card: 1, one_pair: 2, two_pair: 3, three_of_a_kind: 4, straight: 6, flush: 8, full_house: 10, four_of_a_kind: 14, straight_flush: 18, royal_flush: 24 }
 const pools: Record<Pile, readonly MissionRank[]> = { 1: ['high_card', 'one_pair'], 2: ['one_pair', 'two_pair', 'three_of_a_kind'], 3: ['two_pair', 'three_of_a_kind', 'straight', 'flush'] }
 const missionWeights: Record<LeagueId, readonly number[]> = {
   bronze: [0, 0, 0], silver: [.80, .15, .05], gold: [.65, .25, .10], platinum: [.50, .35, .15], diamond: [.40, .40, .20], elite: [.30, .45, .25], master: [.20, .45, .35], grandmaster: [.15, .40, .45], legend: [.10, .30, .60], mythic: [.05, .20, .75],
 }
 const negativeChance: Record<LeagueId, number> = { bronze: 0, silver: .03, gold: .05, platinum: .08, diamond: .12, elite: .16, master: .20, grandmaster: .25, legend: .30, mythic: 1 / 3 }
+// Starts at Gold (Lv.101): 10%, then +5% at every higher League.
+const superComboChallengeChance: Record<LeagueId, number> = { bronze: 0, silver: 0, gold: .10, platinum: .15, diamond: .20, elite: .25, master: .30, grandmaster: .35, legend: .40, mythic: .45 }
 const openChance: Record<LeagueId, number> = { bronze: 0, silver: .03, gold: .05, platinum: .08, diamond: .10, elite: .12, master: .15, grandmaster: .18, legend: .20, mythic: .25 }
 
 export function generateMissions(level: number, random: () => number = Math.random): Mission[] {
   const league = getCurrentLeague(level)
   if (league.id === 'bronze') return []
+  if (level >= 101 && random() < superComboChallengeChance[league.id]) return [
+    { pile: 1, rank: 'three_of_a_kind', superComboChallenge: true },
+    { pile: 2, rank: 'straight', superComboChallenge: true },
+    { pile: 3, rank: 'four_of_a_kind', superComboChallenge: true },
+  ]
   const count = weightedIndex(missionWeights[league.id], random) + 1
   const pileSets: Record<number, Pile[][]> = { 1: [[1], [2], [3]], 2: [[1, 2], [1, 3], [2, 3]], 3: [[1, 2, 3]] }
   const selected = pileSets[count][Math.floor(random() * pileSets[count].length)]
@@ -47,8 +54,13 @@ export function missionResult(mission: Mission, hand: HandRank): { complete: boo
   // Straight and Flush are the two endgame objectives: a stronger hand may still
   // complete them. Earlier objectives teach precise strength allocation, so they
   // require the requested rank exactly.
-  const higherRankAllowed = mission.rank === 'straight' || mission.rank === 'flush'
-  const complete = mission.negative ? handValue >= targetValue : handValue === targetValue || (higherRankAllowed && handValue > targetValue)
+  const higherRankAllowed = mission.rank === 'straight' || mission.rank === 'flush' || mission.rank === 'four_of_a_kind'
+  // The lowest forced mission is deliberately strict: HIGH CARD means exactly
+  // High Card. Building a Pair or anything stronger wastes too much strength
+  // in that pile and therefore fails the forced objective with its penalty.
+  const complete = mission.negative
+    ? mission.rank === 'high_card' ? handValue === targetValue : handValue >= targetValue
+    : handValue === targetValue || (higherRankAllowed && handValue > targetValue)
   if (mission.negative) return { complete, score: 0, penalty: complete ? 0 : mission.penalty! }
   if (!complete) return { complete, score: 0, penalty: 0 }
   const full = missionBonus[mission.rank]
@@ -62,6 +74,7 @@ export function handMultiplier(level: number, hand: HandRank): number {
 export function pileWinScore(level: number, pile: Pile, hand: HandRank, doubled = false): number { return Math.ceil(TIER_D_PILE_BASE_SCORES[pile] * handMultiplier(level, hand) * (doubled ? 2 : 1)) }
 export function comboBonus(missions: readonly Mission[], completed: readonly boolean[], random: () => number = Math.random): number {
   if (missions.length === 2 && completed.every(Boolean)) return 5 + Math.floor(random() * 3)
+  if (missions.length === 3 && missions.every(mission => mission.superComboChallenge) && completed.every(Boolean)) return 20 + Math.floor(random() * 6)
   if (missions.length === 3 && completed.every(Boolean)) return 10 + Math.floor(random() * 6)
   return 0
 }
