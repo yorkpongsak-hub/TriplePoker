@@ -88,7 +88,7 @@ export interface MonarchMatchState {
     humanRevealOrder?: string[]
   }
   matchEnded?: boolean
-  // Arrangement deadline (60s, ไม่มี auto-arrange ช่วยแล้ว) arrangementDeadlineAt
+  // Arrangement deadline follows Tier A+ (120s, ไม่มี auto-arrange ช่วยแล้ว) arrangementDeadlineAt
   // เป็น epoch ms ส่งออกผ่าน buildMonarchRoundSnapshot ให้ Batch 2 เอาไปทำ UI countdown ต่อ
   arrangementDeadlineAt?: number
   arrangementTimer?: ReturnType<typeof setTimeout>

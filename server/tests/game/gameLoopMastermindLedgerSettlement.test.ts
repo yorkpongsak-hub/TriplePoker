@@ -20,9 +20,9 @@ describe('usesLedgerSettlement — the allowlist gate itself (regression guard)'
     expect(usesLedgerSettlement('mastermind')).toBe(true)
   })
 
-  test('returns false for tiers not yet integrated (highNoble, lastBoss, adept, arena)', () => {
-    expect(usesLedgerSettlement('highNoble')).toBe(false)
-    expect(usesLedgerSettlement('lastBoss')).toBe(false)
+  test('covers every Tier C+ solo path but not Adept multiplayer or Arena', () => {
+    expect(usesLedgerSettlement('highNoble')).toBe(true)
+    expect(usesLedgerSettlement('lastBoss')).toBe(true)
     expect(usesLedgerSettlement('adept')).toBe(false)
     expect(usesLedgerSettlement('arena')).toBe(false)
   })
@@ -96,9 +96,9 @@ describe('buildSoloLedgerArg — single source of truth shared by every solo-mat
   // and silently miss another the way usesLedgerSettlement's runtime body was missed in Round 3.
   const sentinel = NINE_SENTINELS.find(s => s.id === 'AI_ORACLE')!
 
-  test('returns undefined for a tier not on the ledger allowlist (e.g. highNoble) — legacy RPC path untouched', () => {
+  test('builds the central ledger argument for High Noble', () => {
     const state = baseMastermindState({ tier: 'highNoble' })
-    expect(buildSoloLedgerArg(state)).toBeUndefined()
+    expect(buildSoloLedgerArg(state)).toMatchObject({tier:'highNoble',burnAmount:0})
   })
 
   test('mastermind: builds tier/burnAmount/npcNets routed through the Sentinel + Minion overrides', () => {

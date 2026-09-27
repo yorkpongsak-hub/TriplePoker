@@ -9,8 +9,8 @@
 //   Cipher  → chaos     : 80% best_of_n N=5 · 20% unorthodox
 // ============================================================
 
-import { checkFoul, PlayerArrangement, CommunityCards } from '../game/foulChecker';
-import { evaluateHand } from '../game/handEvaluator';
+import { checkTierCFoul, PlayerArrangement, CommunityCards } from '../game/foulChecker';
+import { evaluateBestFive, evaluateHand } from '../game/handEvaluator';
 import { Card } from '../game/deck';
 
 // ─── ประเภท Boss ─────────────────────────────────────────────
@@ -52,29 +52,26 @@ export function bossArrange(
 
 // ─── Reaper: weight Pile 3 ×1.5 ──────────────────────────────
 function reaperArrange(cards: Card[], community: CommunityCards): PlayerArrangement {
-  const candidates = buildCandidates(cards, community, BOSS_N.reaper);
+  const candidates = buildCandidates(cards, community);
   return selectByWeightedScore(candidates, community, { pile1: 1.0, pile2: 1.0, pile3: 1.5 });
 }
 
 // ─── The Crag: weight Pile 1 ×1.5 ────────────────────────────
 function cragArrange(cards: Card[], community: CommunityCards): PlayerArrangement {
-  const candidates = buildCandidates(cards, community, BOSS_N.crag);
+  const candidates = buildCandidates(cards, community);
   return selectByWeightedScore(candidates, community, { pile1: 1.5, pile2: 1.0, pile3: 1.0 });
 }
 
 // ─── Cortex: N=15, weight Pile 3 ×1.3 ───────────────────────
 function cortexArrange(cards: Card[], community: CommunityCards): PlayerArrangement {
-  const candidates = buildCandidates(cards, community, BOSS_N.cortex);
+  const candidates = buildCandidates(cards, community);
   return selectByWeightedScore(candidates, community, { pile1: 1.0, pile2: 1.0, pile3: 1.3 });
 }
 
 // ─── Cipher: 80% normal / 20% unorthodox ─────────────────────
 function cipherArrange(cards: Card[], community: CommunityCards): PlayerArrangement {
-  if (Math.random() < 0.80) {
-    const candidates = buildCandidates(cards, community, BOSS_N.cipher);
-    return selectByWeightedScore(candidates, community, { pile1: 1.0, pile2: 1.0, pile3: 1.0 });
-  }
-  return cipherUnorthodoxArrange(cards, community);
+  const candidates = buildCandidates(cards, community);
+  return selectByWeightedScore(candidates, community, { pile1: 1.0, pile2: 1.0, pile3: 1.0 });
 }
 
 function cipherUnorthodoxArrange(cards: Card[], community: CommunityCards): PlayerArrangement {
@@ -85,39 +82,30 @@ function cipherUnorthodoxArrange(cards: Card[], community: CommunityCards): Play
     pile3: sorted.slice(PILE1_SIZE + PILE2_SIZE),
   };
 
-  if (!checkFoul(candidate, community).isFoul) return candidate;
+  if (!checkTierCFoul(candidate, community).isFoul) return candidate;
 
   // Foul → fallback เป็น best_of_n
-  const fallback = buildCandidates(cards, community, BOSS_N.cipher);
+  const fallback = buildCandidates(cards, community);
   if (fallback.length === 0) throw new Error('cipherUnorthodoxArrange: ไม่พบ valid arrangement');
   return selectByWeightedScore(fallback, community, { pile1: 1.0, pile2: 1.0, pile3: 1.0 });
 }
 
 // ─── Shared Helpers ───────────────────────────────────────────
 
-function buildCandidates(
-  cards: Card[],
-  community: CommunityCards,
-  n: number
-): PlayerArrangement[] {
+function buildCandidates(cards: Card[], community: CommunityCards): PlayerArrangement[] {
   const results: PlayerArrangement[] = [];
-
-  for (let i = 0; i < n; i++) {
-    for (let attempt = 0; attempt < MAX_ATTEMPTS_PER_CANDIDATE; attempt++) {
-      const shuffled = shuffleCards([...cards]);
-      const arr: PlayerArrangement = {
-        pile1: shuffled.slice(0, PILE1_SIZE),
-        pile2: shuffled.slice(PILE1_SIZE, PILE1_SIZE + PILE2_SIZE),
-        pile3: shuffled.slice(PILE1_SIZE + PILE2_SIZE),
-      };
-      if (!checkFoul(arr, community).isFoul) {
-        results.push(arr);
-        break;
-      }
-    }
-  }
+  combinations(cards, PILE1_SIZE).forEach(pile1 => {
+    const afterPile1 = without(cards, pile1)
+    combinations(afterPile1, PILE2_SIZE).forEach(pile2 => {
+      const arr:PlayerArrangement={pile1,pile2,pile3:without(afterPile1,pile2)}
+      if(!checkTierCFoul(arr,community).isFoul)results.push(arr)
+    })
+  })
   return results;
 }
+
+function combinations(cards:readonly Card[],size:number):Card[][]{const out:Card[][]=[];const visit=(start:number,chosen:Card[])=>{if(chosen.length===size){out.push(chosen);return}for(let index=start;index<=cards.length-(size-chosen.length);index++)visit(index+1,[...chosen,cards[index]])};visit(0,[]);return out}
+function without(cards:readonly Card[],removed:readonly Card[]):Card[]{const keys=new Set(removed.map(card=>`${card.value}:${card.suit}`));return cards.filter(card=>!keys.has(`${card.value}:${card.suit}`))}
 
 function selectByWeightedScore(
   candidates: PlayerArrangement[],
@@ -145,8 +133,8 @@ function calcWeightedScore(
   weights: { pile1: number; pile2: number; pile3: number }
 ): number {
   const s1 = evaluateHand([...arr.pile1, ...community.row1]).score;
-  const s2 = evaluateHand([...arr.pile2, ...community.row2]).score;
-  const s3 = evaluateHand([...arr.pile3, ...community.row3]).score;
+  const s2 = evaluateBestFive([...arr.pile2, ...community.row2]).score;
+  const s3 = evaluateBestFive([...arr.pile3, ...community.row3]).score;
   return s1 * weights.pile1 + s2 * weights.pile2 + s3 * weights.pile3;
 }
 

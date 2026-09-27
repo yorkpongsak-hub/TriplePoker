@@ -27,11 +27,12 @@ describe('Tier D Solo loop', () => {
   test.each([161, 201, 1000, 1001])('Mission and Combo eligibility at level %i applies independently to every AI', level => {
     const state = createTierDLevel(level, 'human', random)
     state.missions = [{ pile: 1, rank: 'high_card' }, { pile: 2, rank: 'high_card' }]
+    const activeBots = state.duel ? state.seats.filter(seat => seat.id === state.duel!.order[state.duel!.current].id) : state.seats.filter(seat => seat.isBot)
     for (const pile of [1, 2, 3] as const) {
       const result = resolveTierDGame(state, pile)
       if (pile === 3) continue
       expect(result.missionScores.human).toBe(result.hands.human.rank === 'high_card' ? 1 : 0)
-      for (const seat of state.seats.filter(seat => seat.isBot)) {
+      for (const seat of activeBots) {
         expect(result.missionScores[seat.id]).toBe(result.hands[seat.id].rank === 'high_card' ? 1 : 0)
       }
     }
@@ -39,7 +40,7 @@ describe('Tier D Solo loop', () => {
     const bonuses = commitTierDCombo(state, () => 0)
     const completes = (id: string, count: number) => state.gameResults.slice(0, count).every(result => result.hands[id].rank === 'high_card')
     expect(bonuses.human).toBe(completes('human', 2) ? 5 : 0)
-    for (const seat of state.seats.filter(seat => seat.isBot)) {
+    for (const seat of activeBots) {
       expect(bonuses[seat.id]).toBe(completes(seat.id, 2) ? 5 : 0)
       expect(state.scores[seat.id]).toBe(before[seat.id] + bonuses[seat.id])
     }
@@ -47,9 +48,9 @@ describe('Tier D Solo loop', () => {
     state.missions.push({ pile: 3, rank: 'high_card' })
     state.comboBonuses = undefined
     const superBonuses = commitTierDCombo(state, () => 0)
-    expect(superBonuses.human).toBe(completes('human', 3) ? 10 : 0)
-    for (const seat of state.seats.filter(seat => seat.isBot)) {
-      expect(superBonuses[seat.id]).toBe(completes(seat.id, 3) ? 10 : 0)
+    expect(superBonuses.human).toBe(completes('human', 3) ? 10 : completes('human', 2) ? 5 : 0)
+    for (const seat of activeBots) {
+      expect(superBonuses[seat.id]).toBe(completes(seat.id, 3) ? 10 : completes(seat.id, 2) ? 5 : 0)
     }
 
     state.scores = { ...before }
@@ -57,7 +58,7 @@ describe('Tier D Solo loop', () => {
     state.games[0].resolved = false
     state.missions = [{ pile: 1, rank: 'flush', negative: true, penalty: -7 }]
     const negative = resolveTierDGame(state, 1)
-    for (const seat of state.seats.filter(seat => seat.isBot)) {
+    for (const seat of activeBots) {
       const hasFlushOrBetter = ['flush', 'full_house', 'four_of_a_kind', 'straight_flush', 'royal_flush'].includes(negative.hands[seat.id].rank)
       expect(negative.missionPenalties[seat.id]).toBe(!hasFlushOrBetter ? -7 : 0)
     }
@@ -272,7 +273,7 @@ describe('Tier D Solo loop', () => {
     const beforeCommit = { ...state.scores }
     expect(beforeCommit).not.toEqual(beforeG3)
     expect(commitTierDCombo(state, () => 0)).toEqual({ human: 0, 'tier-d-bot-1': 0, 'tier-d-bot-2': 5 })
-    expect(state.scores.human).toBe(beforeCommit.human)
+    expect(state.scores.human).toBe(beforeCommit.human + 2)
     expect(state.scores['tier-d-bot-1']).toBe(beforeCommit['tier-d-bot-1'])
     expect(state.scores['tier-d-bot-2']).toBe(beforeCommit['tier-d-bot-2'] + 5)
   })

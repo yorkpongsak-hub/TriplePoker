@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useAuthStore } from '../../../src/store/authStore'
@@ -18,12 +18,14 @@ export default function TierDItemAd(){
  const {item,placement,returnTo}=useLocalSearchParams<{item?:string;placement?:string;returnTo?:string}>();const token=useAuthStore(state=>state.session?.access_token);const [message,setMessage]=useState<string>();const [grantedItem,setGrantedItem]=useState<string>()
  const selected=VALID_ITEMS.includes(item as ItemKey)?item as ItemKey:undefined
  const claimId=useRef(eventId());const claiming=useRef(false)
+ const forcedStarted=useRef(false)
  const back=()=>router.canGoBack()?router.back():router.replace('/game/tier-d')
  const finishForced=()=>returnTo==='lobby'?router.replace('/(home)/lobby'):back()
  // Policy approval happened before navigating here. If no native ad is ready,
  // continue immediately rather than creating ad debt or blocking the transition.
  const forced=async()=>{const result=await adProvider.showInterstitial();if(result.shown&&token)await fetch(`${SERVER_URL}/ads/forced-complete`,{method:'POST',headers:{Authorization:`Bearer ${token}`}}).catch(()=>{});finishForced()}
- if(placement==='forced')return <View style={s.screen}><GameActionButton label="CONTINUE" onPress={forced} style={s.action}/></View>
+ useEffect(()=>{if(placement!=='forced'||forcedStarted.current)return;forcedStarted.current=true;void forced()},[placement])
+ if(placement==='forced')return null
  const finish=async()=>{if(claiming.current)return;if(!selected||!token){setMessage('Unable to prepare this item reward.');return}claiming.current=true;setMessage('LOADING AD...');const earned=await adProvider.showRewarded('SELECTED_ITEM_REFILL');if(!earned.earned){claiming.current=false;setMessage('AD UNAVAILABLE — TRY AGAIN LATER');return}setMessage('CLAIMING ITEM...');try{
    const response=await fetch(`${SERVER_URL}/tier-d/reward/item-ad-complete`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({item:selected,eventId:claimId.current,devMock:adProvider.mode==='mock'&&__DEV__,googleTestEarned:adProvider.mode==='google_test'})})
    const body=await response.json();if(!response.ok)throw new Error(body.error??'Ad reward unavailable')

@@ -6,7 +6,8 @@ import { GameActionButton } from '../ui/GameActionButton'
 export type TierDAnalysisSnapshot={matchNumber:1|2|3;actualScore:number;bestScore:number;actualWins:number;bestWins:number;actualMissionCount:number;bestMissionCount:number;actualCombo:number;bestCombo:number;pile:{actual:number[];best:number[]};community?:{pile1:string[];pile2:string[];pile3:string[]};actual?:{pile1:string[];pile2:string[];pile3:string[]};best?:{pile1:string[];pile2:string[];pile3:string[]}}
 const decode=(key:string)=>({suit:({s:'spade',h:'heart',d:'diamond',c:'club'}[key.slice(-1)]??'spade') as Suit,value:key.slice(0,-1).toLowerCase() as Value})
 const pileKeys = ['pile1','pile2','pile3'] as const
-function Cards({cards}:{cards:string[]}){return <View style={s.cards}>{cards.map((key,index)=>{const card=decode(key);return <Card key={`${key}-${index}`} variant="face" suit={card.suit} value={card.value} width={31} height={45} style={index?{marginLeft:-10}:undefined}/>})}</View>}
+// Match the resolved-hand flip size so every rank and suit stays readable.
+function Cards({cards}:{cards:string[]}){return <View style={s.cards}>{cards.map((key,index)=>{const card=decode(key);return <Card key={`${key}-${index}`} variant="face" suit={card.suit} value={card.value} width={48} height={70} style={index?{marginLeft:-13}:undefined}/>})}</View>}
 function Arrangement({title,piles}:{title:string;piles:{pile1:string[];pile2:string[];pile3:string[]}}){return <View style={s.arrangement}><Text style={s.section}>{title}</Text>{pileKeys.map((key,index)=><View key={key} style={s.pile}><Text style={s.pileLabel}>G{index+1}</Text><Cards cards={piles[key]}/></View>)}</View>}
 
 export function TierDVIPAnalysis({level,snapshots,onBack,onNext}:{level:number;snapshots:TierDAnalysisSnapshot[];onBack:()=>void;onNext:()=>void}){

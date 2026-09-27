@@ -31,6 +31,8 @@ const COMMUNITY_CARD_HEIGHT = 49
 const STACK_CARD_W = 22
 const STACK_CARD_H = 32
 const RESOLVED_CARD_OVERLAP_STEP = 5
+const GRANDMASTER_P1_HAND_SCALE = 1.00
+const GRANDMASTER_P1_HAND_DROP = 48
 // Local/P1 cards are 62px wide at a 1.44 ratio (about 89px high).
 // Lift the whole seat block so bottom dialogs remain below the hand.
 const LOCAL_SEAT_LIFT = Math.round(62 * 1.44)
@@ -49,6 +51,11 @@ function TightFaceUpStack({ cards }: { cards: string[] }) {
       ))}
     </View>
   )
+}
+
+function TierCSideArrangementBacks({cardCount}:{cardCount:number}){
+  const counts=[3,Math.max(3,cardCount-8),5]
+  return <View style={styles.tierCSideHand}>{counts.map((count,pile)=><View key={pile} style={styles.tierCSidePile}>{Array.from({length:count}).map((_,index)=><View key={index} style={[styles.tierCSideCard,index>0&&{marginLeft:-15}]}><Image source={CARD_BACK_IMG} style={styles.tierCSideCardImage} resizeMode="cover" /></View>)}</View>)}</View>
 }
 
 function PileOneOpeningHand({ piles, width }: { piles: NonNullable<ArenaSeatView['arrangedPiles']>; width: number }) {
@@ -721,7 +728,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
     const gfFolded = gfPileActive && gfPlayer?.status === 'FOLDED'
     const hand = (
       <View style={side && (placement === 'left' ? styles.rotateLeft : styles.rotateRight)}>
-        {gfFolded ? (
+        {arrangingPhase&&side&&!seat.isLocal ? <TierCSideArrangementBacks cardCount={visibleCardCount} /> : gfFolded ? (
           <View style={styles.gfFoldedStack}>
             <CardBackStack count={gfPrivateCardCount} offset={10} />
             <Text style={styles.gfFoldedLabel}>FOLDED</Text>
@@ -1011,7 +1018,11 @@ const styles = StyleSheet.create({
   arrangeSheet: { position: 'absolute', bottom: 8, alignSelf: 'center', width: '96%', paddingVertical: 10, borderRadius: 14, backgroundColor: 'rgba(8,20,13,0.97)', borderWidth: 1, borderColor: '#FFD76A', alignItems: 'center', zIndex: 35 },
   arrangeTitle: { color: '#FFD76A', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
   arrangeSub: { color: '#C8C4B0', fontSize: 8, marginTop: 2, marginBottom: 4, textAlign: 'center', paddingHorizontal: 12 },
-  p1HandScale: { width: '100%', marginVertical: 18, alignItems: 'center', transform: [{ scale: 1.2 }] },
+  p1HandScale: { width: '100%', marginTop: 29, marginBottom: 18, alignItems: 'center', transform: [{ translateY: GRANDMASTER_P1_HAND_DROP }, { scale: GRANDMASTER_P1_HAND_SCALE }] },
+  tierCSideHand:{flexDirection:'column',alignItems:'center',gap:4,transform:[{translateY:-36}]},
+  tierCSidePile:{flexDirection:'row',alignItems:'center',justifyContent:'center'},
+  tierCSideCard:{width:25,height:36,borderRadius:3,overflow:'hidden',borderWidth:1,borderColor:'rgba(201,168,76,.5)'},
+  tierCSideCardImage:{width:25,height:36},
   discardRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 6, paddingHorizontal: 10, marginBottom: 8 },
   discardCard: { width: 44, height: 62, borderRadius: 4, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,215,106,0.5)', backgroundColor: '#160C1E', alignItems: 'center', justifyContent: 'center' },
   discardCardSelected: { borderColor: '#FF6B6B', borderWidth: 2 },

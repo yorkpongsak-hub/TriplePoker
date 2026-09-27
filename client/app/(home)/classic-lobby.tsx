@@ -762,7 +762,7 @@ export default function LobbyScreen() {
       {/* ─── Header (fixed) ─── */}
       <View style={[s.headerRow, { paddingLeft: shopBtnLeftGap }]}>
         <MenuButton icon="profile" label="Profile" size="sm" onPress={() => router.push('/(home)/profile')} />
-        <Text style={s.header}>TriplePoker : Rise Lobby</Text>
+        <Text style={s.header}>TriplePoker : Rise{`\n`}Main Lobby</Text>
       </View>
 
       {/* ─── Menu Bar (fixed) — Feedback A2: เหลือ 4 ปุ่ม กระจายเต็มความกว้าง ไม่ scroll แล้ว ─── */}
@@ -779,6 +779,10 @@ export default function LobbyScreen() {
           <View style={[s.badgeDot, { backgroundColor: COLOR.goldPrimary }]} /><Text style={s.tierBtnTxt}>[D] Tier D Solo</Text>
           <Text style={s.buyInLabel}>Continue your Solo level journey</Text>
         </TouchableOpacity>
+        {isVip && <TouchableOpacity style={[s.tierBtn, s.tierBtnFull]} onPress={() => router.push('/game/vip-crew')}>
+          <View style={[s.badgeDot, { backgroundColor: COLOR.goldPrimary }]} /><Text style={s.tierBtnTxt}>VIP Private Crew Table</Text>
+          <Text style={s.buyInLabel}>Private 4-player points session · Crew PIN required</Text>
+        </TouchableOpacity>}
         {TIER_ROWS.map((row, ri) => <View key={ri} style={s.tierRow}>{row.map(tier => renderTierButton(tier, true))}</View>)}
       </ScrollView>
 

@@ -1,9 +1,9 @@
 import React, { useCallback } from 'react'
 import { Image, Pressable, StyleSheet } from 'react-native'
-import { router } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { PANEL_RIGHT, PANEL_WIDTH } from './TokenFlowPanel'
 import { useConfirmTableExit } from '../../hooks/useConfirmTableExit'
+import { leaveTierCPlusTable } from '../../ads/postSettlementExit'
 
 const EXIT_IMAGE = require('../../../assets/ui/buttons/btn_exit.png')
 
@@ -19,7 +19,7 @@ export default function ExitTableButton({ onRequestExit, onConfirmExit, matchCom
   const insets = useSafeAreaInsets()
 
   const confirmExit = useCallback(() => {
-    onConfirmExit ? onConfirmExit() : router.replace('/(home)/lobby')
+    onConfirmExit ? onConfirmExit() : leaveTierCPlusTable()
   }, [onConfirmExit])
 
   const defaultRequestExit = useConfirmTableExit({ enabled: visible, matchComplete, onConfirm: confirmExit })

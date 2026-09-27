@@ -13,7 +13,6 @@ import { GameActionButton } from '../ui/GameActionButton'
 import { t } from '../../i18n'
 import { useI18n } from '../../i18n/store'
 import Svg, { Circle, Path, Rect } from 'react-native-svg'
-import { TierDItemOfferCard } from './TierDItemOfferCard'
 
 const DOOR_IMAGE = require('../../../assets/images/game_entrance.png')
 const APP_LOGO = require('../../../assets/images/triple_poker_icon.png')
@@ -152,17 +151,18 @@ export default function DoorEntryTransition({ onFinish, onHowToPlay, level }: { 
         <Pressable accessibilityRole="button" accessibilityLabel={t('entry.longestStreak', {}, locale)} style={styles.streakRow} onPress={() => setRecordsBoard('streak')}><StatRow label={t('entry.longestStreak', {}, locale)} value={String(profile?.tier_d_best_win_streak ?? 0)}/></Pressable>
         <StatRow label={t('entry.bestMatchScore', {}, locale)} value={String(profile?.tier_d_best_match_score ?? 0)}/>
       </View>
-      <View pointerEvents="none" accessibilityElementsHidden style={styles.entryIconColumn}>
-        <EntryIcon glyph="profile" style={styles.entryColumnIcon}/>
-        <EntryIcon glyph="crown" style={styles.entryColumnIcon}/>
-        <EntryIcon glyph="cards" style={styles.entryColumnIcon}/>
-        <EntryIcon glyph="flame" style={styles.entryColumnIcon}/>
-        <EntryIcon glyph="trophy" style={styles.entryColumnIcon}/>
-        <EntryIcon glyph="chart" style={styles.entryColumnIcon}/>
+      <View style={styles.entryIconColumn}>
+        <EntryNavButton label={t('entry.profile', {}, locale)} glyph="profile" onPress={() => router.push('/(home)/profile')}/>
+        <EntryNavButton label={t('entry.mainLobby', {}, locale)} glyph="cards" onPress={() => router.push('/(home)/classic-lobby')}/>
+        <EntryNavButton
+          disabled={!user?.id}
+          label={t('entry.showcase', {}, locale)}
+          glyph="trophy"
+          onPress={() => user?.id && router.push({ pathname: '/(home)/player/[userId]/showcase', params: { userId: user.id } })}
+        />
       </View>
       <Text style={styles.readyLevel}>{level ? t('entry.level', { level }, locale) : t('common.continue', {}, locale)}</Text>
       <View style={styles.readyArea}><GameActionButton size="large" label={t('entry.openDoor', {}, locale)} onPress={() => setStarted(true)} style={styles.entryAction}/>{onHowToPlay?<GameActionButton size="small" variant="secondary" animation="none" label={t('entry.howToPlay', {}, locale)} onPress={onHowToPlay} style={styles.guideAction}/>:null}</View>
-      <TierDItemOfferCard placement="ENTRANCE_DOOR"/>
     </> : null}
     {started ? <><LeagueTrophyCabinet side="left"/><LeagueTrophyCabinet side="right"/></> : null}
     <Animated.View pointerEvents="none" style={[styles.brand, { opacity: entryCopyOpacity }]}>
@@ -230,6 +230,13 @@ function DoorPortalVfx({ reducedMotion }: { reducedMotion: boolean }) {
 
 function StatRow({ label, value }: { label: string; value: string }) {
   return <View style={styles.statRow}><Text style={styles.statLabel}>{label}</Text><Text style={styles.statValue}>{value}</Text></View>
+}
+
+function EntryNavButton({ label, glyph, onPress, disabled = false }: { label: string; glyph: EntryGlyph; onPress: () => void; disabled?: boolean }) {
+  return <Pressable accessibilityRole="button" accessibilityLabel={label} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.entryColumnAction, disabled && styles.entryColumnActionDisabled, pressed && styles.entryColumnActionPressed]}>
+    <EntryIcon glyph={glyph} style={styles.entryColumnIcon}/>
+    <Text numberOfLines={1} style={styles.entryColumnLabel}>{label}</Text>
+  </Pressable>
 }
 
 function formatTime(milliseconds?: number | null) {
@@ -352,8 +359,12 @@ const styles = StyleSheet.create({
   nextLevelText: { color: '#17311f', fontSize: 14, fontWeight: '900', letterSpacing: 1.5 },
   howToPlayButton: { paddingHorizontal: 14, paddingVertical: 5 },
   howToPlayText: { color: 'rgba(255,241,187,.76)', fontSize: 11, fontWeight: '800', letterSpacing: 1.1, textDecorationLine: 'underline' },
-  entryIconColumn: { position: 'absolute', top: '22%', left: 14, zIndex: 21, gap: 9, alignItems: 'center' },
+  entryIconColumn: { position: 'absolute', top: '22%', left: 8, zIndex: 21, gap: 9, alignItems: 'center' },
+  entryColumnAction: { width: 66, minHeight: 55, alignItems: 'center', justifyContent: 'center', borderRadius: 9 },
+  entryColumnActionPressed: { opacity: .64, transform: [{ scale: .96 }] },
+  entryColumnActionDisabled: { opacity: .38 },
   entryColumnIcon: { width: 52, height: 42 },
+  entryColumnLabel: { maxWidth: 66, marginTop: -2, color: '#ffd76a', fontSize: 7, lineHeight: 9, fontWeight: '900', letterSpacing: .4, textAlign: 'center', textTransform: 'uppercase', textShadowColor: '#000', textShadowRadius: 4 },
   entryIconSvg: { alignItems: 'center', justifyContent: 'center' },
   // The opened showcase legs end around 60% of the portrait screen; keep the encouragement below them.
   entryCopy: { position: 'absolute', top: '85%', left: 14, right: '50%', alignItems: 'flex-start', zIndex: 4 },

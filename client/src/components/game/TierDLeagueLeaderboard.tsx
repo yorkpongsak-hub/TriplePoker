@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { LayoutAnimation, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Image as ExpoImage } from 'expo-image'
 import { router } from 'expo-router'
 import { audio } from '../../audio/AudioManager'
 import { AudioEvent } from '../../audio/audioEvents'
@@ -8,20 +9,24 @@ import { AvatarDisplay, PRESET_AVATARS } from '../profile/AvatarPicker'
 import { formatInteger, t } from '../../i18n'
 import { useI18n } from '../../i18n/store'
 import { GameActionButton } from '../ui/GameActionButton'
+import { TierDTournamentIntro, TierDTournamentReward } from './TierDTournamentIntro'
+import { ThumbUpVFX } from '../vfx/ThumbUpVFX'
 
 export type LeagueRankEntry = { userId:string; displayName:string; avatarUrl:string|null; languageCode?:string|null; rank:number; leaguePoints:number; longestWinStreak:number; isMock?:boolean }
-export type LeagueRankSnapshot = { enabled:boolean; entries:LeagueRankEntry[]; currentUser:{rank:number|null;leaguePoints:number}; previousDisplayedRank:number|null }
+type RewardBand={rank1:number;rank2:number;rank3:number;rank4To20:number}
+export type LeagueRankSnapshot = { enabled:boolean;tournamentId?:string;startsAt?:string;endsAt?:string;status?:'OPEN'|'LOCKED';introRequired?:boolean;rewardPresentationRequired?:boolean;leagueId?:string;rewardBand?:RewardBand;finalReward?:{rank:number;tokens:number;trophy?:string|null;champion?:boolean};entries:LeagueRankEntry[];currentUser:{rank:number|null;leaguePoints:number;entry?:LeagueRankEntry|null};previousDisplayedRank:number|null }
 
 const LEAGUES=[{name:'Bronze',start:1,end:50},{name:'Silver',start:51,end:100},{name:'Gold',start:101,end:150},{name:'Platinum',start:151,end:200},{name:'Diamond',start:201,end:250},{name:'Elite',start:251,end:350},{name:'Master',start:351,end:500},{name:'Grandmaster',start:501,end:700},{name:'Legend',start:701,end:1000},{name:'Mythic',start:1001,end:Number.MAX_SAFE_INTEGER}]
 function leagueFor(level:number){return LEAGUES.find(entry=>level>=entry.start&&level<=entry.end)??LEAGUES[0]}
-const languageFlag:Record<string,string>={en:'🇬🇧',th:'🇹🇭',zh:'🇨🇳',ja:'🇯🇵',ko:'🇰🇷',vi:'🇻🇳',id:'🇮🇩',es:'🇪🇸',pt:'🇵🇹',fr:'🇫🇷'}
+const languageFlag:Record<string,string>={en:'🇬🇧',th:'🇹🇭',zh:'🇨🇳','zh-CN':'🇨🇳',ja:'🇯🇵',ko:'🇰🇷',vi:'🇻🇳',id:'🇮🇩',es:'🇪🇸',pt:'🇵🇹',fr:'🇫🇷'}
 
-export async function fetchTierDLeagueRanking(serverUrl:string, accessToken:string):Promise<LeagueRankSnapshot>{
- const request=(token:string)=>fetch(`${serverUrl}/tier-d/leaderboard`,{headers:{Authorization:`Bearer ${token}`}})
+export async function fetchTierDLeagueRanking(serverUrl:string, accessToken:string, level?:number):Promise<LeagueRankSnapshot>{
+ const query=Number.isInteger(level)&&level!>0?`?level=${level}`:''
+ const request=(token:string)=>fetch(`${serverUrl}/tier-d/leaderboard${query}`,{headers:{Authorization:`Bearer ${token}`,'Cache-Control':'no-cache'}})
  let response=await request(accessToken)
  if(response.status===401){const {data,error}=await supabase.auth.refreshSession();if(!error&&data.session)response=await request(data.session.access_token)}
  if(!response.ok){let detail='';try{const body=await response.json();detail=body.error??body.message??''}catch{}throw new Error(detail||`Could not load League ranking (${response.status}).`)}
- return response.json()
+ const snapshot:LeagueRankSnapshot=await response.json();if(__DEV__)console.info('[TIER_D_LEADERBOARD]',{event:'QUERY_RESULT',level,returnedPlayerScore:snapshot.currentUser.leaguePoints});return snapshot
 }
 
 export function TierDLeagueLeaderboard({serverUrl,accessToken,userId,level,previousRank,onClose,entryMode='manualView',onAutoComplete}:{serverUrl:string;accessToken:string;userId:string;level:number;previousRank:number|null;onClose:()=>void;entryMode?:'manualView'|'autoReward';onAutoComplete?:()=>void}){
@@ -29,38 +34,37 @@ export function TierDLeagueLeaderboard({serverUrl,accessToken,userId,level,previ
  const [snapshot,setSnapshot]=useState<LeagueRankSnapshot>()
  const [displayRank,setDisplayRank]=useState<number|null>(previousRank)
  const [error,setError]=useState('')
+ const [clock,setClock]=useState(Date.now())
+ const [introOpen,setIntroOpen]=useState(false)
+ const [rewardOpen,setRewardOpen]=useState(false)
+ const [rankUpVfxVisible,setRankUpVfxVisible]=useState(false)
  const timer=useRef<ReturnType<typeof setTimeout>|null>(null); const autoTimer=useRef<ReturnType<typeof setTimeout>|null>(null)
  const onAutoCompleteRef=useRef(onAutoComplete);onAutoCompleteRef.current=onAutoComplete
  const league=leagueFor(level)
+ const beginRanking=(next:LeagueRankSnapshot)=>{
+   const target=next.currentUser.rank;if(target===null){setDisplayRank(null);return}
+   const start=next.previousDisplayedRank??previousRank??target;setDisplayRank(start);let current=start
+   const rankImproved=target<start
+   const complete=()=>{if(rankImproved){setRankUpVfxVisible(true);audio.play(AudioEvent.RANK_COMPLETE)}if(next.tournamentId)void fetch(`${serverUrl}/tier-d/leaderboard/seen`,{method:'POST',headers:{Authorization:`Bearer ${accessToken}`,'Content-Type':'application/json'},body:JSON.stringify({tournamentId:next.tournamentId,rank:target})}).catch(()=>{})}
+   const step=()=>{if(current===target)return;current+=target<current?-1:1;LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);setDisplayRank(current);audio.play(AudioEvent.RANK_TICK);if(current!==target)timer.current=setTimeout(step,333);else complete()}
+   if(current!==target)timer.current=setTimeout(step,333);else complete()
+   if(entryMode==='autoReward')autoTimer.current=setTimeout(()=>onAutoCompleteRef.current?.(),Math.abs(start-target)*333+3000)
+ }
 
  useEffect(()=>{
   let live=true
-  void fetchTierDLeagueRanking(serverUrl,accessToken).then(next=>{
+  void fetchTierDLeagueRanking(serverUrl,accessToken,level).then(next=>{
    if(!live)return
    setSnapshot(next)
-   const target=next.currentUser.rank
-   if(target===null){setDisplayRank(null);return}
-   const start=previousRank??target
-   setDisplayRank(start)
-   let current=start
-   const complete=()=>audio.play(AudioEvent.RANK_COMPLETE)
-   const step=()=>{
-    if(!live||current===target)return
-    current+=target<current?-1:1
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut)
-    setDisplayRank(current)
-    audio.play(AudioEvent.RANK_TICK)
-    if(current!==target)timer.current=setTimeout(step,333)
-    else complete()
-   }
-   if(current!==target)timer.current=setTimeout(step,333)
-   else complete()
-   if(entryMode==='autoReward') autoTimer.current=setTimeout(()=>onAutoCompleteRef.current?.(),Math.abs((previousRank??target)-target)*333+3000)
+   if(next.introRequired){setIntroOpen(true);return}
+   if(next.rewardPresentationRequired&&next.finalReward){setRewardOpen(true);return}
+   beginRanking(next)
   }).catch(e=>live&&setError(e instanceof Error?e.message:'Could not load League ranking.'))
   return()=>{live=false;if(timer.current)clearTimeout(timer.current);if(autoTimer.current)clearTimeout(autoTimer.current)}
  // onAutoComplete is normally an inline parent callback. Keeping it out of this
  // request effect prevents a parent timer render from polling the leaderboard.
- },[accessToken,entryMode,previousRank,serverUrl])
+ },[accessToken,entryMode,level,previousRank,serverUrl])
+ useEffect(()=>{const id=setInterval(()=>setClock(Date.now()),30_000);return()=>clearInterval(id)},[])
 
  const entries=useMemo(()=>{
   if(!snapshot)return[]
@@ -72,18 +76,27 @@ export function TierDLeagueLeaderboard({serverUrl,accessToken,userId,level,previ
   shown.splice(insert,0,{...me,rank:displayRank})
   return shown.slice(0,20).map((row,index)=>row.userId===userId?row:{...row,rank:index+1})
  },[displayRank,snapshot,userId])
+ const remaining=snapshot?.endsAt?Math.max(0,Date.parse(snapshot.endsAt)-clock):0
+ const remainingLabel=snapshot?.endsAt?(remaining<=0?t('ranking.tournamentEnded',{},locale):t('ranking.hoursRemaining',{hours:Math.max(1,Math.ceil(remaining/3_600_000))},locale)):t('ranking.top20',{},locale)
+ const ownerOutside=snapshot?.currentUser.entry&&snapshot.currentUser.rank!==null&&snapshot.currentUser.rank>20?snapshot.currentUser.entry:null
+ const enterTournament=()=>{if(!snapshot?.tournamentId)return;setIntroOpen(false);void fetch(`${serverUrl}/tier-d/leaderboard/intro-seen`,{method:'POST',headers:{Authorization:`Bearer ${accessToken}`,'Content-Type':'application/json'},body:JSON.stringify({tournamentId:snapshot.tournamentId})}).catch(()=>{});beginRanking(snapshot)}
+ const viewFinalStandings=()=>{if(!snapshot?.tournamentId)return;setRewardOpen(false);void fetch(`${serverUrl}/tier-d/leaderboard/reward-seen`,{method:'POST',headers:{Authorization:`Bearer ${accessToken}`,'Content-Type':'application/json'},body:JSON.stringify({tournamentId:snapshot.tournamentId})}).catch(()=>{});beginRanking(snapshot)}
+
+ if(introOpen&&snapshot?.rewardBand)return <TierDTournamentIntro leagueId={snapshot.leagueId??league.name.toLowerCase()} rewards={snapshot.rewardBand} onEnter={enterTournament}/>
+ if(rewardOpen&&snapshot?.finalReward)return <TierDTournamentReward leagueId={snapshot.leagueId??league.name.toLowerCase()} {...snapshot.finalReward} onContinue={viewFinalStandings}/>
 
  return <View style={s.screen}><View style={s.panel}>
   {entryMode==='manualView'?<GameActionButton accessibilityLabel={t('common.close',{},locale)} size="small" variant="back" animation="none" label={t('common.close',{},locale)} onPress={onClose} style={s.close}/>:null}
   <View style={s.header}><Text style={s.title}>{t('ranking.top20',{},locale)}</Text><Text style={s.leagueTitle}>{league.name.toUpperCase()} {t('game.league',{},locale)}</Text></View>
   <View style={s.trophyWrap}><View style={s.goldAura}/><Text style={s.sparkles}>✦  ✧  ✦</Text><Text style={s.trophyGlyph}>♛</Text></View>
-  <Text style={s.speed}>{t('ranking.top20',{},locale)}</Text>
+  <Text style={s.speed}>{remainingLabel}</Text>
   {error?<Text style={s.error}>{error}</Text>:!snapshot?<Text style={s.state}>{t('common.loading',{},locale)}</Text>:!snapshot.enabled?<View style={s.disabled}><Text style={s.disabledTitle}>{t('common.comingSoon',{},locale)}</Text><Text style={s.state}>{t('ranking.top20',{},locale)}</Text></View>:<>
    <View style={s.columns}><Text style={s.colRank}>{t('ranking.rank',{rank:''},locale).replace('#','')}</Text><Text style={s.colName}>{t('ranking.player',{},locale)}</Text><Text style={s.colStreak}>{t('ranking.streak',{},locale)}</Text><Text style={s.colPoints}>{t('ranking.points',{},locale)}</Text></View>
-   <ScrollView style={s.scroll} contentContainerStyle={s.list}>{entries.map(row=>{const isMe=row.userId===userId;const preset=row.avatarUrl?PRESET_AVATARS.find(item=>item.key===row.avatarUrl):undefined;const avatar=preset?<AvatarDisplay config={{type:'preset',presetKey:preset.key,frameKey:'default'}} size={26} showFrame={false}/>:<View style={[s.avatarFallback,isMe&&s.meAvatar]}><Text style={s.avatarText}>{row.displayName.slice(0,1).toUpperCase()}</Text></View>;return <Pressable key={row.userId} accessibilityRole="button" accessibilityLabel={`View ${row.displayName}'s profile`} onPress={()=>router.push({pathname:'/(home)/player/[userId]',params:{userId:row.userId}})}><View style={[s.row,isMe?s.me:s.rival,isMe&&entryMode==='autoReward'&&s.autoMe]}><Text style={[s.rank,row.rank<=3&&s.medal,isMe&&s.meText]}>#{row.rank}</Text><View style={s.avatarSlot}>{avatar}</View><Text style={[s.name,isMe&&s.meText]} numberOfLines={1}>{row.displayName}{isMe?'  · YOU':row.isMock?'  · RIVAL':''}</Text><Text accessibilityLabel={`Language ${row.languageCode??'en'}`} style={s.flag}>{languageFlag[row.languageCode??'en']??languageFlag.en}</Text><Text style={[s.streak,isMe&&s.meText]}>🔥{row.longestWinStreak}</Text><Text style={[s.points,isMe&&s.mePoints]}>{row.leaguePoints.toLocaleString()} LP</Text></View></Pressable>})}</ScrollView>
+   <ScrollView style={s.scroll} contentContainerStyle={s.list}>{entries.map(row=>{const isMe=row.userId===userId;const preset=row.avatarUrl?PRESET_AVATARS.find(item=>item.key===row.avatarUrl):undefined;const avatar=preset?<AvatarDisplay config={{type:'preset',presetKey:preset.key,frameKey:'default'}} size={26} showFrame={false}/>:row.avatarUrl&&/^(https?:|data:)/i.test(row.avatarUrl)?<ExpoImage source={row.avatarUrl} contentFit="cover" transition={120} style={s.avatar}/>:<View style={[s.avatarFallback,isMe&&s.meAvatar]}><Text style={s.avatarText}>{row.displayName.slice(0,1).toUpperCase()}</Text></View>;return <Pressable key={row.userId} accessibilityRole="button" accessibilityLabel={`View ${row.displayName}'s profile`} onPress={()=>router.push({pathname:'/(home)/player/[userId]',params:{userId:row.userId}})}><View style={[s.row,isMe?s.me:s.rival,isMe&&entryMode==='autoReward'&&s.autoMe]}><Text style={[s.rank,row.rank<=3&&s.medal,isMe&&s.meText]}>#{row.rank}</Text><View style={s.avatarSlot}>{avatar}</View><Text style={[s.name,isMe&&s.meText]} numberOfLines={1}>{row.displayName}{isMe?'  · YOU':row.isMock?'  · RIVAL':''}</Text><Text accessibilityLabel={`Language ${row.languageCode??'en'}`} style={s.flag}>{languageFlag[row.languageCode??'en']??languageFlag.en}</Text><Text style={[s.streak,isMe&&s.meText]}>🔥{row.longestWinStreak}</Text><Text style={[s.points,isMe&&s.mePoints]}>{row.leaguePoints.toLocaleString()} LP</Text></View></Pressable>})}</ScrollView>
+   {ownerOutside?<View style={[s.row,s.me]}><Text style={[s.rank,s.meText]}>#{displayRank??ownerOutside.rank}</Text><View style={[s.avatarFallback,s.meAvatar]}><Text style={s.avatarText}>{ownerOutside.displayName.slice(0,1).toUpperCase()}</Text></View><Text style={[s.name,s.meText]} numberOfLines={1}>{ownerOutside.displayName}  · YOU</Text><Text style={s.flag}>{languageFlag[ownerOutside.languageCode??'en']??languageFlag.en}</Text><Text style={[s.streak,s.meText]}>🔥{ownerOutside.longestWinStreak}</Text><Text style={[s.points,s.mePoints]}>{ownerOutside.leaguePoints.toLocaleString()} LP</Text></View>:null}
    {displayRank!==null?<Text style={s.footer}>{t('ranking.rank',{rank:displayRank},locale)}  ·  {formatInteger(snapshot.currentUser.leaguePoints,locale)} LP</Text>:null}
   </>}
- </View></View>
+ </View><ThumbUpVFX visible={rankUpVfxVisible} label="Good job" onFinish={()=>setRankUpVfxVisible(false)}/></View>
 }
 
 const s=StyleSheet.create({

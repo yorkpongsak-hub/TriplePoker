@@ -13,6 +13,8 @@
 // Founder & Chief Architect: Assistant Professor Pongnathee Maneekul
 // ============================================================
 
+import { allocatePotByScore } from './tierCPlusScoring'
+
 // ─── Types ───────────────────────────────────────────────────
 
 /** ค่า Ante ต่อกอง (มาจาก gameConfig.tokenPot.tiers[tier]) */
@@ -33,6 +35,8 @@ export interface SettleRoundInput {
   winners: PileWinners
   stakes: PileStakes
   rake: number                         // 0.05 (5% ทุกกรณี รวม Triple Sweep - มติลุงเยาะ 2026-07-25)
+  /** Tier C+: authoritative final score for each player in each G1/G2/G3 pot. */
+  pileScoreWeights?: readonly [Record<string,number>,Record<string,number>,Record<string,number>]
 }
 
 export interface SettleRoundOutput {
@@ -120,7 +124,12 @@ export function settleRound(input: SettleRoundInput): SettleRoundOutput {
     // ทุกคนจ่าย ante กองนี้ไปแล้วตอนต้นรอบ — สะท้อนใน displayDeltas ให้ UI เห็นเลขเดิม
     playerIds.forEach(id => { displayDeltas[id] -= stake })
 
-    if (!winner) {
+    if (input.pileScoreWeights) {
+      // Canonical Tier C+ path: distribute the complete pile Pot. Rake is
+      // calculated once, from positive game profit, after Match 3.
+      const shares = allocatePotByScore(potAmount,input.pileScoreWeights[k],playerIds)
+      playerIds.forEach(id=>{stacks[id]=(stacks[id]??0)+shares[id];displayDeltas[id]+=shares[id]})
+    } else if (!winner) {
       // ไม่มีผู้ชนะ (foul ครบทุกคน) -> Pot ทั้งก้อนเข้า Fee & Rake
       feeRake += potAmount
     } else {
@@ -138,7 +147,7 @@ export function settleRound(input: SettleRoundInput): SettleRoundOutput {
   let jackpotBonus = 0
   let jackpotRake = 0
 
-  if (jackpotWinner) {
+  if (jackpotWinner && !input.pileScoreWeights) {
     const losers = playerIds.filter(id => id !== jackpotWinner)
     jackpotBonus = stakes.pile3 * losers.length
     jackpotRake = Math.floor((jackpotWinnerNet + jackpotBonus) * rake)
@@ -155,7 +164,7 @@ export function settleRound(input: SettleRoundInput): SettleRoundOutput {
     feeRake += jackpotRake
   }
 
-  return { stacks, pot, feeRake, displayDeltas, jackpotWinner, jackpotBonus, jackpotRake }
+  return { stacks, pot, feeRake, displayDeltas, jackpotWinner:input.pileScoreWeights?null:jackpotWinner, jackpotBonus, jackpotRake }
 }
 
 // ─── Auto Sort Fee: Stack ผู้กด -> Fee & Rake ────────────────

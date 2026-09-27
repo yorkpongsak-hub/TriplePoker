@@ -46,6 +46,7 @@ export interface MatchEndOverlayProps {
   // Solo Mode Endless Level (2026-09-01) — undefined = ไม่แสดง (Adept/HighNoble ไม่มี solo endless
   // level เลย, ดู soloEndlessLevel.ts ฝั่ง server) แสดงทั้งตอนชนะและแพ้เพราะ overlay นี้ใช้ร่วมกัน
   soloLevel?: { previous: number; current: number }
+  economySummary?: { grossReturn:number; profit:number; rake:number; finalReturn:number }
 }
 
 // ป็อปอัพเล็กๆ ตอน Level เลื่อนขึ้น — ใช้ Animated ปกติ (ไฟล์นี้ไม่มี Reanimated อยู่แล้ว ไม่อยาก
@@ -69,7 +70,7 @@ function SoloLevelBadge({ previous, current }: { previous: number; current: numb
 const MatchEndOverlay: React.FC<MatchEndOverlayProps> = ({
   variant, tierBadge, extraContent,
   buyInAmount, returnedAmount, tokenBalanceDisplay,
-  leaderboard, onRematch, onBackToLobby, insetsBottom, soloLevel,
+  leaderboard, onRematch, onBackToLobby, insetsBottom, soloLevel, economySummary,
 }) => {
   const net = returnedAmount - buyInAmount
 
@@ -92,6 +93,12 @@ const MatchEndOverlay: React.FC<MatchEndOverlayProps> = ({
             </Text>
           </Text>
         </View>
+        {economySummary && (
+          <Text style={[s.buyInSummaryText,{marginBottom:8}]}>
+            Gross {economySummary.grossReturn.toLocaleString('en-US')} · Profit {economySummary.profit.toLocaleString('en-US')}
+            {'\n'}Rake 5% −{economySummary.rake.toLocaleString('en-US')} · Final {economySummary.finalReturn.toLocaleString('en-US')}
+          </Text>
+        )}
         {tokenBalanceDisplay !== undefined && (
           <Text style={[s.buyInSummaryText, { textAlign: 'center', marginBottom: 8 }]}>
             Your Token Balance <Text style={{ color: '#c9a84c', fontWeight: '800' }}>{tokenBalanceDisplay.toLocaleString('en-US')}</Text>

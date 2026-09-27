@@ -18,3 +18,13 @@ of Git. Record decisions and remaining release checks in docs/RELAUNCH_2026-09-0
 This authorization does not bypass tool sandbox approvals or authorize purchases,
 database resets, app-store publication, or messages to third parties. No subagents
 are requested for this task.
+
+## Expo development host
+
+When hosting the Expo development client for a physical phone, run Metro from
+Windows PowerShell in `C:\Dev\TriplePoker\client` with:
+
+`npx expo start --dev-client --lan --clear`
+
+Do not default to launching the Expo host from WSL. The Windows LAN host is the
+owner-confirmed faster and more reliable workflow for this project.

@@ -13,10 +13,10 @@ describe('League gameplay canon rules', () => {
     expect(pileWinScore(51,3,'high_card',true)).toBe(16)
     expect(pileWinScore(51,3,'four_of_a_kind')).toBe(16)
   })
-  test('Bronze has no missions and Silver mission count uses approved weights', () => {
+  test('Bronze has no missions and every mission-enabled match has three', () => {
     expect(generateMissions(1, () => 0)).toEqual([])
-    expect(generateMissions(51, () => .79)).toHaveLength(1)
-    expect(generateMissions(51, () => .80)).toHaveLength(2)
+    expect(generateMissions(51, () => .01)).toHaveLength(3)
+    expect(generateMissions(51, () => .80)).toHaveLength(3)
     expect(generateMissions(51, () => .96)).toHaveLength(3)
   })
   test('missions selected for multiple piles remain strictly ordered', () => {
@@ -34,6 +34,6 @@ describe('League gameplay canon rules', () => {
     expect(handMultiplier(51, 'flush')).toBe(1.5); expect(handMultiplier(1, 'flush')).toBe(1)
     expect(pileWinScore(51, 3, 'flush', true)).toBe(24); expect(pileWinScore(51, 3, 'four_of_a_kind', true)).toBe(32)
   })
-  test('combo rolls only for full mission completion', () => { expect(comboBonus([{ pile: 1, rank: 'high_card' }, { pile: 2, rank: 'one_pair' }], [true, false], () => 0)).toBe(0); expect(comboBonus([{ pile: 1, rank: 'high_card' }, { pile: 2, rank: 'one_pair' }], [true, true], () => 0)).toBe(5) })
+  test('two completed missions award Combo and all three award Super Combo', () => { const missions=[{ pile: 1 as const, rank: 'high_card' as const }, { pile: 2 as const, rank: 'one_pair' as const }, { pile: 3 as const, rank: 'two_pair' as const }]; expect(comboBonus(missions, [true, false, false], () => 0)).toBe(0); expect(comboBonus(missions, [true, true, false], () => 0)).toBe(5); expect(comboBonus(missions, [true, true, true], () => 0)).toBe(10) })
   test('Open Challenge uses approved reveal counts only above level 1000', () => { expect(generateOpenChallenge(1, () => 0)).toBeUndefined(); expect(generateOpenChallenge(51, () => 0)).toBeUndefined(); expect(generateOpenChallenge(1000, () => 0)).toBeUndefined(); expect(generateOpenChallenge(1001, (() => { const v = [0, .1, .4]; let i = 0; return () => v[i++] })())).toEqual({ revealedPiles: [2] }) })
 })

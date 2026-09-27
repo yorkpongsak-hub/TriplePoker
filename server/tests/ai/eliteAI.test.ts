@@ -4,7 +4,7 @@
 // ============================================================
 
 import { eliteArrange } from '../../src/ai/eliteAI';
-import { checkFoul, CommunityCards } from '../../src/game/foulChecker';
+import { checkTierCFoul, CommunityCards } from '../../src/game/foulChecker';
 import { evaluateHand } from '../../src/game/handEvaluator';
 import { Card } from '../../src/game/deck';
 
@@ -65,7 +65,7 @@ describe('eliteAI — best_of_n (N=5) strategy', () => {
   // ─── 1. Arrangement ผ่าน FoulChecker เสมอ ─────────────────
   it('should return an arrangement that passes FoulChecker', () => {
     const result = eliteArrange(mockCards, mockCommunity);
-    expect(checkFoul(result, mockCommunity).isFoul).toBe(false);
+    expect(checkTierCFoul(result, mockCommunity).isFoul).toBe(false);
   });
 
   // ─── 2. Pile sizes ถูกต้อง 3-3-5 ──────────────────────────
@@ -116,7 +116,7 @@ describe('eliteAI — best_of_n (N=5) strategy', () => {
   it('should consistently return valid arrangements on repeated calls', () => {
     for (let i = 0; i < 10; i++) {
       const result = eliteArrange(mockCards, mockCommunity);
-      expect(checkFoul(result, mockCommunity).isFoul).toBe(false);
+      expect(checkTierCFoul(result, mockCommunity).isFoul).toBe(false);
     }
   });
 

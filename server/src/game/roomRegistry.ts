@@ -21,6 +21,20 @@ import { FOUR_GODS, AI_CONFIGS, AIConfig, pickRandomMinions } from './aiEngine'
 import { rollHighNobleBoss, type MonarchRollResult } from './monarchSpawn'
 import { gameConfig } from '../config/gameConfig'
 
+// Presentation-only pool for ordinary AI/minion seats. These are image presets,
+// not player entitlements; a random assignment is persisted in the room and
+// therefore survives reconnects for the entire Match.
+const MINION_PRESET_IMAGE_POOL = [
+  'avatar_vip_01', 'avatar_vip_02', 'avatar_vip_03',
+  'avatar_vip_04', 'avatar_vip_05', 'avatar_vip_06',
+  'avatar_vip_07', 'avatar_vip_08', 'avatar_vip_09',
+] as const
+function pickMinionPreset(exclude: readonly (string | undefined)[] = []): string {
+  const available = MINION_PRESET_IMAGE_POOL.filter(key => !exclude.includes(key))
+  const pool = available.length ? available : MINION_PRESET_IMAGE_POOL
+  return pool[Math.floor(Math.random() * pool.length)]
+}
+
 // ─── Types ───────────────────────────────────────────────────────
 export type Tier = 'adept' | 'mastermind' | 'highNoble'
 export type SeatType = 'human' | 'ai' | 'empty'
@@ -96,7 +110,7 @@ function aiSeat(idx: number): Seat {
 function sageSeat(excludeNames: string[] = []): Seat {
   const sage = AI_CONFIGS.find(a => a.personality === 'sage')!
   const minionName = pickRandomMinions(1, excludeNames)[0]
-  return { type: 'ai', name: minionName, joinedAt: Date.now(), aiConfigId: sage.id, isMinion: true }
+  return { type: 'ai', name: minionName, joinedAt: Date.now(), aiConfigId: sage.id, isMinion: true, avatarUrl: pickMinionPreset() }
 }
 
 // Companion bot ตัวที่ 2 ของ Adept (The Ghost หรือ The Reckless สุ่ม 1 ตัว) — private: ตอน human ครบ 2
@@ -105,7 +119,7 @@ function secondAdeptBotSeat(excludeNames: string[] = []): Seat {
   const pool = AI_CONFIGS.filter(a => a.personality === 'ghost' || a.personality === 'reckless')
   const pick = pool[Math.floor(Math.random() * pool.length)]
   const minionName = pickRandomMinions(1, excludeNames)[0]
-  return { type: 'ai', name: minionName, joinedAt: Date.now(), aiConfigId: pick.id, isMinion: true }
+  return { type: 'ai', name: minionName, joinedAt: Date.now(), aiConfigId: pick.id, isMinion: true, avatarUrl: pickMinionPreset() }
 }
 
 // LobbyMatchmaking_Spec_v1_0 §4.2 (private room เท่านั้น ไม่ถูกแตะโดย v1.1): seat 0 = The Sage ทันที
@@ -482,7 +496,7 @@ export async function fillRemainingWithAI(roomId: string): Promise<GameRoom | nu
   let aiIdx = 0
   for (let i = 0; i < 4; i++) {
     if (room.seats[i].type === 'empty') {
-      room.seats[i] = { type: 'ai', name: `Minion-Fill-${++aiIdx}`, joinedAt: Date.now() }
+      room.seats[i] = { type: 'ai', name: `Minion-Fill-${++aiIdx}`, joinedAt: Date.now(), avatarUrl: pickMinionPreset(room.seats.map(seat => seat.avatarUrl)) }
     }
   }
   room.status = 'full'
@@ -637,7 +651,7 @@ export async function fillWithMinion(roomId: string): Promise<GameRoom | null> {
   const emptyIdxs = room.seats.map((s, i) => (s.type === 'empty' ? i : -1)).filter(i => i !== -1)
   const minionNames = pickRandomMinions(emptyIdxs.length)
   emptyIdxs.forEach((idx, i) => {
-    room.seats[idx] = { type: 'ai', name: minionNames[i], joinedAt: Date.now(), isMinion: true }
+    room.seats[idx] = { type: 'ai', name: minionNames[i], joinedAt: Date.now(), isMinion: true, avatarUrl: pickMinionPreset(room.seats.map(seat => seat.avatarUrl)) }
   })
 
   room.status = 'full'

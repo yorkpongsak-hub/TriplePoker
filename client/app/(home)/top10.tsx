@@ -206,7 +206,7 @@ export default function Top10Screen() {
         {/* ═══════════════ HEADER ═══════════════ */}
         <View style={s.headerRow}>
           <TouchableOpacity
-            onPress={() => router.replace(autoContinue ? { pathname: '/lobby', params: { autoContinue } } as any : '/lobby')}
+            onPress={() => router.replace('/(home)/classic-lobby')}
             style={s.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <Text style={s.backTxt}>‹ Back</Text>
           </TouchableOpacity>

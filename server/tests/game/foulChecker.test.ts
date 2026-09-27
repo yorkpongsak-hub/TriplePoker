@@ -12,6 +12,7 @@
 import { Card } from '../../src/game/deck'
 import {
   checkFoul,
+  checkTierCFoul,
   PlayerArrangement,
   CommunityCards,
   FoulCheckResult,
@@ -24,6 +25,30 @@ const S = 'spades'
 const H = 'hearts'
 const D = 'diamonds'
 const C = 'clubs'
+
+describe('checkTierCFoul — Best 5 post-Auction layout', () => {
+  test('accepts 3 / 4 / 5 and ranks Pile 2 as Best 5 from six cards', () => {
+    const result = checkTierCFoul({
+      pile1: [c(2, S), c(5, H), c(9, D)],
+      pile2: [c(3, S), c(3, H), c(6, D), c(11, C)],
+      pile3: [c(7, S), c(7, H), c(8, D), c(8, C), c(14, S)],
+    }, {
+      row1: [c(4, C), c(12, H)], row2: [c(9, C), c(13, H)], row3: [c(2, D), c(4, H)],
+    })
+    expect(result).toEqual({ isFoul: false })
+  })
+
+  test('requires Pile 3 to remain exactly five private cards', () => {
+    const result = checkTierCFoul({
+      pile1: [c(2, S), c(5, H), c(9, D)],
+      pile2: [c(3, S), c(3, H), c(6, D), c(11, C)],
+      pile3: [c(7, S), c(7, H), c(8, D), c(8, C)],
+    }, {
+      row1: [c(4, C), c(12, H)], row2: [c(9, C), c(13, H)], row3: [c(2, D), c(4, H)],
+    })
+    expect(result).toMatchObject({ isFoul: true, foulPile: 3 })
+  })
+})
 
 // ─── กลุ่ม: Card Count Validation (กฎ 3-3-5) ────────────────────────────────
 describe('checkFoul — Card Count (กฎ 3-3-5)', () => {

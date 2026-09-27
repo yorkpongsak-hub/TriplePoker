@@ -145,7 +145,7 @@ export default function GrandmasterScreen() {
   }
 
   if (guideSeen === null) return <View style={styles.guideLoading}><ActivityIndicator color="#FFD76A" /></View>
-  if (!tableReady) return <ArenaWelcomeGuide onComplete={completeGuide} onExit={() => router.replace('/(home)/lobby')} />
+  if (!tableReady) return <ArenaWelcomeGuide onComplete={completeGuide} onExit={() => router.replace('/(home)/classic-lobby')} />
 
   return <GrandmasterTableView snapshot={snapshot ?? initial} onIntent={handleIntent} transportStatus={live ? transport.status : undefined} serverOnline={live ? transport.connected : true} />
 }

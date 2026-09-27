@@ -50,6 +50,7 @@ import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/g
 import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
 import AvatarFrame from '../../../src/components/game/AvatarFrame'
 import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
+import { TierCPlusPileReveal, type TierCPlusReveal } from '../../../src/components/game/TierCPlusPileReveal'
 
 // ตำแหน่งที่นั่งเดียวกับ targets ใน startDealAnimation (Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย)
 // ศูนย์กลาง = จุดกำเนิด/ปลายทางของกองกลาง (เหมือนที่ dealAnims ใช้เป็น origin ตอนแจกไพ่)
@@ -72,7 +73,11 @@ const tableImg    = require('../../../assets/images/table_default.png')
 const tripleSpade = require('../../../assets/images/triple_poker_icon.png')
 
 const CW = 62; const CH = 90; const OVERLAP = -38
-const INITIATE_P1_HAND_SCALE = 1.2
+// Tier C keeps its P1-only presentation adjustment local to this table.
+// Use the shared card size at 1.00; 48px is approximately half of the
+// resulting portrait card height.
+const INITIATE_P1_HAND_SCALE = 1.00
+const INITIATE_P1_HAND_DROP = 48
 const INITIATE_SIDE_HAND_RAISE = 36 // P2/P4 side cards are 25×36px
 const SIDE_COL_W = 72
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
@@ -83,6 +88,7 @@ const DEV_FAKE_USER_ID = __DEV__ ? process.env.EXPO_PUBLIC_DEV_FAKE_USER_ID : un
 
 interface CardData { id: string; key: string }
 interface AIInfo   { id: string; name: string; emoji: string }
+interface TierCMission { pile: 1 | 2 | 3; rank: string; negative?: boolean; penalty?: number }
 
 // =================================================================
 // TIMER DISPLAY — แยก component ไม่ให้ main re-render
@@ -282,7 +288,7 @@ const GameTableLive: React.FC = () => {
   const selectedTableImg = TABLE_SKINS[activeSkin] ?? tableImg
 
   // ── Timer ref (ไม่ trigger re-render)
-  const timerValRef = useRef({ val: 90, max: 90 })
+  const timerValRef = useRef({ val: 165, max: 165 })
   const continueValRef = useRef(0)
   const aiListRef = useRef<AIInfo[]>([])
   const flyingCoinsRef = useRef<FlyingCoinsHandle>(null)
@@ -355,6 +361,7 @@ const GameTableLive: React.FC = () => {
   // ── Community + Blind
   const [comm, setComm]   = useState({ p1: ['',''], p2: ['',''], p3: ['',''] })
   const [blind, setBlind] = useState<string[]>([])
+  const [missions, setMissions] = useState<TierCMission[]>([])
 
   // ── AI
   const [aiList, setAiList]     = useState<AIInfo[]>([])
@@ -363,6 +370,7 @@ const GameTableLive: React.FC = () => {
   // ── Showdown — เก็บไพ่ทุกคนหลัง reveal ครบ
   const [allCards, setAllCards]       = useState<Record<string, Record<number, string[]>>>({})
   const [pileWinners, setPileWinners] = useState<Record<number, string>>({})
+  const [pileRevealShowcases, setPileRevealShowcases] = useState<TierCPlusReveal[]>([])
   const [hasFoul, setHasFoul]         = useState<Record<string, boolean>>({})
   // Haptic เตือน Foul ของฉันเอง — ยิงครั้งเดียวตอน hasFoul[PLAYER_ID] เปลี่ยนจาก false → true
   useEffect(() => {
@@ -544,7 +552,7 @@ const GameTableLive: React.FC = () => {
         data.message === 'INSUFFICIENT_TOKENS' ? 'You do not have enough tokens for this table\'s buy-in.'
           : data.message === 'ACTIVE_MATCH_EXISTS' ? 'You have an unfinished match.'
           : 'Something went wrong. Please try again.',
-        [{ text: 'OK', onPress: () => router.replace('/(home)/lobby') }]
+        [{ text: 'OK', onPress: () => router.replace('/(home)/classic-lobby') }]
       )
     })
 
@@ -596,6 +604,7 @@ const GameTableLive: React.FC = () => {
         p2: data.communityCards.pile2,
         p3: data.communityCards.pile3,
       })
+      setMissions(Array.isArray(data.missions) ? data.missions : [])
       setBlind(data.blindAuction ?? [])
 
       // Buy-in (Escrow) — แสดง popup เฉพาะ Round 1
@@ -614,9 +623,8 @@ const GameTableLive: React.FC = () => {
       const cardObjs = myCards.map((k: string, i: number) => ({ id: `c${i}`, key: k }))
       setPiles([cardObjs.slice(0, 3), cardObjs.slice(3, 6), cardObjs.slice(6, 11)])
 
-      // Patch v1.2: tierBonus (+15 เดิม) พับเข้า gameConfig.arrangementTimer.initiate (90→105) แล้ว —
-      // ใช้ data.timer ตรงๆ เหมือน Mastermind/HighNoble (ผู้เล่นเห็นตัวเลขเท่าเดิมทุกประการ)
-      const t = data.timer ?? 105
+      // Server is authoritative; fallback mirrors Tier C's 2:45 arrangement window.
+      const t = data.timer ?? 165
       timerValRef.current = { val: t, max: t }
       if (timerRef.current) clearInterval(timerRef.current)
       timerRef.current = setInterval(() => {
@@ -682,10 +690,16 @@ const GameTableLive: React.FC = () => {
       })
 
       setAllCards(newAllCards)
+      setPileRevealShowcases(results.filter((pile: any) => (pile.pileNumber === 1 || pile.pileNumber === 2) && pile.winner && pile.winnerBestFive?.length === 5).map((pile: any) => ({
+        key: `${data.roomId ?? ROOM_ID}:${data.roundNumber ?? Date.now()}:g${pile.pileNumber}`,
+        pile: pile.pileNumber, winnerId: pile.winner, winnerBestFive: pile.winnerBestFive,
+        communityCards: pile.communityCards ?? [], handRanking: pile.winnerHandRank ?? 'WIN',
+      })))
       setPileWinners(newWinners)
       setHandRanks(newHandRanks)
       setHasFoul(newFouled)
       setFoulReasons(data.foulReasons ?? {})
+      if (Array.isArray(data.missions)) setMissions(data.missions)
       setTokenDeltas(data.tokenDeltas ?? {})
       // Token Flow: Pot ไหลออกไปหาผู้ชนะ/Fee & Rake แล้ว - stack ทุกที่นั่งเปลี่ยนตรงนี้
       // (เดิม client รอถึง round_result กว่าจะอัปเดตยอด ทำให้ Panel กับยอดใต้ชื่อไม่ตรงกันชั่วขณะ)
@@ -978,29 +992,26 @@ const GameTableLive: React.FC = () => {
 
   // (AIPiles เดิมถูกแทนที่ด้วย BossHandRow กลางแล้ว — ดู src/components/game/BossHandRow.tsx)
 
-  // Patch 2026-08-14: P2/P4 กลับมาเป็นแนวดิ่งธรรมดา — เดิมเอียง 2.5D ตามมุมผ้าขาวม้า (ทำไว้ใช้ในอีก
-  // แอป ลืมแก้ตอน port มา) โต๊ะแรกสุดที่ผู้เล่นเจอควรเป็น layout พื้นฐานที่สุดก่อน ไม่มีการเอียง/หมุน
+  // Tier C side seats: stack G1/G2/G3 vertically while the cards inside each
+  // pile run horizontally. This keeps the elementary table readable without
+  // rotating either side hand.
   const SideSeat: React.FC<{ aiId: string; offsetX?: number; offsetY?: number }> = ({ aiId, offsetX = 0, offsetY = 0 }) => {
     const p1 = allCards[aiId]?.[1] ?? []; const p2 = allCards[aiId]?.[2] ?? []; const p3 = allCards[aiId]?.[3] ?? []
-    const cards = [...p1, ...p2, ...p3]
+    const sidePiles = [{ cards: p1, count: 3 }, { cards: p2, count: 3 }, { cards: p3, count: 5 }]
     return (
       <View style={[s.sideSeatWrap, { transform: [{ translateX: offsetX }, { translateY: offsetY }] }]}>
         <View style={s.sideSeatInner}>
-          {([5, 3, 3] as number[]).map((cnt, pi) => (
-            <React.Fragment key={pi}>
-              {pi > 0 && <View style={{ height: 4 }} />}
-              <View style={{ flexDirection: 'column', alignItems: 'center' }}>
-                {Array.from({ length: cnt }).map((_, ci) => {
-                  const idx = pi === 0 ? ci : pi === 1 ? 3 + ci : 6 + ci
-                  const cardKey = cards[idx]
-                  return (
-                    <View key={`${aiId}-${pi}-${ci}-${cardKey ?? 'back'}`} style={{ marginTop: ci === 0 ? 0 : -26 }}>
-                      {renderCard(cardKey, 25, 36)}
-                    </View>
-                  )
-                })}
-              </View>
-            </React.Fragment>
+          {sidePiles.map((pile, pi) => (
+            <View key={pi} style={s.sidePileRow}>
+              {Array.from({ length: pile.count }).map((_, ci) => {
+                const cardKey = pile.cards[ci]
+                return (
+                  <View key={`${aiId}-${pi}-${ci}-${cardKey ?? 'back'}`} style={{ marginLeft: ci === 0 ? 0 : -15 }}>
+                    {renderCard(cardKey, 25, 36)}
+                  </View>
+                )
+              })}
+            </View>
           ))}
         </View>
       </View>
@@ -1026,6 +1037,9 @@ const GameTableLive: React.FC = () => {
     const rawWinner = winner ? (allCards[winner]?.[pileNum] ?? []) : []
     const winCards  = pileNum === 3 ? rawWinner.slice(0, 3) : rawWinner
     const hasWinner = winner && winCards.length > 0
+    const mission = missions.find(entry => entry.pile === pileNum)
+    const missionReward: Record<string, number> = { high_card: 1, one_pair: 2, two_pair: 3, three_of_a_kind: 4, straight: 6, flush: 8 }
+    const missionLabel = mission ? mission.rank.replaceAll('_', ' ').toUpperCase() : ''
 
     return (
       <View style={{ alignItems: 'flex-start', gap: 2 }}>
@@ -1040,6 +1054,7 @@ const GameTableLive: React.FC = () => {
             </View>
           )}
         </View>
+        {mission && <View style={s.missionBadge}><Text numberOfLines={1} style={s.missionBadgeText}>MISSION · {missionLabel} +{missionReward[mission.rank] ?? 0}</Text></View>}
         {/* Community + ไพ่ผู้ชนะ */}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
           {/* Community cards */}
@@ -1427,7 +1442,7 @@ const GameTableLive: React.FC = () => {
                       },
                     } as any)
                   } else {
-                    void leaveAfterClassicSettlement({accessToken,tier:'C',outcome:'LOSS',exitReason:'BACK_TO_LOBBY',returnTo:'/(home)/lobby?autoContinue=initiate'})
+                    void leaveAfterClassicSettlement({ accessToken, tier: 'C', outcome: 'LOSS', exitReason: 'BACK_TO_LOBBY' })
                   }
                 }}
                 insetsBottom={insets.bottom}
@@ -1708,13 +1723,14 @@ const GameTableLive: React.FC = () => {
 
         </SharedGameTableSurface>
         {/* ── SHOWDOWN RESULT (กลางจอ) — Feedback C5: ครอบด้วยพื้นหลัง free/vip ชุดเดียวกับ Profile/Lobby ── */}
-        {showResult && (phase === 'showdown' || phase === 'result') && (
+        {showResult && pileRevealShowcases.length === 0 && (phase === 'showdown' || phase === 'result') && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: -200, zIndex: 200 }}>
             <ImageBackground source={isVip ? SHOWDOWN_BG_VIP : SHOWDOWN_BG_FREE} resizeMode="cover" style={{ flex: 1, padding: 12 }}>
               <ShowdownResult />
             </ImageBackground>
           </View>
         )}
+        <TierCPlusPileReveal reveals={pileRevealShowcases} localPlayerId={PLAYER_ID} onSequenceComplete={() => setPileRevealShowcases([])} />
         <ServerLog socket={socketRef.current} onMonarchWin={setMonarchWinner} />
       </View>
     </View>
@@ -1760,26 +1776,28 @@ const s = StyleSheet.create({
   // Patch 2026-07-18: ยอดโทเคนคงเหลือใต้ชื่อทุกที่นั่ง — ทองธีมหลัก, JetBrains Mono ตามมาตรฐานตัวเลข
   seatToken:     { fontSize: 9, color: '#FFD76A', fontFamily: 'JetBrainsMono_600SemiBold', textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
   sideSeatWrap:  { flex: 1, width: SIDE_COL_W, overflow: 'visible', justifyContent: 'flex-start', alignItems: 'center' },
-  sideSeatInner: { flexDirection: 'column', alignItems: 'center' },
+  sideSeatInner: { flexDirection: 'column', alignItems: 'center', gap: 4 },
+  sidePileRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
 
   commWrap:    { flex: 1, paddingLeft: 4, paddingRight: 18, alignItems: 'flex-start', justifyContent: 'center', marginTop: 40 /* Patch 2026-07-18: เลื่อนกองกลางทั้ง 3 กองลง 40px — ใช้พื้นที่ว่างกลางจอ */, zIndex: 2 },
   auctionLbl:  { fontSize: 7, color: 'rgba(160,80,220,.55)', letterSpacing: 1, textTransform: 'uppercase' },
   auctionCard: { width: 50, height: 72, borderRadius: 4, backgroundColor: '#091808', borderWidth: 2, borderColor: '#a855f7', overflow: 'hidden', shadowColor: '#a855f7', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.9, shadowRadius: 8, elevation: 8 },
   commCard:    { width: 50, height: 72, borderRadius: 4, backgroundColor: '#fdfaf3', borderWidth: 1, borderColor: 'rgba(74,154,90,.75)', overflow: 'hidden' },
   pileLabel:   { fontSize: 7, color: '#38bdf8', letterSpacing: 0.5, textTransform: 'uppercase', fontWeight: '700' },
+  missionBadge:{ maxWidth: 105, paddingHorizontal: 4, paddingVertical: 2, borderRadius: 4, borderWidth: 1, borderColor: 'rgba(255,215,106,.55)', backgroundColor: 'rgba(38,28,8,.78)' },
+  missionBadgeText:{ color: '#FFD76A', fontSize: 6, lineHeight: 8, fontWeight: '900', letterSpacing: .25 },
   winBadge:    { borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1 },
   winBadgeTxt: { fontSize: 7, fontWeight: '800' },
 
   userArea:     { paddingHorizontal: 8, paddingTop: 4, paddingBottom: 4, borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,.15)', zIndex: 2, alignItems: 'center' },
-  // Initiate-only tutorial table: make P1's interactive hand 20% larger without changing the
-  // shared PlayerHandView sizing used by every other tier. Extra vertical margin reserves the
-  // transformed height so the enlarged cards do not crowd the action bar.
+  // Initiate-only P1 adjustment. Keep the shared PlayerHandView geometry used
+  // by every other tier unchanged.
   initiateP1HandScale: {
     width: '100%',
     marginTop: 29,
     marginBottom: 18,
     alignItems: 'center',
-    transform: [{ scale: INITIATE_P1_HAND_SCALE }],
+    transform: [{ translateY: INITIATE_P1_HAND_DROP }, { scale: INITIATE_P1_HAND_SCALE }],
   },
   userLabels:   { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 3 },
   userPilesRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'flex-start' },

@@ -144,8 +144,8 @@ function makeHNState(overrides: Partial<HNMatchState> = {}): HNMatchState {
   return { ...base, ...overrides }
 }
 
-describe('High Noble boss card counting — public Pile 2 winner signal', () => {
-  test('ไพ่กอง 2 ที่เปิดเผยของผู้ชนะเป็น lower bound ของกอง 3 โดยไม่ต้องอ่านไพ่ลับผู้แพ้', () => {
+describe('High Noble boss card counting — public information only', () => {
+  test('Pile 2 winner is only a public lower bound and never guarantees hidden Pile 3', () => {
     const community: CommunityCards = {
       row1: [card('3', 'clubs'), card('4', 'diamonds')],
       row2: [card('9', 'spades'), card('10', 'spades')],
@@ -153,8 +153,8 @@ describe('High Noble boss card counting — public Pile 2 winner signal', () => 
     }
     const state = makeHNState({ community, phase: 'grand_finale' })
     state.finalPile3 = {
-      [BOSS]: [card('2', 'diamonds'), card('2', 'clubs'), card('K', 'hearts')],
-      [OPP1]: [card('3', 'hearts'), card('4', 'hearts'), card('5', 'hearts')],
+      [BOSS]: [card('2', 'diamonds'), card('2', 'clubs'), card('K', 'hearts'), card('6', 'clubs'), card('7', 'diamonds')],
+      [OPP1]: [card('3', 'hearts'), card('4', 'hearts'), card('5', 'hearts'), card('6', 'hearts'), card('7', 'hearts')],
     }
     const arrangements = state.pendingPile12!.allArrangements
     arrangements[OPP1].pile2 = [card('J', 'spades'), card('Q', 'spades'), card('K', 'spades')]
@@ -166,8 +166,54 @@ describe('High Noble boss card counting — public Pile 2 winner signal', () => 
 
     expect(estimateHNWinrate(state, BOSS)).toBe(0)
 
-    // เมื่อ signal เดียวกันไม่ได้เป็นของคู่แข่ง four-of-a-kind ของ Boss ยังปลอดภัย
+    // Winning Pile 2 does not expose the opponent's Pile 3. A legally possible
+    // unseen straight flush still means the boss's four-of-a-kind is not guaranteed.
     state.pendingPile12 = { ...state.pendingPile12, pile2Winner: BOSS }
+    expect(estimateHNWinrate(state, BOSS)).toBe(0)
+  })
+
+  test('hidden opponent cards never affect the estimate', () => {
+    const community: CommunityCards = {
+      row1: [card('3', 'clubs'), card('4', 'diamonds')],
+      row2: [card('6', 'clubs'), card('7', 'diamonds')],
+      row3: [card('10', 'spades'), card('J', 'spades')],
+    }
+    const state = makeHNState({ community, phase: 'grand_finale' })
+    state.finalPile3 = {
+      [BOSS]: [card('Q', 'spades'), card('K', 'spades'), card('A', 'spades'), card('2', 'clubs'), card('5', 'diamonds')],
+      [OPP1]: [card('2', 'hearts'), card('3', 'hearts'), card('4', 'hearts'), card('5', 'hearts'), card('6', 'hearts')],
+    }
+    state.grandFinale = {
+      roundNumber: 1, foldedPlayers: [], foulPlayers: [], currentTurnIdx: 0,
+      turnOrder: [BOSS, OPP1], pile3Pot: 0, revealedCards: {},
+    }
+
+    const first = estimateHNWinrate(state, BOSS)
+    state.finalPile3[OPP1] = [card('9', 'clubs'), card('9', 'diamonds'), card('9', 'hearts'), card('9', 'spades'), card('8', 'clubs')]
+    const afterHiddenMutation = estimateHNWinrate(state, BOSS)
+
+    expect(first).toBe(0)
+    expect(afterHiddenMutation).toBe(first)
+  })
+
+  test('guaranteed win requires beating every completion of the legally visible range', () => {
+    const community: CommunityCards = {
+      row1: [card('3', 'clubs'), card('4', 'diamonds')],
+      row2: [card('6', 'clubs'), card('7', 'diamonds')],
+      row3: [card('10', 'spades'), card('J', 'spades')],
+    }
+    const state = makeHNState({ community, phase: 'grand_finale' })
+    state.finalPile3 = {
+      [BOSS]: [card('Q', 'spades'), card('K', 'spades'), card('A', 'spades'), card('2', 'clubs'), card('5', 'diamonds')],
+      [OPP1]: [card('2', 'hearts'), card('3', 'hearts'), card('4', 'hearts'), card('5', 'hearts'), card('6', 'hearts')],
+    }
+    state.grandFinale = {
+      roundNumber: 1, foldedPlayers: [], foulPlayers: [], currentTurnIdx: 0,
+      turnOrder: [BOSS, OPP1], pile3Pot: 0,
+      // Once all five are legally revealed there is exactly one completion.
+      revealedCards: { [OPP1]: [...state.finalPile3[OPP1]] },
+    }
+
     expect(estimateHNWinrate(state, BOSS)).toBe(1)
   })
 })

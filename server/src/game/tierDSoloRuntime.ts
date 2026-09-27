@@ -5,8 +5,8 @@ import { domainItem, itemPolicyError, newMatchItemState, resolveGameRules, type 
 import { commitTierDItem, getTierDFreezeDurations } from './tierDItemPersistence'
 import type { Server } from 'socket.io'
 import { wonTierDStreakMatch } from './tierDMatchStreak'
-import { commitTierDCombo, createTierDLevel, defaultTierDArrangement, openChallengeMatchPassed, resetTierDForNextDuel, resolveTierDGame, submitTierDArrangement, submitTierDUndoArrangement, swapTierDHandCard, type TierDArrangement, type TierDGameNumber, type TierDLevelState } from './tierDSolo'
-import { exchangeTierDDuelCard, tierDMatchesPerLevel, tierDNextDuelG1Stake } from './tierDRiseDuel'
+import { commitTierDCombo, createTierDLevel, defaultTierDArrangement, openChallengeMatchPassed, resetTierDForNextDuel, resolveTierDGame, submitTierDArrangement, submitTierDUndoArrangement, swapTierDHandCard, tierDComboKinds, type TierDArrangement, type TierDGameNumber, type TierDLevelState } from './tierDSolo'
+import { chooseTierDAiExchange, exchangeTierDDuelCard, recordTierDDuelResult, settleTierDDuel, tierDDuelExchangeableOpponentPiles, tierDDuelExchangeFee, tierDDuelFinalProfit, tierDDuelRankingScore, tierDMatchesPerLevel, tierDDuelStake } from './tierDRiseDuel'
 import { handRankLabel } from './handEvaluator'
 import { persistTierDLevelOutcome } from './tierDSoloProgress'
 import { supabaseAdmin } from '../config/supabase'
@@ -20,7 +20,7 @@ import { addMiniTournamentPoints } from './tierDMiniTournamentService'
 import { grantTierCGraduationReward } from './tierDLevel250'
 import { analyzeTierDCompletedMatch } from './tierDAnalysis'
 import { escrowBuyIn, settleEscrow } from './gameLoop'
-import { calculateTierDDuelPayout, tierDDuelWon } from './tierDRiseDuel'
+import { tierDDuelWon } from './tierDRiseDuel'
 
 type CardKeys = { pile1: string[]; pile2: string[]; pile3: string[] }
 type RevealHand = { privateCards: string[]; bestFive: string[]; unusedCards: string[]; rank: string }
@@ -117,9 +117,9 @@ function remainingMs(s: Session): number | null {
 function emitState(io:Server,s:Session) {
   if (s.itemBusy || s.recoveryRequired) return
   const playerPiles=s.stagedArrangement??s.state.arrangements[s.userId]
-  const scores=Object.fromEntries(s.state.seats.map(seat=>[seat.id,(s.cumulativeScores[seat.id]??0)+(s.state.scores[seat.id]??0)]))
+  const scores=Object.fromEntries(s.state.seats.map(seat=>[seat.id,s.state.duel?(s.state.scores[seat.id]??0):(s.cumulativeScores[seat.id]??0)+(s.state.scores[seat.id]??0)]))
   const visibleBotPiles=new Set<TierDGameNumber>([...s.state.guidedRevealPiles,...(s.state.openChallenge?.revealedPiles??[])])
-  const botPreviewPiles=Object.fromEntries(s.state.seats.filter(seat=>seat.isBot).map(seat=>{
+  const botPreviewPiles=Object.fromEntries(s.state.seats.filter(seat=>seat.isBot&&!!s.state.arrangements[seat.id]).map(seat=>{
     const arrangement=s.state.arrangements[seat.id]!
     return [seat.id,Object.fromEntries(([1,2,3] as TierDGameNumber[]).map(game=>{
       const cards=arrangement[`pile${game}` as keyof TierDArrangement]
@@ -128,21 +128,22 @@ function emitState(io:Server,s:Session) {
   }))
   const duel=s.state.duel
   const currentDuelOpponent=duel?.order[duel.current]
+  const exchangeableOpponentPiles=duel?.phase==='SWAP'&&currentDuelOpponent?tierDDuelExchangeableOpponentPiles(s.state,currentDuelOpponent.id):undefined
   io.to(s.roomId).emit('tier_d_state',{
     roomId:s.roomId, gameId:s.gameId, itemUsageByMatch:s.items.usage, preG1LockedAt:s.items.preG1LockedAt, xX:s.items.xX,
     freezeExpiresAt:s.items.freezeExpiresAt, freezeDuration:s.matchFreezeDurations[0]??s.freezeDurations[0], foulPendingRecovery:!!s.items.foulPendingRecovery,
     itemEligibility:Object.fromEntries(TIER_D_ITEMS.map(item=>[item,itemEligibility(s,item)])),
-    level:s.state.level, matchNumber:s.state.duel?1:s.matchNumber, totalMatches:tierDMatchesPerLevel(s.state.level), currentGame:s.currentGame,
+    level:s.state.level, matchNumber:s.state.duel?1:s.matchNumber, totalMatches:tierDMatchesPerLevel(s.state.level), currentGame:s.currentGame,missionStreak:s.state.missionStreak??0,missionStreakBonusAward:s.state.missionStreakBonusAward??0,
     matchWinStreak:matchWinStreaks.get(s.userId)??0,
     seats:s.state.seats.filter(x=>!duel||!x.isBot||x.id===currentDuelOpponent?.id).map(x=>({id:x.id,isBot:x.isBot,name:x.bot?.name??'You',emoji:x.bot?.emoji??'🙂'})),
-    duel:duel?{...duel,queue:duel.order.slice(duel.current+1),currentOpponent:currentDuelOpponent,revealedOpponentCards:duel.phase==='SWAP'?s.state.dealtHands[currentDuelOpponent!.id].map(cardKey):undefined}:undefined,
+    duel:duel?{...duel,queue:duel.order.slice(duel.current+1),currentOpponent:currentDuelOpponent,revealedOpponentPiles:exchangeableOpponentPiles?{pile1:exchangeableOpponentPiles.pile1.map(cardKey),pile2:exchangeableOpponentPiles.pile2.map(cardKey)}:undefined}:undefined,
     cards:s.state.dealtHands[s.userId].map(cardKey),
     piles:playerPiles ? Object.fromEntries(Object.entries(playerPiles).map(([pile,cards])=>[pile,cards.map(cardKey)])) : undefined,
     community:{ pile1:s.state.communityPiles.pile1.map(cardKey), pile2:s.state.communityPiles.pile2.map(cardKey), pile3:s.state.communityPiles.pile3.map(cardKey) },
     missionRail:tierDMissionAwareness(s.state,s.userId,s.committedThrough??0,!!s.tripleSweepPending), missions:s.state.missions, riseSuperCombo:s.state.riseSuperCombo, openChallenge:s.state.openChallenge, guidedRevealPiles:s.state.guidedRevealPiles, botPreviewPiles, fouled:s.state.fouled,
     scores, phase:s.timerPausedAt?'frozen':s.systemPausedAt?'revealing':s.items.foulPendingRecovery?'foul_pending_recovery':s.arranged?(s.reveal?'revealed':'ready'):'arranging',
     completedPiles:s.state.gameResults.filter(result=>!s.reveal||result.game<s.currentGame).map(result=>({game:result.game,winnerId:result.winnerId,points:result.points})), reveal:s.reveal, tripleSweepPending:!!s.tripleSweepPending,
-    adPausedAt:s.adPausedAt, dealRevision:s.dealRevision??0, inventory:visibleInventory(s), adGrantAvailable:!s.isVip&&!s.adGrantUsed&&!s.reservedAdItem, matchStartedAt:s.matchStartedAt, timerRemainingMs:remainingMs(s), timerDeadlineAt:s.timerDeadlineAt,
+    adPausedAt:s.adPausedAt, dealRevision:s.dealRevision??0, inventory:visibleInventory(s), adGrantAvailable:(!s.isVip&&!s.reservedAdItem&&!s.adGrantUsed)||(duel?.phase==='SWAP'&&!s.reservedAdItem&&(visibleInventory(s).swap??0)===0), matchStartedAt:s.matchStartedAt, timerRemainingMs:remainingMs(s), timerDeadlineAt:s.timerDeadlineAt,
     timerPausedAt:s.timerPausedAt, systemPausedAt:s.systemPausedAt, timerStarted:s.timerStarted, unlockedFrom:s.unlockedFrom, undoUsed:[...s.undoUsed], doubledPiles:[...s.doubledPiles], autoResolving:s.autoResolving,
   })
   persistSession(s)
@@ -249,8 +250,12 @@ export async function resumeTierDSolo(io:Server,roomId:string,userId:string):Pro
 }
 
 /** Atomically reserve this Match's one eligible ad item before provider fulfilment. */
+export function isTierDDuelSwapRefillEligible(userId:string,item:TierDRewardItem):boolean{
+  const s=[...sessions.values()].find(session=>session.userId===userId)
+  return !!(item==='swap'&&s?.state.duel?.phase==='SWAP'&&!s.reservedAdItem&&(visibleInventory(s).swap??0)===0)
+}
 export function reserveTierDSoloItemAd(userId:string,item:TierDRewardItem): boolean {
-  const session=[...sessions.values()].find(s=>s.userId===userId&&!s.isVip&&!s.adGrantUsed&&!s.reservedAdItem&&(visibleInventory(s)[item]??0)===0)
+  const session=[...sessions.values()].find(s=>s.userId===userId&&!s.reservedAdItem&&(visibleInventory(s)[item]??0)===0&&((!s.isVip&&!s.adGrantUsed)||isTierDDuelSwapRefillEligible(userId,item)))
   if(!session||session.itemBusy||session.recoveryRequired||!TIER_D_ITEMS.includes(item))return false
   session.reservedAdItem=item
   return true
@@ -264,7 +269,7 @@ export function restoreTierDSoloItemAd(userId:string,item:TierDRewardItem): void
 /** A rewarded-item ad is one claim per Match; the persistent inventory write is
  * performed by the reward route after provider verification. */
 export function grantTierDSoloItemAd(userId:string,item:TierDRewardItem): boolean {
-  const session=[...sessions.values()].find(s=>s.userId===userId&&!s.isVip&&s.reservedAdItem===item)
+  const session=[...sessions.values()].find(s=>s.userId===userId&&s.reservedAdItem===item)
   if(!session||session.itemBusy||session.recoveryRequired)return false
   session.reservedAdItem=undefined;session.adGrantUsed=true
   persistSession(session)
@@ -293,7 +298,8 @@ function revealCurrentTierDGame(io: Server, s: Session, pauseForAnimation = true
   }
   s.provisionalScoreSnapshot={...s.state.scores}
   const game=s.currentGame;const result=resolveTierDGame(s.state,game,{doubledSeatId:s.userId,doubledPile:s.doubledPiles.has(game)?game:undefined})
-  const breakdown=Object.fromEntries(s.state.seats.map(seat=>[seat.id,{pileScore:result.winnerId===seat.id?result.points:0,multiplier:handMultiplier(s.state.level,result.hands[seat.id].rank),missionScore:result.missionScores[seat.id]??0,penalty:result.missionPenalties[seat.id]??0,doubled:seat.id===s.userId&&s.doubledPiles.has(game)}]))
+  const revealedSeatIds=Object.keys(result.hands)
+  const breakdown=Object.fromEntries(revealedSeatIds.map(id=>[id,{pileScore:result.winnerId===id?result.points:0,multiplier:handMultiplier(s.state.level,result.hands[id].rank),missionScore:result.missionScores[id]??0,penalty:result.missionPenalties[id]??0,doubled:id===s.userId&&s.doubledPiles.has(game)}]))
   s.reveal={missionSuccess:tierDMissionAwareness(s.state,s.userId,s.committedThrough??0).missions.some(m=>m.pile===game&&m.status==='success'),game,winnerId:result.winnerId,points:result.points,bonusPoints:result.bonusPoints,hands:Object.fromEntries(Object.entries(result.hands).map(([id,h])=>[id,{
     // These are the seat's physical cards. Community cards are moved into the
     // winner row by the client instead of being duplicated in every comparison.
@@ -316,8 +322,10 @@ function revealCurrentTierDGame(io: Server, s: Session, pauseForAnimation = true
 }
 
 export async function playTierDGame(io:Server,roomId:string,userId:string,arrangement?:CardKeys):Promise<boolean> {
-  const s=sessions.get(roomId);if(!s||s.userId!==userId||!s.timerStarted||s.timerPausedAt||s.systemPausedAt||s.adPausedAt||s.autoResolving)return false
-  if(s.itemBusy||s.recoveryRequired)return false
+  const s=sessions.get(roomId)
+  if(!s||s.userId!==userId)return false
+  const blockedBy=!s.timerStarted?'timer_not_started':s.timerPausedAt?'timer_paused':s.systemPausedAt?'reveal_transition':s.adPausedAt?'ad_paused':s.autoResolving?'auto_resolving':s.itemBusy?'item_busy':s.recoveryRequired?'recovery_required':undefined
+  if(blockedBy){console.warn('[TIER_D_REVEAL_REJECTED]',{roomId,userId,duel:s.state.duel?.current!==undefined?s.state.duel.current+1:undefined,currentGame:s.currentGame,phase:s.state.duel?.phase,reason:blockedBy});emitState(io,s);return false}
   if(!s.arranged){
     try { const resolved=arrangement?keyArrangement(s.state,userId,arrangement):(s.stagedArrangement??defaultTierDArrangement(s.state.dealtHands[userId]));if(s.unlockedFrom)submitTierDUndoArrangement(s.state,userId,resolved,s.unlockedFrom);else submitTierDArrangement(s.state,userId,resolved);s.stagedArrangement=undefined;s.arranged=true;s.unlockedFrom=undefined;
       // Reveal is the player's final confirmation.  A foul is a canonical game
@@ -353,9 +361,10 @@ function commitCurrentPile(io:Server,s:Session){
       result.missionPenalties[seat.id]??0,result.winnerId===seat.id?(result.bonusPoints??0):0,
     ].filter(Boolean)])),
   })
-  if(!alreadyAwarded&&Object.values(bonuses).some(Boolean))io.to(s.roomId).emit('tier_d_combo',{
-    bonuses,kind:s.state.missions.length===3?'SUPER_COMBO':'COMBO',piles:s.state.missions.map(mission=>mission.pile),
-  })
+  if(!alreadyAwarded&&Object.values(bonuses).some(Boolean)){
+    const kinds=tierDComboKinds(s.state)
+    io.to(s.roomId).emit('tier_d_combo',{bonuses,kinds,piles:s.state.missions.map(mission=>mission.pile)})
+  }
 }
 
 async function finishMatch(io:Server,s:Session){
@@ -378,15 +387,16 @@ async function finishMatch(io:Server,s:Session){
     const bestMatchScoreSave=await supabaseAdmin.rpc('record_tier_d_best_match_score',{p_user_id:s.userId,p_score:s.state.scores[s.userId]??0})
     if(bestMatchScoreSave.error)console.warn('[TIER_D_SOLO] Best match score persistence requires migration 066:',bestMatchScoreSave.error.code)
   }
-  for(const seat of s.state.seats)s.cumulativeScores[seat.id]=(s.cumulativeScores[seat.id]??0)+(s.state.scores[seat.id]??0)
+  if(!s.state.duel)for(const seat of s.state.seats)s.cumulativeScores[seat.id]=(s.cumulativeScores[seat.id]??0)+(s.state.scores[seat.id]??0)
   if(s.state.duel){
     const duel=s.state.duel;const opponent=duel.order[duel.current]
     const playerScore=s.state.scores[s.userId]??0;const opponentScore=s.state.scores[opponent.id]??0
-    const won=tierDDuelWon(playerScore,opponentScore)
-    duel.results.push({opponentId:opponent.id,playerScore,opponentScore,won})
+    const won=tierDDuelWon(playerScore,opponentScore);const settlement=settleTierDDuel(tierDDuelStake(duel.current),playerScore,opponentScore)
+    const recorded=recordTierDDuelResult(duel,{opponentId:opponent.id,playerScore,opponentScore,won,settlement})
+    if(recorded){s.cumulativeScores[s.userId]=tierDDuelRankingScore(duel);s.cumulativeScores[opponent.id]=(s.cumulativeScores[opponent.id]??0)+opponentScore;console.info('[TIER_D_DUEL_ECONOMY]',{event:'DUEL_SETTLEMENT',duel:duel.current+1,opponentId:opponent.id,score:{player:playerScore,ai:opponentScore},...settlement,rankingScore:tierDDuelRankingScore(duel)})}
     if(!won)duel.phase='FAILED'
-    else if(duel.current<2){duel.phase='SWAP';duel.swapScoreCost=tierDNextDuelG1Stake(s.state.level);s.autoResolving=false;s.reveal=undefined;emitState(io,s);return}
-    else duel.phase='COMPLETE'
+    else if(duel.current<2){duel.phase='SWAP';duel.exchangeFee=tierDDuelExchangeFee(duel.current as 0|1);s.autoResolving=false;s.reveal=undefined;emitState(io,s);return}
+    else {duel.finalProfit=tierDDuelFinalProfit(duel);duel.phase='COMPLETE'}
   }
   const matchWon=wonTierDStreakMatch(s.userId,s.state.seats.filter(seat=>seat.isBot).map(seat=>seat.id),s.state.gameResults)
   const matchStreak=s.state.level>=51&&matchWon?(matchWinStreaks.get(s.userId)??0)+1:0
@@ -398,25 +408,31 @@ async function finishMatch(io:Server,s:Session){
     s.items=newMatchItemState();s.matchFreezeDurations=[];clearTimeout(s.freezeHandle)
     s.reservedAdItem=undefined
     const identities=s.state.seats.filter(seat=>seat.isBot).map(seat=>seat.bot)
-    const nextState=createTierDLevel(s.state.level,s.userId,Math.random,{comboBotId:s.state.comboBotId});nextState.seats.filter(seat=>seat.isBot).forEach((seat,index)=>{if(identities[index])seat.bot={...identities[index]!}})
+    const nextState=createTierDLevel(s.state.level,s.userId,Math.random,{comboBotId:s.state.comboBotId});nextState.missionStreak=s.state.missionStreak;nextState.seats.filter(seat=>seat.isBot).forEach((seat,index)=>{if(identities[index])seat.bot={...identities[index]!}})
     s.committedThrough=0;s.state=nextState;s.currentGame=1;s.matchNumber=(s.matchNumber+1) as 1|2|3;s.arranged=false;s.stagedArrangement=undefined;s.reveal=undefined;s.provisionalScoreSnapshot=undefined;s.matchStartedAt=Date.now();s.frozenMs=0;s.timerPausedAt=undefined;s.systemPausedAt=undefined;s.timerStarted=false;s.timerDeadlineAt=undefined;s.timerRemainingMs=undefined;s.unlockedFrom=undefined;s.undoUsed.clear();s.adPausedAt=undefined;s.doubledPiles.clear();s.matchInventory=rollVipMatchItems(s.inventory,s.isVip,s.state.level);s.matchFreezeDurations=Array.from({length:s.matchInventory.freeze},rollFreezeDuration);s.adGrantUsed=false;s.autoResolving=false;emitState(io,s);return
   }
   const aiScores=s.state.seats.filter(seat=>seat.isBot).map(seat=>s.cumulativeScores[seat.id]??0)
   const highestAiScore=Math.max(...aiScores)
   const playerWon=s.state.duel?s.state.duel.phase==='COMPLETE':(s.state.level<=1000||s.openChallengePassed)&&(s.cumulativeScores[s.userId]??0)>=highestAiScore
   if(s.state.duel){
-    const bestMatchScoreSave=await supabaseAdmin.rpc('record_tier_d_best_match_score',{p_user_id:s.userId,p_score:s.cumulativeScores[s.userId]??0})
+    const rankingScore=tierDDuelRankingScore(s.state.duel);s.cumulativeScores[s.userId]=rankingScore
+    const bestMatchScoreSave=await supabaseAdmin.rpc('record_tier_d_best_match_score',{p_user_id:s.userId,p_score:rankingScore})
     if(bestMatchScoreSave.error)console.warn('[TIER_D_SOLO] Best match score persistence requires migration 066:',bestMatchScoreSave.error.code)
   }
   let duelPayout
   if(s.state.duel&&s.escrowId){
-    duelPayout=playerWon?calculateTierDDuelPayout(s.cumulativeScores,s.state.duel.totalPot):{payouts:Object.fromEntries(s.state.seats.map(seat=>[seat.id,0])),burned:s.state.duel.buyIn,pot:s.state.duel.totalPot}
-    const finalStack=duelPayout.payouts[s.userId]??0
-    await settleEscrow(s.userId,s.escrowId,finalStack,{tier:'tier_d_duel',burnAmount:duelPayout.burned,npcNets:s.state.duel.order.map(opponent=>({npcId:opponent.aiConfigId,amount:(duelPayout!.payouts[opponent.id]??0)-s.state.duel!.buyIn}))})
+    const duel=s.state.duel;const finalProfit=duel.finalProfit??tierDDuelFinalProfit(duel);duel.finalProfit=finalProfit
+    const playerFees=duel.exchangeFees?.player??0;const aiFees=Object.values(duel.exchangeFees?.ai??{}).reduce((sum,fee)=>sum+fee,0);const exchangeFees=playerFees+aiFees
+    const npcNets=duel.order.map(opponent=>({npcId:opponent.aiConfigId,amount:-(duel.results.find(result=>result.opponentId===opponent.id)?.settlement.playerNet??0)-(duel.exchangeFees?.ai?.[opponent.id]??0)}))
+    const finalStack=Math.max(0,duel.buyIn+finalProfit)
+    duelPayout={buyIn:duel.buyIn,duels:duel.results.map((result,index)=>({duel:index+1,opponentId:result.opponentId,...result.settlement,fee:duel.exchanges.filter(exchange=>exchange.player&&exchange.duel===index+1).reduce((sum,exchange)=>sum+exchange.fee,0)})),playerExchangeFees:playerFees,aiExchangeFees:aiFees,exchangeFees,finalProfit,tokenChange:finalProfit,finalStack,latestTokenBalance:undefined as number|undefined}
+    console.info('[TIER_D_DUEL_ECONOMY]',{event:'LEVEL_SETTLEMENT',duels:duelPayout.duels,playerExchangeFees:playerFees,aiExchangeFees:aiFees,finalProfit,finalStack,playerWon})
+    duelPayout.latestTokenBalance=(await settleEscrow(s.userId,s.escrowId,finalStack,{tier:'tier_d_duel',burnAmount:exchangeFees,npcNets}))??undefined
   }
   const rewardBaseline=playerWon?await getTierDRewardBaseline(s.userId).catch(()=>undefined):undefined
-  const competition=playerWon?await recordTierDCompetitionLevelWin({userId:s.userId,level:s.state.level,points:s.cumulativeScores[s.userId]??0,isVip:s.isVip}).catch(()=>undefined):undefined
-  if(playerWon)await addMiniTournamentPoints(s.userId,s.cumulativeScores[s.userId]??0).catch(error=>console.warn('[TIER_D_SOLO] mini tournament score update failed',error))
+  const rankingScore=s.state.duel?tierDDuelRankingScore(s.state.duel):(s.cumulativeScores[s.userId]??0)
+  const competition=playerWon?await recordTierDCompetitionLevelWin({userId:s.userId,level:s.state.level,points:rankingScore,isVip:s.isVip}).catch(error=>{console.error('[TIER_D_LEADERBOARD]',{event:'SCORE_COMMIT_FAILED',userId:s.userId,level:s.state.level,earnedScore:rankingScore,error:error instanceof Error?error.message:String(error)});return undefined}):undefined
+  if(playerWon)await addMiniTournamentPoints(s.userId,rankingScore).catch(error=>console.warn('[TIER_D_SOLO] mini tournament score update failed',error))
   const progress=await persistTierDLevelOutcome(s.userId,playerWon);const elapsedMs=Math.max(0,Date.now()-s.levelStartedAt)
   // The progress RPC advances a cleared Lv.250 to Lv.251.  Grant the Tier C
   // graduation package only after that durable progression write succeeds.
@@ -428,23 +444,37 @@ async function finishMatch(io:Server,s:Session){
   io.to(s.roomId).emit('tier_d_complete',{matchWinStreak:matchStreak,level:s.state.level,playerWon,scores:s.cumulativeScores,highestAiScore,openChallengePassed:s.openChallengePassed,duel:s.state.duel,duelPayout,progress,reward,rewardEligible:!!reward,rewardReasons:reward?[s.state.level%10===0?'LEVEL_MILESTONE':'RANDOM_LEVEL_REWARD']:[],competition,elapsedMs,personalBestMs,tierCGraduation});discardSession(s)
 }
 
-/** Accepts either Skip or one ownership-changing 1-for-1 purchase after a won Duel. */
-export function continueTierDDuel(io:Server,roomId:string,userId:string,swap?:{playerCard:string;opponentCard:string}):boolean{
+/** Accepts either Skip or one ownership-changing 1-for-1 Swap-item action. */
+export async function continueTierDDuel(io:Server,roomId:string,userId:string,swap?:{playerCard:string;opponentCard:string;requestId:string}):Promise<boolean>{
   const s=sessions.get(roomId);const duel=s?.state.duel
-  if(!s||s.userId!==userId||!duel||duel.phase!=='SWAP'||duel.current>=2)return false
+  if(!s||s.userId!==userId||!duel||duel.phase!=='SWAP'||duel.current>=2||s.itemBusy||s.recoveryRequired)return false
+  const candidate:Session={...s,state:structuredClone(s.state),items:structuredClone(s.items),inventory:{...s.inventory},matchInventory:{...s.matchInventory},freezeDurations:[...s.freezeDurations],matchFreezeDurations:[...s.matchFreezeDurations],stagedArrangement:s.stagedArrangement?structuredClone(s.stagedArrangement):undefined,doubledPiles:new Set(s.doubledPiles),undoUsed:new Set(s.undoUsed)}
+  const nextDuel=candidate.state.duel!
   try{
     if(swap){
-      const opponentId=duel.order[duel.current].id
-      const playerIndex=s.state.dealtHands[userId].findIndex(card=>cardKey(card)===swap.playerCard)
-      const opponentIndex=s.state.dealtHands[opponentId].findIndex(card=>cardKey(card)===swap.opponentCard)
-      exchangeTierDDuelCard(s.state,userId,opponentId,playerIndex,opponentIndex)
-      duel.scoreSpent+=duel.swapScoreCost;s.cumulativeScores[userId]=(s.cumulativeScores[userId]??0)-duel.swapScoreCost
+      if(typeof swap.requestId!=='string'||!swap.requestId.length||swap.requestId.length>128)throw new Error('Invalid Swap item request')
+      if((visibleInventory(s).swap??0)<1)throw new Error('Swap item required. Watch an ad to receive one.')
+      const opponentId=nextDuel.order[nextDuel.current].id
+      const exchangeable=tierDDuelExchangeableOpponentPiles(candidate.state,opponentId)
+      const allowedOpponentCards=new Set(exchangeable?[...exchangeable.pile1,...exchangeable.pile2].map(cardKey):[])
+      if(!allowedOpponentCards.has(swap.opponentCard))throw new Error('Choose an AI card from G1 or G2')
+      const playerIndex=candidate.state.dealtHands[userId].findIndex(card=>cardKey(card)===swap.playerCard)
+      const opponentIndex=candidate.state.dealtHands[opponentId].findIndex(card=>cardKey(card)===swap.opponentCard)
+      exchangeTierDDuelCard(candidate.state,userId,opponentId,playerIndex,opponentIndex)
+      nextDuel.exchanges=nextDuel.exchanges??[];nextDuel.exchanges.push({duel:(nextDuel.current+1) as 1|2,actorId:userId,sourceId:opponentId,fee:0,player:true})
+      console.info('[TIER_D_DUEL_ITEM]',{event:'PLAYER_SWAP_ITEM',afterDuel:nextDuel.current+1,playerCard:swap.playerCard,aiCard:swap.opponentCard})
     }
-    resetTierDForNextDuel(s.state)
-    s.items=newMatchItemState();s.matchNumber=1;s.currentGame=1;s.arranged=false;s.stagedArrangement=s.state.arrangements[userId];s.reveal=undefined;s.provisionalScoreSnapshot=undefined;s.committedThrough=0;s.timerStarted=false;s.timerDeadlineAt=undefined;s.timerRemainingMs=undefined;s.systemPausedAt=undefined;s.autoResolving=false;s.undoUsed.clear();s.doubledPiles.clear()
-    startMatchTimer(io,s)
+    else console.info('[TIER_D_DUEL_ITEM]',{event:'PLAYER_SWAP_SKIPPED',afterDuel:nextDuel.current+1})
+    const revealedId=nextDuel.order[nextDuel.current].id;const nextId=nextDuel.order[nextDuel.current+1].id;const aiFee=nextDuel.exchangeFee
+    const aiChoice=chooseTierDAiExchange(candidate.state,nextId,revealedId,aiFee,tierDDuelStake((nextDuel.current+1) as 1|2))
+    if(aiChoice){const aiOut=cardKey(candidate.state.dealtHands[nextId][aiChoice.aiCardIndex]);const revealedOut=cardKey(candidate.state.dealtHands[revealedId][aiChoice.revealedCardIndex]);exchangeTierDDuelCard(candidate.state,nextId,revealedId,aiChoice.aiCardIndex,aiChoice.revealedCardIndex);nextDuel.exchangeFees=nextDuel.exchangeFees??{player:0,ai:{}};nextDuel.exchanges=nextDuel.exchanges??[];nextDuel.exchangeFees.ai[nextId]=(nextDuel.exchangeFees.ai[nextId]??0)+aiFee;nextDuel.exchanges.push({duel:(nextDuel.current+1) as 1|2,actorId:nextId,sourceId:revealedId,fee:aiFee,player:false});console.info('[TIER_D_DUEL_ECONOMY]',{event:'AI_EXCHANGE',afterDuel:nextDuel.current+1,aiId:nextId,sourceId:revealedId,fee:aiFee,expectedBenefit:aiChoice.expectedBenefit,aiCard:aiOut,revealedCard:revealedOut})}
+    else console.info('[TIER_D_DUEL_ECONOMY]',{event:'AI_EXCHANGE_SKIPPED',afterDuel:nextDuel.current+1,aiId:nextId,fee:0,quotedFee:aiFee})
+    resetTierDForNextDuel(candidate.state)
+    candidate.items=newMatchItemState();candidate.matchNumber=1;candidate.currentGame=1;candidate.arranged=false;candidate.stagedArrangement=candidate.state.arrangements[userId];candidate.reveal=undefined;candidate.provisionalScoreSnapshot=undefined;candidate.committedThrough=0;candidate.timerStarted=false;candidate.timerDeadlineAt=undefined;candidate.timerRemainingMs=undefined;candidate.systemPausedAt=undefined;candidate.autoResolving=false;candidate.undoUsed.clear();candidate.doubledPiles.clear()
+    if(swap){const persistent=(s.matchInventory.swap??0)===0;if(persistent)candidate.inventory.swap--;else candidate.matchInventory.swap--;candidate.itemRevision++;s.itemBusy=true;try{await s.snapshotWrite;await commitTierDItem({userId,roomId,item:'swap',requestId:swap.requestId,persistent,expectedRevision:s.itemRevision,snapshot:snapshotOf(candidate)})}catch{s.itemBusy=false;s.recoveryRequired=true;io.to(roomId).emit('tier_d_error',{message:'Swap item save could not be confirmed. Reconnect to restore the saved Duel.'});return false}}
+    Object.assign(s,candidate,{itemBusy:false});startMatchTimer(io,s)
     emitState(io,s);return true
-  }catch(error){io.to(roomId).emit('tier_d_error',{message:error instanceof Error?error.message:'Duel transition failed'});return false}
+  }catch(error){s.itemBusy=false;console.error('[TIER_D_DUEL_ITEM]',{event:'DUEL_TRANSITION_FAILED',duel:duel.current+1,error:error instanceof Error?error.message:String(error)});io.to(roomId).emit('tier_d_error',{message:error instanceof Error?error.message:'Duel transition failed'});return false}
 }
 
 const rulesFor=(s:Session)=>resolveGameRules({tier:'D',gameMode:'SOLO',playerCount:s.state.seats.length})
@@ -493,7 +523,7 @@ export async function useTierDItem(io:Server,roomId:string,userId:string,item:Ti
     }
     if(item==='shuffle'){
       const old=candidate.state
-      candidate.state=createTierDLevel(old.level,userId,Math.random,{missions:old.missions,riseSuperCombo:old.riseSuperCombo,openChallenge:old.openChallenge,guidedRevealPiles:old.guidedRevealPiles,comboBotId:old.comboBotId})
+      candidate.state=createTierDLevel(old.level,userId,Math.random,{missions:old.missions,riseSuperCombo:old.riseSuperCombo,openChallenge:old.openChallenge,guidedRevealPiles:old.guidedRevealPiles,comboBotId:old.comboBotId});candidate.state.missionStreak=old.missionStreak
       candidate.state.seats.forEach((seat,index)=>{seat.bot=old.seats[index].bot})
       candidate.dealRevision=(s.dealRevision??0)+1;candidate.stagedArrangement=undefined
       candidate.timerRemainingMs=(getArrangeTimerSeconds(old.level)??0)*1000;candidate.systemPausedAt=Date.now();candidate.timerDeadlineAt=undefined
@@ -550,13 +580,14 @@ function armFreeze(io:Server,s:Session){
 export function pauseTierDItemAd(io:Server,roomId:string,userId:string,item:TierDRewardItem){
   const s=sessions.get(roomId)
   if(s?.itemBusy||s?.recoveryRequired)return false
-  if(!s||s.userId!==userId||s.isVip||s.adGrantUsed||s.reservedAdItem||!s.timerStarted||s.timerPausedAt||s.systemPausedAt||s.autoResolving||(visibleInventory(s)[item]??0)!==0)return false
+  const duelSwapRefill=item==='swap'&&s?.state.duel?.phase==='SWAP'
+  if(!s||s.userId!==userId||(!duelSwapRefill&&(s.isVip||s.adGrantUsed))||s.reservedAdItem||!s.timerStarted||s.timerPausedAt||s.systemPausedAt||s.autoResolving||(visibleInventory(s)[item]??0)!==0)return false
   if(!s.adPausedAt){s.timerRemainingMs=remainingMs(s)??undefined;s.adPausedAt=Date.now();clearMatchTimer(s)}
   emitState(io,s);return true
 }
 export function resumeTierDItemAd(io:Server,roomId:string,userId:string){
   const s=sessions.get(roomId);if(!s||s.userId!==userId||!s.adPausedAt)return
-  s.adPausedAt=undefined;startMatchTimer(io,s,s.timerRemainingMs);emitState(io,s)
+  s.adPausedAt=undefined;if(s.state.duel?.phase!=='SWAP')startMatchTimer(io,s,s.timerRemainingMs);emitState(io,s)
 }
 
 export function resumeTierDTimer(io:Server,roomId:string,userId:string){

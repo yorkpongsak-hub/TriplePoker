@@ -48,6 +48,7 @@ import {
   playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton, playRevealCountdownTick, playMatchWin,
 } from '../../../src/services/gameSfxService'
 import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
+import { TierCPlusPileReveal, type TierCPlusReveal } from '../../../src/components/game/TierCPlusPileReveal'
 
 // ตำแหน่งที่นั่งเดียวกับ targets ใน startDealAnimation (Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย)
 const SEAT_TARGETS = {
@@ -71,6 +72,9 @@ const tableImg    = require('../../../assets/images/table_default.png')
 const tripleSpade = require('../../../assets/images/triple_poker_icon.png')
 
 const CW = 62; const CH = 90; const OVERLAP = -38
+const ADEPT_P1_HAND_SCALE = 1.00
+const ADEPT_P1_HAND_DROP = 48
+const ADEPT_SIDE_HAND_RAISE = 36
 const SIDE_COL_W = 72
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 // Escrow (ที่หักตอน matchmaking เต็มห้อง) ผูกกับ user_id จริงใน DB — ห้าม fallback เงียบเป็น literal เด็ดขาด
@@ -285,7 +289,7 @@ const GameTableLive: React.FC = () => {
   const selectedTableImg = TABLE_SKINS[activeSkin] ?? tableImg
 
   // ── Timer ref (ไม่ trigger re-render)
-  const timerValRef = useRef({ val: 90, max: 90 })
+  const timerValRef = useRef({ val: 150, max: 150 })
   const continueValRef = useRef(0)
   const aiListRef = useRef<AIInfo[]>([])
   const flyingCoinsRef = useRef<FlyingCoinsHandle>(null)
@@ -369,6 +373,7 @@ const GameTableLive: React.FC = () => {
   // ── Showdown — เก็บไพ่ทุกคนหลัง reveal ครบ
   const [allCards, setAllCards]       = useState<Record<string, Record<number, string[]>>>({})
   const [pileWinners, setPileWinners] = useState<Record<number, string>>({})
+  const [pileRevealShowcases, setPileRevealShowcases] = useState<TierCPlusReveal[]>([])
   const [hasFoul, setHasFoul]         = useState<Record<string, boolean>>({})
   // Haptic เตือน Foul ของฉันเอง — ยิงครั้งเดียวตอน hasFoul[PLAYER_ID] เปลี่ยนจาก false → true
   useEffect(() => {
@@ -522,7 +527,7 @@ const GameTableLive: React.FC = () => {
       Alert.alert(
         'Table Not Found',
         'This table could not be found. Please join a table from the lobby.',
-        [{ text: 'OK', onPress: () => router.replace('/(home)/lobby') }]
+        [{ text: 'OK', onPress: () => router.replace('/(home)/classic-lobby') }]
       )
       return
     }
@@ -562,7 +567,7 @@ const GameTableLive: React.FC = () => {
         data.message === 'INSUFFICIENT_TOKENS' ? 'You do not have enough tokens for this table\'s buy-in.'
           : data.message === 'ACTIVE_MATCH_EXISTS' ? 'You have an unfinished match.'
           : 'Something went wrong. Please try again.',
-        [{ text: 'OK', onPress: () => router.replace('/(home)/lobby') }]
+        [{ text: 'OK', onPress: () => router.replace('/(home)/classic-lobby') }]
       )
     })
 
@@ -647,9 +652,8 @@ const GameTableLive: React.FC = () => {
       const cardObjs = myCards.map((k: string, i: number) => ({ id: `c${i}`, key: k }))
       setPiles([cardObjs.slice(0, 3), cardObjs.slice(3, 6), cardObjs.slice(6, 11)])
 
-      // Patch v1.2: tierBonus (+15 เดิม) พับเข้า gameConfig.arrangementTimer.adept (75→90) แล้ว —
-      // ใช้ data.timer ตรงๆ เหมือน Mastermind/HighNoble (ผู้เล่นเห็นตัวเลขเท่าเดิมทุกประการ)
-      const t = data.timer ?? 90
+      // Server is authoritative; fallback mirrors Tier B's 2:30 arrangement window.
+      const t = data.timer ?? 150
       timerValRef.current = { val: t, max: t }
       if (timerRef.current) clearInterval(timerRef.current)
       timerRef.current = setInterval(() => {
@@ -724,6 +728,11 @@ const GameTableLive: React.FC = () => {
       })
 
       setAllCards(newAllCards)
+      setPileRevealShowcases(results.filter((pile: any) => (pile.pileNumber === 1 || pile.pileNumber === 2) && pile.winner && pile.winnerBestFive?.length === 5).map((pile: any) => ({
+        key: `${data.roomId ?? ROOM_ID}:${data.roundNumber ?? Date.now()}:g${pile.pileNumber}`,
+        pile: pile.pileNumber, winnerId: pile.winner, winnerBestFive: pile.winnerBestFive,
+        communityCards: pile.communityCards ?? [], handRanking: pile.winnerHandRank ?? 'WIN',
+      })))
       setPileWinners(newWinners)
       setHandRanks(newHandRanks)
       setHasFoul(newFouled)
@@ -1061,7 +1070,7 @@ const GameTableLive: React.FC = () => {
         },
       } as any)
     } else {
-      void leaveAfterClassicSettlement({accessToken,tier:'B',outcome:'LOSS',exitReason:'BACK_TO_LOBBY',returnTo:'/lobby'})
+      void leaveAfterClassicSettlement({ accessToken, tier: 'B', outcome: 'LOSS', exitReason: 'BACK_TO_LOBBY' })
     }
   }
 
@@ -1094,23 +1103,16 @@ const GameTableLive: React.FC = () => {
 
   // (AIPiles เดิมถูกแทนที่ด้วย BossHandRow กลางแล้ว — ดู src/components/game/BossHandRow.tsx)
 
-  const SideSeat: React.FC<{ rot: '270deg' | '90deg'; aiId: string }> = ({ rot, aiId }) => {
+  const SideSeat: React.FC<{ aiId: string; offsetY?: number }> = ({ aiId, offsetY = 0 }) => {
     const p1 = allCards[aiId]?.[1] ?? []; const p2 = allCards[aiId]?.[2] ?? []; const p3 = allCards[aiId]?.[3] ?? []
-    const cards = [...p1, ...p2, ...p3]
+    const sidePiles=[{cards:p1,count:3},{cards:p2,count:3},{cards:p3,count:5}]
     return (
-      <View style={s.sideSeatWrap}>
-        <View style={[s.sideSeatInner, { transform: [{ rotate: rot }] }]}>
-          {([5, 3, 3] as number[]).map((cnt, pi) => (
-            <React.Fragment key={pi}>
-              {pi > 0 && <View style={{ width: 4 }} />}
-              <View style={{ flexDirection: 'row' }}>
-                {Array.from({ length: cnt }).map((_, ci) => {
-                  const idx = pi === 0 ? ci : pi === 1 ? 3 + ci : 6 + ci
-                  const cardKey = cards[idx]
-                  return renderCard(cardKey, 25, 36, ci === 0 ? 0 : -18, `${aiId}-${pi}-${ci}-${cardKey ?? 'back'}`)
-                })}
-              </View>
-            </React.Fragment>
+      <View style={[s.sideSeatWrap,{transform:[{translateY:offsetY}]}]}>
+        <View style={s.sideSeatInner}>
+          {sidePiles.map((pile,pi)=>(
+            <View key={pi} style={s.sidePileRow}>
+              {Array.from({length:pile.count}).map((_,ci)=>{const cardKey=pile.cards[ci];return <View key={`${aiId}-${pi}-${ci}-${cardKey??'back'}`} style={{marginLeft:ci===0?0:-15}}>{renderCard(cardKey,25,36)}</View>})}
+            </View>
           ))}
         </View>
       </View>
@@ -1749,7 +1751,7 @@ const GameTableLive: React.FC = () => {
                   ? <AvatarFrame size={36}><AvatarBubble emoji={p2Avatar.emoji} image={p2Avatar.image} size={36} /></AvatarFrame>
                   : <AvatarBubble emoji={p2Avatar.emoji} image={p2Avatar.image} size={36} />}
               </View>
-              {p2AI && <SideSeat rot="270deg" aiId={p2AI.id} />}
+              {p2AI && <SideSeat aiId={p2AI.id} offsetY={-ADEPT_SIDE_HAND_RAISE} />}
             </View>
 
             <View style={s.commWrap}>
@@ -1772,11 +1774,7 @@ const GameTableLive: React.FC = () => {
                   ? <AvatarFrame size={36}><AvatarBubble emoji={p4Avatar.emoji} image={p4Avatar.image} size={36} /></AvatarFrame>
                   : <AvatarBubble emoji={p4Avatar.emoji} image={p4Avatar.image} size={36} />}
               </View>
-              {p4AI && (
-                <View style={{ marginLeft: 15 }}>
-                  <SideSeat rot="90deg" aiId={p4AI.id} />
-                </View>
-              )}
+              {p4AI && <SideSeat aiId={p4AI.id} offsetY={-ADEPT_SIDE_HAND_RAISE} />}
             </View>
           </View>
 
@@ -1837,13 +1835,14 @@ const GameTableLive: React.FC = () => {
 
         </View>
         {/* ── SHOWDOWN RESULT (กลางจอ) — Feedback C5: ครอบด้วยพื้นหลัง free/vip ชุดเดียวกับ Profile/Lobby ── */}
-        {showResult && (phase === 'showdown' || phase === 'result') && (
+        {showResult && pileRevealShowcases.length === 0 && (phase === 'showdown' || phase === 'result') && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: -200, zIndex: 200 }}>
             <ImageBackground source={isVip ? SHOWDOWN_BG_VIP : SHOWDOWN_BG_FREE} resizeMode="cover" style={{ flex: 1, padding: 12 }}>
               <ShowdownResult />
             </ImageBackground>
           </View>
         )}
+        <TierCPlusPileReveal reveals={pileRevealShowcases} localPlayerId={PLAYER_ID} onSequenceComplete={() => setPileRevealShowcases([])} />
         <ServerLog socket={socketRef.current} onMonarchWin={setMonarchWinner} />
       </View>
     </View>
@@ -1889,7 +1888,8 @@ const s = StyleSheet.create({
   // Patch 2026-07-18: ยอดโทเคนคงเหลือใต้ชื่อทุกที่นั่ง — ทองธีมหลัก, JetBrains Mono ตามมาตรฐานตัวเลข
   seatToken:     { fontSize: 9, color: '#FFD76A', fontFamily: 'JetBrainsMono_600SemiBold', textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
   sideSeatWrap:  { flex: 1, width: SIDE_COL_W, overflow: 'visible', justifyContent: 'flex-start', alignItems: 'center' },
-  sideSeatInner: { flexDirection: 'row', alignItems: 'center' },
+  sideSeatInner: { flexDirection: 'column', alignItems: 'center', gap: 4 },
+  sidePileRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
 
   commWrap:    { flex: 1, paddingLeft: 4, paddingRight: 18, alignItems: 'flex-start', justifyContent: 'center', marginTop: 40 /* Patch 2026-07-18: เลื่อนกองกลางทั้ง 3 กองลง 40px — ใช้พื้นที่ว่างกลางจอ */, zIndex: 2 },
   auctionLbl:  { fontSize: 7, color: 'rgba(160,80,220,.55)', letterSpacing: 1, textTransform: 'uppercase' },
@@ -1900,7 +1900,7 @@ const s = StyleSheet.create({
   winBadgeTxt: { fontSize: 7, fontWeight: '800' },
 
   userArea:     { paddingHorizontal: 8, paddingTop: 4, paddingBottom: 4, borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,.15)', zIndex: 2, alignItems: 'center' },
-  p1HandScale: { width: '100%', marginTop: 29, marginBottom: 18, alignItems: 'center', transform: [{ scale: 1.2 }] },
+  p1HandScale: { width: '100%', marginTop: 29, marginBottom: 18, alignItems: 'center', transform: [{ translateY: ADEPT_P1_HAND_DROP }, { scale: ADEPT_P1_HAND_SCALE }] },
   userLabels:   { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 3 },
   userPilesRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'flex-start' },
   userCard:     { width: CW, height: CH, borderRadius: 4, backgroundColor: '#fdfaf3', borderWidth: 1, borderColor: 'rgba(201,168,76,.65)', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },

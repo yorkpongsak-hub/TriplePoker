@@ -1,7 +1,7 @@
 // app/(home)/victory.tsx
 // Post-Match Victory Screen — shown only to the match's #1 finisher, right after "back to lobby"
 // (มติลุงเยาะ 2026-08-13). Flow: Victory (VFX + stats) -> Ad screen (skippable, shared /watch-ad
-// route) -> that Tier's Top10. A single shared route parameterized by ?tier=, mirroring top10.tsx's
+// route) -> Main Lobby. A single shared route parameterized by ?tier=, mirroring top10.tsx's
 // own precedent — this is a tier-agnostic post-game summary, not a gameplay screen, so CLAUDE.md's
 // "no dynamic [tier] route" rule (which governs the game tables themselves) does not apply here.
 //
@@ -57,13 +57,11 @@ export default function VictoryScreen() {
     tokensWon?: string
     matchDurationSec?: string
     bestHandLabel?: string
-    autoContinue?: string // Solo Mode Endless Level (2026-09-01) — ดู lobby.tsx's autoContinue
   }>()
   const tier = params.tier ?? 'initiate'
   const tokensWon = Number(params.tokensWon ?? 0)
   const matchDurationSec = Number(params.matchDurationSec ?? 0)
   const bestHandLabel = params.bestHandLabel && params.bestHandLabel !== 'null' ? params.bestHandLabel : null
-  const autoContinue = params.autoContinue
 
   const isGuest = useAuthStore(s => s.session?.user?.is_anonymous === true)
   const accessToken = useAuthStore(s => s.session?.access_token)
@@ -163,11 +161,10 @@ export default function VictoryScreen() {
   const progressFillStyle = useAnimatedStyle(() => ({ width: progressFillWidth.value }))
 
   const goToWatchAd = async () => {
-    const returnTo=`/(home)/top10?tier=${tier}${autoContinue ? `&autoContinue=${autoContinue}` : ''}`
     const tierToAdTier:Record<string,ClassicAdTier>={initiate:'C',adept:'B',mastermind:'A',highNoble:'A_PLUS'}
     const adTier=tierToAdTier[tier]
-    if(!adTier){router.push(returnTo as any);return}
-    await leaveAfterClassicSettlement({accessToken,tier:adTier,outcome:'WIN',exitReason:'CONTINUE',returnTo})
+    if(!adTier){router.replace('/(home)/classic-lobby');return}
+    await leaveAfterClassicSettlement({ accessToken, tier: adTier, outcome: 'WIN', exitReason: 'BACK_TO_LOBBY' })
   }
 
   if (!loaded) {

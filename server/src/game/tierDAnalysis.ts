@@ -64,7 +64,7 @@ function scoreArrangement(level: number, arrangement: TierDArrangement, communit
   }
   const missionOutcomes = missions.map(mission => missionResult(mission, own[mission.pile - 1].rank))
   const missionPoints = missionOutcomes.reduce((sum, result) => sum + result.score + result.penalty, 0)
-  const combo = missions.length >= 2 && missionOutcomes.every(result => result.complete) ? comboBonus(missions, missionOutcomes.map(result => result.complete), () => 0) : 0
+  const combo = missions.length >= 2 ? comboBonus(missions, missionOutcomes.map(result => result.complete), () => 0) : 0
   const sweep = wins === 3 ? 5 : 0
   return { total: pile.reduce((sum, points) => sum + points, 0) + missionPoints + combo + sweep, pile, wins, missions: missionOutcomes.filter(result => result.complete).length, combo }
 }

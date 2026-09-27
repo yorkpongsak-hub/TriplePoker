@@ -14,7 +14,7 @@
 
 import { Card } from './deck'
 import { CommunityCards } from './foulChecker'
-import { evaluateHand } from './handEvaluator'
+import { evaluateBestFive, evaluateHand } from './handEvaluator'
 import { aiDecideArrangement, AIPersonality, AIConfig } from './aiEngine'
 import { gameConfig } from '../config/gameConfig'
 
@@ -29,8 +29,8 @@ const PROBE_CONFIG: AIConfig = { id: 'MONARCH_PROBE', name: 'Monarch', emoji: 'ð
 export function evaluateMonarchHandStrength(cards: Card[], community: CommunityCards): number {
   const arr = aiDecideArrangement(PROBE_CONFIG, cards, community, 1, 'highNoble', 0)
   const h1 = evaluateHand([...arr.pile1, ...community.row1])
-  const h2 = evaluateHand([...arr.pile2, ...community.row2])
-  const h3 = evaluateHand([...arr.pile3.slice(0, 3), ...community.row3])
+  const h2 = evaluateBestFive([...arr.pile2, ...community.row2])
+  const h3 = evaluateBestFive([...arr.pile3, ...community.row3])
   return (h1.rankIndex + h2.rankIndex + h3.rankIndex) / 27
 }
 

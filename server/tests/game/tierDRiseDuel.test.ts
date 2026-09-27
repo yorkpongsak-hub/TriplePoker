@@ -1,5 +1,5 @@
-import { createTierDLevel, firstValidTierDArrangement, resetTierDForNextDuel, submitTierDArrangement } from '../../src/game/tierDSolo'
-import { calculateTierDDuelPayout, exchangeTierDDuelCard, hiddenTierDDuelView, orderTierDDuelOpponents, tierDMatchesPerLevel, tierDNextDuelG1Stake, tierDDuelActive, tierDDuelBuyIn, tierDDuelRoster, tierDDuelWon } from '../../src/game/tierDRiseDuel'
+import { createTierDLevel, firstValidTierDArrangement, resetTierDForNextDuel, resolveTierDGame, submitTierDArrangement, tierDComboKinds } from '../../src/game/tierDSolo'
+import { chooseTierDAiExchange, exchangeTierDDuelCard, hiddenTierDDuelView, orderTierDDuelOpponents, recordTierDDuelResult, settleTierDDuel, tierDMatchesPerLevel, tierDDuelActive, tierDDuelBuyIn, tierDDuelExchangeableOpponentPiles, tierDDuelExchangeFee, tierDDuelFinalProfit, tierDDuelRankingScore, tierDDuelRoster, tierDDuelStake, tierDDuelWon } from '../../src/game/tierDRiseDuel'
 
 describe('Tier D Rise three-stage Duel Challenge', () => {
   test('activates at Lv.1000, not Lv.999, without Open Challenge', () => {
@@ -32,9 +32,9 @@ describe('Tier D Rise three-stage Duel Challenge', () => {
     expect(['AI_REAPER', 'AI_CRAG', 'AI_CORTEX', 'AI_CIPHER']).toContain(roster[2].id)
   })
 
-  test.each([[1000,1000],[1099,1000],[1100,3500],[1200,6000],[1300,8000],[1400,10500],[1500,13000],[1600,15500],[1700,18000],[1800,20000],[1900,22500],[2000,25000],[9999,25000]])('buy-in progression at Lv.%i', (level, amount) => {
-    expect(tierDDuelBuyIn(level)).toBe(amount)
-    if (level >= 1000) expect(createTierDLevel(level, 'human', () => .2).duel?.totalPot).toBe(amount * 4)
+  test.each([1000,1099,1100,1500,1999,2000,9999])('uses one independent 1,000 Token Level buy-in at Lv.%i', level => {
+    expect(tierDDuelBuyIn(level)).toBe(1000)
+    expect(createTierDLevel(level, 'human', () => .2).duel?.totalPot).toBe(2000)
   })
 
   test('swap is physical 1-for-1 ownership transfer with no duplicate cards', () => {
@@ -47,6 +47,18 @@ describe('Tier D Rise three-stage Duel Challenge', () => {
     expect(state.dealtHands[opponent][0]).toEqual(beforePlayer)
     const ids = [...Object.values(state.dealtHands).flat(), ...Object.values(state.communityPiles).flat(), ...state.drawPile].map(card => `${card.rank}:${card.suit}`)
     expect(new Set(ids).size).toBe(52)
+  })
+
+  test('defeated-AI exchange offers only the arranged G1 and G2 cards', () => {
+    const state = createTierDLevel(1000, 'human', () => .2)
+    const opponent = state.duel!.order[0].id
+    const arrangement = state.arrangements[opponent]!
+    const offered = tierDDuelExchangeableOpponentPiles(state, opponent)!
+    const identity = (card: { rank: string; suit: string }) => `${card.rank}:${card.suit}`
+    expect(offered.pile1).toEqual(arrangement.pile1)
+    expect(offered.pile2).toEqual(arrangement.pile2)
+    expect([...offered.pile1, ...offered.pile2]).toHaveLength(6)
+    expect(new Set([...offered.pile1, ...offered.pile2].map(identity))).not.toContain(identity(arrangement.pile3[0]))
   })
 
   test('Buy/Swap advances immediately without recomputing the eliminated opponent', () => {
@@ -66,13 +78,30 @@ describe('Tier D Rise three-stage Duel Challenge', () => {
     expect(state.gameResults).toEqual([])
   })
 
+  test('Duel 2 G1 reveal evaluates only the player and current opponent', () => {
+    const state = createTierDLevel(1000, 'human', () => .2)
+    const eliminated = state.duel!.order[0].id
+    submitTierDArrangement(state, 'human', firstValidTierDArrangement(state.dealtHands.human, state.communityPiles))
+    exchangeTierDDuelCard(state, 'human', eliminated, 0, 0)
+    resetTierDForNextDuel(state)
+    const current = state.duel!.order[1].id
+
+    expect(state.arrangements[eliminated]).toBeUndefined()
+    expect(() => resolveTierDGame(state, 1)).not.toThrow()
+    expect(Object.keys(state.gameResults[0].hands).sort()).toEqual(['human', current].sort())
+    expect(state.gameResults[0].hands[eliminated]).toBeUndefined()
+  })
+
   test('Skip preserves the exact committed arrangement and the original deal across Duels', () => {
     const state = createTierDLevel(1000, 'human', () => .2)
     submitTierDArrangement(state, 'human', firstValidTierDArrangement(state.dealtHands.human, state.communityPiles))
+    state.scores.human=42
+    for(const seat of state.seats.filter(seat=>seat.isBot))state.scores[seat.id]=17
     const arrangement = JSON.parse(JSON.stringify(state.arrangements.human))
     const hands = JSON.parse(JSON.stringify(state.dealtHands))
     const community = JSON.parse(JSON.stringify(state.communityPiles))
     resetTierDForNextDuel(state)
+    expect(state.scores).toEqual(Object.fromEntries(state.seats.map(seat=>[seat.id,0])))
     expect(state.arrangements.human).toEqual(arrangement)
     expect(state.dealtHands).toEqual(hands)
     expect(state.communityPiles).toEqual(community)
@@ -105,20 +134,48 @@ describe('Tier D Rise three-stage Duel Challenge', () => {
     expect(JSON.stringify({ hands: retry.dealtHands, community: retry.communityPiles })).not.toBe(originalCards)
   })
 
-  test('only a strict win advances; tie and loss terminate, and swap costs next Duel G1 stake', () => {
+  test('a tied or higher score advances; Duel stakes remain fixed and independent', () => {
     expect(tierDDuelWon(11, 10)).toBe(true)
-    expect(tierDDuelWon(10, 10)).toBe(false)
+    expect(tierDDuelWon(10, 10)).toBe(true)
     expect(tierDDuelWon(9, 10)).toBe(false)
-    expect(tierDNextDuelG1Stake(1000)).toBe(4)
+    expect([tierDDuelStake(0),tierDDuelStake(1),tierDDuelStake(2)]).toEqual([200,300,500])
+    expect([tierDDuelExchangeFee(0),tierDDuelExchangeFee(1)]).toEqual([50,100])
   })
 
-  test('payout clamps negative scores, normalizes positive scores, floors, and burns remainder', () => {
-    const result = calculateTierDDuelPayout({ human: 7, a: 2, b: 1, c: -40 }, 100_000)
-    expect(result.payouts).toEqual({ human: 70_000, a: 20_000, b: 10_000, c: 0 })
-    const rounded = calculateTierDDuelPayout({ human: 1, a: 1, b: 1, c: 0 }, 100_000)
-    expect(rounded.payouts).toEqual({ human: 33_333, a: 33_333, b: 33_333, c: 0 })
-    expect(rounded.burned).toBe(1)
-    expect(Object.values(rounded.payouts).reduce((a,b)=>a+b,0)+rounded.burned).toBe(rounded.pot)
+  test('settles each Duel independently by positive score share', () => {
+    expect(settleTierDDuel(200,8,2)).toEqual({stake:200,playerStake:200,opponentStake:200,pot:400,playerScore:8,opponentScore:2,grossPayout:320,opponentGrossPayout:80,playerTokens:320,opponentTokens:80,playerNet:120})
+    expect(settleTierDDuel(300,8,2)).toMatchObject({pot:600,grossPayout:480,opponentGrossPayout:120,playerNet:180})
+    expect(settleTierDDuel(500,18,2)).toMatchObject({pot:1000,grossPayout:900,opponentGrossPayout:100,playerNet:400})
+    expect(settleTierDDuel(200,2,8)).toMatchObject({pot:400,grossPayout:80,opponentGrossPayout:320,playerNet:-120})
+    expect(settleTierDDuel(200,5,5)).toMatchObject({pot:400,grossPayout:200,opponentGrossPayout:200,playerNet:0})
+    expect(settleTierDDuel(200,0,0)).toMatchObject({pot:400,grossPayout:200,opponentGrossPayout:200,playerNet:0})
+    expect(settleTierDDuel(200,-4,2).playerNet).toBe(-200)
+  })
+
+  test('accumulates all three Duel scores once and survives Duel resets/restoration', () => {
+    const level=createTierDLevel(1000,'human',()=>.2);const duel=level.duel!
+    const add=(score:number,opponentScore:number)=>recordTierDDuelResult(duel,{opponentId:duel.order[duel.current].id,playerScore:score,opponentScore,won:score>opponentScore,settlement:settleTierDDuel(tierDDuelStake(duel.current),score,opponentScore)})
+    expect(add(30,2)).toBe(true)
+    expect(add(30,2)).toBe(false)
+    expect(tierDDuelRankingScore(duel)).toBe(30)
+    resetTierDForNextDuel(level);expect(level.scores.human).toBe(0);expect(tierDDuelRankingScore(duel)).toBe(30)
+    expect(add(16,2)).toBe(true);resetTierDForNextDuel(level)
+    expect(add(24,2)).toBe(true)
+    expect(tierDDuelRankingScore(duel)).toBe(70)
+    expect(duel.accumulatedDuels).toBe(3)
+    const restored=JSON.parse(JSON.stringify(duel));delete restored.rankingScore
+    expect(tierDDuelRankingScore(restored)).toBe(70)
+  })
+
+  test('Swap items replace player Token fees in final profit', () => {
+    const state=createTierDLevel(1000,'human',()=>.2).duel!
+    state.results=[
+      {opponentId:'a',playerScore:8,opponentScore:2,won:true,settlement:settleTierDDuel(200,8,2)},
+      {opponentId:'b',playerScore:8,opponentScore:2,won:true,settlement:settleTierDDuel(300,8,2)},
+      {opponentId:'c',playerScore:18,opponentScore:2,won:true,settlement:settleTierDDuel(500,18,2)},
+    ]
+    state.exchangeFees.player=150
+    expect(tierDDuelFinalProfit(state)).toBe(700)
   })
 
   test('hidden-information projection exposes only the viewer hand', () => {
@@ -126,5 +183,37 @@ describe('Tier D Rise three-stage Duel Challenge', () => {
     const view = hiddenTierDDuelView(state, 'human')
     expect(view.human).toHaveLength(11)
     expect(Object.entries(view).filter(([id]) => id !== 'human').every(([,cards]) => cards.length === 0)).toBe(true)
+  })
+
+  test('AI exchange decision is isolated from the hidden player hand', () => {
+    const first=createTierDLevel(1000,'human',()=>.4);const second=JSON.parse(JSON.stringify(first))
+    const revealed=first.duel!.order[0].id;const next=first.duel!.order[1].id
+    second.dealtHands.human.reverse()
+    expect(chooseTierDAiExchange(first,next,revealed,50,300)).toEqual(chooseTierDAiExchange(second,next,revealed,50,300))
+  })
+
+  test('Skip and Buy/Swap both complete the AI exchange transition without breaking card state', () => {
+    for(const playerSwaps of [false,true]){
+      const state=createTierDLevel(1000,'human',()=>.4);const duel=state.duel!;const revealed=duel.order[0].id;const next=duel.order[1].id
+      submitTierDArrangement(state,'human',firstValidTierDArrangement(state.dealtHands.human,state.communityPiles))
+      if(playerSwaps)exchangeTierDDuelCard(state,'human',revealed,0,0)
+      const choice=chooseTierDAiExchange(state,next,revealed,50,300)
+      if(choice)exchangeTierDDuelCard(state,next,revealed,choice.aiCardIndex,choice.revealedCardIndex)
+      expect(()=>resetTierDForNextDuel(state)).not.toThrow()
+      expect(state.duel).toMatchObject({current:1,phase:'REARRANGE'})
+      const ids=[...Object.values(state.dealtHands).flat(),...Object.values(state.communityPiles).flat(),...state.drawPile].map(card=>`${card.rank}:${card.suit}`)
+      expect(new Set(ids).size).toBe(52)
+    }
+  })
+
+  test('Lv.1010 Combo labels ignore eliminated opponents after the final Duel', () => {
+    const state=createTierDLevel(1010,'human',()=>.4)
+    submitTierDArrangement(state,'human',firstValidTierDArrangement(state.dealtHands.human,state.communityPiles))
+    for(const game of [1,2,3] as const)resolveTierDGame(state,game)
+    const current=state.duel!.order[state.duel!.current].id
+    expect(()=>tierDComboKinds(state)).not.toThrow()
+    expect(tierDComboKinds(state)).toHaveProperty('human')
+    expect(tierDComboKinds(state)).toHaveProperty(current)
+    for(const opponent of state.duel!.order.filter(entry=>entry.id!==current))expect(tierDComboKinds(state)[opponent.id]).toBeUndefined()
   })
 })

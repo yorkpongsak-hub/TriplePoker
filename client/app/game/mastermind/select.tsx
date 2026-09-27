@@ -78,7 +78,7 @@ const MastermindSelect: React.FC = () => {
       <StatusBar barStyle="light-content" />
 
       <View style={s.header}>
-        <TouchableOpacity onPress={() => router.push('/lobby')}>
+        <TouchableOpacity onPress={() => router.push('/(home)/classic-lobby')}>
           <Text style={s.backTxt}>‹ Lobby</Text>
         </TouchableOpacity>
         <Text style={s.title}>THE NINE SENTINELS</Text>

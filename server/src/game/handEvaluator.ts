@@ -23,6 +23,7 @@ export interface HandResult {
 export interface BestFiveResult extends HandResult {
   bestFive: Card[]
   unusedCards: Card[]
+  combinationsEvaluated: number
 }
 
 export interface SoloG2BestFiveResult extends BestFiveResult {
@@ -89,13 +90,13 @@ export function evaluateHand(cards: Card[]): HandResult {
 }
 
 /**
- * Finds the strongest five-card poker hand in a 5–7 card eligible pool.
+ * Finds the strongest five-card poker hand in an eligible card pool.
  * This Core Rule has no dependency on a tier or UI. Ties keep the first
  * input-order combination so the displayed cards are deterministic.
  */
 export function evaluateBestFive(cards: readonly Card[]): BestFiveResult {
-  if (cards.length < 5 || cards.length > 7) {
-    throw new Error(`Best Five requires 5 to 7 eligible cards; received ${cards.length}`)
+  if (cards.length < 5) {
+    throw new Error(`Best Five requires at least 5 eligible cards; received ${cards.length}`)
   }
 
   let best: HandResult | undefined
@@ -113,7 +114,14 @@ export function evaluateBestFive(cards: readonly Card[]): BestFiveResult {
     ...best!,
     bestFive: bestIndices!.map(index => cards[index]),
     unusedCards: cards.filter((_, index) => !selected.has(index)),
+    combinationsEvaluated: chooseCount(cards.length, 5),
   }
+}
+
+function chooseCount(n: number, k: number): number {
+  let value = 1
+  for (let index = 1; index <= k; index++) value = value * (n - index + 1) / index
+  return value
 }
 
 /**

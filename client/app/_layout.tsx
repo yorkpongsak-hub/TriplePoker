@@ -33,6 +33,7 @@ const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 const GAME_TABLE_ROUTES = new Set([
   'game/initiate', 'game/adept', 'game/mastermind', 'game/highNoble',
   'game/monarch', 'game/vipPlus', 'game/grandmaster', 'game/sovereign', 'game/tier-d',
+  'game/vip-crew',
 ])
 
 export default function RootLayout() {

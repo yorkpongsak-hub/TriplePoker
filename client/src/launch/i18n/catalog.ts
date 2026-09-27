@@ -1,6 +1,9 @@
 // แต่ละแถว: English | ไทย | 简体中文 | 日本語 | 한국어 | Tiếng Việt | Indonesia | Español | Português | Français
 // ข้อความแบบ {n} เป็นตัวแปร ต้องคงชื่อเดียวกันทุกภาษา
 export const RAW_MESSAGES = `
+SWAP ITEM REQUIRED|ต้องใช้ไอเทม Swap|需要 Swap 道具|Swapアイテムが必要|Swap 아이템 필요|Cần vật phẩm Swap|Memerlukan item Swap|Se necesita un objeto Swap|Requer item Swap|Objet Swap requis
+SWAP · ITEM ×{count}|SWAP · ไอเทม ×{count}|SWAP · 道具 ×{count}|SWAP · アイテム ×{count}|SWAP · 아이템 ×{count}|SWAP · VẬT PHẨM ×{count}|SWAP · ITEM ×{count}|SWAP · OBJETO ×{count}|SWAP · ITEM ×{count}|SWAP · OBJET ×{count}
+WATCH AD · GET SWAP|ดูโฆษณา · รับ Swap|观看广告 · 获得 Swap|広告を見る · Swap獲得|광고 보기 · Swap 받기|XEM QUẢNG CÁO · NHẬN SWAP|TONTON IKLAN · DAPATKAN SWAP|VER ANUNCIO · OBTENER SWAP|VER ANÚNCIO · OBTER SWAP|VOIR LA PUB · OBTENIR SWAP
 Language|ภาษา|语言|言語|언어|Ngôn ngữ|Bahasa|Idioma|Idioma|Langue
 Use device language|ใช้ภาษาของเครื่อง|使用设备语言|端末の言語を使う|기기 언어 사용|Dùng ngôn ngữ thiết bị|Gunakan bahasa perangkat|Usar idioma del dispositivo|Usar idioma do dispositivo|Utiliser la langue de l’appareil
 Choose your language|เลือกภาษาที่ต้องการ|选择语言|言語を選択|언어 선택|Chọn ngôn ngữ|Pilih bahasa|Elige tu idioma|Escolha seu idioma|Choisissez votre langue

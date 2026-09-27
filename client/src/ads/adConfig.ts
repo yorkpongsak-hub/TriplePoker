@@ -1,6 +1,11 @@
 export type ClientAdMode = 'mock' | 'google_test' | 'production'
 export type RewardedContext = 'DAILY_STREAK' | 'RANDOM_ITEM' | 'SELECTED_ITEM_REFILL' | 'TOKEN_RESCUE' | 'PROGRESSION_REWARD'
 
+export const GOOGLE_ANDROID_TEST_AD_UNIT_IDS = {
+  interstitial: 'ca-app-pub-3940256099942544/1033173712',
+  rewarded: 'ca-app-pub-3940256099942544/5224354917',
+} as const
+
 // Production is deliberately opt-in twice. A release build with no explicit
 // gate stays mock/fail-closed instead of accidentally requesting live ads.
 const requested = process.env.EXPO_PUBLIC_AD_MODE

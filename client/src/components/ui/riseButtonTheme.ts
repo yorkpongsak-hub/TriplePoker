@@ -12,5 +12,5 @@ export const RISE_BUTTON_THEME = {
 } as const
 
 export type RiseButtonSize = keyof typeof RISE_BUTTON_THEME.sizes
-export type RiseButtonVariant = 'primary' | 'secondary' | 'prestige' | 'confirm' | 'back' | 'dangerMuted' | 'disabled'
+export type RiseButtonVariant = 'primary' | 'secondary' | 'prestige' | 'confirm' | 'back' | 'danger' | 'dangerMuted' | 'disabled'
 export type RiseButtonIdleAnimation = 'none' | 'shimmer' | 'glowSweep' | 'prestige'

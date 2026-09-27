@@ -16,10 +16,18 @@ export function tierDMissionAwareness(state: TierDLevelState, seatId: string, co
       label:mission.negative?`⚠ ${forcedLabel} · FAIL ${mission.penalty}`:`${names[mission.rank]} +${reward}`}
   })
   const count=missions.length
-  const failed=missions.some(m=>m.status==='failed'&&!m.provisional)
+  const settled=missions.every(m=>m.status!=='pending'&&!m.provisional)
+  const failed=settled&&missions.filter(m=>m.status==='success').length<2
   const completed=missions.filter(m=>m.status==='success'&&!m.provisional).length
-  const kind=count===3?'SUPER COMBO':'COMBO'
+  const kind=completed===3?'SUPER COMBO':'COMBO'
   const title=count===1?'MISSION':completed>0||failed?kind:`${count} MISSIONS`
-  const detail=failed?(count===1?'MISSION MISSED':`${kind} MISSED`):completed===count&&count>0?(count===1?'MISSION COMPLETE':`${kind}!`):count===1?'COMPLETE FOR BONUS':completed>0?`${count-completed} TO GO`:count===3?'SUPER COMBO +10–15':'COMBO +5–7'
-  return {missions,title,detail,failed,risk:missions.some(m=>m.negative),intro:count===1?'Complete the objective for bonus points':count===2?'Complete both → COMBO +5–7':'Complete all 3 → SUPER COMBO +10–15'}
+  const baseDetail=failed?(count===1?'MISSION MISSED':'COMBO MISSED')
+    :settled&&completed===3?'SUPER COMBO!'
+    :settled&&completed===2?'COMBO!'
+    :count===1?'COMPLETE FOR BONUS'
+    :completed>0?`${count-completed} TO GO`
+    :count===2?'COMBO +5–7'
+    :'2 COMPLETE → COMBO · ALL 3 → SUPER COMBO'
+  const detail=settled&&state.missionStreak!==undefined&&state.seats.some(seat=>seat.id===seatId&&!seat.isBot)?`${baseDetail} · STREAK ${state.missionStreak}${state.missionStreakBonusAward?` (+${state.missionStreakBonusAward})`:''}`:baseDetail
+  return {missions,title,detail,failed,risk:missions.some(m=>m.negative),intro:count===1?'Complete the objective for bonus points':count===2?'Complete both → COMBO +5–7':'Complete 2 → COMBO +5–7 · all 3 → SUPER COMBO +10–15'}
 }

@@ -19,8 +19,8 @@
 import { Server } from 'socket.io'
 import { finishSpectatorBroadcast, publishSpectatorEvent } from '../spectator/spectatorRuntime'
 import { dealCards } from './cardEngine'
-import { evaluateHand, compareHands, handRankLabel, HandResult } from './handEvaluator'
-import { checkFoul, PlayerArrangement, CommunityCards } from './foulChecker'
+import { evaluateBestFive, evaluateHand, compareHands, handRankLabel, HandResult } from './handEvaluator'
+import { checkFoul, checkTierCFoul, PlayerArrangement, CommunityCards } from './foulChecker'
 import { aiDecideArrangement, AIConfig, AIPersonality, AI_CONFIGS, FOUR_GODS, greedyArrangement, pickRandomMinions } from './aiEngine'
 import { Card } from './deck'
 import { gameConfig, getAutoSortFee } from '../config/gameConfig'
@@ -37,6 +37,8 @@ import { getAscendantStatus } from './crownVaultService'
 import { economyService } from '../economy/economyService'
 import { resolveNpcPoolKey, type ResolveNpcPoolContext } from '../economy/npcPoolResolver'
 import type { AccountRef } from '../economy/economyTypes'
+import { allocatePotByScore, generateTierCPlusMissions, missionStreakBonus, scoreTierCPlusRound, type TierCPlusScore } from './tierCPlusScoring'
+import { missionResult, type Mission } from './leagueGameplay'
 
 // ── Local copies of small pure helpers (ตั้งใจ duplicate จาก gameLoop.ts แทนการ import
 //    เพื่อไม่ให้ engine ใหม่นี้ผูกกับการแก้ไขไฟล์เดิมในอนาคต — ของเดิมพิสูจน์แล้วว่าถูกต้อง) ──
@@ -56,8 +58,8 @@ function resolvePile(
   let winnerId = ''
   for (const [pid, arr] of Object.entries(arrangements)) {
     if (fouled[pid]) continue
-    const pileCards = pileNum === 1 ? arr.pile1 : pileNum === 2 ? arr.pile2 : arr.pile3.slice(0, 3)
-    const hand = evaluateHand([...pileCards, ...row])
+    const pileCards = pileNum === 1 ? arr.pile1 : pileNum === 2 ? arr.pile2 : arr.pile3
+    const hand = pileNum === 1 ? evaluateHand([...pileCards, ...row]) : evaluateBestFive([...pileCards, ...row])
     if (hand.score > bestScore) { bestScore = hand.score; winnerId = pid }
   }
   return winnerId
@@ -114,25 +116,6 @@ function revealWinnerOnly(
     result[pid] = pile.map(cardKey)
   }
   return result
-}
-
-function bestThreeFromHand(hand: Card[], community3: Card[]): { keep: Card[]; discard: Card[] } {
-  const n = hand.length
-  let bestScore = -Infinity
-  let bestKeepIdx: number[] = [0, 1, 2]
-  const combo = (start: number, chosen: number[]) => {
-    if (chosen.length === 3) {
-      const keepCards = chosen.map(i => hand[i])
-      const hand5 = evaluateHand([...keepCards, ...community3])
-      if (hand5.score > bestScore) { bestScore = hand5.score; bestKeepIdx = [...chosen] }
-      return
-    }
-    for (let i = start; i < n; i++) combo(i + 1, [...chosen, i])
-  }
-  combo(0, [])
-  const keep = bestKeepIdx.map(i => hand[i])
-  const discard = hand.filter((_, i) => !bestKeepIdx.includes(i))
-  return { keep, discard }
 }
 
 function delay(ms: number): Promise<void> {
@@ -219,6 +202,9 @@ export interface HNMatchState {
   afkPlayers: Record<string, { disconnectedAt: number; graceTimer: NodeJS.Timeout }>
   /** Server-authoritative: charge Auto Sort at most once per player per round. */
   autoSortUsed: Record<string, boolean>
+  missions?:Mission[]
+  roundScores?:Record<string,TierCPlusScore>
+  missionStreaks?:Record<string,number>
 }
 
 const hnMatchStates = new Map<string, HNMatchState>()
@@ -535,7 +521,7 @@ export async function startHighNobleMultiMatch(
     return { id: `AI_FILL_${i}`, role, isHuman: false, name: FILLER_NAMES[p].name, emoji: FILLER_NAMES[p].emoji, personality: p, aiConfigId: realConfig.id }
   }) as [HNSeat, HNSeat, HNSeat, HNSeat]
 
-  const totalRounds = 5
+  const totalRounds = 3
   const buyInAmount = gameConfig.buyIn.highNoble
   const tokenBalance: Record<string, number> = {}
   const escrowIds: Record<string, string> = {}
@@ -619,6 +605,7 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
   state.grandFinale = undefined
   state.resolvedPileCount = 0
   state.autoSortUsed = {}
+  state.missions=generateTierCPlusMissions('highNoble')
 
   const dealt = dealCards()
   const playerIds = state.seats.map(s => s.id)
@@ -651,11 +638,11 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
   // AI/Boss ตัดสินใจจัดไพ่ทันที — Minion (§6.1) ใช้ greedyArrangement เสมอ ไม่ผ่าน personality dispatch
   aiSeats(state).forEach(seat => {
     if (seat.isMinion) {
-      state.arrangements![seat.id] = greedyArrangement(cardsMap[seat.id], community)
+      state.arrangements![seat.id] = greedyArrangement(cardsMap[seat.id], community, state.missions)
       return
     }
     const config: AIConfig = { id: seat.id, name: seat.name, emoji: seat.emoji, personality: seat.personality! }
-    state.arrangements![seat.id] = aiDecideArrangement(config, cardsMap[seat.id], community, state.roundNumber, 'highNoble', 0)
+    state.arrangements![seat.id] = aiDecideArrangement(config, cardsMap[seat.id], community, state.roundNumber, 'highNoble', 0, state.missions)
   })
 
   const timer = gameConfig.arrangementTimer.highNoble
@@ -678,6 +665,7 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
       autoSortFee: getAutoSortFee('highNoble'),
       timer,
       cardZones: buildHNCardZones(state),
+      missions:state.missions,
       ...(state.roundNumber === 1 ? { buyInAmount: state.buyInAmount } : {}),
     })
   })
@@ -736,7 +724,7 @@ function naiveArrangeR1(state: HNMatchState, seatId: string): void {
 function naiveArrangeR2(state: HNMatchState, seatId: string): void {
   const arr = state.arrangements![seatId]
   const won = state.auctionWonCards![seatId]
-  state.arrangements![seatId] = won ? { pile1: arr.pile1, pile2: arr.pile2, pile3: [...arr.pile3, won] } : arr
+  state.arrangements![seatId] = won ? { pile1: arr.pile1, pile2: [...arr.pile2, won], pile3: arr.pile3 } : arr
 }
 
 function naiveDiscard(state: HNMatchState, seatId: string): void {
@@ -744,7 +732,7 @@ function naiveDiscard(state: HNMatchState, seatId: string): void {
   const trim = (pile: Card[]) => pile.length > 3 ? pile.slice(0, 3) : pile
   const finalArr: PlayerArrangement = { pile1: trim(arr.pile1), pile2: trim(arr.pile2), pile3: trim(arr.pile3) }
   state.arrangements![seatId] = finalArr
-  const foul = checkFoul(finalArr, state.community!)
+  const foul = checkTierCFoul(finalArr, state.community!)
   state.foulMap![seatId] = foul.isFoul
   if (foul.isFoul && foul.reason) state.foulReasons![seatId] = foul.reason
   state.finalPile3![seatId] = finalArr.pile3
@@ -878,11 +866,11 @@ function startHNArrangementRound2(io: Server, roomId: string): void {
     if (!state.auctionWonCards![seat.id]) return
     const fullHand = [...state.cardsMap![seat.id], state.auctionWonCards![seat.id]]
     if (seat.isMinion) {
-      state.arrangements![seat.id] = greedyArrangement(fullHand, state.community!)
+      const proposed=greedyArrangement(fullHand, state.community!,state.missions);state.arrangements![seat.id]={pile1:proposed.pile1,pile2:[...proposed.pile2,...proposed.pile3.slice(5)],pile3:proposed.pile3.slice(0,5)}
       return
     }
     const config: AIConfig = { id: seat.id, name: seat.name, emoji: seat.emoji, personality: seat.personality! }
-    state.arrangements![seat.id] = aiDecideArrangement(config, fullHand, state.community!, state.roundNumber, 'highNoble', 0)
+    const proposed=aiDecideArrangement(config, fullHand, state.community!, state.roundNumber, 'highNoble', 0,state.missions);state.arrangements![seat.id]={pile1:proposed.pile1,pile2:[...proposed.pile2,...proposed.pile3.slice(5)],pile3:proposed.pile3.slice(0,5)}
   })
   emitHNCardZones(io, state)
 
@@ -903,6 +891,10 @@ export async function submitHNArrangementRound2(
 ): Promise<{ ok: boolean; reason?: string }> {
   const state = hnMatchStates.get(roomId)
   if (!state || state.phase !== 'arrangement_2') return { ok: false, reason: 'not_in_arrangement_2' }
+  const held=[...(state.cardsMap?.[userId] ?? []), ...(state.auctionWonCards?.[userId] ? [state.auctionWonCards[userId]] : [])]
+  const submitted=[...arrangement.pile1,...arrangement.pile2,...arrangement.pile3]
+  const expectedPile2=held.length-8
+  if(arrangement.pile1.length!==3||arrangement.pile2.length!==expectedPile2||arrangement.pile3.length!==5||submitted.length!==held.length||submitted.map(cardKey).sort().some((key,index)=>key!==held.map(cardKey).sort()[index]))return {ok:false,reason:'post_auction_arrangement_must_be_3_remaining_5'}
   state.arrangements![userId] = arrangement
   state.submittedArrangement.add(userId)
   if (allHumansSubmitted(state, state.submittedArrangement)) {
@@ -930,72 +922,31 @@ async function resolveHNArrangementRound2Timeout(io: Server, roomId: string): Pr
 function startHNDiscardPhase(io: Server, roomId: string): void {
   const state = hnMatchStates.get(roomId)
   if (!state) return
+  // Compatibility name only: the post-auction arrangement is now final.  No
+  // player or bot discards cards; Auction cards are placed in Pile 2 and that
+  // pile is evaluated as Best 5 from its real size plus community cards.
   state.phase = 'discard'
-  state.submittedDiscard = new Set()
-  const community3 = state.community!.row3
-
   aiSeats(state).forEach(seat => {
     const arr = state.arrangements![seat.id]
-    const { keep } = bestThreeFromHand([...arr.pile3], community3)
-    const finalArr: PlayerArrangement = { pile1: arr.pile1, pile2: arr.pile2, pile3: keep }
-    state.finalPile3![seat.id] = keep
-    const foul = checkFoul(finalArr, state.community!)
+    state.finalPile3![seat.id] = [...arr.pile3]
+    const foul = checkTierCFoul(arr, state.community!)
     state.foulMap![seat.id] = foul.isFoul
     if (foul.isFoul && foul.reason) state.foulReasons![seat.id] = foul.reason
-    state.arrangements![seat.id] = finalArr
   })
-  emitHNCardZones(io, state)
-
-  // Patch v1.2 (2026-07-24): ย้ายจาก literal 20000 hardcode มา gameConfig.discardTimer — ค่าเท่าเดิม (20s)
-  const discardTimeoutMs = (gameConfig.discardTimer.highNoble ?? 20) * 1000
-
   humanSeats(state).forEach(seat => {
     const arr = state.arrangements![seat.id]
-    io.to(seat.id).emit('discard_phase_start_highnoble', {
-      roomId,
-      pile1: arr.pile1.map(cardKey), pile2: arr.pile2.map(cardKey), pile3: arr.pile3.map(cardKey),
-      needDiscard: {
-        pile1: Math.max(0, arr.pile1.length - 3),
-        pile2: Math.max(0, arr.pile2.length - 3),
-        pile3: Math.max(0, arr.pile3.length - 3),
-      },
-      decisionTimeMs: discardTimeoutMs,
-    })
+    state.finalPile3![seat.id] = [...arr.pile3]
+    const foul=checkTierCFoul(arr,state.community!);state.foulMap![seat.id]=foul.isFoul
+    if(foul.reason)state.foulReasons![seat.id]=foul.reason;else delete state.foulReasons![seat.id]
   })
-
-  const timeoutId = setTimeout(() => resolveHNDiscardTimeout(io, roomId), discardTimeoutMs)
-  ;(state as any)._discardTimeoutId = timeoutId
+  void resolveHNDiscardComplete(io, roomId).catch(error => console.error('[HN] final arrangement resolve failed', error))
 }
 
 export function submitHNDiscard(io: Server, roomId: string, userId: string, keepKeys: string[]): { ok: boolean; reason?: string } {
   const state = hnMatchStates.get(roomId)
   if (!state || state.phase !== 'discard') return { ok: false, reason: 'not_in_discard' }
-  if (keepKeys.length !== 9) return { ok: false, reason: 'must_keep_exactly_9' }
-
-  const arr = state.arrangements![userId]
-  const newPile1 = arr.pile1.filter(c => keepKeys.includes(cardKey(c)))
-  const newPile2 = arr.pile2.filter(c => keepKeys.includes(cardKey(c)))
-  const newPile3 = arr.pile3.filter(c => keepKeys.includes(cardKey(c)))
-  if (newPile1.length !== 3 || newPile2.length !== 3 || newPile3.length !== 3) {
-    return { ok: false, reason: 'invalid_pile_distribution' }
-  }
-  const finalArrangement: PlayerArrangement = { pile1: newPile1, pile2: newPile2, pile3: newPile3 }
-  state.arrangements![userId] = finalArrangement
-
-  const foul = checkFoul(finalArrangement, state.community!)
-  state.foulMap![userId] = foul.isFoul
-  if (foul.isFoul && foul.reason) state.foulReasons![userId] = foul.reason
-  else delete state.foulReasons![userId]
-
-  state.finalPile3![userId] = newPile3
-  state.submittedDiscard.add(userId)
-  emitHNCardZones(io, state)
-
-  if (allHumansSubmitted(state, state.submittedDiscard)) {
-    if ((state as any)._discardTimeoutId) clearTimeout((state as any)._discardTimeoutId)
-    resolveHNDiscardComplete(io, roomId).catch(err => console.error('[HN] resolveHNDiscardComplete error:', err))
-  }
-  return { ok: true }
+  // The compatibility phase is never a player decision in the Best-5 ruleset.
+  return { ok: false, reason: 'discard_not_supported' }
 }
 
 async function resolveHNDiscardTimeout(io: Server, roomId: string): Promise<void> {
@@ -1003,8 +954,12 @@ async function resolveHNDiscardTimeout(io: Server, roomId: string): Promise<void
   if (!state || state.phase !== 'discard') return
   humanSeats(state).forEach(seat => {
     if (state.submittedDiscard.has(seat.id)) return
-    // หมดเวลา — ทิ้งใบสุดท้ายของแต่ละกองอัตโนมัติ (ตรงกับ single-player)
-    naiveDiscard(state, seat.id)
+    const arrangement = state.arrangements![seat.id]
+    state.finalPile3![seat.id] = [...arrangement.pile3]
+    const foul = checkTierCFoul(arrangement, state.community!)
+    state.foulMap![seat.id] = foul.isFoul
+    if (foul.reason) state.foulReasons![seat.id] = foul.reason
+    else delete state.foulReasons![seat.id]
   })
   await resolveHNDiscardComplete(io, roomId)
 }
@@ -1033,6 +988,8 @@ async function resolveHNDiscardComplete(io: Server, roomId: string): Promise<voi
   io.to(roomId).emit('pile_reveal', {
     roomId, pileNumber: 1, winner: pile1Winner,
     winnerHandRank: hand1 ? handRankLabel(hand1) : '',
+    winnerBestFive: pile1Winner ? [...allArrangements[pile1Winner].pile1, ...state.community!.row1].map(cardKey) : [],
+    communityCards: state.community!.row1.map(cardKey),
     arrangements: revealWinnerOnly(allArrangements, 1, pile1Winner),
     fouled: state.foulMap, foulReasons: state.foulReasons,
   })
@@ -1047,12 +1004,14 @@ async function resolveHNDiscardComplete(io: Server, roomId: string): Promise<voi
   await delay(revealTime)
 
   const pile2Winner = resolvePile(2, allArrangements, state.community!, state.foulMap!)
-  const hand2 = pile2Winner ? evaluateHand([...allArrangements[pile2Winner].pile2, ...state.community!.row2]) : null
+  const hand2 = pile2Winner ? evaluateBestFive([...allArrangements[pile2Winner].pile2, ...state.community!.row2]) : null
   state.resolvedPileCount = 2
   emitHNCardZones(io, state)
   io.to(roomId).emit('pile_reveal', {
     roomId, pileNumber: 2, winner: pile2Winner,
     winnerHandRank: hand2 ? handRankLabel(hand2) : '',
+    winnerBestFive: hand2?.bestFive.map(cardKey) ?? [],
+    communityCards: state.community!.row2.map(cardKey),
     arrangements: revealWinnerOnly(allArrangements, 2, pile2Winner),
     fouled: state.foulMap, foulReasons: state.foulReasons,
   })
@@ -1061,7 +1020,7 @@ async function resolveHNDiscardComplete(io: Server, roomId: string): Promise<voi
   humanSeats(state).forEach(seat => {
     if (state.foulMap![seat.id]) return
     const cards2 = [...allArrangements[seat.id].pile2, ...state.community!.row2]
-    trackBestHandLive(state, seat.id, evaluateHand(cards2), cards2, 2, pile2Winner === seat.id)
+    trackBestHandLive(state, seat.id, evaluateBestFive(cards2), cards2, 2, pile2Winner === seat.id)
   })
   await delay(revealTime)
 
@@ -1187,8 +1146,8 @@ export function estimateHNWinrate(state: HNMatchState, bossId: string): number {
   if (!gf) return 0.5
 
   const myHand = finalPile3[bossId] ?? []
-  if (myHand.length !== 3) return 0
-  const myResult = evaluateHand([...myHand, ...community.row3])
+  if (myHand.length !== 5) return 0
+  const myResult = evaluateBestFive([...myHand, ...community.row3])
 
   const cardId = (c: Card) => `${c.rank}_${c.suit}`
   const seen = new Set<string>()
@@ -1216,9 +1175,44 @@ export function estimateHNWinrate(state: HNMatchState, bossId: string): number {
     const id = `${r}_${s}`
     if (!seen.has(id)) unseen.push({ rank: r, suit: s, value: VALUE[r] })
   }
+  // Search dangerous high cards first so common straight-flush/quads threats are
+  // found without blocking the game loop. If the bounded proof cannot exhaust
+  // the legal range, the result remains conservative (not guaranteed).
+  unseen.sort((a, b) => b.value - a.value || a.suit.localeCompare(b.suit))
 
   const opponents = gf.turnOrder.filter(pid => pid !== bossId && !gf.foldedPlayers.includes(pid))
   if (opponents.length === 0) return 1.0
+
+  // Return true when at least one hand made only from legally visible revealed
+  // cards plus the unseen-card range can tie or beat the boss.  Do not inspect
+  // finalPile3 for an opponent: that map contains authoritative hidden cards and
+  // is reserved for reveal/settlement.  Enumerating completions is deliberately
+  // conservative — a win is guaranteed only when every legal completion loses.
+  const canAvoidLossWithUnseen = (revealed: Card[]): boolean => {
+    const need = 5 - revealed.length
+    if (need < 0 || need > unseen.length) return true
+    const chosen: Card[] = []
+    let examined = 0
+    const MAX_EXACT_COMPLETIONS = 25_000
+    const search = (start: number): boolean => {
+      if (chosen.length === need) {
+        examined++
+        // Exhaustion cannot be interpreted as a guaranteed win. Conservatively
+        // retain the opponent as capable of tying/beating us.
+        if (examined > MAX_EXACT_COMPLETIONS) return true
+        const result = evaluateBestFive([...revealed, ...chosen, ...community.row3])
+        return compareHands(result, myResult) >= 0
+      }
+      const remaining = need - chosen.length
+      for (let index = start; index <= unseen.length - remaining; index++) {
+        chosen.push(unseen[index])
+        if (search(index + 1)) return true
+        chosen.pop()
+      }
+      return false
+    }
+    return search(0)
+  }
 
   let opponentsBeatMe = 0
   for (const oppId of opponents) {
@@ -1227,21 +1221,16 @@ export function estimateHNWinrate(state: HNMatchState, bossId: string): number {
     // spot without reading any losing player's private arrangement.
     if (state.pendingPile12?.pile2Winner === oppId) {
       const pile2 = state.pendingPile12.allArrangements[oppId]?.pile2 ?? []
-      if (pile2.length === 3) {
-        const lowerBound = evaluateHand([...pile2, ...community.row2])
-        if (compareHands(lowerBound, myResult) > 0) {
+      if (pile2.length >= 3) {
+        const lowerBound = evaluateBestFive([...pile2, ...community.row2])
+        if (compareHands(lowerBound, myResult) >= 0) {
           opponentsBeatMe++
           continue
         }
       }
     }
     const revealed = gf.revealedCards[oppId] ?? []
-    const need = 3 - revealed.length
-    const dangerCards = [...unseen].sort((a, b) => b.value - a.value).slice(0, need)
-    const bestOppHand = [...revealed, ...dangerCards]
-    if (bestOppHand.length !== 3) continue
-    const oppResult = evaluateHand([...bestOppHand, ...community.row3])
-    if (compareHands(oppResult, myResult) > 0) opponentsBeatMe++
+    if (canAvoidLossWithUnseen(revealed)) opponentsBeatMe++
   }
   const safeOpponents = opponents.length - opponentsBeatMe
   return safeOpponents / opponents.length
@@ -1250,8 +1239,8 @@ export function estimateHNWinrate(state: HNMatchState, bossId: string): number {
 function decideHNAIGrandFinaleAction(state: HNMatchState, aiId: string): 'call' | 'fold' {
   const community3 = state.community!.row3
   const hand3 = (state.finalPile3 ?? {})[aiId] ?? []
-  if (hand3.length !== 3) return 'fold'
-  const result = evaluateHand([...hand3, ...community3])
+  if (hand3.length !== 5) return 'fold'
+  const result = evaluateBestFive([...hand3, ...community3])
   let callProb: number
   if (result.rankIndex >= 3) callProb = 0.99
   else if (result.rankIndex === 2) callProb = 0.90
@@ -1356,7 +1345,7 @@ function resolveHNGrandFinaleShowdown(io: Server, roomId: string, stillIn: strin
   stillIn.forEach(pid => {
     const hand = (state.finalPile3 ?? {})[pid] ?? []
     reveals[pid] = hand.map(cardKey)
-    const result = evaluateHand([...hand, ...community3])
+    const result = evaluateBestFive([...hand, ...community3])
     if (!bestHand || compareHands(result, bestHand) > 0) { bestHand = result; bestId = pid }
   })
 
@@ -1470,9 +1459,9 @@ function finalizeHNGrandFinale(
   const community3ForStats = state.community!.row3
   humanSeats(state).forEach(seat => {
     const pile3Cards = (state.finalPile3 ?? {})[seat.id]
-    if (pile3Cards && pile3Cards.length === 3) {
+    if (pile3Cards && pile3Cards.length === 5) {
       const hand3Cards = [...pile3Cards, ...community3ForStats]
-      trackBestHandLive(state, seat.id, evaluateHand(hand3Cards), hand3Cards, 3, winnerId === seat.id)
+      trackBestHandLive(state, seat.id, evaluateBestFive(hand3Cards), hand3Cards, 3, winnerId === seat.id)
     }
   })
   if (jackpotWinner) {
@@ -1489,6 +1478,26 @@ function finalizeHNGrandFinale(
     jackpotRake = Math.floor(jackpotSubtotal * rake)
     deltas[jackpotWinner] += (jackpotBonus - jackpotRake)
     allPlayerIds.forEach(id => { if (id !== jackpotWinner) deltas[id] += -stakes.pile3 })
+  }
+
+  // Tier C++ replaces winner-takes-pot and the old Token jackpot with a
+  // Canonical Tier C+ score share. Triple Sweep contributes +12 on G3 only.
+  if(pendingP12&&state.arrangements&&state.community){
+    const scoringArrangements=Object.fromEntries(allPlayerIds.map(id=>[id,{...state.arrangements![id],pile3:state.finalPile3?.[id]??state.arrangements![id].pile3}]))
+    const hands=Object.fromEntries(allPlayerIds.map(id=>[id,[
+      evaluateHand([...scoringArrangements[id].pile1,...state.community!.row1]).rank,
+      evaluateBestFive([...scoringArrangements[id].pile2,...state.community!.row2]).rank,
+      evaluateBestFive([...scoringArrangements[id].pile3,...state.community!.row3]).rank,
+    ] as readonly [string,string,string]]))
+    const scoring=scoreTierCPlusRound({playerIds:allPlayerIds,winners:[pendingP12.pile1Winner,pendingP12.pile2Winner,(winnerId&&!burned)?winnerId:''],hands,missions:state.missions??generateTierCPlusMissions('highNoble'),fouled:Object.fromEntries(foulPlayers.map(id=>[id,true]))})
+    state.missionStreaks??={}
+    humanSeats(state).forEach(seat=>{if(foulPlayers.includes(seat.id)){state.missionStreaks![seat.id]=0;return}const streak=missionStreakBonus((state.missions??[]).map(m=>missionResult(m,hands[seat.id][m.pile-1] as any).complete),state.missionStreaks![seat.id]);state.missionStreaks![seat.id]=streak.streak;scoring[seat.id].streakBonus=streak.bonus;scoring[seat.id].total+=streak.bonus})
+    state.roundScores=scoring
+    const grossPots=[stakes.pile1*allPlayerIds.length,stakes.pile2*allPlayerIds.length,pile3Pot]
+    const shares=Object.fromEntries(allPlayerIds.map(id=>[id,0])) as Record<string,number>
+    grossPots.forEach((pot,k)=>{const split=allocatePotByScore(pot,Object.fromEntries(allPlayerIds.map(id=>[id,scoring[id].piles[k].finalPileScore])),allPlayerIds);allPlayerIds.forEach(id=>shares[id]+=split[id])})
+    allPlayerIds.forEach(id=>{deltas[id]=-(stakes.pile1+stakes.pile2+stakes.pile3)+shares[id]})
+    jackpotWinner=null;jackpotBonus=0;jackpotRake=0
   }
 
   allPlayerIds.forEach(id => {
@@ -1508,6 +1517,7 @@ function finalizeHNGrandFinale(
     jackpotWinner, jackpotBonus, jackpotRake,
     tokenBalance: state.tokenBalance,
     tokenDeltas: deltas,
+    missions:state.missions,scoring:state.roundScores,
   })
   const winnerSeatIndex = winnerId ? state.seats.findIndex(s => s.id === winnerId) : -1
   publishSpectatorEvent(roomId, { type: 'PILE_RESULT', pile: 3, winnerSeats: winnerSeatIndex >= 0 ? [winnerSeatIndex] : [] })

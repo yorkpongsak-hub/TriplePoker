@@ -1,4 +1,4 @@
-import { bestArenaArrangement, checkArenaFoul, validateArenaPartition, ArenaArrangement } from '../../src/arena/arrangement/arenaArrangement'
+import { bestArenaArrangement, checkArenaFoul, evaluatePileBest, validateArenaPartition, ArenaArrangement } from '../../src/arena/arrangement/arenaArrangement'
 import { arenaCardKey, createArenaDeck, createSeededRandom, shuffleArenaDeck, ArenaCard, ArenaStandardCard } from '../../src/arena/cards/arenaDeck'
 
 const deck = createArenaDeck()
@@ -7,6 +7,13 @@ function find(rank: string, suit: string): ArenaStandardCard {
   if (!card) throw new Error(`card not found: ${rank} of ${suit}`)
   return card
 }
+
+test('Arena G3 evaluates all C(7,5)=21 choices and may exclude both community cards',()=>{
+  const privateRoyal=['A','K','Q','J','10'].map(rank=>find(rank,'spades'))
+  const result=evaluatePileBest(privateRoyal,[find('2','hearts'),find('4','diamonds')])
+  expect(result.rank).toBe('royal_flush')
+  expect(result.selectedCardIds.sort()).toEqual(privateRoyal.map(card=>card.id).sort())
+})
 
 describe('validateArenaPartition', () => {
   const heldCards = ['A_spades', 'K_spades', 'Q_spades', '2_spades', '3_spades', '4_spades', '5_spades', '6_spades', '7_spades', '8_spades', '9_spades']
@@ -81,12 +88,13 @@ describe('bestArenaArrangement', () => {
     }
   })
 
-  test('แบ่งไพ่ 12 ใบ (ก่อน Discard) ได้ pile3 = 6 ใบ ผ่าน validateArenaPartition', () => {
+  test('แบ่งไพ่ 12 ใบหลัง Auction เป็น 3/4/5 โดย Pile 2 รับไพ่เกิน', () => {
     const shuffled = shuffleArenaDeck(createArenaDeck(), createSeededRandom(99))
     const cards = shuffled.slice(0, 12)
     const community = { pile1: shuffled.slice(12, 14), pile2: shuffled.slice(14, 16), pile3: shuffled.slice(16, 18) }
     const arrangement = bestArenaArrangement(cards, community)
-    expect(arrangement.pile3).toHaveLength(6)
+    expect(arrangement.pile2).toHaveLength(4)
+    expect(arrangement.pile3).toHaveLength(5)
     const heldIds = new Set(cards.map(c => arenaCardKey(c)))
     expect(validateArenaPartition(arrangement, heldIds)).toEqual({ ok: true })
   })

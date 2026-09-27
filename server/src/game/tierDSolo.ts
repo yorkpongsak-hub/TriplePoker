@@ -3,7 +3,8 @@ import { assertCardZones, evaluateSharedPile, isSharedArrangementFoul } from './
 import { createDeck, shuffleDeck, type Card } from './deck'
 import { compareHands, evaluateBestFive, evaluateSoloG2BestFive, type BestFiveResult } from './handEvaluator'
 import { TIER_D_PILE_BASE_SCORES, getCurrentLeague, tierDBotCountForLevel, type LeagueId } from './tierDLeague'
-import { comboBonus, generateMissions, generateOpenChallenge, missionResult, pileWinScore, type Mission, type OpenChallenge } from './leagueGameplay'
+import { comboBonus, comboKind, generateMissions, generateOpenChallenge, missionResult, pileWinScore, type Mission, type OpenChallenge } from './leagueGameplay'
+import { missionStreakBonus } from './tierCPlusScoring'
 import { TIER_D_RISE_SOLO_PERSONALITIES, TIER_D_RISE_SOLO_SEAT_PERSONALITIES, tierDRiseCandidateFraction, tierDRiseVisiblePileWeights, type TierDRiseSoloPersonality, type TierDRiseVisibleContext } from './tierDRiseSoloPersonality'
 import { createTierDDuelState, tierDDuelActive, tierDDuelRoster, tierDInitialHandStrength, type TierDDuelState } from './tierDRiseDuel'
 import { selectTierDRiseSuperCombo, type TierDRiseSuperComboId, type TierDRiseSuperComboDifficulty } from './tierDRiseSuperCombo'
@@ -80,6 +81,8 @@ export interface TierDLevelState {
   /** Shared and visible from deal time; never changes for this Match. */
   comboBotId?: string
   comboBonuses?: Record<string, number>
+  missionStreak?: number
+  missionStreakBonusAward?: number
   missions: Mission[]
   openChallenge?: OpenChallenge
   /** Rise Lv.1000+ replaces Open Challenge with three locked 1v1 Duels. */
@@ -285,8 +288,12 @@ export function resolveTierDGame(level: TierDLevelState, gameNumber: TierDGameNu
   if (game.resolved) throw new Error('Tier D game already resolved')
   const duelOpponentId=level.duel?.order[level.duel.current]?.id
   const eligible = level.seats.filter(seat => !level.fouled[seat.id] && (!duelOpponentId || !seat.isBot || seat.id===duelOpponentId))
+  // A Rise Duel is strictly 1v1. Defeated opponents keep their physical cards
+  // for ownership conservation but no longer have an active arrangement and
+  // must not be evaluated or included in a later Duel reveal.
+  const evaluatedSeats = duelOpponentId ? eligible : level.seats
   const hands: Record<string, BestFiveResult> = {}
-  for (const seat of level.seats) {
+  for (const seat of evaluatedSeats) {
     hands[seat.id] = game.game === 2
       ? evaluateSoloG2BestFive(game.hands[seat.id], game.communityCards, game.auctionCards[seat.id])
       : evaluateBestFive([...game.hands[seat.id], ...game.communityCards])
@@ -306,7 +313,7 @@ export function resolveTierDGame(level: TierDLevelState, gameNumber: TierDGameNu
   const mission = level.missions.find(entry => entry.pile === gameNumber)
   const missionScores = Object.fromEntries(level.seats.map(seat => [seat.id, 0])) as Record<string, number>
   const missionPenalties = Object.fromEntries(level.seats.map(seat => [seat.id, 0])) as Record<string, number>
-  if (mission) for (const seat of level.seats.filter(seat => !seat.isBot || tierDAiMissionsEnabled(level.level))) {
+  if (mission) for (const seat of evaluatedSeats.filter(seat => !seat.isBot || tierDAiMissionsEnabled(level.level))) {
     const result = missionResult(mission, hands[seat.id].rank)
     missionScores[seat.id] = result.score; missionPenalties[seat.id] = result.penalty
     if (eligible.some(candidate => candidate.id === seat.id)) level.scores[seat.id] += result.score + result.penalty
@@ -328,8 +335,10 @@ export function commitTierDCombo(level: TierDLevelState, random: () => number = 
   if (level.comboBonuses) return level.comboBonuses
   const bonuses = Object.fromEntries(level.seats.map(seat => [seat.id, 0])) as Record<string, number>
   if (level.missions.length < 2 || level.missions.some(mission => mission.pile > committedThrough || !level.gameResults.some(result => result.game === mission.pile))) return bonuses
-  for (const seat of level.seats) {
-    if (level.fouled[seat.id]) continue
+  const duelOpponentId=level.duel?.order[level.duel.current]?.id
+  const comboSeats=duelOpponentId?level.seats.filter(seat=>!seat.isBot||seat.id===duelOpponentId):level.seats
+  for (const seat of comboSeats) {
+    if (level.fouled[seat.id]) { if(!seat.isBot){level.missionStreak=0;level.missionStreakBonusAward=0} continue }
     if (seat.isBot && !tierDAiMissionsEnabled(level.level)) continue
     const complete = level.missions.map(missionEntry => {
       const result = level.gameResults.find(gameResult => gameResult.game === missionEntry.pile)!
@@ -338,9 +347,20 @@ export function commitTierDCombo(level: TierDLevelState, random: () => number = 
     const bonus = comboBonus(level.missions, complete, random)
     bonuses[seat.id] = bonus
     level.scores[seat.id] += bonus
+    if(!seat.isBot){const streak=missionStreakBonus(complete,level.missionStreak);level.missionStreak=streak.streak;level.missionStreakBonusAward=streak.bonus;level.scores[seat.id]+=streak.bonus}
   }
   level.comboBonuses = bonuses
   return bonuses
+}
+
+/** Combo labels for seats actually evaluated in this Match/Duel. Eliminated
+ * Rise opponents intentionally have no hand rows in later Duel results. */
+export function tierDComboKinds(level: TierDLevelState): Record<string, 'COMBO' | 'SUPER_COMBO' | undefined> {
+  return Object.fromEntries(level.seats.map(seat => [seat.id, comboKind(level.missions.map(mission => {
+    const game = level.gameResults.find(result => result.game === mission.pile)
+    const hand = game?.hands[seat.id]
+    return !!game && !!hand && !game.fouled?.[seat.id] && missionResult(mission, hand.rank).complete
+  }))]))
 }
 
 /** Undo cancels the current provisional result without generating reverse VFX. */
@@ -437,7 +457,9 @@ export function arrangeTierDBot(cards: Card[], community: TierDCommunityPiles, s
   candidates.sort((a, b) => b.total - a.total)
   const boundedFraction = Math.min(1, Math.max(.01, candidateFraction))
   const window = Math.max(1, Math.ceil(candidates.length * boundedFraction))
-  const selected = candidates[Math.min(window - 1, Math.floor(random() * window))]
+  // Rise/Four Gods use the fully scored best legal plan. Personality remains
+  // encoded in utility weights; randomness must not discard an obvious made hand.
+  const selected = rise ? candidates[0] : candidates[Math.min(window - 1, Math.floor(random() * window))]
   if (rise && process.env.NODE_ENV === 'development') {
     const ranks = selected.hands.map(hand => hand.rank).join('/')
     console.debug(`[TIER_D_RISE_AI] personality=${rise.personality} reason=${riseDecisionReason(rise.personality, selected.hands, missions)} ranks=${ranks} pool=${window}/${candidates.length}`)

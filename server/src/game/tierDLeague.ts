@@ -28,9 +28,6 @@ const LEAGUES: readonly TierDLeagueDefinition[] = [
 ]
 
 export const TIER_D_PILE_BASE_SCORES = { 1: 4, 2: 6, 3: 8 } as const
-/** Each League opens with ten non-ranked warm-up Levels. */
-export const TIER_D_LEAGUE_REST_LEVELS = 10
-export const TIER_D_LEAGUE_COMPETITION_LEVELS = 20
 export function getCurrentLeague(level: number): TierDLeagueDefinition {
   assertLevel(level)
   return LEAGUES.find(league => level >= league.startLevel && (league.endLevel === null || level <= league.endLevel))!
@@ -41,15 +38,4 @@ export function hasHandMultiplier(level: number): boolean { return level >= 51 }
 export function hasMissions(level: number): boolean { return level >= 51 }
 export function isLeagueFinalLevel(level: number): boolean { return getCurrentLeague(level).trophyLevel === level }
 export function tierUnlockForLevel(level: number): TierUnlock | undefined { return isLeagueFinalLevel(level) ? getCurrentLeague(level).unlocksTier : undefined }
-export type TierDCompetitionWindow={leagueId:LeagueId;cycle:number;startLevel:number;endLevel:number}
-/** Competition alternates rest 10 / compete 20. The final round stays active even when a League has fewer than 20 Levels remaining. */
-export function getTierDCompetitionWindow(level:number):TierDCompetitionWindow|undefined{
-  const league=getCurrentLeague(level);const offset=level-league.startLevel;const period=TIER_D_LEAGUE_REST_LEVELS+TIER_D_LEAGUE_COMPETITION_LEVELS
-  const cycle=Math.floor(offset/period)+1;const startLevel=league.startLevel+(cycle-1)*period+TIER_D_LEAGUE_REST_LEVELS;const nominalEndLevel=startLevel+TIER_D_LEAGUE_COMPETITION_LEVELS-1
-  const endLevel=league.endLevel===null?nominalEndLevel:Math.min(nominalEndLevel,league.endLevel)
-  if(level<startLevel||level>endLevel)return undefined
-  return {leagueId:league.id,cycle,startLevel,endLevel}
-}
-export function isTierDLeagueCompetitionActive(level: number): boolean { return !!getTierDCompetitionWindow(level) }
-export function isTierDCompetitionFinalLevel(level:number):boolean{return getTierDCompetitionWindow(level)?.endLevel===level}
 function assertLevel(level: number): void { if (!Number.isInteger(level) || level < 1) throw new Error('Tier D level must be a positive integer') }

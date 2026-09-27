@@ -1,6 +1,8 @@
 import React, { useState } from 'react'
 import { Image, ImageBackground, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
+import { t } from '../../../src/i18n'
+import { useI18n } from '../../../src/i18n/store'
 
 type Props = { onComplete: () => void; onExit: () => void }
 
@@ -24,7 +26,7 @@ const SLIDES = [
       ['FULLY WILD', 'It may represent any rank and suit to build the strongest hand, except Five of a Kind.'],
       ['ANTE ×2', 'Double the ante of the chosen pile and force every opponent to match that ante.'],
       ['BEST 5 FROM 7', 'Pile 3 combines five arranged cards with two community cards, then ranks the strongest five-card hand.'],
-      ['BOTH COMMUNITY CARDS REQUIRED', 'Your final hand must always use both community cards. Choose the best three of your five arranged cards to complete a Straight, Flush, Full House, or Straight Flush.'],
+      ['BOTH COMMUNITY CARDS REQUIRED', '__AUCTION_PILE_2_RULE__'],
     ],
     joker: true,
   },
@@ -55,6 +57,7 @@ const SLIDES = [
 ] as const
 
 export default function ArenaWelcomeGuide({ onComplete, onExit }: Props) {
+  const locale = useI18n(state => state.locale)
   const [page, setPage] = useState(0)
   const { width } = useWindowDimensions()
   const slide = SLIDES[page]
@@ -83,9 +86,9 @@ export default function ArenaWelcomeGuide({ onComplete, onExit }: Props) {
           )}
           <View style={styles.rules}>
             {slide.bullets.map(([label, body], index) => (
-              <View key={label} style={styles.ruleRow}>
+                <View key={label} style={styles.ruleRow}>
                 <View style={styles.ruleNumber}><Text style={styles.ruleNumberText}>{String(index + 1).padStart(2, '0')}</Text></View>
-                <View style={styles.ruleCopy}><Text style={styles.ruleLabel}>{label}</Text><Text style={styles.ruleBody}>{body}</Text></View>
+                <View style={styles.ruleCopy}><Text style={styles.ruleLabel}>{label}</Text><Text style={styles.ruleBody}>{body === '__AUCTION_PILE_2_RULE__' ? t('game.auctionPile2Rule', {}, locale) : body}</Text></View>
               </View>
             ))}
           </View>

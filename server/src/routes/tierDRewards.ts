@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { supabase, supabaseAdmin } from '../config/supabase'
 import { claimTierDLevelAdBonus, claimTierDLevelReward, claimTierDRuntimeItemAd } from '../game/tierDRewardService'
 import type { TierDRewardItem } from '../game/tierDRewards'
-import { grantTierDSoloItemAd, reserveTierDSoloItemAd, restoreTierDSoloItemAd } from '../game/tierDSoloRuntime'
+import { grantTierDSoloItemAd, isTierDDuelSwapRefillEligible, reserveTierDSoloItemAd, restoreTierDSoloItemAd } from '../game/tierDSoloRuntime'
 import { markRewardedAdCompleted } from '../game/adPolicyService'
 import { adProvider } from '../game/adProvider'
 
@@ -62,7 +62,7 @@ export async function tierDRewardRoutes(app: FastifyInstance) {
     const previous=itemAdClaims.get(claimKey)
     if(previous) return reply.send({itemKey:previous.item,quantity:1,idempotent:true,matchOnly:false})
     const { data: profile }=await supabaseAdmin.from('users').select('vip_status').eq('user_id',data.user.id).maybeSingle()
-    if((profile?.vip_status??'none')!=='none') return reply.status(403).send({error:'FREE_MEMBERS_ONLY'})
+    if((profile?.vip_status??'none')!=='none'&&!isTierDDuelSwapRefillEligible(data.user.id,item)) return reply.status(403).send({error:'FREE_MEMBERS_ONLY'})
     if(!reserveTierDSoloItemAd(data.user.id,item)) return reply.status(409).send({error:'ITEM_AD_NOT_ELIGIBLE'})
     try {
       // This route is the explicit "selected item is empty" refill context.

@@ -130,8 +130,15 @@ export default function PileReveal({ result, myPlayerId, style }: PileRevealProp
             {result.isTie ? ' 🎲' : ''}
           </Text>
           <Text style={styles.handName}>{handName}</Text>
+          {result.scoring && (
+            <Text style={styles.scoreLine}>
+              Win {result.scoring.winScore} · Mission {result.scoring.missionScore}
+              {result.scoring.comboScore ? ` · Combo ${result.scoring.comboScore}` : ''}
+              {result.scoring.tripleSweepScore ? ` · Sweep ${result.scoring.tripleSweepScore}` : ''}
+              {'\n'}Score {result.scoring.finalPileScore} · Share {result.scoring.sharePercent.toFixed(1)}%
+            </Text>
+          )}
           <Text style={styles.payoutText}>+{result.payout} T</Text>
-          <Text style={styles.rakeText}>Rake: {result.rake} T</Text>
         </Animated.View>
       )}
     </Animated.View>
@@ -171,5 +178,5 @@ const styles = StyleSheet.create({
   winnerName: { color: COLORS.gold, fontSize: 16, fontWeight: '800' },
   handName:   { color: COLORS.textPrimary, fontSize: 12, marginTop: 2 },
   payoutText: { color: COLORS.winGreen, fontSize: 18, fontWeight: '900', marginTop: 4 },
-  rakeText:   { color: COLORS.textSecondary, fontSize: 10, marginTop: 2 },
+  scoreLine:  { color: COLORS.textSecondary, fontSize: 10, marginTop: 3, textAlign: 'center' },
 });

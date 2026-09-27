@@ -8,7 +8,7 @@
 // เดิม) จึงตัด 2 เทสที่เช็ค throw ออก (ดูท้ายไฟล์)
 
 import { firstValidArrangement } from '../../src/game/aiEngine';
-import { checkFoul, CommunityCards } from '../../src/game/foulChecker';
+import { checkTierCFoul, CommunityCards } from '../../src/game/foulChecker';
 import { Card } from '../../src/game/deck';
 
 // ─── Test Fixtures ────────────────────────────────────────────
@@ -52,7 +52,7 @@ describe('minionAI — first_valid strategy (firstValidArrangement)', () => {
   // ─── 1. Arrangement ผ่าน FoulChecker เสมอ ─────────────────
   it('should return an arrangement that passes FoulChecker', () => {
     const result = firstValidArrangement(mockCards, mockCommunity);
-    expect(checkFoul(result, mockCommunity).isFoul).toBe(false);
+    expect(checkTierCFoul(result, mockCommunity).isFoul).toBe(false);
   });
 
   // ─── 2. Pile sizes ถูกต้อง 3-3-5 ──────────────────────────
@@ -93,7 +93,7 @@ describe('minionAI — first_valid strategy (firstValidArrangement)', () => {
   it('should consistently return valid arrangements on repeated calls', () => {
     for (let i = 0; i < 20; i++) {
       const result = firstValidArrangement(mockCards, mockCommunity);
-      expect(checkFoul(result, mockCommunity).isFoul).toBe(false);
+      expect(checkTierCFoul(result, mockCommunity).isFoul).toBe(false);
     }
   });
 

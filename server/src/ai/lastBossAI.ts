@@ -23,8 +23,8 @@
 //   There is no retry-loss balancing or calendar-based handicap.
 // ============================================================
 
-import { checkFoul } from '../game/foulChecker';
-import { evaluateHand } from '../game/handEvaluator';
+import { checkTierCFoul } from '../game/foulChecker';
+import { evaluateBestFive, evaluateHand } from '../game/handEvaluator';
 import type { Card } from '../game/deck';
 import type { PlayerArrangement as Arrangement, CommunityCards } from '../game/foulChecker';
 
@@ -32,6 +32,7 @@ import type { PlayerArrangement as Arrangement, CommunityCards } from '../game/f
 const PILE1_SIZE         = 3;
 const PILE2_SIZE         = 3;
 const PILE3_SIZE         = 5;
+const isCanonicalFoul=(arr:Arrangement,community:CommunityCards)=>checkTierCFoul(arr,community).isFoul
 
 const DDE_POPULATION     = 20;
 const DDE_ITERATIONS     = 50;
@@ -124,7 +125,7 @@ function runDDE(
     // ─── Early Best Checkpoint ────────────────────────────
     if (iter === EARLY_CHECKPOINT_1 || iter === EARLY_CHECKPOINT_2) {
       const cand = chromosomeToArrangement(bestChrom, cards);
-      if (bestScore > earlyBestScore && !checkFoul(cand, community)) {
+      if (bestScore > earlyBestScore && !isCanonicalFoul(cand, community)) {
         earlyBest      = cand;
         earlyBestScore = bestScore;
       }
@@ -154,7 +155,7 @@ function runDDE(
 
       // Selection
       const trialArr   = chromosomeToArrangement(trial, cards);
-      if (checkFoul(trialArr, community)) {
+      if (isCanonicalFoul(trialArr, community)) {
         nextPop.push(population[i]);
         continue;
       }
@@ -180,7 +181,7 @@ function runDDE(
 
   // คืนผลลัพธ์
   const finalArr = chromosomeToArrangement(bestChrom, cards);
-  if (!checkFoul(finalArr, community)) return finalArr;
+  if (!isCanonicalFoul(finalArr, community)) return finalArr;
   if (earlyBest) return earlyBest;
   return fallbackArrange(cards, community);
 }
@@ -251,7 +252,7 @@ function runMCTS(
   }
 
   // คืนผลลัพธ์
-  if (!checkFoul(bestNode.arrangement, community)) return bestNode.arrangement;
+  if (!isCanonicalFoul(bestNode.arrangement, community)) return bestNode.arrangement;
   if (earlyBest) return earlyBest;
   return fallbackArrange(cards, community);
 }
@@ -318,7 +319,7 @@ function rollout(
       indices = applyFullPowerLock(indices, lock);
     }
     const arr = chromosomeToArrangement(indices, cards);
-    if (!checkFoul(arr, community)) return arr;
+    if (!isCanonicalFoul(arr, community)) return arr;
   }
 
   return null;
@@ -335,7 +336,7 @@ function fallbackArrange(cards: Card[], community: CommunityCards): Arrangement 
       pile2: s.slice(PILE1_SIZE, PILE1_SIZE + PILE2_SIZE),
       pile3: s.slice(PILE1_SIZE + PILE2_SIZE),
     };
-    if (!checkFoul(arr, community)) return arr;
+    if (!isCanonicalFoul(arr, community)) return arr;
   }
   throw new Error('fallbackArrange: ไม่พบ valid arrangement');
 }
@@ -363,7 +364,7 @@ function initPopulation(cards: Card[], community: CommunityCards): Chromosome[] 
   for (let i = 0; i < DDE_POPULATION; i++) {
     let indices = shuffleArray([...base]);
     for (let t = 0; t < 10 &&
-      checkFoul(chromosomeToArrangement(indices, cards), community); t++) {
+      isCanonicalFoul(chromosomeToArrangement(indices, cards), community); t++) {
       indices = shuffleArray([...base]);
     }
     pop.push(indices);
@@ -382,11 +383,11 @@ function chromosomeToArrangement(chromosome: Chromosome, cards: Card[]): Arrange
 
 /** scoreFitness — Total Hand Strength 3 Pile (Foul = -Infinity) */
 function scoreFitness(arr: Arrangement, community: CommunityCards): number {
-  if (checkFoul(arr, community)) return -Infinity;
+  if (isCanonicalFoul(arr, community)) return -Infinity;
   return (
     evaluateHand([...arr.pile1, ...community.row1]).score +
-    evaluateHand([...arr.pile2, ...community.row2]).score +
-    evaluateHand([...arr.pile3, ...community.row3]).score
+    evaluateBestFive([...arr.pile2, ...community.row2]).score +
+    evaluateBestFive([...arr.pile3, ...community.row3]).score
   );
 }
 

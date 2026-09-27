@@ -226,17 +226,13 @@ export class ArenaMatchEngine {
 
   // ใช้ arrangement ที่ล็อกแล้ว (FINAL_LOCK) ถ้ามี ไม่งั้น fallback ไปที่ arrangement ล่าสุดที่ส่ง (FINAL_ARRANGE)
   // เพราะ Joker declare เกิดก่อน FINAL_LOCK — ให้บอทประเมิน winrate ของกองเป้าหมายได้ทั้งสองจังหวะ
-  // ผู้ชนะประมูลมีกอง 3 ชั่วคราว 6 ใบ: ใบสุดท้ายเป็น discard slot บังคับ จึงตัดออกก่อน
-  // และเลือกไพ่ส่วนตัว 3 ใบที่ดีที่สุดร่วมกับ community ทั้ง 2 ใบเสมอ
+  // Auction cards are placed in Pile 2. Pile 2/Pile 3 each select their
+  // strongest five-card result from all private cards plus both community cards.
   pileHandFor(actorId: string, pile: 1 | 2 | 3): ArenaHandResult | null {
     const arrangement = this.lockedArrangements.get(actorId) ?? this.lastArrangement.get(actorId)
     if (!arrangement || !this.deal) return null
     const arrangedPileIds = pile === 1 ? arrangement.pile1 : pile === 2 ? arrangement.pile2 : arrangement.pile3
-    // For an auction winner, pile 3's last position is the mandatory discard.
-    // Choose exactly three of the five private cards and require both community cards.
-    const pileIds = pile === 3 && this.auctionWinnerIds.has(actorId) && arrangedPileIds.length === 6
-      ? arrangedPileIds.slice(0, 5)
-      : arrangedPileIds
+    const pileIds = arrangedPileIds
     const community = pile === 1 ? this.deal.community.pile1 : pile === 2 ? this.deal.community.pile2 : this.deal.community.pile3
     const cards = pileIds.map(id => this.dealCardsById.get(id)).filter((card): card is ArenaCard => !!card)
     if (cards.length !== pileIds.length) return null
@@ -491,20 +487,18 @@ export class ArenaMatchEngine {
       return this.transition('AUCTION_BLIND_RESULT', now)
     }
     if (this.phase === 'FINAL_ARRANGE' && this.allActorsActed()) {
-      // Materialize every pile-3 rank as soon as round-two arrangement closes.
-      // Auction winners are already evaluated with both community cards by pileHandFor;
-      // the sixth/final arranged card is reserved for mandatory discard.
+      // Materialize every final arrangement before the explicit lock.
       for (const actorId of this.actorIds) {
         if (!this.pileHandFor(actorId, 3)) throw new Error('ARENA_FINAL_ARRANGE_PILE3_RANK_UNAVAILABLE')
       }
-      if (!this.jokerOwnerId && this.deal!.community.pile3[1].kind !== 'JOKER') return this.enterDiscard(now)
+      if (!this.jokerOwnerId && this.deal!.community.pile3[1].kind !== 'JOKER') return this.transition('FINAL_LOCK', now)
       if (this.deal!.community.pile3[1].kind === 'JOKER') {
         this.jokerDeclaration = { mode: 'WILD', targetPile: 3, forcedWild: true, declaredAt: new Date(now).toISOString() }
-        return this.enterDiscard(now)
+        return this.transition('FINAL_LOCK', now)
       }
       return this.transition('JOKER_DECLARE', now)
     }
-    if (this.phase === 'JOKER_DECLARE' && this.jokerDeclaration) return this.enterDiscard(now)
+    if (this.phase === 'JOKER_DECLARE' && this.jokerDeclaration) return this.transition('FINAL_LOCK', now)
     if (this.phase === 'DISCARD' && this.pendingActors().length === 0) return this.transition('FINAL_LOCK', now)
     if (this.phase === 'AUCTION_FACE_UP_RESULT') return this.transition('AUCTION_BLIND', now)
     if (this.phase === 'AUCTION_BLIND_RESULT') return this.transition('REVEAL_PILE3_COMMUNITY_CARD_2', now)
