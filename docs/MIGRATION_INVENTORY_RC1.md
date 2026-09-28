@@ -8,7 +8,8 @@ Staging verification update: 2026-09-29
 - Never use a blind `supabase db push` against this project. It could attempt to replay historical files, including the prohibited manual-only `031` reset.
 - Read-only table, index and PostgREST OpenAPI inspection confirms the tables, columns and callable RPC signatures expected by `071`-`074` and `076`-`086` are present, subject to the trigger-only exception below.
 - `sync_tier_d_freeze_durations()` is intentionally absent from PostgREST RPC discovery because it returns `trigger`; the `tier_d_item_inventory.freeze_durations` column is present.
-- One confirmed Staging schema defect remains: `public.tier_d_item_reward_weights` from migration `075` is absent (`PGRST205`), while `grant_tier_d_level_random_item` is present and references it. Apply only the reviewed additive `075` repair (or its exact missing table/seed subset), verify the six configured rows and exercise the Level reward RPC with a disposable QA account before clearing this blocker.
+- The audit initially found `public.tier_d_item_reward_weights` from migration `075` absent (`PGRST205`) while the deployed Level reward RPC referenced it. The reviewed additive `075` repair was applied on 2026-09-29, followed by `082` to restore the latest one-or-two-item retry-safe function body after `075` replaced the shared RPC. Read-only verification confirms all six configured weights (`swap=0`), the expected RPC signature and PostgREST discovery.
+- A disposable QA account/unused synthetic Level verified the repaired RPC end to end: first call created one unclaimed non-Swap normal reward, the identical retry returned `idempotent=true`, persisted row count stayed one, and both responses returned identical Items. The exact test reservation was then removed and zero rows remained. Anon access to the weights table and reward RPC returns HTTP 401. The `075/082` Staging blocker is closed.
 
 ## Repository inventory
 
