@@ -11,14 +11,21 @@ import { useI18n } from '../../i18n/store'
 import { GameActionButton } from '../ui/GameActionButton'
 import { TierDTournamentIntro, TierDTournamentReward } from './TierDTournamentIntro'
 import { ThumbUpVFX } from '../vfx/ThumbUpVFX'
+import { MonetizedBannerSlot } from '../ads/MonetizedBannerSlot'
+import { COUNTRIES } from '../../country/countries'
 
-export type LeagueRankEntry = { userId:string; displayName:string; avatarUrl:string|null; languageCode?:string|null; rank:number; leaguePoints:number; longestWinStreak:number; isMock?:boolean }
+export type LeagueRankEntry = { userId:string; displayName:string; avatarUrl:string|null; countryCode?:string|null; rank:number; leaguePoints:number; longestWinStreak:number; isMock?:boolean }
 type RewardBand={rank1:number;rank2:number;rank3:number;rank4To20:number}
 export type LeagueRankSnapshot = { enabled:boolean;tournamentId?:string;startsAt?:string;endsAt?:string;status?:'OPEN'|'LOCKED';introRequired?:boolean;rewardPresentationRequired?:boolean;leagueId?:string;rewardBand?:RewardBand;finalReward?:{rank:number;tokens:number;trophy?:string|null;champion?:boolean};entries:LeagueRankEntry[];currentUser:{rank:number|null;leaguePoints:number;entry?:LeagueRankEntry|null};previousDisplayedRank:number|null }
 
 const LEAGUES=[{name:'Bronze',start:1,end:50},{name:'Silver',start:51,end:100},{name:'Gold',start:101,end:150},{name:'Platinum',start:151,end:200},{name:'Diamond',start:201,end:250},{name:'Elite',start:251,end:350},{name:'Master',start:351,end:500},{name:'Grandmaster',start:501,end:700},{name:'Legend',start:701,end:1000},{name:'Mythic',start:1001,end:Number.MAX_SAFE_INTEGER}]
 function leagueFor(level:number){return LEAGUES.find(entry=>level>=entry.start&&level<=entry.end)??LEAGUES[0]}
-const languageFlag:Record<string,string>={en:'🇬🇧',th:'🇹🇭',zh:'🇨🇳','zh-CN':'🇨🇳',ja:'🇯🇵',ko:'🇰🇷',vi:'🇻🇳',id:'🇮🇩',es:'🇪🇸',pt:'🇵🇹',fr:'🇫🇷'}
+function RankingCountry({code,isMock=false}:{code?:string|null;isMock?:boolean}){
+ const country=COUNTRIES.find(item=>item.code===code)
+ if(isMock)return <Text accessibilityLabel="Synthetic rival" style={s.neutralFlag}>🌐</Text>
+ if(!country)return <View style={s.countrySlot}/>
+ return <View style={s.countrySlot}><ExpoImage source={country.image} contentFit="cover" accessibilityLabel={`Representing ${country.name}`} style={s.countryFlag}/></View>
+}
 
 export async function fetchTierDLeagueRanking(serverUrl:string, accessToken:string, level?:number):Promise<LeagueRankSnapshot>{
  const query=Number.isInteger(level)&&level!>0?`?level=${level}`:''
@@ -93,12 +100,13 @@ export function TierDLeagueLeaderboard({serverUrl,accessToken,userId,level,previ
  return <View style={s.screen}><View style={s.panel}>
   {entryMode==='manualView'?<GameActionButton accessibilityLabel={t('common.close',{},locale)} size="small" variant="back" animation="none" label={t('common.close',{},locale)} onPress={onClose} style={s.close}/>:null}
   <View style={s.header}><Text style={s.title}>{t('ranking.top20',{},locale)}</Text><Text style={s.leagueTitle}>{league.name.toUpperCase()} {t('game.league',{},locale)}</Text></View>
+  <MonetizedBannerSlot placement="tier_d_top20" />
   <View style={s.trophyWrap}><View style={s.goldAura}/><Text style={s.sparkles}>✦  ✧  ✦</Text><Text style={s.trophyGlyph}>♛</Text></View>
   <Text style={s.speed}>{remainingLabel}</Text>
   {error?<Text style={s.error}>{error}</Text>:!snapshot?<Text style={s.state}>{t('common.loading',{},locale)}</Text>:!snapshot.enabled?<View style={s.disabled}><Text style={s.disabledTitle}>{t('common.comingSoon',{},locale)}</Text><Text style={s.state}>{t('ranking.top20',{},locale)}</Text></View>:<>
    <View style={s.columns}><Text style={s.colRank}>{t('ranking.rank',{rank:''},locale).replace('#','')}</Text><Text style={s.colName}>{t('ranking.player',{},locale)}</Text><Text style={s.colStreak}>{t('ranking.streak',{},locale)}</Text><Text style={s.colPoints}>{t('ranking.points',{},locale)}</Text></View>
-   <ScrollView style={s.scroll} contentContainerStyle={s.list}>{entries.map(row=>{const isMe=row.userId===userId;const preset=row.avatarUrl?PRESET_AVATARS.find(item=>item.key===row.avatarUrl):undefined;const avatar=preset?<AvatarDisplay config={{type:'preset',presetKey:preset.key,frameKey:'default'}} size={26} showFrame={false}/>:row.avatarUrl&&/^(https?:|data:)/i.test(row.avatarUrl)?<ExpoImage source={row.avatarUrl} contentFit="cover" transition={120} style={s.avatar}/>:<View style={[s.avatarFallback,isMe&&s.meAvatar]}><Text style={s.avatarText}>{row.displayName.slice(0,1).toUpperCase()}</Text></View>;return <Pressable key={row.userId} accessibilityRole="button" accessibilityLabel={`View ${row.displayName}'s profile`} onPress={()=>router.push({pathname:'/(home)/player/[userId]',params:{userId:row.userId}})}><View style={[s.row,isMe?s.me:s.rival,isMe&&entryMode==='autoReward'&&s.autoMe]}><Text style={[s.rank,row.rank<=3&&s.medal,isMe&&s.meText]}>#{row.rank}</Text><View style={s.avatarSlot}>{avatar}</View><Text style={[s.name,isMe&&s.meText]} numberOfLines={1}>{row.displayName}{isMe?'  · YOU':row.isMock?'  · RIVAL':''}</Text><Text accessibilityLabel={`Language ${row.languageCode??'en'}`} style={s.flag}>{languageFlag[row.languageCode??'en']??languageFlag.en}</Text><Text style={[s.streak,isMe&&s.meText]}>🔥{row.longestWinStreak}</Text><Text style={[s.points,isMe&&s.mePoints]}>{row.leaguePoints.toLocaleString()} LP</Text></View></Pressable>})}</ScrollView>
-   {ownerOutside?<View style={[s.row,s.me]}><Text style={[s.rank,s.meText]}>#{displayRank??ownerOutside.rank}</Text><View style={[s.avatarFallback,s.meAvatar]}><Text style={s.avatarText}>{ownerOutside.displayName.slice(0,1).toUpperCase()}</Text></View><Text style={[s.name,s.meText]} numberOfLines={1}>{ownerOutside.displayName}  · YOU</Text><Text style={s.flag}>{languageFlag[ownerOutside.languageCode??'en']??languageFlag.en}</Text><Text style={[s.streak,s.meText]}>🔥{ownerOutside.longestWinStreak}</Text><Text style={[s.points,s.mePoints]}>{ownerOutside.leaguePoints.toLocaleString()} LP</Text></View>:null}
+   <ScrollView style={s.scroll} contentContainerStyle={s.list}>{entries.map(row=>{const isMe=row.userId===userId;const preset=row.avatarUrl?PRESET_AVATARS.find(item=>item.key===row.avatarUrl):undefined;const avatar=preset?<AvatarDisplay config={{type:'preset',presetKey:preset.key,frameKey:'default'}} size={26} showFrame={false}/>:row.avatarUrl&&/^(https?:|data:)/i.test(row.avatarUrl)?<ExpoImage source={row.avatarUrl} contentFit="cover" transition={120} style={s.avatar}/>:<View style={[s.avatarFallback,isMe&&s.meAvatar]}><Text style={s.avatarText}>{row.displayName.slice(0,1).toUpperCase()}</Text></View>;return <Pressable key={row.userId} accessibilityRole="button" accessibilityLabel={`View ${row.displayName}'s profile`} onPress={()=>router.push({pathname:'/(home)/player/[userId]',params:{userId:row.userId}})}><View style={[s.row,isMe?s.me:s.rival,isMe&&entryMode==='autoReward'&&s.autoMe]}><Text style={[s.rank,row.rank<=3&&s.medal,isMe&&s.meText]}>#{row.rank}</Text><View style={s.avatarSlot}>{avatar}</View><Text style={[s.name,isMe&&s.meText]} numberOfLines={1}>{row.displayName}{isMe?'  · YOU':row.isMock?'  · RIVAL':''}</Text><RankingCountry code={row.countryCode} isMock={row.isMock}/><Text style={[s.streak,isMe&&s.meText]}>🔥{row.longestWinStreak}</Text><Text style={[s.points,isMe&&s.mePoints]}>{row.leaguePoints.toLocaleString()} LP</Text></View></Pressable>})}</ScrollView>
+   {ownerOutside?<View style={[s.row,s.me]}><Text style={[s.rank,s.meText]}>#{displayRank??ownerOutside.rank}</Text><View style={[s.avatarFallback,s.meAvatar]}><Text style={s.avatarText}>{ownerOutside.displayName.slice(0,1).toUpperCase()}</Text></View><Text style={[s.name,s.meText]} numberOfLines={1}>{ownerOutside.displayName}  · YOU</Text><RankingCountry code={ownerOutside.countryCode}/><Text style={[s.streak,s.meText]}>🔥{ownerOutside.longestWinStreak}</Text><Text style={[s.points,s.mePoints]}>{ownerOutside.leaguePoints.toLocaleString()} LP</Text></View>:null}
    {displayRank!==null?<Text style={s.footer}>{t('ranking.rank',{rank:displayRank},locale)}  ·  {formatInteger(snapshot.currentUser.leaguePoints,locale)} LP</Text>:null}
   </>}
   {entryMode==='autoReward'?<GameActionButton accessibilityLabel={t('common.continue',{},locale)} label={t('common.continue',{},locale)} onPress={continueFromRanking} style={s.continue}/>:null}
@@ -115,7 +123,7 @@ const s=StyleSheet.create({
  close:{position:'absolute',right:12,top:12,zIndex:8,width:76},
  closeText:{color:'#FFD76A',fontSize:9,fontWeight:'900'},
  columns:{flexDirection:'row',paddingHorizontal:8,paddingBottom:5,borderBottomWidth:1,borderBottomColor:'rgba(255,215,106,.35)'},
- colRank:{width:48,color:'#8eb7c7',fontSize:9,fontWeight:'900'},
+ colRank:{width:36,color:'#8eb7c7',fontSize:9,fontWeight:'900'},
  colName:{flex:1,color:'#8eb7c7',fontSize:9,fontWeight:'900'},
  colStreak:{width:52,textAlign:'right',color:'#8eb7c7',fontSize:9,fontWeight:'900'},
  colPoints:{width:70,textAlign:'right',color:'#8eb7c7',fontSize:9,fontWeight:'900'},
@@ -131,14 +139,16 @@ const s=StyleSheet.create({
  meText:{color:'#fff8d6',textShadowColor:'#704000',textShadowRadius:3},
  mePoints:{color:'#fffbd8'},
  meAvatar:{backgroundColor:'#9b6414',borderWidth:1,borderColor:'#fff0a0'},
- rank:{width:48,color:'#F5F2E8',fontWeight:'900'},
+ rank:{width:36,color:'#F5F2E8',fontWeight:'900'},
  medal:{color:'#FFD76A'},
  avatar:{width:26,height:26,borderRadius:13,marginRight:8},
  avatarSlot:{width:34,height:26,marginRight:0,alignItems:'center',justifyContent:'center'},
  avatarFallback:{width:26,height:26,borderRadius:13,alignItems:'center',justifyContent:'center',backgroundColor:'#28583c'},
  avatarText:{color:'#F5F2E8',fontSize:11,fontWeight:'900'},
  name:{flex:1,color:'#F5F2E8',fontSize:11,fontWeight:'800'},
- flag:{width:27,textAlign:'center',fontSize:15},
+ countrySlot:{width:27,height:18,alignItems:'center',justifyContent:'center'},
+ countryFlag:{width:24,height:18,borderRadius:2},
+ neutralFlag:{width:27,textAlign:'center',fontSize:15},
  streak:{width:52,textAlign:'right',color:'#ffbf61',fontSize:10,fontWeight:'900'},
  points:{width:70,textAlign:'right',color:'#8DFFB5',fontWeight:'900'},
  footer:{color:'#FFD76A',fontWeight:'900',textAlign:'center',paddingTop:8},

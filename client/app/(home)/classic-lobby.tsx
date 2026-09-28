@@ -20,10 +20,10 @@ import { BUY_IN, BuyInTier, AD_RESCUE_AMOUNT } from '../../src/config/buyInConfi
 import { Tier, TIER_CONFIG, isEligible, meetsLastBossCondition } from '../../src/config/tierConfig'
 import { ActiveTableSummary } from '../../src/types/spectator.types'
 import { Image as ExpoImage } from 'expo-image'
+import { MonetizedBannerSlot } from '../../src/components/ads/MonetizedBannerSlot'
 import { RELEASE_SCOPE } from '../../src/config/releaseScope'
 
 const studioLogo = require('../../assets/images/sage_unicorn_logo_transparent.png');
-const flowerAndBeeFx = require('../../assets/fx/vfx_flower_and_bee.webp');
 
 type Selection = Tier | 'all';
 
@@ -972,12 +972,7 @@ export default function LobbyScreen() {
           ))}
           {activeTablesExpanded && activeTables.length === 0 && <Text style={s.activeCount}>No Live Tables in this tier.</Text>}
 
-          <ExpoImage
-            source={flowerAndBeeFx}
-            style={s.lobbyBottomFx}
-            contentFit="contain"
-            autoplay
-          />
+          <MonetizedBannerSlot placement="lobby" />
         </ScrollView>
       </View>
 

@@ -34,6 +34,7 @@ import MyBadgesPanel from '../../src/components/profile/MyBadgesPanel'
 import { BADGES } from '../../assets/badges/BADGE_MANIFEST'
 import AvatarFrame from '../../src/components/game/AvatarFrame'
 import { RELEASE_SCOPE } from '../../src/config/releaseScope'
+import { MonetizedBannerSlot } from '../../src/components/ads/MonetizedBannerSlot'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
@@ -499,6 +500,8 @@ export default function ProfileScreen() {
             <Text style={s.lastVisited}>Last visited: {formatLastVisited(profile?.last_login)}</Text>
           </View>
         </GoldCard>
+
+        <MonetizedBannerSlot placement="profile" />
 
         {/* ═══════════════ TOKEN / CROWN + PERFORMANCE SCORE — รวมคอนเทนเนอร์เดียว (มติลุงเยาะ
             2026-08-15 — เดิมแยก resourceCard/psCard 2 กล่อง) Season PS เด่น (เกณฑ์แข่งขัน/

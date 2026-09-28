@@ -13,6 +13,7 @@ import { glassPanel, glassPanelDense, textOnGlass } from '../../src/ui/glassStyl
 import { useAuthStore } from '../../src/store/authStore'
 import { CountryBadge } from '../../src/country/CountryBadge'
 import { AvatarDisplay, PRESET_AVATARS, AvatarConfig } from '../../src/components/profile/AvatarPicker'
+import { MonetizedBannerSlot } from '../../src/components/ads/MonetizedBannerSlot'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
@@ -253,6 +254,7 @@ export default function Top10Screen() {
             <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={C.gold} colors={[C.gold]} />
           }
         >
+          <MonetizedBannerSlot placement="top10" />
           <View style={s.tableCard}>
             <View style={s.tableHeadRow}>
               <Text style={[s.tableHeadTxt, { width: 44 }]}>RANK</Text>
