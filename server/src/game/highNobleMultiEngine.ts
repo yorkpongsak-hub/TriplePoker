@@ -21,7 +21,7 @@ import { finishSpectatorBroadcast, publishSpectatorEvent } from '../spectator/sp
 import { dealCards } from './cardEngine'
 import { evaluateBestFive, evaluateHand, compareHands, handRankLabel, HandResult } from './handEvaluator'
 import { checkFoul, checkTierCFoul, checkHighNobleTexasFoul, PlayerArrangement, CommunityCards } from './foulChecker'
-import { aiDecideArrangement, AIConfig, AIPersonality, AI_CONFIGS, FOUR_GODS, greedyArrangement, pickRandomMinions } from './aiEngine'
+import { aiDecideArrangement, AIConfig, AIPersonality, AI_CONFIGS, FOUR_GODS, arrangementSearchBudget, greedyArrangement, pickRandomMinions } from './aiEngine'
 import { Card } from './deck'
 import { gameConfig, getAutoSortFee } from '../config/gameConfig'
 import { supabaseAdmin } from '../config/supabase'
@@ -184,14 +184,15 @@ function chooseCards(cards: Card[], count: number): Card[][] {
   return out
 }
 
-/** Exhaustive 560-candidate arranger for the A+ 3/(3|4)/2 shape.
- * Mission completion is explicitly included so bots do not optimize pile wins alone. */
-export function arrangeHighNobleTexas(hand: Card[], community: CommunityCards, missions: Mission[] = []): PlayerArrangement {
+/** Bounded A+ arranger. Mission completion is scored together with hand strength. */
+export function arrangeHighNobleTexas(hand: Card[], community: CommunityCards, missions: Mission[] = [], maxEvaluations = 640): PlayerArrangement {
   let best: { arrangement: PlayerArrangement; score: number } | undefined
+  let evaluated = 0
   for (const pile1 of chooseCards(hand, 3)) {
     const p1Keys = new Set(pile1.map(cardKey))
     const after1 = hand.filter(c => !p1Keys.has(cardKey(c)))
     for (const pile3 of chooseCards(after1, 2)) {
+      if (evaluated++ >= maxEvaluations) break
       const p3Keys = new Set(pile3.map(cardKey))
       const pile2 = after1.filter(c => !p3Keys.has(cardKey(c)))
       const h1 = evaluateHand([...pile1, ...community.row1])
@@ -205,6 +206,7 @@ export function arrangeHighNobleTexas(hand: Card[], community: CommunityCards, m
       const score = missionBonus + comboBonus + h1.score + h2.score * 1.1 + h3.score * 1.25
       if (!best || score > best.score) best = { arrangement: { pile1, pile2, pile3 }, score }
     }
+    if (evaluated >= maxEvaluations) break
   }
   return best?.arrangement ?? { pile1: hand.slice(0, 3), pile2: hand.slice(3, hand.length - 2), pile3: hand.slice(-2) }
 }
@@ -735,7 +737,10 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
   }
 
   // AI/Boss ตัดสินใจจัดไพ่ทันที — Minion (§6.1) ใช้ greedyArrangement เสมอ ไม่ผ่าน personality dispatch
-  aiSeats(state).forEach(seat => { state.arrangements![seat.id] = arrangeHighNobleTexas(cardsMap[seat.id], community, state.missions) })
+  aiSeats(state).forEach(seat => {
+    const role = seat.role === 'boss' ? 'boss' : 'support'
+    state.arrangements![seat.id] = arrangeHighNobleTexas(cardsMap[seat.id], community, state.missions, arrangementSearchBudget('highNoble', role))
+  })
 
   const timer = gameConfig.arrangementTimer.highNoble
   const aiNamesPublic = state.seats.map(s => ({ id: s.id, name: s.name, emoji: s.emoji, avatarUrl: s.avatarUrl, role: s.role, isHuman: s.isHuman, isVip: s.isVip }))
@@ -963,7 +968,10 @@ function startHNArrangementRound2(io: Server, roomId: string): void {
 
   aiSeats(state).forEach(seat => {
     const won = state.auctionWonCards![seat.id]
-    if (won) state.arrangements![seat.id] = arrangeHighNobleTexas([...state.cardsMap![seat.id], won], state.community!, state.missions)
+    if (won) {
+      const role = seat.role === 'boss' ? 'boss' : 'support'
+      state.arrangements![seat.id] = arrangeHighNobleTexas([...state.cardsMap![seat.id], won], state.community!, state.missions, arrangementSearchBudget('highNoble', role))
+    }
   })
   emitHNCardZones(io, state)
 
@@ -1304,7 +1312,9 @@ export function estimateHNWinrate(state: HNMatchState, bossId: string): number {
     if (need < 0 || need > unseen.length) return true
     const chosen: Card[] = []
     let examined = 0
-    const MAX_EXACT_COMPLETIONS = 25_000
+    // Keep the public-information proof bounded so one Grand Finale decision
+    // cannot monopolize the server event loop. Exhaustion stays conservative.
+    const MAX_EXACT_COMPLETIONS = 4_000
     const search = (start: number): boolean => {
       if (chosen.length === need) {
         examined++

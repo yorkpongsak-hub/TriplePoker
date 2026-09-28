@@ -1,5 +1,5 @@
 import { AI_CONFIGS } from '../../src/game/aiEngine'
-import { arrangeTierDBot, createTierDLevel, tierDAiCandidateFraction } from '../../src/game/tierDSolo'
+import { arrangeTierDBot, createTierDLevel, tierDAiCandidateFraction, tierDSearchBudgetForBotIndex } from '../../src/game/tierDSolo'
 import { TIER_D_RISE_SOLO_PERSONALITIES, tierDRiseCandidateFraction, tierDRiseVisiblePileWeights, type TierDRiseSoloPersonality } from '../../src/game/tierDRiseSoloPersonality'
 
 const fixedRandom = () => .5
@@ -11,7 +11,7 @@ describe('TriplePoker: Rise Solo Lv.1000+ personalities', () => {
     const firstBot = legacy.seats.find(seat => seat.isBot)!
     expect(legacy.arrangements[firstBot.id]).toEqual(arrangeTierDBot(
       legacy.dealtHands[firstBot.id], legacy.communityPiles, firstBot.difficulty.skill,
-      fixedRandom, legacy.missions, firstBot.id === legacy.comboBotId, tierDAiCandidateFraction(999),
+      fixedRandom, legacy.missions, firstBot.id === legacy.comboBotId, tierDAiCandidateFraction(999), undefined, tierDSearchBudgetForBotIndex(0),
     ))
 
     const rise = createTierDLevel(1000, 'human', fixedRandom)

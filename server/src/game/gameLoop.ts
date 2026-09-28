@@ -9,7 +9,7 @@ import { Server } from 'socket.io'
 import { dealCards } from './cardEngine'
 import { evaluateBestFive, evaluateHand, compareHands, handRankLabel } from './handEvaluator'
 import { checkFoul, checkTierCFoul, PlayerArrangement, CommunityCards } from './foulChecker'
-import { aiDecideArrangement, AI_CONFIGS, AIConfig, AIPersonality, FOUR_GODS, NINE_SENTINELS, greedyArrangement, pickRandomMinions } from './aiEngine'
+import { aiDecideArrangement, AI_CONFIGS, AIConfig, AIPersonality, FOUR_GODS, NINE_SENTINELS, arrangementSearchBudget, greedyArrangement, mastermindBossUsesMissions, pickRandomMinions } from './aiEngine'
 import { Card } from './deck'
 import { gameConfig, getAutoSortFee } from '../config/gameConfig'
 import { supabaseAdmin } from '../config/supabase'
@@ -72,6 +72,8 @@ export interface MatchState {
   /** กด Auto Sort ไปแล้วในรอบนี้หรือยัง (single human ต่อโต๊ะ) — reset ทุกต้นรอบ กันเรียกเก็บซ้ำ */
   autoSortUsed: boolean
   missions?: Mission[]
+  /** Mastermind is determined by the selected Sentinel: bosses 1-5 off, 6-9 on. */
+  missionsEnabled?: boolean
   roundScores?: Record<string,TierCPlusScore>
   missionStreak?:number
   // Patch Mastermind: เก็บผล Pile1+2 ไว้รอ Auction/Discard/GrandFinale (patch ถัดไป)
@@ -517,6 +519,7 @@ export async function startMatch(
     const chosenSentinel = NINE_SENTINELS.find(s => s.bossId === bossId) ?? NINE_SENTINELS[0]
     ;(state as any)._bossOverride = chosenSentinel
     ;(state as any)._bossId = chosenSentinel.bossId // เก็บไว้ใช้ตอน match_end เขียน conquered_sentinels
+    state.missionsEnabled = mastermindBossUsesMissions(chosenSentinel.bossId)
 
     // LobbyMatchmaking_Spec_v1_0 §5: P2/P4 = Minion สุ่ม 2 ใน 25 (แทน Sage/Reckless/Ghost เดิม) —
     // สุ่มครั้งเดียวตอนเริ่มแมตช์ ไม่สุ่มใหม่ทุก Round, personality สุ่ม 1 ใน 3 แบบ Tier C (ไม่ผูกกับชื่อ)
@@ -647,7 +650,7 @@ export async function startRound(io: Server, roomId: string): Promise<void> {
 
   state.phase = 'arrangement'
   state.humanArrangement = undefined
-  state.missions=generateTierCPlusMissions(state.tier as any)
+  state.missions=state.missionsEnabled === false ? [] : generateTierCPlusMissions(state.tier as any)
 
   // สับและแจกไพ่
   const dealt = dealCards()
@@ -687,7 +690,7 @@ export async function startRound(io: Server, roomId: string): Promise<void> {
   AI_CONFIGS.forEach((ai, i) => {
     const effectiveAI = getEffectiveAIConfig(state, ai)
     aiArrangements[ai.id] = (state.tier === 'mastermind' && minionOverrides?.[ai.id])
-      ? greedyArrangement(cardsMap[ai.id], community, state.missions)
+      ? greedyArrangement(cardsMap[ai.id], community, state.missions, undefined, arrangementSearchBudget(state.tier, 'support'))
       : aiDecideArrangement(
           effectiveAI,
           cardsMap[ai.id],
@@ -696,6 +699,7 @@ export async function startRound(io: Server, roomId: string): Promise<void> {
           state.tier,
           state.humanWinStreak,
           state.missions,
+          i === 0 ? 'boss' : 'support',
         )
   })
 
@@ -1262,13 +1266,13 @@ async function resolveBlindAuctionTimeout(io: Server, roomId: string): Promise<v
     // Patch High Noble: Boss ใช้ personality จตุรเทพที่เลือกไว้ (ถ้ามี) ตอนจัดไพ่รอบ2 ด้วย
     // LobbyMatchmaking_Spec_v1_0 §5: Mastermind Minion ใช้ greedyArrangement รอบ 2 เหมือนกัน
     const minionOverridesR2 = (state as any)._minionOverrides as Record<string, unknown> | undefined
-    AI_CONFIGS.forEach(ai => {
+    AI_CONFIGS.forEach((ai, i) => {
       if (state.tier === 'mastermind' || auctionWonCards[ai.id]) {
         const effectiveAI = getEffectiveAIConfig(state, ai)
         const fullHand = [...cardsMap[ai.id], ...(auctionWonCards[ai.id] ? [auctionWonCards[ai.id]] : [])]
         const proposed = (state.tier === 'mastermind' && minionOverridesR2?.[ai.id])
-          ? greedyArrangement(fullHand, community, state.missions)
-          : aiDecideArrangement(effectiveAI, fullHand, community, state.roundNumber, state.tier, state.humanWinStreak, state.missions)
+          ? greedyArrangement(fullHand, community, state.missions, undefined, arrangementSearchBudget(state.tier, 'support'))
+          : aiDecideArrangement(effectiveAI, fullHand, community, state.roundNumber, state.tier, state.humanWinStreak, state.missions, i === 0 ? 'boss' : 'support')
         aiArrangements[ai.id] = { pile1: proposed.pile1, pile2: [...proposed.pile2, ...proposed.pile3.slice(5)], pile3: proposed.pile3.slice(0, 5) }
       }
     })
@@ -2500,8 +2504,9 @@ function isPlayerAFK(state: MultiMatchState, userId: string): boolean {
 function autoSubmitArrangementForAFKPlayer(state: MultiMatchState, userId: string): void {
   if (!state.community || !state.cardsMap || state.submittedArrangements[userId]) return
   const decisionConfig = AI_CONFIGS[state.humanPlayerIds.indexOf(userId) % AI_CONFIGS.length] ?? AI_CONFIGS[0]
+  const searchRole = state.seatOrder.find(seat => seat.userId === userId)?.seat === 2 ? 'boss' : 'support'
   state.submittedArrangements[userId] = aiDecideArrangement(
-    decisionConfig, state.cardsMap[userId], state.community, state.roundNumber, state.tier, 0, state.missions,
+    decisionConfig, state.cardsMap[userId], state.community, state.roundNumber, state.tier, 0, state.missions, searchRole,
   )
 }
 
@@ -2619,7 +2624,8 @@ async function startMultiRound(io: Server, roomId: string): Promise<void> {
   const aiArrangements: Record<string, PlayerArrangement> = {}
   state.aiPlayerIds.forEach((aiId) => {
     const aiConfig = AI_CONFIGS.find(a => a.id === aiId) ?? AI_CONFIGS[0]
-    aiArrangements[aiId] = aiDecideArrangement(aiConfig, cardsMap[aiId], community, state.roundNumber, state.tier, 0, state.missions)
+    const searchRole = state.seatOrder.find(seat => seat.userId === aiId)?.seat === 2 ? 'boss' : 'support'
+    aiArrangements[aiId] = aiDecideArrangement(aiConfig, cardsMap[aiId], community, state.roundNumber, state.tier, 0, state.missions, searchRole)
   })
   state.submittedArrangements = { ...aiArrangements }
 

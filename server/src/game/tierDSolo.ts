@@ -50,6 +50,14 @@ export const TIER_D_AI_CANDIDATE_FRACTION_BY_LEAGUE: Readonly<Record<LeagueId, n
   mythic: .20,
 }
 
+// Tier D keeps the designated P3 opponent at full 11-card search strength.
+// Other seats receive at most ten percent of the same tier budget.
+export const TIER_D_BOSS_SEARCH_BUDGET = 9_240
+const TIER_D_SUPPORT_SEARCH_BUDGET = Math.floor(TIER_D_BOSS_SEARCH_BUDGET * .10)
+export function tierDSearchBudgetForBotIndex(botIndex: number): number {
+  return botIndex === 1 ? TIER_D_BOSS_SEARCH_BUDGET : TIER_D_SUPPORT_SEARCH_BUDGET
+}
+
 /** Display-only Solo roster. Names are selected server-side for each Level. */
 export const TIER_D_ENGLISH_BOT_NAMES = [
   'Avery', 'Blake', 'Cameron', 'Dylan', 'Ellis', 'Finley', 'Harper', 'Jordan',
@@ -183,7 +191,9 @@ export function createTierDLevel(level: number, humanId: string, random: () => n
     // public scoring objective from ordinary (non-specialist) opponents.
     const missionAware = tierDAiMissionsEnabled(level)
     const candidateFraction = seat.risePersonality ? tierDRiseCandidateFraction(level, seat.risePersonality) : tierDAiCandidateFraction(level)
-    arrangements[seat.id] = arrangeTierDBot(dealtHands[seat.id], communityPiles, seat.difficulty.skill, random, missionAware ? missions : [], seat.id === comboBotId, candidateFraction, seat.risePersonality ? { personality: seat.risePersonality, visible: { community: communityPiles } } : undefined)
+    const botIndex = aiSeats.findIndex(aiSeat => aiSeat.id === seat.id)
+    const searchBudget = tierDSearchBudgetForBotIndex(botIndex)
+    arrangements[seat.id] = arrangeTierDBot(dealtHands[seat.id], communityPiles, seat.difficulty.skill, random, missionAware ? missions : [], seat.id === comboBotId, candidateFraction, seat.risePersonality ? { personality: seat.risePersonality, visible: { community: communityPiles } } : undefined, searchBudget)
   }
   const games: TierDGameState[] = [1, 2, 3].map(game => ({
     game: game as TierDGameNumber,
@@ -440,12 +450,14 @@ export function automaticTierDArrangement(cards: Card[], community: TierDCommuni
  * scoring legal plan it can reliably recognise. This changes decision quality,
  * never card dealing, hidden information, or the core ordering rule.
  */
-export function arrangeTierDBot(cards: Card[], community: TierDCommunityPiles, skill: number, random: () => number = Math.random, missions: readonly Mission[] = [], comboFocus = false, candidateFraction = .90, rise?: { personality: TierDRiseSoloPersonality; visible: TierDRiseVisibleContext }): TierDArrangement {
+export function arrangeTierDBot(cards: Card[], community: TierDCommunityPiles, skill: number, random: () => number = Math.random, missions: readonly Mission[] = [], comboFocus = false, candidateFraction = .90, rise?: { personality: TierDRiseSoloPersonality; visible: TierDRiseVisibleContext }, maxEvaluations = TIER_D_BOSS_SEARCH_BUDGET): TierDArrangement {
   type Candidate = { arrangement: TierDArrangement; total: number; hands: BestFiveResult[] }
   const candidates: Candidate[] = []
+  let evaluated = 0
   forEachCombination(cards, 3, pile1 => {
     const afterP1 = withoutCards(cards, pile1)
-    forEachCombination(afterP1, 3, pile2 => {
+    const completed = forEachCombination(afterP1, 3, pile2 => {
+      if (evaluated++ >= maxEvaluations) return false
       const pile3 = withoutCards(afterP1, pile2)
       const h1 = evaluateBestFive([...pile1, ...community.pile1])
       const h2 = evaluateBestFive([...pile2, ...community.pile2])
@@ -455,6 +467,7 @@ export function arrangeTierDBot(cards: Card[], community: TierDCommunityPiles, s
       const hands = [h1,h2,h3]
       candidates.push({ arrangement, hands, total: tierDBotHandsUtility(hands, skill, missions, comboFocus, rise) })
     })
+    if (!completed) return false
   })
   if (!candidates.length) return defaultTierDArrangement(cards)
   candidates.sort((a, b) => b.total - a.total)
@@ -555,12 +568,15 @@ export function strongestTierDArrangement(cards: Card[], community: TierDCommuni
   return strongest
 }
 
-function forEachCombination(cards: readonly Card[], size: number, visit: (selection: Card[]) => void): void {
-  const choose = (start: number, selected: Card[]) => {
-    if (selected.length === size) { visit(selected); return }
-    for (let index = start; index <= cards.length - (size - selected.length); index++) choose(index + 1, [...selected, cards[index]])
+function forEachCombination(cards: readonly Card[], size: number, visit: (selection: Card[]) => boolean | void): boolean {
+  const choose = (start: number, selected: Card[]): boolean => {
+    if (selected.length === size) return visit(selected) !== false
+    for (let index = start; index <= cards.length - (size - selected.length); index++) {
+      if (!choose(index + 1, [...selected, cards[index]])) return false
+    }
+    return true
   }
-  choose(0, [])
+  return choose(0, [])
 }
 function withoutCards(source: readonly Card[], removed: readonly Card[]): Card[] {
   const identities = new Set(removed.map(cardIdentity))

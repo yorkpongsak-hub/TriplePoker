@@ -1,4 +1,4 @@
-import { applyTierDLevelOutcome, arrangeTierDBot, assertTierDCardConservation, assignTierDAuctionCard, commitTierDCombo, createTierDLevel, firstValidTierDArrangement, openChallengeMatchPassed, resolveTierDGame, resolveTierDLevel, rollbackTierDGame, submitTierDArrangement, submitTierDUndoArrangement, swapTierDHandCard, tierDAiCandidateFraction, tierDAiMissionsEnabled, tierDBotArrangementUtility, TIER_D_TRIPLE_SWEEP_BONUS, tierDBotCount, tierDDifficulty } from '../../src/game/tierDSolo'
+import { applyTierDLevelOutcome, arrangeTierDBot, assertTierDCardConservation, assignTierDAuctionCard, commitTierDCombo, createTierDLevel, firstValidTierDArrangement, openChallengeMatchPassed, resolveTierDGame, resolveTierDLevel, rollbackTierDGame, submitTierDArrangement, submitTierDUndoArrangement, swapTierDHandCard, tierDAiCandidateFraction, tierDAiMissionsEnabled, tierDBotArrangementUtility, tierDSearchBudgetForBotIndex, TIER_D_TRIPLE_SWEEP_BONUS, tierDBotCount, tierDDifficulty } from '../../src/game/tierDSolo'
 import { compareHands, evaluateBestFive } from '../../src/game/handEvaluator'
 import { createDeck, type Card } from '../../src/game/deck'
 
@@ -18,9 +18,9 @@ describe('Tier D Solo loop', () => {
     expect(second.comboBotId).toBe('tier-d-bot-2')
     const redeal = createTierDLevel(201, 'human', () => .99, { ...rules, comboBotId: first.comboBotId })
     expect(redeal.comboBotId).toBe(first.comboBotId)
-    for (const seat of first.seats.filter(seat => seat.isBot)) {
+    for (const [botIndex, seat] of first.seats.filter(seat => seat.isBot).entries()) {
       const focus = seat.id === first.comboBotId
-      expect(first.arrangements[seat.id]).toEqual(arrangeTierDBot(first.dealtHands[seat.id], first.communityPiles, seat.difficulty.skill, () => 0, first.missions, focus, tierDAiCandidateFraction(201)))
+      expect(first.arrangements[seat.id]).toEqual(arrangeTierDBot(first.dealtHands[seat.id], first.communityPiles, seat.difficulty.skill, () => 0, first.missions, focus, tierDAiCandidateFraction(201), undefined, tierDSearchBudgetForBotIndex(botIndex)))
     }
     // การรักษาบทบาทไม่ได้รับประกันว่าไพ่ที่สุ่มได้จะทำ Mission สำเร็จ
   })
@@ -204,9 +204,9 @@ describe('Tier D Solo loop', () => {
     const missions = [{ pile: 1 as const, rank: 'high_card' as const }, { pile: 2 as const, rank: 'one_pair' as const }]
     for (const level of [161, 201, 251, 501, 1001]) {
       const state = createTierDLevel(level, 'human', () => 0, { missions })
-      for (const seat of state.seats.filter(seat => seat.isBot)) {
+      for (const [botIndex, seat] of state.seats.filter(seat => seat.isBot).entries()) {
         const focus = seat.id === state.comboBotId
-        expect(state.arrangements[seat.id]).toEqual(arrangeTierDBot(state.dealtHands[seat.id], state.communityPiles, seat.difficulty.skill, () => 0, missions, focus, tierDAiCandidateFraction(level), seat.risePersonality ? { personality: seat.risePersonality, visible: { community: state.communityPiles } } : undefined))
+        expect(state.arrangements[seat.id]).toEqual(arrangeTierDBot(state.dealtHands[seat.id], state.communityPiles, seat.difficulty.skill, () => 0, missions, focus, tierDAiCandidateFraction(level), seat.risePersonality ? { personality: seat.risePersonality, visible: { community: state.communityPiles } } : undefined, tierDSearchBudgetForBotIndex(botIndex)))
       }
     }
   })

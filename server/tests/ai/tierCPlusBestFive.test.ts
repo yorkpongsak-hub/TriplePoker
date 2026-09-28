@@ -1,4 +1,4 @@
-import { canonicalArrangementObjective, greedyArrangement } from '../../src/game/aiEngine'
+import { NINE_SENTINELS, arrangementSearchBudget, canonicalArrangementObjective, greedyArrangement, mastermindBossUsesMissions } from '../../src/game/aiEngine'
 import { checkTierCFoul, type CommunityCards } from '../../src/game/foulChecker'
 import { evaluateBestFive } from '../../src/game/handEvaluator'
 import type { Card } from '../../src/game/deck'
@@ -16,6 +16,23 @@ const cases:{name:string;expected:string;made:Card[];row3:Card[]}[]=[
 ]
 
 describe('Tier C++ canonical AI arrangement',()=>{
+  test('Mastermind bosses 1-5 play without Missions and bosses 6-9 require Missions',()=>{
+    expect(NINE_SENTINELS.slice(0,5).map(boss=>[boss.bossId,mastermindBossUsesMissions(boss.bossId)])).toEqual([
+      ['iron_wall',false],['chivalry',false],['war_lord',false],['phantom',false],['dark_shark',false],
+    ])
+    expect(NINE_SENTINELS.slice(5).map(boss=>[boss.bossId,mastermindBossUsesMissions(boss.bossId)])).toEqual([
+      ['oracle',true],['jester',true],['phoenix',true],['black_magic',true],
+    ])
+    expect(mastermindBossUsesMissions('unknown')).toBe(false)
+  })
+  test('only P3/Boss receives the tier search budget; support AI is capped at 10%',()=>{
+    for(const tier of ['initiate','adept','mastermind','highNoble']){
+      expect(arrangementSearchBudget(tier,'support')).toBeLessThanOrEqual(arrangementSearchBudget(tier,'boss')*.10)
+    }
+    expect(arrangementSearchBudget('adept','boss')).toBe(240)
+    expect(arrangementSearchBudget('mastermind','boss')).toBe(400)
+    expect(arrangementSearchBudget('highNoble','boss')).toBe(640)
+  })
   test.each(cases)('greedy/minion path recognizes $name with Best 5/7',({expected,made,row3})=>{
     const used=new Set([...made,...row3].map(card=>`${card.value}:${card.suit}`))
     const cards=[...made,...fillers.filter(card=>!used.has(`${card.value}:${card.suit}`))].slice(0,11)
