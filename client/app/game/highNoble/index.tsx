@@ -22,6 +22,7 @@ import { TABLE_SKINS } from '../../../src/config/tableSkins'
 import BossVictoryVFX, { VictoryTier } from '../../../src/components/vfx/BossVictoryVFX'
 import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
 import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
+import NegativeStackGameOverVFX from '../../../src/components/vfx/NegativeStackGameOverVFX'
 import { TierCPlusPileReveal, type TierCPlusReveal } from '../../../src/components/game/TierCPlusPileReveal'
 import ComboCardBurst from '../../../src/components/vfx/ComboCardBurst'
 import { RoundScoreSummary } from '../../../src/components/game/RoundScoreSummary'
@@ -468,6 +469,10 @@ const GameTableLive: React.FC = () => {
 
   // ── Result
   const [tokenBalance, setTokenBalance] = useState<Record<string, number>>({})
+  const [negativeStackGameOver, setNegativeStackGameOver] = useState(false)
+  useEffect(() => {
+    if (!negativeStackGameOver && typeof tokenBalance[PLAYER_ID] === 'number' && tokenBalance[PLAYER_ID] < 0) setNegativeStackGameOver(true)
+  }, [tokenBalance[PLAYER_ID], negativeStackGameOver, PLAYER_ID])
   // Patch 2026-07-18: format ยอดโทเคนเต็มมี comma (มติลุงเยาะ: แบบเต็ม ไม่ย่อ K/M) — pattern Initiate
   const fmtToken = (v: number | undefined) => (v ?? buyInAmount).toLocaleString('en-US')
   const [tokenDeltas, setTokenDeltas]   = useState<Record<string, number>>({})
@@ -840,7 +845,7 @@ const GameTableLive: React.FC = () => {
         if (pile.winner) newWinners[pNum] = pile.winner
         if (pile.winnerHandRank) {
           newHandRanks[pNum] = pile.winnerHandRank
-          if (String(pile.winnerHandRank).toLowerCase().replace(/[ _-]/g, '') === 'royalflush') setRoyalFlushWinner(pile.winner)
+          if (aiList.some(ai => ai.id === pile.winner) && String(pile.winnerHandRank).toLowerCase().replace(/[ _-]/g, '') === 'royalflush') setRoyalFlushWinner(pile.winner)
         }
         if (pile.fouled) Object.assign(newFouled, pile.fouled)
         // Boss (role==='boss' seat, always aiListRef.current[0]) vs Human/other-AI — thunder only for the boss seat.
@@ -894,7 +899,7 @@ const GameTableLive: React.FC = () => {
       if (data.winner && data.winner === aiListRef.current[0]?.id) playBossPileWinThunder()
       if (data.winnerHandRank) {
         setHandRanks(prev => ({ ...prev, [pNum]: data.winnerHandRank }))
-        if (String(data.winnerHandRank).toLowerCase().replace(/[ _-]/g, '') === 'royalflush') setRoyalFlushWinner(data.winner)
+        if (aiList.some(ai => ai.id === data.winner) && String(data.winnerHandRank).toLowerCase().replace(/[ _-]/g, '') === 'royalflush') setRoyalFlushWinner(data.winner)
       }
       setHasFoul(data.fouled ?? {})
       if (data.foulReasons) setFoulReasons(data.foulReasons)
@@ -3316,6 +3321,10 @@ const GameTableLive: React.FC = () => {
         {/* Patch 2026-07-18: Boss Victory VFX — ทับทุก layer, จบแล้วถอดตัวเอง */}
         {phase === 'grand_finale_done' && gfFinalResult?.winnerId === PLAYER_ID && <ComboCardBurst eventKey={`${ROOM_ID}:${roundNumber}:g3-win`} kind="YOU_WIN" />}
         {royalFlushWinner && <RoyalStraightFlushVFX playerName={royalFlushWinner === PLAYER_ID ? myDisplayName : (aiList.find(a => a.id === royalFlushWinner)?.name ?? royalFlushWinner)} onClose={() => setRoyalFlushWinner(null)} />}
+        {negativeStackGameOver && <NegativeStackGameOverVFX eventKey={`${ROOM_ID}:${roundNumber}`} onFinish={() => {
+          socketRef.current?.emit('player_leave', { roomId: ROOM_ID, playerId: PLAYER_ID })
+          void leaveAfterClassicSettlement({ accessToken, tier: 'A_PLUS', outcome: 'LOSS', exitReason: 'BACK_TO_LOBBY' })
+        }} />}
         {victoryVfx && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 }} pointerEvents="none">
             <BossVictoryVFX tier={victoryVfx} onFinish={() => setVictoryVfx(null)} />

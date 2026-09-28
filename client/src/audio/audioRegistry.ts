@@ -32,6 +32,7 @@ const tripleSweepCongratulations = require('../../assets/audio/sfx/result/sfx_co
 const top20Complete = require('../../assets/audio/sfx/result/sfx_top20.wav')
 const tierUnlock = require('../../assets/audio/sfx/result/tier_unlock.mp3')
 const rareReaction = require('../../assets/audio/sfx/result/rare_reaction.mp3')
+const royalBravo = require('../../assets/audio/sfx/result/royal_bravoooo.mp3')
 const bossThunder = require('../../assets/audio/sfx/boss/boss_thunder.mp3')
 const bossAmbience = require('../../assets/audio/sfx/boss/boss_ambience.mp3')
 const lobbyBgm = require('../../assets/audio/bgm/sfx_bgm_lobby.mp3')
@@ -107,6 +108,8 @@ export const audioRegistry: Record<AudioEvent, AudioDefinition> = {
   [AudioEvent.ELITES_BGM]: def(elitesBgm, AudioCategory.BGM, AudioPriority.LOW, .27, { loop: true, fadeInMs: 800, fadeOutMs: 500 }),
   [AudioEvent.SHOP_BGM]: def(shopBgm, AudioCategory.BGM, AudioPriority.LOW, .24, { loop: true, fadeInMs: 800, fadeOutMs: 500 }),
   [AudioEvent.RARE_REACTION]: def(rareReaction, AudioCategory.RESULT, AudioPriority.VERY_HIGH, .75, { cooldownMs: 5000, duckBgm: .35 }),
+  [AudioEvent.ROYAL_BRAVO]: def(royalBravo, AudioCategory.RESULT, AudioPriority.CRITICAL, .88, { cooldownMs: 5000, duckBgm: .20 }),
+  [AudioEvent.GAME_OVER_TRY_AGAIN]: def(rareReaction, AudioCategory.RESULT, AudioPriority.CRITICAL, .82, { cooldownMs: 4000, duckBgm: .15 }),
 }
 
 export const PRELOAD_AUDIO_EVENTS = [

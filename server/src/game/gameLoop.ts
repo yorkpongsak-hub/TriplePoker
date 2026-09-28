@@ -30,6 +30,7 @@ import { resolveNpcPoolKey, type ResolveNpcPoolContext } from '../economy/npcPoo
 import type { AccountRef } from '../economy/economyTypes'
 import { calculateGameProfitAndRake, generateTierCPlusMissions, getMissionDifficulty, getTierMatchCount, getTierMissionAward, missionStreakBonus, scoreTierCPlusRound, TIER_C_PLUS_RULES, type TierCPlusScore, type TierCPlusTier } from './tierCPlusScoring'
 import { missionResult, type Mission } from './leagueGameplay'
+import { broadcastHumanRoyalFlush } from './royalFlushBroadcast'
 
 // ── Types ────────────────────────────────────────────────────
 export interface RoundResult {
@@ -813,6 +814,14 @@ export async function submitArrangement(
   const hand1W = p1Winner ? evaluateHand([...allArrangements[p1Winner].pile1, ...community.row1]) : null
   const hand2W = p2Winner ? evaluateBestFive([...allArrangements[p2Winner].pile2, ...community.row2]) : null
   const hand3W = p3Winner ? evaluateBestFive([...allArrangements[p3Winner].pile3, ...community.row3]) : null
+  const authoritativeHands = [
+    { pile: 1, winner: p1Winner, hand: hand1W, cards: p1Winner ? [...allArrangements[p1Winner].pile1, ...community.row1] : [] },
+    { pile: 2, winner: p2Winner, hand: hand2W, cards: p2Winner ? [...allArrangements[p2Winner].pile2, ...community.row2] : [] },
+    { pile: 3, winner: p3Winner, hand: hand3W, cards: p3Winner ? [...allArrangements[p3Winner].pile3, ...community.row3] : [] },
+  ]
+  for (const royal of authoritativeHands) if (royal.winner === state.humanPlayerId && royal.hand?.rank === 'royal_flush') {
+    broadcastHumanRoyalFlush(io, { eventId: `${roomId}:${state.roundNumber}:g${royal.pile}`, playerId: state.humanPlayerId, playerName: state.humanName, cards: royal.cards })
+  }
   const scoring=tierCPlusScores(playerIds,[p1Winner,p2Winner,p3Winner],allArrangements,community,fouled,state.missions??generateTierCPlusMissions(state.tier as any),state.tier as TierCPlusTier)
   state.missionStreak=fouled[state.humanPlayerId]?0:addPlayerMissionStreak(scoring[state.humanPlayerId],state.humanPlayerId,allArrangements[state.humanPlayerId],community,state.missions??[],state.missionStreak)
   state.roundScores=scoring
@@ -1513,6 +1522,7 @@ async function resolveDiscardTimeout(io: Server, roomId: string): Promise<void> 
     // ── Pile 1 ──────────────────────────────────────────────
     const pile1Winner = resolvePile(1, allArrangements, community, fouled)
     const hand1 = pile1Winner ? evaluateHand([...allArrangements[pile1Winner].pile1, ...community.row1]) : null
+    if (pile1Winner === state.humanPlayerId && hand1?.rank === 'royal_flush') broadcastHumanRoyalFlush(io, { eventId: `${roomId}:${state.roundNumber}:g1`, playerId: state.humanPlayerId, playerName: state.humanName, cards: [...allArrangements[pile1Winner].pile1, ...community.row1] })
     const pile1MissionMeta=revealMissionMeta(1,playerIds,allArrangements,community,fouled,state.missions??[],state.tier as TierCPlusTier)
     io.to(roomId).emit('pile_reveal', {
       roomId, pileNumber: 1, winner: pile1Winner,
@@ -1529,6 +1539,7 @@ async function resolveDiscardTimeout(io: Server, roomId: string): Promise<void> 
     // ── Pile 2 ──────────────────────────────────────────────
     const pile2Winner = resolvePile(2, allArrangements, community, fouled)
     const hand2 = pile2Winner ? evaluateBestFive([...allArrangements[pile2Winner].pile2, ...community.row2]) : null
+    if (pile2Winner === state.humanPlayerId && hand2?.rank === 'royal_flush') broadcastHumanRoyalFlush(io, { eventId: `${roomId}:${state.roundNumber}:g2`, playerId: state.humanPlayerId, playerName: state.humanName, cards: hand2.bestFive })
     const pile2MissionMeta=revealMissionMeta(2,playerIds,allArrangements,community,fouled,state.missions??[],state.tier as TierCPlusTier)
     io.to(roomId).emit('pile_reveal', {
       roomId, pileNumber: 2, winner: pile2Winner,
@@ -2165,6 +2176,7 @@ function finalizeGrandFinale(
     if (winnerHand.length === 5) {
       const result = evaluateBestFive([...winnerHand, ...community3])
       winnerRank = result.rank // e.g. "one_pair", "two_pair", "three_of_a_kind"
+      if (winnerId === state.humanPlayerId && result.rank === 'royal_flush') broadcastHumanRoyalFlush(io, { eventId: `${roomId}:${state.roundNumber}:g3`, playerId: state.humanPlayerId, playerName: state.humanName, cards: result.bestFive })
     }
   }
   // Jackpot: ใครก็ตามที่ชนะทั้ง 3 กอง (คำนวณไว้ข้างบนแล้ว ใช้ตัวเดียวกันทั้ง 2 เส้นทาง)
@@ -2810,6 +2822,15 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
   const hand1W = p1Winner ? evaluateHand([...allArrangements[p1Winner].pile1, ...community.row1]) : null
   const hand2W = p2Winner ? evaluateBestFive([...allArrangements[p2Winner].pile2, ...community.row2]) : null
   const hand3W = p3Winner ? evaluateBestFive([...allArrangements[p3Winner].pile3, ...community.row3]) : null
+  const humanIds = new Set(state.humanPlayerIds)
+  const authoritativeHands = [
+    { pile: 1, winner: p1Winner, hand: hand1W, cards: p1Winner ? [...allArrangements[p1Winner].pile1, ...community.row1] : [] },
+    { pile: 2, winner: p2Winner, hand: hand2W, cards: p2Winner ? [...allArrangements[p2Winner].pile2, ...community.row2] : [] },
+    { pile: 3, winner: p3Winner, hand: hand3W, cards: p3Winner ? [...allArrangements[p3Winner].pile3, ...community.row3] : [] },
+  ]
+  for (const royal of authoritativeHands) if (royal.winner && humanIds.has(royal.winner) && royal.hand?.rank === 'royal_flush') {
+    broadcastHumanRoyalFlush(io, { eventId: `${roomId}:${state.roundNumber}:g${royal.pile}`, playerId: royal.winner, playerName: state.seatOrder.find(seat => seat.userId === royal.winner)?.displayName ?? royal.winner, cards: royal.cards })
+  }
   const scoring=tierCPlusScores(playerIds,[p1Winner,p2Winner,p3Winner],allArrangements,community,fouled,state.missions??generateTierCPlusMissions('adept'),'adept')
   state.missionStreaks??={}
   state.humanPlayerIds.forEach(id=>{state.missionStreaks![id]=fouled[id]?0:addPlayerMissionStreak(scoring[id],id,allArrangements[id],community,state.missions??[],state.missionStreaks![id])})

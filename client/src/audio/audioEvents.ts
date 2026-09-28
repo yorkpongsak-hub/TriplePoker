@@ -70,6 +70,8 @@ export enum AudioEvent {
   ELITES_BGM = 'ELITES_BGM',
   SHOP_BGM = 'SHOP_BGM',
   RARE_REACTION = 'RARE_REACTION',
+  ROYAL_BRAVO = 'ROYAL_BRAVO',
+  GAME_OVER_TRY_AGAIN = 'GAME_OVER_TRY_AGAIN',
 }
 
 export type AudioPlayContext = {

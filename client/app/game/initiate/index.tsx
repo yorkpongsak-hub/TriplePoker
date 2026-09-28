@@ -50,6 +50,7 @@ import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/g
 import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
 import AvatarFrame from '../../../src/components/game/AvatarFrame'
 import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
+import NegativeStackGameOverVFX from '../../../src/components/vfx/NegativeStackGameOverVFX'
 import { TierCPlusPileReveal, type TierCPlusReveal } from '../../../src/components/game/TierCPlusPileReveal'
 
 // ตำแหน่งที่นั่งเดียวกับ targets ใน startDealAnimation (Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย)
@@ -396,6 +397,10 @@ const GameTableLive: React.FC = () => {
 
   // ── Result
   const [tokenBalance, setTokenBalance] = useState<Record<string, number>>({})
+  const [negativeStackGameOver, setNegativeStackGameOver] = useState(false)
+  useEffect(() => {
+    if (!negativeStackGameOver && typeof tokenBalance[PLAYER_ID] === 'number' && tokenBalance[PLAYER_ID] < 0) setNegativeStackGameOver(true)
+  }, [tokenBalance[PLAYER_ID], negativeStackGameOver, PLAYER_ID])
   // Patch 2026-07-18: format ยอดโทเคนเต็มมี comma (มติลุงเยาะ: แบบเต็ม ไม่ย่อ K/M)
   const fmtToken = (v: number | undefined) => (v ?? buyInAmount).toLocaleString('en-US')
   const [tokenDeltas, setTokenDeltas]   = useState<Record<string, number>>({})
@@ -695,7 +700,7 @@ const GameTableLive: React.FC = () => {
         if (pile.winner) newWinners[pNum] = pile.winner
         if (pile.winnerHandRank) {
           newHandRanks[pNum] = pile.winnerHandRank
-          if (String(pile.winnerHandRank).toLowerCase().replace(/[ _-]/g, '') === 'royalflush') setRoyalFlushWinner(pile.winner)
+          if (aiList.some(ai => ai.id === pile.winner) && String(pile.winnerHandRank).toLowerCase().replace(/[ _-]/g, '') === 'royalflush') setRoyalFlushWinner(pile.winner)
         }
         if (pile.fouled) Object.assign(newFouled, pile.fouled)
       })
@@ -753,7 +758,7 @@ const GameTableLive: React.FC = () => {
       setPileWinners(prev => ({ ...prev, [pNum]: data.winner }))
       if (data.winnerHandRank) {
         setHandRanks(prev => ({ ...prev, [pNum]: data.winnerHandRank }))
-        if (String(data.winnerHandRank).toLowerCase().replace(/[ _-]/g, '') === 'royalflush') setRoyalFlushWinner(data.winner)
+        if (aiList.some(ai => ai.id === data.winner) && String(data.winnerHandRank).toLowerCase().replace(/[ _-]/g, '') === 'royalflush') setRoyalFlushWinner(data.winner)
       }
       setHasFoul(data.fouled ?? {})
       if (data.foulReasons) setFoulReasons(data.foulReasons)
@@ -1464,7 +1469,11 @@ const GameTableLive: React.FC = () => {
           )}
 
           {/* ── TRIPLE SWEEP — Legendary สำหรับ P1, VFX เดิมสำหรับผู้เล่นอื่น ── */}
-          {royalFlushWinner && <RoyalStraightFlushVFX playerName={royalFlushWinner === PLAYER_ID ? myDisplayName : (aiList.find(a => a.id === royalFlushWinner)?.name ?? royalFlushWinner)} onClose={() => setRoyalFlushWinner(null)} />}
+        {royalFlushWinner && <RoyalStraightFlushVFX playerName={royalFlushWinner === PLAYER_ID ? myDisplayName : (aiList.find(a => a.id === royalFlushWinner)?.name ?? royalFlushWinner)} onClose={() => setRoyalFlushWinner(null)} />}
+        {negativeStackGameOver && <NegativeStackGameOverVFX eventKey={`${ROOM_ID}:${roundNumber}`} onFinish={() => {
+          socketRef.current?.emit('player_leave', { roomId: ROOM_ID, playerId: PLAYER_ID })
+          void leaveAfterClassicSettlement({ accessToken, tier: 'C', outcome: 'LOSS', exitReason: 'BACK_TO_LOBBY' })
+        }} />}
           {jackpotWinner && (() => {
             const isMe = jackpotWinner === PLAYER_ID
             const winAI = aiList.find(a => a.id === jackpotWinner)

@@ -23,6 +23,7 @@ import { evaluateBestFive, evaluateHand, compareHands, handRankLabel, HandResult
 import { checkFoul, checkTierCFoul, checkHighNobleTexasFoul, PlayerArrangement, CommunityCards } from './foulChecker'
 import { aiDecideArrangement, AIConfig, AIPersonality, AI_CONFIGS, FOUR_GODS, arrangementSearchBudget, greedyArrangement, pickRandomMinions } from './aiEngine'
 import { Card } from './deck'
+import { broadcastHumanRoyalFlush } from './royalFlushBroadcast'
 import { gameConfig, getAutoSortFee } from '../config/gameConfig'
 import { supabaseAdmin } from '../config/supabase'
 import { escrowBuyIn, settleEscrow, refundEscrow } from './gameLoop'
@@ -1084,6 +1085,8 @@ async function resolveHNDiscardComplete(io: Server, roomId: string): Promise<voi
 
   const pile1Winner = resolvePile(1, allArrangements, state.community!, state.foulMap!)
   const hand1 = pile1Winner ? evaluateHand([...allArrangements[pile1Winner].pile1, ...state.community!.row1]) : null
+  const pile1Seat = pile1Winner ? seatById(state, pile1Winner) : undefined
+  if (pile1Seat?.isHuman && hand1?.rank === 'royal_flush') broadcastHumanRoyalFlush(io, { eventId: `${roomId}:${state.roundNumber}:g1`, playerId: pile1Seat.id, playerName: pile1Seat.name, cards: [...allArrangements[pile1Seat.id].pile1, ...state.community!.row1] })
   const pile1MissionMeta=revealMissionMeta(1,playerIds,allArrangements,state.community!,state.foulMap!,state.missions??[])
   state.resolvedPileCount = 1
   emitHNCardZones(io, state)
@@ -1108,6 +1111,8 @@ async function resolveHNDiscardComplete(io: Server, roomId: string): Promise<voi
 
   const pile2Winner = resolvePile(2, allArrangements, state.community!, state.foulMap!)
   const hand2 = pile2Winner ? evaluateBestFive([...allArrangements[pile2Winner].pile2, ...state.community!.row2]) : null
+  const pile2Seat = pile2Winner ? seatById(state, pile2Winner) : undefined
+  if (pile2Seat?.isHuman && hand2?.rank === 'royal_flush') broadcastHumanRoyalFlush(io, { eventId: `${roomId}:${state.roundNumber}:g2`, playerId: pile2Seat.id, playerName: pile2Seat.name, cards: hand2.bestFive })
   const pile2MissionMeta=revealMissionMeta(2,playerIds,allArrangements,state.community!,state.foulMap!,state.missions??[])
   state.resolvedPileCount = 2
   emitHNCardZones(io, state)
@@ -1584,7 +1589,9 @@ function finalizeHNGrandFinale(
     const pile3Cards = (state.finalPile3 ?? {})[seat.id]
     if (pile3Cards && pile3Cards.length === 2) {
       const hand3Cards = [...pile3Cards, ...community3ForStats]
-      trackBestHandLive(state, seat.id, evaluateBestFive(hand3Cards), hand3Cards, 3, winnerId === seat.id)
+      const hand3 = evaluateBestFive(hand3Cards)
+      trackBestHandLive(state, seat.id, hand3, hand3Cards, 3, winnerId === seat.id)
+      if (winnerId === seat.id && hand3.rank === 'royal_flush') broadcastHumanRoyalFlush(io, { eventId: `${roomId}:${state.roundNumber}:g3`, playerId: seat.id, playerName: seat.name, cards: hand3.bestFive })
     }
   })
   if (jackpotWinner) {

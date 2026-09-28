@@ -16,6 +16,8 @@ import { CARD_BACK_IMG, CARD_IMG } from '../src/components/game/cardAssets'
 import { PENDING_MATCH_KEY, PendingMatch } from '../src/utils/pendingMatch'
 import { audio } from '../src/audio'
 import { adProvider } from '../src/ads/adProvider'
+import { io, Socket } from 'socket.io-client'
+import GlobalRoyalFlushVFX from '../src/components/vfx/GlobalRoyalFlushVFX'
 
 // Native Expo splash is deliberately short; the artwork-matched React splash follows it.
 void ExpoSplashScreen.preventAutoHideAsync().catch(() => undefined)
@@ -35,6 +37,7 @@ const GAME_TABLE_ROUTES = new Set([
   'game/monarch', 'game/vipPlus', 'game/grandmaster', 'game/sovereign', 'game/tier-d',
   'game/vip-crew',
 ])
+type GlobalRoyalFlushEvent = { eventId: string; playerId: string; playerName: string; suit: 'spades' | 'hearts' | 'diamonds' | 'clubs'; occurredAt: number }
 
 export default function RootLayout() {
   const segments = useSegments()
@@ -43,6 +46,10 @@ export default function RootLayout() {
   const [assetsReady, setAssetsReady] = useState(false)
   const [showGameSplash, setShowGameSplash] = useState(true)
   const authInitialized = useAuthStore(s => s.isInitialized)
+  const [royalQueue, setRoyalQueue] = useState<GlobalRoyalFlushEvent[]>([])
+  const [activeRoyal, setActiveRoyal] = useState<GlobalRoyalFlushEvent | null>(null)
+  const segmentsRef = useRef(segments.join('/'))
+  segmentsRef.current = segments.join('/')
 
   useEffect(() => {
     let mounted = true
@@ -86,6 +93,30 @@ export default function RootLayout() {
   const session      = useAuthStore(s => s.session)
   const refreshProfile = useAuthStore(s => s.refreshProfile)
   const setUser      = useUserStore(s => s.setUser)
+
+  // Online-only celebration feed. Events are accepted only while this client is
+  // actively playing, kept in RAM, and deliberately not replayed after reconnect.
+  useEffect(() => {
+    if (!session?.access_token) return
+    const royalSocket: Socket = io(SERVER_URL, {
+      auth: { accessToken: session.access_token }, transports: ['websocket'],
+      reconnection: true, reconnectionDelay: 1000,
+    })
+    const onRoyal = (event: GlobalRoyalFlushEvent) => {
+      if (!event?.eventId || !GAME_TABLE_ROUTES.has(segmentsRef.current)) return
+      setRoyalQueue(previous => previous.some(item => item.eventId === event.eventId) ? previous : [...previous.slice(-4), event])
+    }
+    royalSocket.on('royal_flush:global_celebration', onRoyal)
+    return () => { royalSocket.off('royal_flush:global_celebration', onRoyal); royalSocket.disconnect() }
+  }, [session?.access_token])
+
+  // Never cover live play. The first queued moment begins after navigation has
+  // left the table route; additional moments play serially for five seconds each.
+  useEffect(() => {
+    if (activeRoyal || royalQueue.length === 0 || GAME_TABLE_ROUTES.has(segments.join('/'))) return
+    setActiveRoyal(royalQueue[0])
+    setRoyalQueue(previous => previous.slice(1))
+  }, [segments.join('/'), royalQueue, activeRoyal])
 
   // Last visited means entering a game, not viewing Profile. Server applies an
   // atomic Asia/Bangkok daily guard; this effect simply reports game navigation.
@@ -226,6 +257,14 @@ export default function RootLayout() {
           borderColor: '#2a2a2a',
         }}>
           <Stack screenOptions={{ headerShown: false }} />
+          {activeRoyal && (
+            <GlobalRoyalFlushVFX
+              eventId={activeRoyal.eventId}
+              playerName={activeRoyal.playerName}
+              suit={activeRoyal.suit}
+              onFinish={() => setActiveRoyal(null)}
+            />
+          )}
           {showGameSplash && (
             <GameSplash
               progress={loadingProgress}

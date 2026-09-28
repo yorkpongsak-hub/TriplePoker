@@ -24,6 +24,7 @@ import {
   VipPlusSeat,
 } from './vipPlusFoundation'
 import { VipPlusWaitingTable, vipPlusTableRegistry } from './vipPlusTableRegistry'
+import { broadcastHumanRoyalFlush } from './royalFlushBroadcast'
 
 export type VipPlusMatchPhase = 'INITIAL_ARRANGE' | 'BETTING' | 'BLIND_AUCTION' | 'REARRANGE' | 'MATCH_COMPLETE'
 
@@ -682,9 +683,9 @@ function seatForPlayer(state: VipPlusMatchState, playerId: string): VipPlusSeat 
   return VIP_PLUS_SEATS.find(seat => state.playerBySeat[seat] === playerId)
 }
 
-let bettingIo: Pick<Server, 'to'> | null = null
+let bettingIo: Pick<Server, 'to' | 'emit'> | null = null
 
-export function attachVipPlusBettingIo(io: Pick<Server, 'to'>): void {
+export function attachVipPlusBettingIo(io: Pick<Server, 'to' | 'emit'>): void {
   bettingIo = io
 }
 
@@ -938,6 +939,11 @@ function settleVipPlusGroup(state: VipPlusMatchState, group: 1 | 2 | 3): void {
   // เฉพาะ HOLDEM_G3's G3 เท่านั้น (7 ใบ scoring แต่ใช้จริงแค่ 5) กองอื่น/ruleset อื่น winningCards มี 5 ใบ
   // อยู่แล้วเลยเท่ากับ highlightedCards เป๊ะ (ไม่มีใบ "เกิน" ให้ต้องแยก)
   const highlightedCards = winner ? bestVipPlusCombo(winnerScoringCards).cards.map(vipPlusCardKey) : []
+  const winnerSeat = winner ? seatForPlayer(state, winner) : undefined
+  const winnerBest = winner ? bestVipPlusCombo(winnerScoringCards) : null
+  if (bettingIo && winner && winnerSeat && isHumanPlayer(state, winner) && winnerBest?.result.rank === 'royal_flush') {
+    broadcastHumanRoyalFlush(bettingIo, { eventId: `${state.roomId}:${state.gameNumber}:g${group}`, playerId: winner, playerName: state.displayNameBySeat[winnerSeat], cards: winnerBest.cards })
+  }
   bettingIo?.to(state.roomId).emit('vip_plus:group_settled', {
     gameNumber: state.gameNumber,
     group,

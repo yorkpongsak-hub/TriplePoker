@@ -17,6 +17,7 @@ import { useConfirmTableExit } from '../../../src/hooks/useConfirmTableExit'
 import { TABLE_SKINS } from '../../../src/config/tableSkins'
 import BossVictoryVFX from '../../../src/components/vfx/BossVictoryVFX'
 import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
+import NegativeStackGameOverVFX from '../../../src/components/vfx/NegativeStackGameOverVFX'
 import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/game/FlyingCoins'
 import { AvatarDisplay, PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
 import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
@@ -206,7 +207,11 @@ export default function VipPlusTableScreen() {
   const [matchResult, setMatchResult] = useState<MatchResult | null>(null)
   const [showVictoryVfx, setShowVictoryVfx] = useState(false)
   const [royalFlushPlayer, setRoyalFlushPlayer] = useState<string | null>(null)
+  const [negativeStackGameOver, setNegativeStackGameOver] = useState(false)
   const [hostToast, setHostToast] = useState(false)
+  useEffect(() => {
+    if (!negativeStackGameOver && selfSeat && typeof game.balances[selfSeat] === 'number' && game.balances[selfSeat]! < 0) setNegativeStackGameOver(true)
+  }, [game.balances, selfSeat, negativeStackGameOver])
   // ใบที่ P1 เลือกไว้ว่าจะหงายตอนกด CALL รอบเดิมพันปัจจุบัน — reset ทุกครั้งที่ถึงตาใหม่/CALL สำเร็จ
   // เป็น array เพราะ G3 รอบแรก (groupRound 1) ต้องหงายมากกว่า 1 ใบ (ดู requiredRevealCount)
   const [bettingRevealKeys, setBettingRevealKeys] = useState<string[]>([])
@@ -349,9 +354,6 @@ export default function VipPlusTableScreen() {
       // safety net เฉยๆ เผื่อ event ถัดไปมาช้าผิดปกติ — ต้องตรงกับ gameConfig.vipPlus5.resultDisplayMs เสมอ
       // เฉพาะตอนมีผู้ชนะจริง (all-fold ทั้งกอง winnerSeat เป็น null ไม่มีอะไรให้ฉลอง)
       if (data.winnerSeat && data.winnerHandName) {
-        if (String(data.winnerHandName).toLowerCase().replace(/[ _-]/g, '') === 'royalflush') {
-          setRoyalFlushPlayer(data.winnerDisplayName ?? data.winnerSeat)
-        }
         setRoundResultBanner({
           group: data.group, seat: data.winnerSeat, handName: data.winnerHandName, cards: data.winningCards,
           // มติลุงเยาะ (รอบ 10) — fallback เป็น cards ทั้งชุด (blink ทุกใบ) เผื่อ server รุ่นเก่าที่ยังไม่ส่ง
@@ -879,6 +881,14 @@ export default function VipPlusTableScreen() {
         </View>
       )}
       {royalFlushPlayer && <RoyalStraightFlushVFX playerName={royalFlushPlayer} onClose={() => setRoyalFlushPlayer(null)} />}
+      {negativeStackGameOver && <NegativeStackGameOverVFX eventKey={`${activeTableIdRef.current ?? 'vip-plus'}:${game.gameNumber}`} onFinish={() => {
+        const tableId = activeTableIdRef.current
+        hasLeftRef.current = true
+        if (tableId) socketRef.current?.emit('vip_plus:forfeit', { ...authPayload(), tableId })
+        activeTableIdRef.current = null
+        AsyncStorage.removeItem(ACTIVE_MATCH_KEY).catch(() => {})
+        router.replace('/(home)/lobby' as any)
+      }} />}
     </ImageBackground>
   )
 }
