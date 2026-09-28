@@ -1,5 +1,6 @@
 import { applyTierDLevelOutcome, arrangeTierDBot, assertTierDCardConservation, assignTierDAuctionCard, commitTierDCombo, createTierDLevel, firstValidTierDArrangement, openChallengeMatchPassed, resolveTierDGame, resolveTierDLevel, rollbackTierDGame, submitTierDArrangement, submitTierDUndoArrangement, swapTierDHandCard, tierDAiCandidateFraction, tierDAiMissionsEnabled, tierDBotArrangementUtility, tierDSearchBudgetForBotIndex, TIER_D_TRIPLE_SWEEP_BONUS, tierDBotCount, tierDDifficulty } from '../../src/game/tierDSolo'
 import { compareHands, evaluateBestFive } from '../../src/game/handEvaluator'
+import { evaluateSharedPile, isSharedArrangementFoul } from '../../src/game/sharedCardRules'
 import { createDeck, type Card } from '../../src/game/deck'
 
 const c = (value: number, suit: string): Card => ({
@@ -90,6 +91,9 @@ describe('Tier D Solo loop', () => {
     const state = createTierDLevel(level, 'human', random)
     expect(state.seats).toHaveLength(bots + 1)
     expect(state.seats.filter(seat => seat.id === state.comboBotId)).toHaveLength(bots >= 2 && level >= 201 ? 1 : 0)
+    for (const seat of state.seats.filter(seat => seat.isBot)) {
+      expect(isSharedArrangementFoul(state.arrangements[seat.id]!, state.communityPiles)).toBe(false)
+    }
   })
 
   test('deals all 11 player cards and all three community piles before arrangement', () => {
@@ -184,12 +188,24 @@ describe('Tier D Solo loop', () => {
     const botCards = state.dealtHands['tier-d-bot-1']
     for (const skill of [1, 3, 5, 10]) {
       const arrangement = arrangeTierDBot(botCards, state.communityPiles, skill, random)
-      const h1 = evaluateBestFive([...arrangement.pile1, ...state.communityPiles.pile1])
-      const h2 = evaluateBestFive([...arrangement.pile2, ...state.communityPiles.pile2])
-      const h3 = evaluateBestFive([...arrangement.pile3, ...state.communityPiles.pile3])
-      expect(compareHands(h1, h2)).toBeLessThanOrEqual(0)
-      expect(compareHands(h2, h3)).toBeLessThanOrEqual(0)
+      const h1 = evaluateSharedPile(arrangement, state.communityPiles, 1)
+      const h2 = evaluateSharedPile(arrangement, state.communityPiles, 2)
+      const h3 = evaluateSharedPile(arrangement, state.communityPiles, 3)
+      expect(compareHands(h1, h2)).toBeLessThan(0)
+      expect(compareHands(h2, h3)).toBeLessThan(0)
     }
+  })
+
+  test('bot search-budget fallback still enforces strict G1 < G2 < G3', () => {
+    const state = createTierDLevel(1, 'human', random)
+    const arrangement = arrangeTierDBot(
+      state.dealtHands['tier-d-bot-1'], state.communityPiles, 1, random,
+      [], false, .90, undefined, 0,
+    )
+    expect(isSharedArrangementFoul(arrangement, state.communityPiles)).toBe(false)
+    const ranks = ([1, 2, 3] as const).map(pile => evaluateSharedPile(arrangement, state.communityPiles, pile))
+    expect(compareHands(ranks[0], ranks[1])).toBeLessThan(0)
+    expect(compareHands(ranks[1], ranks[2])).toBeLessThan(0)
   })
 
   test.each([1, 2, 3, 4, 5])('skill %i combines public Mission and Combo EV with hand strength', (skill) => {

@@ -459,17 +459,25 @@ export function arrangeTierDBot(cards: Card[], community: TierDCommunityPiles, s
     const completed = forEachCombination(afterP1, 3, pile2 => {
       if (evaluated++ >= maxEvaluations) return false
       const pile3 = withoutCards(afterP1, pile2)
-      const h1 = evaluateBestFive([...pile1, ...community.pile1])
-      const h2 = evaluateBestFive([...pile2, ...community.pile2])
-      const h3 = evaluateBestFive([...pile3, ...community.pile3])
-      if (compareHands(h1, h2) >= 0 || compareHands(h2, h3) >= 0) return
       const arrangement = { pile1, pile2, pile3 }
+      // Use the same authoritative pile evaluator as foul detection and reveal.
+      // Keeping arrangement search on this path prevents a future G2 rule change
+      // (for example an eligible Auction card) from creating a layout that looks
+      // legal to the bot but reveals as G1 >= G2 or G2 >= G3.
+      const h1 = evaluatePile(arrangement, community, 1)
+      const h2 = evaluatePile(arrangement, community, 2)
+      const h3 = evaluatePile(arrangement, community, 3)
+      if (compareHands(h1, h2) >= 0 || compareHands(h2, h3) >= 0) return
       const hands = [h1,h2,h3]
       candidates.push({ arrangement, hands, total: tierDBotHandsUtility(hands, skill, missions, comboFocus, rise) })
     })
     if (!completed) return false
   })
-  if (!candidates.length) return defaultTierDArrangement(cards)
+  // A small search budget can expire before encountering a legal layout. Never
+  // leak the raw 3/3/5 deal-order split: it has no G1 < G2 < G3 guarantee and
+  // was the source of AI revealing a stronger G1 than G2. Correctness takes
+  // priority over strategy quality, so fall back to the first verified layout.
+  if (!candidates.length) return firstValidTierDArrangement(cards, community)
   candidates.sort((a, b) => b.total - a.total)
   const boundedFraction = Math.min(1, Math.max(.01, candidateFraction))
   const window = Math.max(1, Math.ceil(candidates.length * boundedFraction))
