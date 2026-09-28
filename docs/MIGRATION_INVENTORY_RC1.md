@@ -2,6 +2,14 @@
 
 Audit date: 2026-09-28
 
+Staging verification update: 2026-09-29
+
+- The linked Staging migration ledger records only `005` and `006`. This ledger cannot be used by itself to decide which repository migrations should run: read-only schema inspection confirms that most later objects were applied manually without corresponding migration-history rows.
+- Never use a blind `supabase db push` against this project. It could attempt to replay historical files, including the prohibited manual-only `031` reset.
+- Read-only table, index and PostgREST OpenAPI inspection confirms the tables, columns and callable RPC signatures expected by `071`-`074` and `076`-`086` are present, subject to the trigger-only exception below.
+- `sync_tier_d_freeze_durations()` is intentionally absent from PostgREST RPC discovery because it returns `trigger`; the `tier_d_item_inventory.freeze_durations` column is present.
+- One confirmed Staging schema defect remains: `public.tier_d_item_reward_weights` from migration `075` is absent (`PGRST205`), while `grant_tier_d_level_random_item` is present and references it. Apply only the reviewed additive `075` repair (or its exact missing table/seed subset), verify the six configured rows and exercise the Level reward RPC with a disposable QA account before clearing this blocker.
+
 ## Repository inventory
 
 - The repository contains one continuous sequence of 87 SQL files, `001` through `087`, with no missing or duplicate numbers.

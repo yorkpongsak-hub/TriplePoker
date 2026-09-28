@@ -28,6 +28,7 @@ ios/build/
 npm-debug.log*
 .DS_Store
 Thumbs.db
+supabase/.temp/
 
 # IDE
 .vscode/
