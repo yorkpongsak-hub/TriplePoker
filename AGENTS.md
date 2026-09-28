@@ -15,6 +15,20 @@ the launch/practice/table-learning/results/quiz screens; advanced tables remain 
 Do not silently remove old economy data or source files. Keep backups out
 of Git. Record decisions and remaining release checks in docs/RELAUNCH_2026-09-05.md.
 
+## Launch schedule guard
+
+The current target is an Android Version 1.0 launch in late October 2026. When
+the owner requests any new feature or material scope expansion before launch,
+first assess its impact on the release critical path (RC stability, automated
+regression, Android device QA, migrations, privacy/ads compliance, store assets,
+and submission lead time). If it could delay or materially increase risk to the
+late-October launch, explicitly warn the owner in Thai before implementation,
+state the likely schedule/risk impact, and recommend deferring it to a post-1.0
+release or substituting a smaller launch-safe version. Do not treat this warning
+rule as a blanket prohibition: proceed when the owner confirms the tradeoff or
+when the request is necessary to fix a launch blocker, security issue, data-loss
+risk, policy violation, or correctness defect.
+
 This authorization does not bypass tool sandbox approvals or authorize purchases,
 database resets, app-store publication, or messages to third parties. No subagents
 are requested for this task.
