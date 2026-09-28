@@ -38,6 +38,7 @@ import { clearPendingMatch, markPendingMatch } from '../../../src/utils/pendingM
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
 import MonarchConquestBanner from '../../../src/components/game/MonarchConquestBanner'
 import { leaveAfterClassicSettlement, leaveTierCPlusTable } from '../../../src/ads/postSettlementExit'
+import { showProfitableAiInterstitial } from '../../../src/ads/profitableAiInterstitial'
 import { MINION_AVATAR } from '../../../src/constants/minionAvatars'
 import { ActionButton } from '../../../src/components/ui/ActionButton'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
@@ -414,6 +415,7 @@ const GameTableLive: React.FC = () => {
   // Patch 2026-07-18: format ยอดโทเคนเต็มมี comma (มติลุงเยาะ: แบบเต็ม ไม่ย่อ K/M) — pattern Initiate
   const fmtToken = (v: number | undefined) => (v ?? buyInAmount).toLocaleString('en-US')
   const [tokenDeltas, setTokenDeltas]   = useState<Record<string, number>>({})
+  const profitableAdTicketRef = useRef<string | undefined>(undefined)
   // Patch 2026-07-18: Boss Victory VFX — null = ไม่แสดง (mount/unmount ทั้ง component ปลอดภัย)
   const [victoryVfx, setVictoryVfx] = useState<VictoryTier | null>(null)
   const [matchResult, setMatchResult]   = useState<any>(null)
@@ -1115,6 +1117,7 @@ const GameTableLive: React.FC = () => {
       setPhase('result')
       setTokenBalance(data.tokenBalance ?? {})
       setTokenDeltas(data.tokenDeltas ?? {})
+      profitableAdTicketRef.current = data.profitableAdTicket
       syncTokenFlow(data)
       const speaker = aiListRef.current[0]?.name ?? 'Iron Wall'
       const winners = Object.values(data.pileWinners ?? {})
@@ -1456,9 +1459,12 @@ const GameTableLive: React.FC = () => {
     socketRef.current?.emit('player_continue', { roomId: ROOM_ID, playerId: PLAYER_ID })
   }
 
-  const handleRoundSummaryContinue = () => {
+  const handleRoundSummaryContinue = async () => {
     if (roundSummaryContinuedRef.current) return
     roundSummaryContinuedRef.current = true
+    const adTicket = profitableAdTicketRef.current
+    profitableAdTicketRef.current = undefined
+    await showProfitableAiInterstitial(adTicket, accessToken)
     socketRef.current?.emit('player_continue', { roomId: ROOM_ID, playerId: PLAYER_ID })
     setGfFinalResult(null)
   }

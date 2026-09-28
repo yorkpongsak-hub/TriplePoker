@@ -30,6 +30,7 @@ import { resolveNpcPoolKey, type ResolveNpcPoolContext } from '../economy/npcPoo
 import type { AccountRef } from '../economy/economyTypes'
 import { calculateGameProfitAndRake, generateTierCPlusMissions, getMissionDifficulty, getTierMatchCount, getTierMissionAward, missionStreakBonus, scoreTierCPlusRound, TIER_C_PLUS_RULES, type TierCPlusScore, type TierCPlusTier } from './tierCPlusScoring'
 import { missionResult, type Mission } from './leagueGameplay'
+import { issueProfitableAiInterstitialTicket } from './profitableAiInterstitial'
 import { broadcastHumanRoyalFlush } from './royalFlushBroadcast'
 
 // ── Types ────────────────────────────────────────────────────
@@ -907,6 +908,13 @@ export async function submitArrangement(
   }
   state.results.push(result)
 
+  const profitableAdTicket = issueProfitableAiInterstitialTicket({
+    tier: state.tier,
+    gameId: state.escrowId ?? state.roomId,
+    userId: state.humanPlayerId,
+    tokenDelta: deltas[state.humanPlayerId] ?? 0,
+  })
+
   // ── Emit round result ────────────────────────────────────
   io.to(roomId).emit('round_result', {
     roomId,
@@ -917,6 +925,7 @@ export async function submitArrangement(
     tokenDeltas: deltas,
     tokenBalance: state.tokenBalance,
     hasFoul: fouled,
+    profitableAdTicket,
     ...(state.tier === 'initiate'
       ? { pot: state.pot, feeRake: state.feeRake, buyIn: state.buyInAmount }
       : {}),

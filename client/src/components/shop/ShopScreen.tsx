@@ -33,6 +33,7 @@ import { ThemedBackground } from '../ui/ThemedBackground'
 import { glassPanel, glassPanelDense, textOnGlass } from '../../ui/glassStyles'
 import { TIER_CONFIG } from '../../config/tierConfig'
 import { BADGES } from '../../../assets/badges/BADGE_MANIFEST'
+import { planFromVipStatus } from '../../membership/entitlements'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
@@ -297,41 +298,32 @@ const TOKEN_PACKS: TokenPack[] = [
 interface VipPlan {
   tier: 'vip' | 'vip_pro'
   label: string
-  priceTHB: number       // ราคา Monthly
-  price3moTHB: number    // ราคา Special แบบ 3 Months
+  priceTHB: number
+  priceYearTHB: number
+  freeMonths: number
   accent: string
   ribbon?: string
-  benefits: string[]
+  adBenefits: string[]
+  accessBenefits: string[]
+  socialBenefits: string[]
 }
 
 const VIP_PLANS: VipPlan[] = [
   {
-    tier: 'vip', label: 'VIP', priceTHB: 99, price3moTHB: 259, accent: C.silver,
-    benefits: [
-      'Ad-free play and reward claims',
-      '+300 Tokens automatically each daily login',
-      'Skip ads when claiming Streak Milestone rewards',
-      'VIP avatars and custom profile photo',
-      'Gold Radiance avatar frame',
-      'VIP table skins earned through progression',
-      'Open private PIN-protected tables',
-      'Bag Expansion purchases unlocked',
-    ],
+    tier: 'vip', label: 'Pro', priceTHB: 149, priceYearTHB: 1490, freeMonths: 2, accent: C.silver,
+    adBenefits: ['No forced interstitial ads', 'Post-game Analysis opens immediately', 'Optional rewarded ads remain available for extra rewards'],
+    accessBenefits: ['Create private tables', 'Protect private tables with a PIN', 'Create and use Golf Group mode'],
+    socialBenefits: [],
   },
   {
-    tier: 'vip_pro', label: 'VIP PRO', priceTHB: 199, price3moTHB: 499, accent: C.gold, ribbon: 'BEST VALUE',
-    benefits: [
-      'Everything included with VIP',
-      'VIP Plus: exclusive 3–5 human-player tables',
-      'VIP PRO-exclusive avatar collection',
-      'All Competitive Item purchases unlocked by Tier',
-      'Exclusive VIP PRO identity and presentation',
-      'Access to VIP Plus Beyond the Rules beta when enabled',
-    ],
+    tier: 'vip_pro', label: 'Pro Plus', priceTHB: 499, priceYearTHB: 3992, freeMonths: 4, accent: C.gold, ribbon: 'SOCIAL STATUS',
+    adBenefits: ['No forced interstitial ads', 'Post-game Analysis opens immediately', 'Optional rewarded ads remain available for extra rewards'],
+    accessBenefits: ['All Pro gameplay-access benefits'],
+    socialBenefits: ['Gift and Tip', 'Heart, Rose and other Pro Plus social items', 'Pro Plus badge and identity', 'Social/status benefits never improve gameplay odds'],
   },
 ]
 
-type BillingPeriod = 'monthly' | '3mo'
+type BillingPeriod = 'monthly' | 'yearly'
 
 // ─── Small building blocks ──────────────────────────────────────────────
 
@@ -420,23 +412,23 @@ function BadgeShopCard({ badge, busy, onBuy }: { badge: BadgeStatusEntry; busy: 
   )
 }
 
-// ─── VIP PRO Upgrade Bottom Sheet ───────────────────────────────────────
+// ─── Pro Plus Upgrade Bottom Sheet ───────────────────────────────────────
 function VipUpgradeSheet({ visible, onClose, onUpgrade }: { visible: boolean; onClose: () => void; onUpgrade: () => void }) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <TouchableOpacity style={s.sheetOverlay} activeOpacity={1} onPress={onClose}>
         <View style={s.sheetBox}>
           <View style={s.sheetHandle} />
-          <Text style={s.sheetTitle}>🔒 VIP PRO REQUIRED</Text>
-          <Text style={s.sheetSub}>Competitive Items are exclusive to VIP PRO members.</Text>
+          <Text style={s.sheetTitle}>🔒 PRO PLUS REQUIRED</Text>
+          <Text style={s.sheetSub}>This social/status collection is exclusive to Pro Plus members.</Text>
           <View style={s.sheetBenefits}>
-            {VIP_PLANS[1].benefits.map((b, i) => (
+            {VIP_PLANS[1].socialBenefits.map((b, i) => (
               <Text key={i} style={s.sheetBenefitRow}>✦  {b}</Text>
             ))}
           </View>
           <PressScale onPress={onUpgrade}>
             <View style={s.sheetUpgradeBtn}>
-              <Text style={s.sheetUpgradeTxt}>UPGRADE TO VIP PRO — ฿{VIP_PLANS[1].priceTHB}/mo</Text>
+              <Text style={s.sheetUpgradeTxt}>UPGRADE TO PRO PLUS — ฿{VIP_PLANS[1].priceTHB}/mo</Text>
             </View>
           </PressScale>
           <TouchableOpacity onPress={onClose} style={{ marginTop: 10, alignItems: 'center' }}>
@@ -517,6 +509,7 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
   }, [toastMsg])
 
   const vipStatus  = profile?.vip_status ?? 'none'
+  const currentPlan = planFromVipStatus(vipStatus)
   const isVip      = vipStatus !== 'none'
   const isVipPro   = vipStatus === 'vip_pro'
   const tokenBalance = profile?.token_balance ?? 0
@@ -559,8 +552,7 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
   }
 
   const handleSubscribe = (plan: VipPlan, period: BillingPeriod) => {
-    // TODO(RevenueCat): ต่อ purchase flow จริงตอน integrate IAP subscription (Sprint 7)
-    handleComingSoon(`${plan.label} — ${period === 'monthly' ? 'Monthly' : '3 Months'}`)
+    handleComingSoon(`${plan.label} — ${period === 'monthly' ? 'Monthly' : 'Yearly'}`)
   }
 
   const handleBuyTokenPack = (pack: TokenPack) => {
@@ -864,27 +856,41 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
           {/* ── VIP (comparison cards) ── */}
           {activeTab === 'vip' && (
             <View style={{ gap: 14 }}>
+              <GlassCard dense style={s.vipCard}>
+                <Text style={s.vipLabel}>CURRENT PLAN · {currentPlan.replace('_', ' ')}</Text>
+                <Text style={s.itemDesc}>{currentPlan === 'FREE' ? 'No active subscription' : 'Active membership'}</Text>
+              </GlassCard>
               <View style={s.billingToggle}>
                 <PressScale onPress={() => setBillingPeriod('monthly')} style={{ flex: 1 }}>
                   <View style={[s.billingToggleBtn, billingPeriod === 'monthly' && s.billingToggleBtnActive]}>
                     <Text style={[s.billingToggleTxt, billingPeriod === 'monthly' && s.billingToggleTxtActive]}>Monthly</Text>
                   </View>
                 </PressScale>
-                <PressScale onPress={() => setBillingPeriod('3mo')} style={{ flex: 1 }}>
-                  <View style={[s.billingToggleBtn, billingPeriod === '3mo' && s.billingToggleBtnActive]}>
-                    <Text style={[s.billingToggleTxt, billingPeriod === '3mo' && s.billingToggleTxtActive]}>3 Months</Text>
+                <PressScale onPress={() => setBillingPeriod('yearly')} style={{ flex: 1 }}>
+                  <View style={[s.billingToggleBtn, billingPeriod === 'yearly' && s.billingToggleBtnActive]}>
+                    <Text style={[s.billingToggleTxt, billingPeriod === 'yearly' && s.billingToggleTxtActive]}>Yearly</Text>
                     <View style={s.billingSpecialBadge}>
-                      <Text style={s.billingSpecialBadgeTxt}>SPECIAL</Text>
+                      <Text style={s.billingSpecialBadgeTxt}>SAVE</Text>
                     </View>
                   </View>
                 </PressScale>
               </View>
+              <GlassCard style={s.vipCard}>
+                <Text style={s.vipLabel}>Free</Text>
+                <Text style={s.vipSavingsNote}>AD BENEFITS</Text>
+                <Text style={s.vipBenefitRow}>✦  Normal forced interstitial cadence remains</Text>
+                <Text style={s.vipBenefitRow}>✦  Watch a rewarded ad every time before Analysis</Text>
+                <Text style={s.vipBenefitRow}>✦  Reward doubling and optional ad bonuses remain available</Text>
+                <Text style={s.vipSavingsNote}>GAMEPLAY ACCESS</Text>
+                <Text style={s.vipBenefitRow}>✦  Core Solo and progression remain available</Text>
+              </GlassCard>
               {VIP_PLANS.map(plan => {
                 const isMonthly = billingPeriod === 'monthly'
-                const price = isMonthly ? plan.priceTHB : plan.price3moTHB
-                const unit = isMonthly ? '/ month' : '/ 3 months'
-                const fullPrice3mo = plan.priceTHB * 3
-                const savings = fullPrice3mo - plan.price3moTHB
+                const price = isMonthly ? plan.priceTHB : plan.priceYearTHB
+                const unit = isMonthly ? '/ month' : '/ year'
+                const activeTier = currentPlan === 'PRO' ? 'vip' : currentPlan === 'PRO_PLUS' ? 'vip_pro' : 'none'
+                const isCurrent = activeTier === plan.tier
+                const action = isCurrent ? 'MANAGE SUBSCRIPTION' : activeTier === 'vip_pro' ? 'DOWNGRADE' : 'UPGRADE'
                 return (
                   <GlassCard key={plan.tier} style={[s.vipCard, { borderColor: plan.accent }]}>
                     {plan.ribbon && (
@@ -897,26 +903,27 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
                       <View>
                         <Text style={[s.vipLabel, { color: plan.accent }]}>{plan.label}</Text>
                         <Text style={s.vipPrice}>฿{price} <Text style={s.vipPriceUnit}>{unit}</Text></Text>
-                        {!isMonthly && (
-                          <Text style={s.vipSavingsNote}>฿{fullPrice3mo} billed monthly · Save ฿{savings}</Text>
-                        )}
+                        {!isMonthly && <Text style={s.vipSavingsNote}>Equivalent to {plan.freeMonths} months free</Text>}
                       </View>
                     </View>
                     <View style={s.vipBenefits}>
-                      {plan.benefits.map((b, i) => (
-                        <Text key={i} style={s.vipBenefitRow}>✦  {b}</Text>
-                      ))}
+                      <Text style={s.vipSavingsNote}>AD BENEFITS</Text>
+                      {plan.adBenefits.map((b, i) => <Text key={`ad-${i}`} style={s.vipBenefitRow}>✦  {b}</Text>)}
+                      <Text style={s.vipSavingsNote}>GAMEPLAY ACCESS</Text>
+                      {plan.accessBenefits.map((b, i) => <Text key={`access-${i}`} style={s.vipBenefitRow}>✦  {b}</Text>)}
+                      {plan.socialBenefits.length ? <Text style={s.vipSavingsNote}>PRO PLUS SOCIAL / STATUS</Text> : null}
+                      {plan.socialBenefits.map((b, i) => <Text key={`social-${i}`} style={s.vipBenefitRow}>✦  {b}</Text>)}
                     </View>
                     <PressScale onPress={() => handleSubscribe(plan, billingPeriod)}>
                       <View style={[s.subscribeBtn, { backgroundColor: plan.accent }]}>
-                        <Text style={s.subscribeBtnTxt}>SUBSCRIBE</Text>
+                        <Text style={s.subscribeBtnTxt}>{action}</Text>
                       </View>
                     </PressScale>
                   </GlassCard>
                 )
               })}
               <Text style={s.iapDisclaimer}>
-                Subscriptions renew monthly via App Store / Google Play. Cancel anytime.
+                Purchase activation is coming later. Prices and benefits shown here are the planned Google Play offering. VIP removes inconvenience ads, not optional value-exchange ads.
               </Text>
             </View>
           )}

@@ -8,14 +8,14 @@ describe('eight-day Daily Streak eligibility', () => {
   })
   test('VIP Pro protects one missed day, Pro Plus protects two, Free protects none',()=>{
     expect(computeDailyPlayStreak(3,3,'2026-09-01',0,false,'2026-09-03','FREE')).toMatchObject({cycleDay:1,shields:0})
-    expect(computeDailyPlayStreak(3,3,'2026-09-01',0,false,'2026-09-03','VIP_PRO')).toMatchObject({cycleDay:4,shields:0,shieldUsed:true})
-    expect(computeDailyPlayStreak(3,3,'2026-09-01',0,false,'2026-09-04','VIP_PRO_PLUS')).toMatchObject({cycleDay:4,shields:0,shieldUsed:true})
+    expect(computeDailyPlayStreak(3,3,'2026-09-01',0,false,'2026-09-03','PRO')).toMatchObject({cycleDay:4,shields:0,shieldUsed:true})
+    expect(computeDailyPlayStreak(3,3,'2026-09-01',0,false,'2026-09-04','PRO_PLUS')).toMatchObject({cycleDay:4,shields:0,shieldUsed:true})
   })
   test('second consecutive missed day breaks VIP Pro but not Pro Plus with two protections',()=>{
-    expect(computeDailyPlayStreak(4,4,'2026-09-01',1,false,'2026-09-03','VIP_PRO')).toMatchObject({cycleDay:1})
-    expect(computeDailyPlayStreak(4,4,'2026-09-01',1,false,'2026-09-03','VIP_PRO_PLUS')).toMatchObject({cycleDay:5,shields:0})
+    expect(computeDailyPlayStreak(4,4,'2026-09-01',1,false,'2026-09-03','PRO')).toMatchObject({cycleDay:1})
+    expect(computeDailyPlayStreak(4,4,'2026-09-01',1,false,'2026-09-03','PRO_PLUS')).toMatchObject({cycleDay:5,shields:0})
   })
   test('Day 8 stays available for claim; next unclaimed play starts a safe new cycle',()=>{
-    expect(computeDailyPlayStreak(8,8,'2026-09-01',2,true,'2026-09-02','VIP_PRO_PLUS')).toMatchObject({cycleDay:1,shields:2})
+    expect(computeDailyPlayStreak(8,8,'2026-09-01',2,true,'2026-09-02','PRO_PLUS')).toMatchObject({cycleDay:1,shields:2})
   })
 })

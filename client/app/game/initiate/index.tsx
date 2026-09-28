@@ -34,6 +34,7 @@ import PreGameCountdown from '../../../src/components/PreGameCountdown'
 import MonarchConquestBanner from '../../../src/components/game/MonarchConquestBanner'
 import { ActionButton } from '../../../src/components/ui/ActionButton'
 import { leaveAfterClassicSettlement } from '../../../src/ads/postSettlementExit'
+import { showProfitableAiInterstitial } from '../../../src/ads/profitableAiInterstitial'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
 import { GuideOverlay } from '../../../src/components/onboarding/GuideOverlay'
 import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
@@ -404,6 +405,8 @@ const GameTableLive: React.FC = () => {
   // Patch 2026-07-18: format ยอดโทเคนเต็มมี comma (มติลุงเยาะ: แบบเต็ม ไม่ย่อ K/M)
   const fmtToken = (v: number | undefined) => (v ?? buyInAmount).toLocaleString('en-US')
   const [tokenDeltas, setTokenDeltas]   = useState<Record<string, number>>({})
+  const profitableAdTicketRef = useRef<string | undefined>(undefined)
+  const profitableAdTransitionRef = useRef(false)
   const [matchResult, setMatchResult]   = useState<any>(null)
 
   // Token Flow Panel (Spec v1.1) - ค่าทั้งหมดมาจาก server ล้วน client ไม่คำนวณเอง
@@ -769,6 +772,7 @@ const GameTableLive: React.FC = () => {
       setPhase('result')
       setTokenBalance(data.tokenBalance ?? {})
       setTokenDeltas(data.tokenDeltas ?? {})
+      profitableAdTicketRef.current = data.profitableAdTicket
       if (data.pot) setFlowPot(data.pot)
       if (typeof data.feeRake === 'number') setFlowFeeRake(data.feeRake)
       if (typeof data.buyIn === 'number') setFlowBuyIn(data.buyIn)
@@ -951,16 +955,22 @@ const GameTableLive: React.FC = () => {
   }
 
   // ── Continue → emit player_continue รอ server
-  const handleContinue = () => {
+  const handleContinue = async () => {
+    if (profitableAdTransitionRef.current) return
+    profitableAdTransitionRef.current = true
     if (continueTimerRef.current) clearInterval(continueTimerRef.current)
     blinkAnim.stopAnimation(); blinkAnim.setValue(1)
     btnBlinkAnim.stopAnimation(); btnBlinkAnim.setValue(1)
     setShowResult(false)
+    const adTicket = profitableAdTicketRef.current
+    profitableAdTicketRef.current = undefined
+    await showProfitableAiInterstitial(adTicket, accessToken)
     // Fade out ไพ่ทุกใบก่อน emit continue (stop ก่อนเสมอ กัน timing ค้างจากรอบก่อน)
     fadeCards.stopAnimation()
     Animated.timing(fadeCards, {
       toValue: 0, duration: 600, useNativeDriver: false,
     }).start(() => {
+      profitableAdTransitionRef.current = false
       socketRef.current?.emit('player_continue', { roomId: ROOM_ID, playerId: PLAYER_ID })
     })
   }

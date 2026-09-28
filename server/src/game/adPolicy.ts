@@ -1,28 +1,29 @@
 /** Central advertising and membership policy.  Provider UI is deliberately separate. */
-export type Membership = 'FREE' | 'VIP_PRO' | 'VIP_PRO_PLUS'
+import { entitlementsForPlan, planFromVipStatus, type MembershipPlan } from './membershipEntitlements'
+
+export type Membership = MembershipPlan
 export type RewardedAdCategory = 'RANDOM_ITEM' | 'SELECTED_ITEM_REFILL' | 'TOKEN_RESCUE' | 'DAILY_STREAK' | 'PROGRESSION_REWARD'
-export type NaturalBreak = 'TIER_D_LEVEL_COMPLETE' | 'TIER_D_RETRY' | 'TIER_D_EXIT_TO_LOBBY' | 'TIER_D_TOP20_CONTINUE' | 'CLASSIC_GAME_SETTLED' | 'CLASSIC_POST_SETTLEMENT_EXIT'
+export type NaturalBreak = 'TIER_D_LEVEL_COMPLETE' | 'TIER_D_RETRY' | 'TIER_D_EXIT_TO_LOBBY' | 'TIER_D_TOP20_CONTINUE' | 'CLASSIC_GAME_SETTLED' | 'CLASSIC_POST_SETTLEMENT_EXIT' | 'PROFITABLE_AI_MATCH'
 export const REWARDED_AD_GRACE_MS = 45_000
 
-// The legacy database values intentionally remain stable: vip is VIP Pro and
-// vip_pro is the product's VIP Pro Plus entitlement.
+// The legacy database values intentionally remain stable: vip is Pro and
+// vip_pro is the product's Pro Plus entitlement.
 export function membershipFromVipStatus(value: string | null | undefined): Membership {
-  return value === 'vip_pro' ? 'VIP_PRO_PLUS' : value === 'vip' ? 'VIP_PRO' : 'FREE'
+  return planFromVipStatus(value)
 }
 export const needsDailyStreakRewardedAd = (membership: Membership) => membership === 'FREE'
-export const socialBonusAllowed = (membership: Membership) => membership === 'VIP_PRO_PLUS'
-export const streakProtectionEntitlement = (membership: Membership) => membership === 'VIP_PRO_PLUS' ? 2 : membership === 'VIP_PRO' ? 1 : 0
+export const socialBonusAllowed = (membership: Membership) => entitlementsForPlan(membership).canUseProPlusSocialBenefits
+export const streakProtectionEntitlement = (membership: Membership) => membership === 'PRO_PLUS' ? 2 : membership === 'PRO' ? 1 : 0
 
 export function canRequestRewardedAd(membership: Membership, category: RewardedAdCategory): boolean {
   if (category === 'DAILY_STREAK') return membership === 'FREE'
-  if (membership === 'VIP_PRO_PLUS') return false
-  return true
+  return entitlementsForPlan(membership).canUseRewardedAdsForExtras
 }
 
 export function canShowForcedInterstitial(input: { membership: Membership; naturalBreak: NaturalBreak; now: number; lastForcedAt?: number | null; rewardedGraceUntil?: number | null; providerAvailable: boolean }): boolean {
-  if (input.membership !== 'FREE' || !input.providerAvailable) return false
+  if (entitlementsForPlan(input.membership).hasNoForcedInterstitialAds || !input.providerAvailable) return false
   if (input.rewardedGraceUntil && input.rewardedGraceUntil > input.now) return false
-  return !input.lastForcedAt || input.now - input.lastForcedAt >= 60_000
+  return !input.lastForcedAt || input.now - input.lastForcedAt >= 300_000
 }
 
 export const DAILY_STREAK_MULTIPLIERS = [1, 1, 2, 1, 2, 1, 2, 3] as const

@@ -1,10 +1,10 @@
 import { Server, Socket } from 'socket.io'
 import { supabase, supabaseAdmin } from '../config/supabase'
-import { getUserVipTier } from '../middleware/vipGuard'
+import { entitlementsFromVipStatus, type MembershipEntitlements } from '../game/membershipEntitlements'
 import { buildCrewSessionView, createCrewInviteToken, CrewTableError, vipPrivateCrewRegistry, type CrewArrangement, type CrewSession } from '../game/vipPrivateCrew'
 import { acceptVipCrewInvite, createVipCrewInvite, loadCrewSession, loadOrCreateVipCrew, persistCrewSession, removeVipCrewMemberStored } from '../game/vipPrivateCrewService'
 
-type Profile = { playerId: string; displayName: string; vip: boolean }
+type Profile = { playerId: string; displayName: string; entitlements: MembershipEntitlements }
 const tracked = new Map<string, { sessionId: string; playerId: string }>()
 const arrangementTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const revealTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -14,7 +14,7 @@ async function authenticate(userId: string, token?: string | null): Promise<Prof
   if (error || data.user?.id !== userId) return null
   const { data: row, error: profileError } = await supabaseAdmin.from('users').select('display_name,vip_status').eq('user_id', userId).single()
   if (profileError || !row) return null
-  return { playerId: userId, displayName: row.display_name ?? 'Player', vip: (row.vip_status ?? 'none') !== 'none' }
+  return { playerId: userId, displayName: row.display_name ?? 'Player', entitlements: entitlementsFromVipStatus(row.vip_status) }
 }
 
 function errorCode(error: unknown): string { return error instanceof CrewTableError ? error.code : error instanceof Error ? error.message : 'SERVER_ERROR' }
@@ -70,7 +70,7 @@ export function registerVipPrivateCrewSocket(io: Server, socket: Socket): void {
 
   socket.on('crew:create_invite', async (data: { userId: string; accessToken?: string | null }) => {
     try {
-      const profile = await authenticate(data.userId, data.accessToken); if (!profile?.vip) throw new Error('VIP_REQUIRED')
+      const profile = await authenticate(data.userId, data.accessToken); if (!profile?.entitlements.canUseGolfGroupMode) throw new Error('PRO_REQUIRED')
       const token = createCrewInviteToken(); const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1_000
       await createVipCrewInvite(profile.playerId, token, expiresAt)
       socket.emit('crew:invite', { token, expiresAt, url: `triplepoker://game/vip-crew?invite=${encodeURIComponent(token)}` })
@@ -82,12 +82,12 @@ export function registerVipPrivateCrewSocket(io: Server, socket: Socket): void {
   })
 
   socket.on('crew:remove_member', async (data: { userId: string; accessToken?: string | null; playerId: string }) => {
-    try { const profile = await authenticate(data.userId, data.accessToken); if (!profile?.vip) throw new Error('VIP_REQUIRED'); const crew = await removeVipCrewMemberStored(profile.playerId, data.playerId); socket.emit('crew:state', crew) } catch (error) { emitError(socket, error) }
+    try { const profile = await authenticate(data.userId, data.accessToken); if (!profile?.entitlements.canUseGolfGroupMode) throw new Error('PRO_REQUIRED'); const crew = await removeVipCrewMemberStored(profile.playerId, data.playerId); socket.emit('crew:state', crew) } catch (error) { emitError(socket, error) }
   })
 
   socket.on('crew:create_session', async (data: { userId: string; accessToken?: string | null; pin: string; points?: { g1: number; g2: number; g3: number }; comboEnabled?: boolean }) => {
     try {
-      const profile = await authenticate(data.userId, data.accessToken); if (!profile?.vip || (await getUserVipTier(profile.playerId)) === 'none') throw new Error('VIP_REQUIRED')
+      const profile = await authenticate(data.userId, data.accessToken); if (!profile?.entitlements.canCreatePrivateTable || !profile.entitlements.canUsePrivateTablePin || !profile.entitlements.canUseGolfGroupMode) throw new Error('PRO_REQUIRED')
       await loadOrCreateVipCrew(profile.playerId)
       const session = vipPrivateCrewRegistry.createSession({ ownerId: profile.playerId, ownerName: profile.displayName, pin: data.pin, points: data.points, comboEnabled: data.comboEnabled })
       socket.join(session.sessionId); socket.join(profile.playerId); tracked.set(socket.id, { sessionId: session.sessionId, playerId: profile.playerId })

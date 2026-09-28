@@ -21,6 +21,7 @@ import { grantTierCGraduationReward } from './tierDLevel250'
 import { analyzeTierDCompletedMatch } from './tierDAnalysis'
 import { escrowBuyIn, settleEscrow } from './gameLoop'
 import { tierDDuelWon } from './tierDRiseDuel'
+import { issueProfitableAiInterstitialTicket } from './profitableAiInterstitial'
 import { broadcastHumanRoyalFlush } from './royalFlushBroadcast'
 
 type CardKeys = { pile1: string[]; pile2: string[]; pile3: string[] }
@@ -376,7 +377,8 @@ async function finishMatch(io:Server,s:Session){
   clearRevealSafety(s)
   commitCurrentPile(io,s)
   // This is emitted once, after G3 is committed, and is never persisted with
-  // the resumable match snapshot.  Free members receive score-only data.
+  // the resumable match snapshot. The client entitlement gate requires a
+  // completed Rewarded Ad for Free members before rendering these details.
   const visibleBeforeReveal=new Set<TierDGameNumber>([...s.state.guidedRevealPiles,...(s.state.openChallenge?.revealedPiles??[])])
   const knownOpponents=Object.fromEntries(s.state.seats.filter(seat=>seat.isBot).flatMap(seat=>{
     const layout=s.state.arrangements[seat.id]
@@ -384,7 +386,7 @@ async function finishMatch(io:Server,s:Session){
     return [[seat.id,layout]]
   }))
   const analysis=analyzeTierDCompletedMatch(s.state,s.userId,s.state.duel?(s.state.duel.current+1) as 1|2|3:s.matchNumber,knownOpponents)
-  const analysisPayload={matchNumber:analysis.matchNumber,actualScore:analysis.actualScore,bestScore:analysis.bestScore,actualWins:analysis.actualWins,bestWins:analysis.bestWins,actualMissionCount:analysis.actualMissionCount,bestMissionCount:analysis.bestMissionCount,actualCombo:analysis.actualCombo,bestCombo:analysis.bestCombo,pile:analysis.pile,...(s.isVip?{community:Object.fromEntries(Object.entries(analysis.community).map(([key,cards])=>[key,cards.map(cardKey)])),actual:Object.fromEntries(Object.entries(analysis.actual).map(([key,cards])=>[key,cards.map(cardKey)])),best:Object.fromEntries(Object.entries(analysis.best).map(([key,cards])=>[key,cards.map(cardKey)]))}: {})}
+  const analysisPayload={matchNumber:analysis.matchNumber,actualScore:analysis.actualScore,bestScore:analysis.bestScore,actualWins:analysis.actualWins,bestWins:analysis.bestWins,actualMissionCount:analysis.actualMissionCount,bestMissionCount:analysis.bestMissionCount,actualCombo:analysis.actualCombo,bestCombo:analysis.bestCombo,pile:analysis.pile,community:Object.fromEntries(Object.entries(analysis.community).map(([key,cards])=>[key,cards.map(cardKey)])),actual:Object.fromEntries(Object.entries(analysis.actual).map(([key,cards])=>[key,cards.map(cardKey)])),best:Object.fromEntries(Object.entries(analysis.best).map(([key,cards])=>[key,cards.map(cardKey)]))}
   io.to(s.roomId).emit('tier_d_analysis_snapshot',analysisPayload)
   if(!s.state.duel){
     const bestMatchScoreSave=await supabaseAdmin.rpc('record_tier_d_best_match_score',{p_user_id:s.userId,p_score:s.state.scores[s.userId]??0})
@@ -444,7 +446,8 @@ async function finishMatch(io:Server,s:Session){
     : undefined
   const personalBestMs=playerWon?await recordTierDLevelClearPersonalBest(s.userId,s.state.level,elapsedMs).catch(()=>undefined):undefined
   const reward=playerWon?await grantTierDLevelRandomItem(s.userId,s.state.level,s.isVip).catch(error=>{console.warn('[TIER_D_SOLO] level reward reservation failed',error);return undefined}):undefined
-  io.to(s.roomId).emit('tier_d_complete',{matchWinStreak:matchStreak,level:s.state.level,playerWon,scores:s.cumulativeScores,highestAiScore,openChallengePassed:s.openChallengePassed,duel:s.state.duel,duelPayout,progress,reward,rewardEligible:!!reward,rewardReasons:reward?[s.state.level%10===0?'LEVEL_MILESTONE':'RANDOM_LEVEL_REWARD']:[],competition,elapsedMs,personalBestMs,tierCGraduation});discardSession(s)
+  const profitableAdTicket=issueProfitableAiInterstitialTicket({tier:'tier_d',gameId:s.gameId,userId:s.userId,tokenDelta:duelPayout?.finalProfit??0})
+  io.to(s.roomId).emit('tier_d_complete',{matchWinStreak:matchStreak,level:s.state.level,playerWon,scores:s.cumulativeScores,highestAiScore,openChallengePassed:s.openChallengePassed,duel:s.state.duel,duelPayout,profitableAdTicket,progress,reward,rewardEligible:!!reward,rewardReasons:reward?[s.state.level%10===0?'LEVEL_MILESTONE':'RANDOM_LEVEL_REWARD']:[],competition,elapsedMs,personalBestMs,tierCGraduation});discardSession(s)
 }
 
 /** Accepts either Skip or one ownership-changing 1-for-1 Swap-item action. */

@@ -2,8 +2,9 @@ import type { FastifyInstance } from 'fastify'
 import { considerForcedInterstitial, markForcedInterstitialCompleted, markRewardedAdCompleted } from '../game/adPolicyService'
 import type { NaturalBreak } from '../game/adPolicy'
 import { supabase } from '../config/supabase'
+import { consumeProfitableAiInterstitialTicket } from '../game/profitableAiInterstitial'
 
-const BREAKS: NaturalBreak[] = ['TIER_D_LEVEL_COMPLETE', 'TIER_D_RETRY', 'TIER_D_EXIT_TO_LOBBY', 'TIER_D_TOP20_CONTINUE', 'CLASSIC_GAME_SETTLED', 'CLASSIC_POST_SETTLEMENT_EXIT']
+const BREAKS: NaturalBreak[] = ['TIER_D_LEVEL_COMPLETE', 'TIER_D_RETRY', 'TIER_D_EXIT_TO_LOBBY', 'TIER_D_TOP20_CONTINUE', 'CLASSIC_GAME_SETTLED', 'CLASSIC_POST_SETTLEMENT_EXIT', 'PROFITABLE_AI_MATCH']
 const CLASSIC_TIERS = ['C', 'B', 'A', 'A_PLUS'] as const
 async function userIdFrom(request: any) {
   const token = request.headers.authorization?.replace('Bearer ', '')
@@ -12,10 +13,15 @@ async function userIdFrom(request: any) {
   return error ? undefined : data.user?.id
 }
 export async function adRoutes(app: FastifyInstance) {
-  app.post<{ Body: { naturalBreak?: NaturalBreak; tier?: typeof CLASSIC_TIERS[number]; outcome?: 'WIN'|'LOSS'; exitReason?: 'CONTINUE'|'BACK_TO_LOBBY' } }>('/ads/natural-break', async (request, reply) => {
+  app.post<{ Body: { naturalBreak?: NaturalBreak; tier?: typeof CLASSIC_TIERS[number]; outcome?: 'WIN'|'LOSS'; exitReason?: 'CONTINUE'|'BACK_TO_LOBBY'; ticket?: string } }>('/ads/natural-break', async (request, reply) => {
     const userId = await userIdFrom(request); if (!userId) return reply.status(401).send({ error: 'UNAUTHORIZED' })
     const naturalBreak = request.body?.naturalBreak
     if (!naturalBreak || !BREAKS.includes(naturalBreak)) return reply.status(400).send({ error: 'INVALID_NATURAL_BREAK' })
+    if (naturalBreak === 'PROFITABLE_AI_MATCH') {
+      if (!request.body?.ticket || !consumeProfitableAiInterstitialTicket(request.body.ticket, userId)) return reply.status(400).send({ error: 'INVALID_AD_TICKET' })
+      try { return reply.send({ showForcedInterstitial: await considerForcedInterstitial(userId, naturalBreak) }) }
+      catch { return reply.send({ showForcedInterstitial: false }) }
+    }
     // Forced interstitials are an advanced-table, post-settlement exit policy.
     // Never insert them in Tier D, gameplay, reveal or reward paths.
     if (naturalBreak === 'TIER_D_LEVEL_COMPLETE' || naturalBreak === 'TIER_D_RETRY' || naturalBreak === 'TIER_D_EXIT_TO_LOBBY' || naturalBreak === 'TIER_D_TOP20_CONTINUE') return reply.send({ showForcedInterstitial: false })

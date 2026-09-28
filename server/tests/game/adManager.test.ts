@@ -9,5 +9,5 @@ test('cooldowns, cap, and membership prevent forced ads',()=>{
   expect(decideInterstitial({...base,state:{interstitialsShown:8},random:()=>0}).reason).toBe('session_cap')
   expect(decideInterstitial({...base,state:{interstitialsShown:0,lastInterstitialAt:99_999},random:()=>0}).reason).toBe('global_cooldown')
   expect(decideInterstitial({...base,state:{interstitialsShown:0,lastRewardedAt:99_999},random:()=>0}).reason).toBe('rewarded_cooldown')
-  expect(decideInterstitial({...base,membership:'VIP_PRO',random:()=>0}).reason).toBe('membership')
+  expect(decideInterstitial({...base,membership:'PRO',random:()=>0}).reason).toBe('membership')
 })

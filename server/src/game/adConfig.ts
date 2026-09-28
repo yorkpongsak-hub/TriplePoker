@@ -3,7 +3,7 @@ export const AD_CONFIG = {
   enabled: true,
   interstitial: {
     chancePool: [0.25, 0.40] as const,
-    globalCooldownSec: 60,
+    globalCooldownSec: 300,
     rewardedCooldownSec: 45,
     maxPerSession: 8,
     allowBackToBack: false,
