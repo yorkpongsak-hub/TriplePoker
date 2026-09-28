@@ -12,7 +12,9 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#0a0a0a"
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#030711",
+        "monochromeImage": "./assets/adaptive-icon-monochrome.png"
       },
       "package": "com.sagunicorn.triplepoker"
     },
