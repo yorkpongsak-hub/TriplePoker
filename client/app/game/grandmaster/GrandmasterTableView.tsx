@@ -16,6 +16,7 @@ import { ArenaClientIntent, ArenaClientSnapshot, ArenaSeatView } from '../../../
 import { playCardArrange1, playCardArrange2, playCountdownWarning, playJackpotFanfare, playBossPileWinThunder, playCardReveal, playPokerChip, playReadyButton, playCardShuffle, playAnte } from '../../../src/services/gameSfxService'
 import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
 import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
+import ComboCardBurst from '../../../src/components/vfx/ComboCardBurst'
 
 const MONARCH_TABLE = require('../../../assets/tables/boss_monarch_skin_table.png')
 
@@ -913,6 +914,9 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
       {!isDealAnimation && <ArenaOverlays snapshot={{ ...snapshot, ...(auctionAwardActive ? { auction: null } : {}), ...(deferPileResult ? { reveal: null } : {}) }} onIntent={onIntent} selectedGFCardIds={selectedGFCardIds} requiredGFSelection={requiredGFSelection} />}
       {royalFlushPlayer && <RoyalStraightFlushVFX playerName={royalFlushPlayer} onClose={() => setRoyalFlushPlayer(null)} />}
       {gfActionQueue[0] && <GFActionSpotlight event={gfActionQueue[0]} width={width} />}
+      {snapshot.reveal?.pile === 3 && snapshot.reveal.winnerSeat === local?.seat && (
+        <ComboCardBurst eventKey={`${snapshot.matchId}:${snapshot.gameNumber}:g3-win:${snapshot.reveal.winnerSeat}`} kind="YOU_WIN" />
+      )}
       {victoryVfx && (
         <BossVictoryVFX tier={victoryVfx.tier} titleOverride={victoryVfx.title ?? undefined} onFinish={() => setVictoryVfx(null)} />
       )}

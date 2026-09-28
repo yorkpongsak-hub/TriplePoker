@@ -32,6 +32,7 @@ jest.mock('../../src/economy/economyService', () => ({
 
 import Fastify, { FastifyInstance } from 'fastify'
 import rewardsRoutes from '../../src/routes/rewards'
+import { gameConfig } from '../../src/config/gameConfig'
 
 async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify()
@@ -96,7 +97,9 @@ describe('POST /rewards/watch-ad', () => {
     expect(res.statusCode).toBe(200)
     const json = res.json()
     expect(json.success).toBe(true)
-    expect(json.tokensAwarded).toBe(30)
+    expect(json.tokensAwarded).toBe(
+      gameConfig.tokenPot.tiers.initiate.pile1 + gameConfig.tokenPot.tiers.initiate.pile2,
+    )
     expect(json.newTokenBalance).toBe(1150)
 
     const mintCall = mockMint.mock.calls[0][0]

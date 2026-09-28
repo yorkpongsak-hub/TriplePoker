@@ -3,6 +3,7 @@ node_modules/
 backups/
 client/launch-preview/
 client/launch-native/
+client/.asset-audit/
 .pnp/
 
 # Expo

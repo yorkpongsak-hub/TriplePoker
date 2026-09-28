@@ -25,10 +25,10 @@ export async function tickSovereignLifecycle(store: SovereignLifecycleStore, now
   return transitions
 }
 
-export function startSovereignLifecycleRuntime(store: SovereignLifecycleStore = new SupabaseSovereignLifecycleStore()): NodeJS.Timeout | null {
+export function startSovereignLifecycleRuntime(store: SovereignLifecycleStore = new SupabaseSovereignLifecycleStore()): ReturnType<typeof global.setInterval> | null {
   if (process.env.SOVEREIGN_ENABLED !== 'true') return null
   let running = false
-  const timer = setInterval(async () => {
+  const timer = global.setInterval(async () => {
     if (running) return
     running = true
     try { await tickSovereignLifecycle(store) }

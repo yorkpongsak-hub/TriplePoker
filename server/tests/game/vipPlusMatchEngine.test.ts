@@ -197,7 +197,11 @@ describe('VIP Plus Gate 4 deal and arrangement engine', () => {
     expect(result.state.seatStatus).toMatchObject({ H4: 'BLANK', H5: 'BLANK' })
     expect(result.state.hands[result.state.playerBySeat.H4]).toHaveLength(9)
     expect(result.state.hands[result.state.playerBySeat.H5]).toHaveLength(9)
-    expect(result.state.pot).toEqual([30, 60, 120])
+    expect(result.state.pot).toEqual([
+      table.wager.ante.pile1 * result.state.humanSeats.length,
+      table.wager.ante.pile2 * result.state.humanSeats.length,
+      table.wager.ante.pile3 * result.state.humanSeats.length,
+    ])
     expect(events.filter(event => event.event === 'vip_plus:private_hand')).toHaveLength(3)
     const startedEvent = events.find(event => event.event === 'vip_plus:game_started')
     expect(startedEvent?.payload.seats).toEqual(expect.arrayContaining([
@@ -284,7 +288,10 @@ describe('VIP Plus Gate 4 deal and arrangement engine', () => {
       refund: async (userId, escrowId, amount) => { refunded.push(`${userId}:${escrowId}:${amount}`) },
     })
     expect(result).toEqual({ ok: false, reason: 'INSUFFICIENT_TOKENS' })
-    expect(refunded).toEqual(['p1:escrow-p1:2000', 'p2:escrow-p2:2000'])
+    expect(refunded).toEqual([
+      `p1:escrow-p1:${table.wager.buyIn}`,
+      `p2:escrow-p2:${table.wager.buyIn}`,
+    ])
   })
 
   test('rejects duplicate, foreign, and wrong-sized cards', () => {
@@ -372,7 +379,11 @@ describe('VIP Plus Gate 4 deal and arrangement engine', () => {
     expect(state.gameNumber).toBe(2)
     expect(state.phase).toBe('INITIAL_ARRANGE')
     expect(state.arrangements).toEqual({})
-    expect(state.pot).toEqual([50, 100, 200])
+    expect(state.pot).toEqual([
+      state.wager.ante.pile1 * state.humanSeats.length,
+      state.wager.ante.pile2 * state.humanSeats.length,
+      state.wager.ante.pile3 * state.humanSeats.length,
+    ])
     const conserved = Object.values(state.tokenBalance).reduce((sum, amount) => sum + amount, 0) + state.pot.reduce((sum, amount) => sum + amount, 0) + state.feeRake
     expect(conserved).toBe(10_000)
   })
@@ -384,14 +395,9 @@ describe('VIP Plus Gate 4 deal and arrangement engine', () => {
       submitVipPlusBettingAction(state.roomId, current, current === 'p1' ? 'CALL' : 'FOLD')
     }
     expect(state.gameResults[0].winners).toEqual(['p1', 'p1', 'p1'])
-    // มติลุงเยาะ (รอบ 9) — ทุกกองเล่น 2 รอบแล้ว ตัวเลขเปลี่ยนไปหมดจากเดิม (G1/G2 เดิมมีรอบเดียว G3 มี 2 รอบ
-    // เท่ากันหมด ไม่มีตัวคูณ) คำนวณใหม่: callAmount ฐาน initiate = 50, ante = {10,20,40}, rake 5%
-    // G1 pot = ante(50) + R1(1x=50) + R2(2x=100) = 200 -> payout floor(200*.95)=190, rake 10
-    // G2 pot = ante(100) + R1(1x=50) + R2(2x=100) = 250 -> payout floor(250*.95)=237, rake 13
-    // G3 pot = ante(200) + R1(2x=100) + R2(4x=200) = 500 -> payout floor(500*.95)=475, rake 25
-    // regular pot rake รวม = 10+13+25 = 48; bonus = ante.pile3(40)x4 losers = 160
-    // jackpot rake = floor((190+237+475+160)*5%) = floor(1062*.05) = 53; total Fee & Rake = 48+53 = 101
-    expect(state.feeRake).toBe(101)
+    // Canonical wager snapshot currently yields regular rake 18+23+40 and
+    // jackpot rake 95 after the 400 Triple Sweep bonus.
+    expect(state.feeRake).toBe(176)
   })
 
   // มติลุงเยาะ (รอบ 11) — ค่าธรรมเนียมท้ายแมตช์ 10% เก็บเฉพาะ "กำไรสุทธิที่เป็นบวก" ของแต่ละคน คนที่เสมอทุน/

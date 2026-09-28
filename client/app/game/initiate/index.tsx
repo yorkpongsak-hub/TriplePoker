@@ -521,13 +521,23 @@ const GameTableLive: React.FC = () => {
     })
 
     let startRequested = false
+    let resumeWatchdog: ReturnType<typeof setTimeout> | null = null
+    const requestFreshMatch = () => {
+      if (startRequested) return
+      startRequested = true
+      if (resumeWatchdog) { clearTimeout(resumeWatchdog); resumeWatchdog = null }
+      socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'initiate' })
+    }
     socket.on('connect', () => {
+      startRequested = false
       setConnectionError(null)
       if (!accessToken) {
-        if (!startRequested) { startRequested = true; socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'initiate' }) }
+        requestFreshMatch()
         return
       }
       requestGameResume(socket, { roomId: ROOM_ID, userId: PLAYER_ID, accessToken, matchType: 'INITIATE' })
+      if (resumeWatchdog) clearTimeout(resumeWatchdog)
+      resumeWatchdog = setTimeout(requestFreshMatch, 6_000)
       // token ไม่ส่งจาก client (server-authoritative — escrowBuyIn คิดจาก users.token_balance สดเท่านั้น)
       // (player_join_room ถูกตัดออก — dead path เดิม: client ไม่เคย listen 'player_joined'/'arrangement_start'
       // ที่มันคืนมา แถมยังสร้างตาราง tableRegistry ซ้ำด้วย roomId เดิมอีกชั้น start_match ด้านล่างทำ
@@ -536,9 +546,9 @@ const GameTableLive: React.FC = () => {
       // ของเดิมส่ง 'beginner' ทำให้ Beginner's Luck System (subOptimal/firstValid) ไม่เคย trigger เลย
     })
     socket.on(GAME_RESUME_RESULT_EVENT, (result: { ok: boolean; status: string; matchType: string }) => {
-      if (result.matchType !== 'INITIATE' || result.ok || result.status !== 'MATCH_NOT_FOUND' || startRequested) return
-      startRequested = true
-      socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'initiate' })
+      if (result.matchType !== 'INITIATE') return
+      if (resumeWatchdog) { clearTimeout(resumeWatchdog); resumeWatchdog = null }
+      if (!result.ok && (result.status === 'MATCH_NOT_FOUND' || result.status === 'RESUME_TIMEOUT')) requestFreshMatch()
     })
 
     socket.on('connect_error', (err: any) => {
@@ -557,6 +567,7 @@ const GameTableLive: React.FC = () => {
     })
 
     socket.on('round_start', (data: any) => {
+      if (resumeWatchdog) { clearTimeout(resumeWatchdog); resumeWatchdog = null }
       if (typeof data.buyInAmount === 'number') void markPendingMatch('initiate')
       console.log('[DEAL] round_start received, roundNumber=', data.roundNumber, 'at', Date.now())
       // Pre-Game Countdown §7.1 — โชว์ครั้งเดียวตอนเริ่มแมตช์ (ref ไม่ reset ตอน Rematch เพราะ component เดิมไม่ remount)
@@ -694,6 +705,8 @@ const GameTableLive: React.FC = () => {
         key: `${data.roomId ?? ROOM_ID}:${data.roundNumber ?? Date.now()}:g${pile.pileNumber}`,
         pile: pile.pileNumber, winnerId: pile.winner, winnerBestFive: pile.winnerBestFive,
         communityCards: pile.communityCards ?? [], handRanking: pile.winnerHandRank ?? 'WIN',
+        missionScores: Object.fromEntries(Object.entries(data.scoring ?? {}).map(([id, score]: [string, any]) => [id, score?.piles?.[pile.pileNumber - 1]?.missionScore ?? 0])),
+        localCombo: pile.pileNumber === 2 && data.scoring?.[PLAYER_ID]?.comboKind ? { kind: data.scoring[PLAYER_ID].comboKind, bonus: data.scoring[PLAYER_ID].combo ?? 0 } : undefined,
       })))
       setPileWinners(newWinners)
       setHandRanks(newHandRanks)
@@ -807,6 +820,7 @@ const GameTableLive: React.FC = () => {
     })
 
     return () => {
+      if (resumeWatchdog) clearTimeout(resumeWatchdog)
       if (timerRef.current) clearInterval(timerRef.current)
       if (countdownAnimTimeoutRef.current) clearTimeout(countdownAnimTimeoutRef.current)
       if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop()
@@ -1045,7 +1059,6 @@ const GameTableLive: React.FC = () => {
       <View style={{ alignItems: 'flex-start', gap: 2 }}>
         {/* Label + Winner badge */}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-          <Text style={s.pileLabel}>PILE {pileNum}</Text>
           {hasWinner && (
             <View style={[s.winBadge, { backgroundColor: isWin ? 'rgba(74,222,128,0.15)' : 'rgba(248,113,113,0.15)' }]}>
               <Text style={[s.winBadgeTxt, { color: isWin ? '#4ade80' : '#f87171' }]}>
@@ -1557,6 +1570,7 @@ const GameTableLive: React.FC = () => {
             tierName="INITIATE"
             tierStars={2}
             round={roundNumber}
+            totalRounds={3}
             isWeb={isWeb}
             insetsTop={insets.top}
             opacity={(phase === 'showdown' || phase === 'result') ? 0 : 1}
@@ -1730,7 +1744,7 @@ const GameTableLive: React.FC = () => {
             </ImageBackground>
           </View>
         )}
-        <TierCPlusPileReveal reveals={pileRevealShowcases} localPlayerId={PLAYER_ID} onSequenceComplete={() => setPileRevealShowcases([])} />
+        <TierCPlusPileReveal reveals={pileRevealShowcases} localPlayerId={PLAYER_ID} playerIds={[PLAYER_ID, ...aiList.map(ai => ai.id)]} localPiles={piles} winnerName={id => id === PLAYER_ID ? myDisplayName : (aiList.find(ai => ai.id === id)?.name ?? id)} onSequenceComplete={() => setPileRevealShowcases([])} />
         <ServerLog socket={socketRef.current} onMonarchWin={setMonarchWinner} />
       </View>
     </View>

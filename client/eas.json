@@ -14,7 +14,14 @@
       "env": { "EXPO_PUBLIC_AD_MODE": "google_test" }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_AD_MODE": "mock",
+        "EXPO_PUBLIC_AD_RELEASE_GATE": "disabled",
+        "EXPO_PUBLIC_ARENA_ENABLED": "false",
+        "EXPO_PUBLIC_SOVEREIGN_ENABLED": "false",
+        "EXPO_PUBLIC_VIP_PLUS_ENABLED": "false"
+      }
     }
   },
   "submit": {

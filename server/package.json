@@ -4,9 +4,15 @@
   "description": "TriplePoker Server - The Sage Unicorn Studio",
   "main": "dist/index.js",
   "scripts": {
-    "test": "node node_modules/jest/bin/jest.js --testPathIgnorePatterns=tests/game/hnGracePeriod.test.ts && node node_modules/jest/bin/jest.js --runInBand tests/game/hnGracePeriod.test.ts",
+    "test": "npm run test:release",
+    "test:release": "npm run test:main && npm run test:hn-grace",
+    "test:main": "node node_modules/jest/bin/jest.js --maxWorkers=2 --silent --forceExit --testPathIgnorePatterns tests/game/hnGracePeriod.test.ts tests/arena/arenaCardCounting.test.ts tests/arena/arenaTableWinner.test.ts tests/arena/arenaMatchEngine.test.ts",
+    "test:arena-heavy": "node node_modules/jest/bin/jest.js --runInBand --silent --forceExit tests/arena/arenaMatchEngine.test.ts tests/arena/arenaCardCounting.test.ts tests/arena/arenaTableWinner.test.ts",
+    "test:full": "npm run test:main && npm run test:arena-heavy && npm run test:hn-grace",
+    "test:hn-grace": "node node_modules/jest/bin/jest.js --runInBand --silent tests/game/hnGracePeriod.test.ts",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
+    "check:migrations": "node scripts/checkMigrationInventory.cjs",
     "dev": "nodemon --watch src --ext ts --exec ts-node src/index.ts",
     "build": "node node_modules/typescript/bin/tsc -p tsconfig.build.json",
     "start": "node dist/index.js"

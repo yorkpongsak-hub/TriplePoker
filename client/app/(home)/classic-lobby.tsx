@@ -20,6 +20,7 @@ import { BUY_IN, BuyInTier, AD_RESCUE_AMOUNT } from '../../src/config/buyInConfi
 import { Tier, TIER_CONFIG, isEligible, meetsLastBossCondition } from '../../src/config/tierConfig'
 import { ActiveTableSummary } from '../../src/types/spectator.types'
 import { Image as ExpoImage } from 'expo-image'
+import { RELEASE_SCOPE } from '../../src/config/releaseScope'
 
 const studioLogo = require('../../assets/images/sage_unicorn_logo_transparent.png');
 const flowerAndBeeFx = require('../../assets/fx/vfx_flower_and_bee.webp');
@@ -51,7 +52,7 @@ const TIER_TO_BUYIN_KEY: Partial<Record<Tier, BuyInTier>> = {
 const TIER_ROWS: Tier[][] = [
   ['initiate', 'adept'],
   ['mastermind', 'high_noble'],
-  ['grandmaster'],
+  ...(RELEASE_SCOPE.arena ? [['grandmaster'] as Tier[]] : []),
   ['last_boss'],
 ];
 
@@ -112,6 +113,7 @@ export default function LobbyScreen() {
   const [privateDialog, setPrivateDialog] = useState<{ mode: 'CREATE' | 'JOIN'; tier: MatchmakingTier } | null>(null);
   const [privateUsesPin, setPrivateUsesPin] = useState(true);
   const [roomPin, setRoomPin] = useState('');
+  const [missionsEnabled, setMissionsEnabled] = useState(true);
   const [matchmakingError, setMatchmakingError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -355,9 +357,9 @@ export default function LobbyScreen() {
       // Bug C fix (2026-07-17): ส่ง avatarUrl ไปด้วย — server เก็บลง Seat แล้วส่งต่อให้ผู้เล่นคนอื่นเห็น
       // avatar กันใน round_start (เดิมไม่เคยส่ง เลยมีแต่ userName แต่ไม่มี avatar ของคนอื่นเลย)
       if (options.createPrivate) {
-        socket.emit('room_create_private', { tier, userId, userName: displayName, pin: options.pin, accessToken });
+        socket.emit('room_create_private', { tier, userId, userName: displayName, pin: options.pin, missionsEnabled, accessToken });
       } else {
-        socket.emit('room_auto_match', { tier, userId, userName: displayName, avatarUrl: profile?.avatar_url ?? undefined, liveMode, allowLiveTables, pin: options.pin, forceNew: options.forceNew, accessToken });
+        socket.emit('room_auto_match', { tier, userId, userName: displayName, avatarUrl: profile?.avatar_url ?? undefined, liveMode, allowLiveTables, pin: options.pin, forceNew: options.forceNew, missionsEnabled, accessToken });
       }
     });
 
@@ -707,10 +709,16 @@ export default function LobbyScreen() {
                 : 'Enter the same 4-digit PIN set by the VIP table host.'}
             </Text>
             {privateDialog?.mode === 'CREATE' && (
-              <View style={s.pinToggleRow}>
-                <View style={{ flex: 1 }}><Text style={s.pinLabel}>Require PIN</Text><Text style={s.pinHelp}>{privateUsesPin ? 'Only players with this PIN can join' : 'Open to normal Auto-match players'}</Text></View>
-                <Switch value={privateUsesPin} onValueChange={value => { setPrivateUsesPin(value); setMatchmakingError(null); }} trackColor={{ true: COLOR.goldPrimary }} />
-              </View>
+              <>
+                <View style={s.pinToggleRow}>
+                  <View style={{ flex: 1 }}><Text style={s.pinLabel}>Play with Missions</Text><Text style={s.pinHelp}>The host locks this rule for everyone at the table</Text></View>
+                  <Switch value={missionsEnabled} onValueChange={setMissionsEnabled} trackColor={{ true: COLOR.goldPrimary }} />
+                </View>
+                <View style={s.pinToggleRow}>
+                  <View style={{ flex: 1 }}><Text style={s.pinLabel}>Require PIN</Text><Text style={s.pinHelp}>{privateUsesPin ? 'Only players with this PIN can join' : 'Open to normal Auto-match players'}</Text></View>
+                  <Switch value={privateUsesPin} onValueChange={value => { setPrivateUsesPin(value); setMatchmakingError(null); }} trackColor={{ true: COLOR.goldPrimary }} />
+                </View>
+              </>
             )}
             {(privateDialog?.mode === 'JOIN' || privateUsesPin) && (
               <TextInput
@@ -810,9 +818,11 @@ export default function LobbyScreen() {
                 <Text style={s.enterBtnSubTxt}>2–3 Human + Boss AI</Text>
               </TouchableOpacity>
               <Text style={s.detailText}>Required reserve: 20 Crown · Your balance: {profile?.crown_balance ?? 0} Crown</Text>
-              <TouchableOpacity style={s.enterBtn} onPress={handleEnterSovereign}>
-                <Text style={s.enterBtnTxt}>♛ Sovereign Monthly Event</Text>
-              </TouchableOpacity>
+              {RELEASE_SCOPE.sovereign && (
+                <TouchableOpacity style={s.enterBtn} onPress={handleEnterSovereign}>
+                  <Text style={s.enterBtnTxt}>♛ Sovereign Monthly Event</Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
@@ -823,6 +833,7 @@ export default function LobbyScreen() {
                 {/* มติลุงเยาะ — ห้ามสปอยล์ชื่อ Monarch ก่อนผู้เล่นได้เจอจริง (card นี้เห็นได้ตั้งแต่ยังไม่ต่อคิวเลย) */}
                 <Text style={s.detailText}>Ante: 250 / 500 / 1,000{`\n`}Players: 3 Humans + Boss AI{`\n`}Boss Encounter: Four Gods / Hidden Boss{`\n`}Manual arrangement only</Text>
               </View>
+              <View style={s.liveSetting}><View style={{ flex: 1 }}><Text style={s.detailTitle}>Play with Missions</Text><Text style={s.detailText}>{missionsEnabled ? 'Mission players match only with Mission players' : 'Classic scoring · no Mission or Combo points'}</Text></View><Switch value={missionsEnabled} onValueChange={setMissionsEnabled} trackColor={{ true: COLOR.goldPrimary }} /></View>
               <TouchableOpacity style={s.enterBtn} onPress={() => requireAdGate('high_noble')}>
                 <Text style={s.enterBtnTxt}>ENTER HIGH NOBLE</Text>
               </TouchableOpacity>
@@ -836,6 +847,7 @@ export default function LobbyScreen() {
 
           {selected === 'adept' && mmStatus === 'idle' && (
             <>
+              <View style={s.liveSetting}><View style={{ flex: 1 }}><Text style={s.detailTitle}>Play with Missions</Text><Text style={s.detailText}>{missionsEnabled ? 'Mission players match only with Mission players' : 'Classic scoring · no Mission or Combo points'}</Text></View><Switch value={missionsEnabled} onValueChange={setMissionsEnabled} trackColor={{ true: COLOR.goldPrimary }} /></View>
               <TouchableOpacity style={s.enterBtn} onPress={() => requireAdGate('adept')}>
                 <Text style={s.enterBtnTxt}>▶ Play (Auto-Match 2 Human + AI)</Text>
               </TouchableOpacity>

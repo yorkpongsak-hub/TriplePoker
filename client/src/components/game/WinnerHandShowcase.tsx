@@ -4,10 +4,10 @@ import { AnimatedCardFlip } from './AnimatedCardFlip'
 import { handRankKey, t } from '../../i18n'
 import { useI18n } from '../../i18n/store'
 
-export type WinnerHandShowcaseProps = { pile: 1 | 2 | 3; centerCards: string[]; winnerCards: string[]; handRanking: string; winnerOrigin: 'bottom' | 'top'; isCombo?: boolean; isSuperCombo?: boolean; onComplete: () => void }
+export type WinnerHandShowcaseProps = { pile: 1 | 2 | 3; centerCards: string[]; winnerCards: string[]; handRanking: string; winnerName?: string; winnerOrigin: 'bottom' | 'top'; isCombo?: boolean; isSuperCombo?: boolean; onComplete: () => void }
 
 /** Presentation-only. All cards, winner identity and hand label are canonical inputs. */
-export function WinnerHandShowcase({ pile, centerCards, winnerCards, handRanking, winnerOrigin, isCombo, isSuperCombo, onComplete }: WinnerHandShowcaseProps) {
+export function WinnerHandShowcase({ pile, centerCards, winnerCards, handRanking, winnerName, winnerOrigin, isCombo, isSuperCombo, onComplete }: WinnerHandShowcaseProps) {
   const locale = useI18n(state => state.locale)
   const label = useRef(new Animated.Value(0)).current
   const rankLeadMs = 200
@@ -30,8 +30,12 @@ export function WinnerHandShowcase({ pile, centerCards, winnerCards, handRanking
   // travel left from their real table slots before the winning cards join them.
   const centerSourceX = (pile - 1) * 88
   return <View pointerEvents="none" style={s.overlay} accessibilityLiveRegion="polite">
-    <Animated.View style={[s.rank, winnerOrigin === 'bottom' && s.rankWinner, { opacity: label, transform: [{ translateY: -40 }, { scale: label.interpolate({ inputRange: [0, 1], outputRange: [.92, 1] }) }] }]}><Text style={s.rankText}>{t(handRankKey(handRanking), {}, locale)}</Text>{isSuperCombo ? <Text style={s.vfx}>{t('game.superCombo', {}, locale)}</Text> : isCombo ? <Text style={s.vfx}>{t('game.combo', {}, locale)}</Text> : null}</Animated.View>
+    <Animated.View style={[s.rank, winnerOrigin === 'bottom' && s.rankWinner, { opacity: label, transform: [{ translateY: -40 }, { scale: label.interpolate({ inputRange: [0, 1], outputRange: [.92, 1] }) }] }]}>
+      {winnerName ? <Text style={s.winnerName}>G{pile} WINNER · {winnerName}</Text> : null}
+      <Text style={s.rankText}>{t(handRankKey(handRanking), {}, locale)}</Text>
+      {isSuperCombo ? <Text style={s.vfx}>{t('game.superCombo', {}, locale)}</Text> : isCombo ? <Text style={s.vfx}>{t('game.combo', {}, locale)}</Text> : null}
+    </Animated.View>
     <View style={s.hand}>{centerCards.map((card, index) => <AnimatedCardFlip key={`center-${card}-${index}`} cardKey={card} delay={rankLeadMs + index * 130} startOffset={{x:centerSourceX+(index-.5)*16,y:0}} />)}{centerCards.length&&winnerCards.length?<View style={s.divider}/>:null}{winnerCards.map((card, index) => <AnimatedCardFlip key={`winner-${card}-${index}`} cardKey={card} delay={winnerDelay + index * 130} startOffset={{x:(index-(winnerCards.length-1)/2)*48,y:originY}} />)}</View>
   </View>
 }
-const s = StyleSheet.create({ overlay: { ...StyleSheet.absoluteFill, zIndex: 70, elevation: 70, alignItems: 'center', justifyContent: 'center' }, hand: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', minHeight: 84, transform:[{translateY:-92}], paddingHorizontal:4 }, divider: { width: 1, height: 48, backgroundColor: 'rgba(255,215,106,.75)', marginHorizontal: 7 }, rank: { position:'absolute', top:'31%', alignItems: 'center', paddingHorizontal:16, paddingVertical:5 }, rankWinner: { borderTopWidth:1, borderBottomWidth:1, borderColor:'rgba(255,215,106,.8)', backgroundColor:'rgba(7,36,20,.72)' }, rankText: { color: '#FFFFFF', fontSize: 22, fontWeight: '700', letterSpacing: .5 }, vfx: { color: '#8dffb5', fontSize: 15, fontWeight: '900', marginTop: 6 } })
+const s = StyleSheet.create({ overlay: { ...StyleSheet.absoluteFill, zIndex: 70, elevation: 70, alignItems: 'center', justifyContent: 'center' }, hand: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', minHeight: 84, transform:[{translateY:-92}], paddingHorizontal:4 }, divider: { width: 1, height: 48, backgroundColor: 'rgba(255,215,106,.75)', marginHorizontal: 7 }, rank: { position:'absolute', top:'29%', alignItems: 'center', paddingHorizontal:16, paddingVertical:5 }, rankWinner: { borderTopWidth:1, borderBottomWidth:1, borderColor:'rgba(255,215,106,.8)', backgroundColor:'rgba(7,36,20,.72)' }, winnerName: { color:'#FFD76A', fontSize:12, fontWeight:'900', letterSpacing:1.2, marginBottom:3 }, rankText: { color: '#FFFFFF', fontSize: 22, fontWeight: '700', letterSpacing: .5 }, vfx: { color: '#8dffb5', fontSize: 15, fontWeight: '900', marginTop: 6 } })

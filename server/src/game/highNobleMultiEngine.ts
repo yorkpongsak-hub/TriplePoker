@@ -20,7 +20,7 @@ import { Server } from 'socket.io'
 import { finishSpectatorBroadcast, publishSpectatorEvent } from '../spectator/spectatorRuntime'
 import { dealCards } from './cardEngine'
 import { evaluateBestFive, evaluateHand, compareHands, handRankLabel, HandResult } from './handEvaluator'
-import { checkFoul, checkTierCFoul, PlayerArrangement, CommunityCards } from './foulChecker'
+import { checkFoul, checkTierCFoul, checkHighNobleTexasFoul, PlayerArrangement, CommunityCards } from './foulChecker'
 import { aiDecideArrangement, AIConfig, AIPersonality, AI_CONFIGS, FOUR_GODS, greedyArrangement, pickRandomMinions } from './aiEngine'
 import { Card } from './deck'
 import { gameConfig, getAutoSortFee } from '../config/gameConfig'
@@ -37,7 +37,7 @@ import { getAscendantStatus } from './crownVaultService'
 import { economyService } from '../economy/economyService'
 import { resolveNpcPoolKey, type ResolveNpcPoolContext } from '../economy/npcPoolResolver'
 import type { AccountRef } from '../economy/economyTypes'
-import { allocatePotByScore, generateTierCPlusMissions, missionStreakBonus, scoreTierCPlusRound, type TierCPlusScore } from './tierCPlusScoring'
+import { allocatePotByScore, generateTierCPlusMissions, getMissionDifficulty, getTierMissionAward, missionStreakBonus, scoreTierCPlusRound, TIER_C_PLUS_RULES, type TierCPlusScore } from './tierCPlusScoring'
 import { missionResult, type Mission } from './leagueGameplay'
 
 // ── Local copies of small pure helpers (ตั้งใจ duplicate จาก gameLoop.ts แทนการ import
@@ -132,7 +132,7 @@ export function computeHNHumanPayout(netDelta: number, isMonarchWinnerCandidate:
 // ── Types ────────────────────────────────────────────────────
 export interface HNSeat {
   id: string            // human: real userId | AI: stable instance id เช่น 'AI_BOSS', 'AI_FILL_1'
-  role: 'boss' | 'p4' | 'p1' | 'p2'
+  role: 'boss' | 'p1' | 'p2' | 'p3' | 'p4' | 'p5'
   isHuman: boolean
   name: string
   emoji: string
@@ -157,11 +157,62 @@ interface HNGrandFinaleState {
   pile3Pot: number
   revealedCards: Record<string, Card[]>
   decisionTimerId?: any
+  betOpened?: boolean
+  checkedBeforeBet?: string[]
 }
+
+/** Re-partition one shuffled 52-card deal for the Tier A+ Texas Hybrid only. */
+function dealHighNobleTexas(playerCount: number): { players: Card[][]; community: CommunityCards; blindAuction: Card[] } {
+  const dealt = dealCards()
+  const deck = [...dealt.players.flat(), ...dealt.community.row1, ...dealt.community.row2, ...dealt.community.row3, ...dealt.blindAuction]
+  let cursor = 0
+  const players = Array.from({ length: playerCount }, () => deck.slice(cursor, cursor += 8))
+  const row1 = deck.slice(cursor, cursor += 2)
+  const row2 = deck.slice(cursor, cursor += 2)
+  const row3 = deck.slice(cursor, cursor += 5)
+  const blindAuction = deck.slice(cursor, cursor += 2)
+  return { players, community: { row1, row2, row3 }, blindAuction }
+}
+
+function chooseCards(cards: Card[], count: number): Card[][] {
+  const out: Card[][] = []
+  const walk = (start: number, picked: Card[]) => {
+    if (picked.length === count) { out.push(picked); return }
+    for (let i = start; i <= cards.length - (count - picked.length); i++) walk(i + 1, [...picked, cards[i]])
+  }
+  walk(0, [])
+  return out
+}
+
+/** Exhaustive 560-candidate arranger for the A+ 3/(3|4)/2 shape.
+ * Mission completion is explicitly included so bots do not optimize pile wins alone. */
+export function arrangeHighNobleTexas(hand: Card[], community: CommunityCards, missions: Mission[] = []): PlayerArrangement {
+  let best: { arrangement: PlayerArrangement; score: number } | undefined
+  for (const pile1 of chooseCards(hand, 3)) {
+    const p1Keys = new Set(pile1.map(cardKey))
+    const after1 = hand.filter(c => !p1Keys.has(cardKey(c)))
+    for (const pile3 of chooseCards(after1, 2)) {
+      const p3Keys = new Set(pile3.map(cardKey))
+      const pile2 = after1.filter(c => !p3Keys.has(cardKey(c)))
+      const h1 = evaluateHand([...pile1, ...community.row1])
+      const h2 = evaluateBestFive([...pile2, ...community.row2])
+      const h3 = evaluateBestFive([...pile3, ...community.row3])
+      if (compareHands(h1, h2) >= 0 || compareHands(h2, h3) >= 0) continue
+      const hands = [h1, h2, h3]
+      const missionBonus = missions.reduce((sum, mission) => sum + getTierMissionAward('highNoble',mission.pile,mission,hands[mission.pile - 1].rank).score * 1_000_000, 0)
+      const completed = missions.filter(m => getTierMissionAward('highNoble',m.pile,m,hands[m.pile - 1].rank).complete).length
+      const comboBonus = completed === 3 ? 3_000_000 : completed >= 2 ? 1_500_000 : 0
+      const score = missionBonus + comboBonus + h1.score + h2.score * 1.1 + h3.score * 1.25
+      if (!best || score > best.score) best = { arrangement: { pile1, pile2, pile3 }, score }
+    }
+  }
+  return best?.arrangement ?? { pile1: hand.slice(0, 3), pile2: hand.slice(3, hand.length - 2), pile3: hand.slice(-2) }
+}
+type HNGrandFinaleAction = 'check' | 'bet' | 'call' | 'fold'
 
 export interface HNMatchState {
   roomId: string
-  seats: [HNSeat, HNSeat, HNSeat, HNSeat]
+  seats: HNSeat[]
   roundNumber: number
   totalRounds: number
   tokenBalance: Record<string, number>
@@ -199,15 +250,55 @@ export interface HNMatchState {
   // ⚠️ INVARIANT: ตราบใดที่ userId อยู่ใน map นี้ seat.isHuman ต้องคง true เสมอ (ห้าม flip จนกว่า
   // finalizeHNAFKReplacement จะทำงานจริง) เพราะ aiSeats()/AI decision loop ทุกจุด filter จาก !isHuman
   // — flip ก่อนกำหนด = seat ถูก AI logic จับไปเล่นแทนทันที ไม่ passive ตามที่ออกแบบไว้
-  afkPlayers: Record<string, { disconnectedAt: number; graceTimer: NodeJS.Timeout }>
+  afkPlayers: Record<string, { disconnectedAt: number; graceTimer: ReturnType<typeof global.setTimeout> }>
   /** Server-authoritative: charge Auto Sort at most once per player per round. */
   autoSortUsed: Record<string, boolean>
   missions?:Mission[]
+  missionsEnabled?:boolean
   roundScores?:Record<string,TierCPlusScore>
   missionStreaks?:Record<string,number>
 }
 
 const hnMatchStates = new Map<string, HNMatchState>()
+const hnRoundContinueResolvers = new Map<string, () => void>()
+const hnRoundContinueReady = new Map<string, Set<string>>()
+
+export function submitHNRoundContinue(roomId: string, userId: string): { ok: boolean; reason?: string } {
+  const state = hnMatchStates.get(roomId)
+  if (!state || state.phase !== 'round_end') return { ok: false, reason: 'not_in_round_summary' }
+  if (!state.seats.some(seat => seat.isHuman && seat.id === userId)) return { ok: false, reason: 'not_a_member' }
+  const ready = hnRoundContinueReady.get(roomId) ?? new Set<string>()
+  ready.add(userId)
+  hnRoundContinueReady.set(roomId, ready)
+  const humans = state.seats.filter(seat => seat.isHuman).map(seat => seat.id)
+  if (humans.every(id => ready.has(id))) hnRoundContinueResolvers.get(roomId)?.()
+  return { ok: true }
+}
+
+function revealMissionMeta(pile:1|2,playerIds:string[],arrangements:Record<string,PlayerArrangement>,community:CommunityCards,fouled:Record<string,boolean>,missions:Mission[]){
+  const mission=missions.find(item=>item.pile===pile)
+  const missionScores=Object.fromEntries(playerIds.map(id=>{if(!mission||fouled[id])return[id,0];const rank=pile===1?evaluateHand([...arrangements[id].pile1,...community.row1]).rank:evaluateBestFive([...arrangements[id].pile2,...community.row2]).rank;return[id,getTierMissionAward('highNoble',pile,mission,rank).score]}))
+  const comboPlayers:Record<string,number>={}
+  if(pile===2){for(const id of playerIds){if(fouled[id])continue;const completed=([1,2] as const).every(n=>{const item=missions.find(m=>m.pile===n);if(!item)return false;const rank=n===1?evaluateHand([...arrangements[id].pile1,...community.row1]).rank:evaluateBestFive([...arrangements[id].pile2,...community.row2]).rank;return getTierMissionAward('highNoble',n,item,rank).complete});if(completed)comboPlayers[id]=TIER_C_PLUS_RULES.comboScore.COMBO}}
+  return{missionScores,comboPlayers}
+}
+
+function waitForHNRoundContinue(roomId: string, timeoutMs: number): Promise<void> {
+  if (!hnRoundContinueReady.has(roomId)) hnRoundContinueReady.set(roomId, new Set())
+  return new Promise(resolve => {
+    const finish = () => {
+      clearTimeout(timer)
+      hnRoundContinueResolvers.delete(roomId)
+      hnRoundContinueReady.delete(roomId)
+      resolve()
+    }
+    const timer = setTimeout(finish, timeoutMs)
+    hnRoundContinueResolvers.set(roomId, finish)
+    const state = hnMatchStates.get(roomId)
+    const ready = hnRoundContinueReady.get(roomId)!
+    if (state && state.seats.filter(seat => seat.isHuman).every(seat => ready.has(seat.id))) finish()
+  })
+}
 
 export function getHNMatchState(roomId: string): HNMatchState | undefined {
   return hnMatchStates.get(roomId)
@@ -253,9 +344,12 @@ export function buildHNCardZones(state: HNMatchState): HNCardZones {
     }
     return [seat.id, Math.max(0, count)]
   }))
-  const stockCount = beforeAuction ? 2 : 0
+  // The A+ layout uses 32 hole cards + 9 community + 2 auction cards;
+  // the remaining nine cards stay in the undealt stock for the whole round.
+  const undealtStock = Math.max(0, 41 - state.seats.length * 8)
+  const stockCount = undealtStock + (beforeAuction ? 2 : 0)
   const auctionCount = inAuction ? 2 : 0
-  const communityCount = 6
+  const communityCount = 9
   const visible = stockCount + auctionCount + communityCount
     + Object.values(handCounts).reduce((a, b) => a + b, 0)
     + Object.values(resolvedPileCounts).reduce((a, b) => a + b, 0)
@@ -294,8 +388,9 @@ function emitHNTokenFlow(io: Server, state: HNMatchState): void {
 // ============================================================
 export function buildHNSnapshotForPlayer(state: HNMatchState, userId: string): Record<string, any> {
   // ── Public เสมอทุก phase (ตรงกับ payload ที่ event เดิมเคย broadcast ให้ทุกคนอยู่แล้ว) ──
+  const visibleRow3Count = state.phase === 'match_end' ? 5 : state.phase === 'grand_finale' && state.grandFinale?.roundNumber === 2 ? 4 : 3
   const community = state.community
-    ? { pile1: state.community.row1.map(cardKey), pile2: state.community.row2.map(cardKey), pile3: state.community.row3.map(cardKey) }
+    ? { pile1: state.community.row1.map(cardKey), pile2: state.community.row2.map(cardKey), pile3: state.community.row3.slice(0, visibleRow3Count).map(cardKey) }
     : null
   const seatsPublic = state.seats.map(s => ({
     id: s.id, name: s.name, emoji: s.emoji, avatarUrl: s.avatarUrl, role: s.role, isHuman: s.isHuman, isVip: s.isVip,
@@ -449,15 +544,18 @@ const FILLER_NAMES: Record<AIPersonality, { name: string; emoji: string }> = {
 export async function startHighNobleMultiMatch(
   io: Server,
   roomId: string,
-  roomSeats: [RoomSeat, RoomSeat, RoomSeat, RoomSeat],
+  roomSeats: RoomSeat[],
+  missionsEnabled = true,
 ): Promise<{ ok: true } | { ok: false; reason: 'INSUFFICIENT_TOKENS' | 'ACTIVE_MATCH_EXISTS' | 'SERVER_ERROR' }> {
   // v1.1 prerequisite: role ต้องผูกกับ rs.isBoss/rs.isMonarch flag ตรงๆ ไม่ใช่ raw array index i อีก
   // ต่อไป (เดิม roles[i] สมมติว่า seat 0 = boss เสมอ — จะพังทันทีถ้า Step 3 ย้าย seat order ของ
   // HighNoble ให้ Human เติมจากหัวแบบ Adept) — หา boss seat จริงจาก flag ก่อน แล้วไล่แจก p4/p1/p2 ให้
   // ที่นั่งที่เหลือตามลำดับ index ที่เจอ (ให้ผลลัพธ์เหมือนเดิมทุกกรณีตอนนี้ เพราะ roomRegistry การันตี
   // seat[0].isBoss=true เสมอในปัจจุบัน — zero behavior change จนกว่า Step 3 จะเปลี่ยน seat order จริง)
+  if (roomSeats.length < 3 || roomSeats.length > 5) return { ok: false, reason: 'SERVER_ERROR' }
   const bossIdx = roomSeats.findIndex(rs => rs.isBoss)
-  const nonBossRoles: HNSeat['role'][] = ['p4', 'p1', 'p2']
+  if (bossIdx < 0) return { ok: false, reason: 'SERVER_ERROR' }
+  const nonBossRoles: HNSeat['role'][] = ['p2', 'p3', 'p4', 'p5']
   let nonBossRoleIdx = 0
   let fillerIdx = 0
 
@@ -519,9 +617,9 @@ export async function startHighNobleMultiMatch(
     fillerIdx++
     const realConfig = AI_CONFIGS.find(c => c.personality === p) ?? AI_CONFIGS[0]
     return { id: `AI_FILL_${i}`, role, isHuman: false, name: FILLER_NAMES[p].name, emoji: FILLER_NAMES[p].emoji, personality: p, aiConfigId: realConfig.id }
-  }) as [HNSeat, HNSeat, HNSeat, HNSeat]
+  })
 
-  const totalRounds = 3
+  const totalRounds = 5
   const buyInAmount = gameConfig.buyIn.highNoble
   const tokenBalance: Record<string, number> = {}
   const escrowIds: Record<string, string> = {}
@@ -550,6 +648,7 @@ export async function startHighNobleMultiMatch(
     resolvedPileCount: 0,
     afkPlayers: {},
     autoSortUsed: {},
+    missionsEnabled,
   }
   hnMatchStates.set(roomId, state)
 
@@ -605,9 +704,9 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
   state.grandFinale = undefined
   state.resolvedPileCount = 0
   state.autoSortUsed = {}
-  state.missions=generateTierCPlusMissions('highNoble')
+  state.missions=state.missionsEnabled !== false ? generateTierCPlusMissions('highNoble') : []
 
-  const dealt = dealCards()
+  const dealt = dealHighNobleTexas(state.seats.length)
   const playerIds = state.seats.map(s => s.id)
   const cardsMap: Record<string, Card[]> = {}
   playerIds.forEach((id, i) => cardsMap[id] = dealt.players[i])
@@ -636,14 +735,7 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
   }
 
   // AI/Boss ตัดสินใจจัดไพ่ทันที — Minion (§6.1) ใช้ greedyArrangement เสมอ ไม่ผ่าน personality dispatch
-  aiSeats(state).forEach(seat => {
-    if (seat.isMinion) {
-      state.arrangements![seat.id] = greedyArrangement(cardsMap[seat.id], community, state.missions)
-      return
-    }
-    const config: AIConfig = { id: seat.id, name: seat.name, emoji: seat.emoji, personality: seat.personality! }
-    state.arrangements![seat.id] = aiDecideArrangement(config, cardsMap[seat.id], community, state.roundNumber, 'highNoble', 0, state.missions)
-  })
+  aiSeats(state).forEach(seat => { state.arrangements![seat.id] = arrangeHighNobleTexas(cardsMap[seat.id], community, state.missions) })
 
   const timer = gameConfig.arrangementTimer.highNoble
   const aiNamesPublic = state.seats.map(s => ({ id: s.id, name: s.name, emoji: s.emoji, avatarUrl: s.avatarUrl, role: s.role, isHuman: s.isHuman, isVip: s.isVip }))
@@ -657,7 +749,8 @@ async function startHNRound(io: Server, roomId: string): Promise<void> {
       communityCards: {
         pile1: community.row1.map(cardKey),
         pile2: community.row2.map(cardKey),
-        pile3: community.row3.map(cardKey),
+        // Flop is public while Turn and River remain server-authoritative.
+        pile3: community.row3.slice(0, 3).map(cardKey),
       },
       blindAuction: dealt.blindAuction.map(cardKey),
       seats: aiNamesPublic,
@@ -698,6 +791,13 @@ export async function submitHNArrangement(
   const seat = seatById(state, userId)
   if (!seat || !seat.isHuman) return { ok: false, reason: 'not_a_seat' }
 
+  const held = state.cardsMap?.[userId] ?? []
+  const submitted = [...arrangement.pile1, ...arrangement.pile2, ...arrangement.pile3]
+  if (arrangement.pile1.length !== 3 || arrangement.pile2.length !== 3 || arrangement.pile3.length !== 2 ||
+      submitted.length !== held.length || submitted.map(cardKey).sort().some((key, index) => key !== held.map(cardKey).sort()[index])) {
+    return { ok: false, reason: 'tier_a_plus_arrangement_must_be_3_3_2' }
+  }
+
   state.arrangements![userId] = arrangement
   state.submittedArrangement.add(userId)
 
@@ -718,7 +818,7 @@ export async function submitHNArrangement(
 // ============================================================
 function naiveArrangeR1(state: HNMatchState, seatId: string): void {
   const hand = state.cardsMap![seatId]
-  state.arrangements![seatId] = { pile1: hand.slice(0, 3), pile2: hand.slice(3, 6), pile3: hand.slice(6, 11) }
+  state.arrangements![seatId] = { pile1: hand.slice(0, 3), pile2: hand.slice(3, 6), pile3: hand.slice(6, 8) }
 }
 
 function naiveArrangeR2(state: HNMatchState, seatId: string): void {
@@ -729,10 +829,9 @@ function naiveArrangeR2(state: HNMatchState, seatId: string): void {
 
 function naiveDiscard(state: HNMatchState, seatId: string): void {
   const arr = state.arrangements![seatId]
-  const trim = (pile: Card[]) => pile.length > 3 ? pile.slice(0, 3) : pile
-  const finalArr: PlayerArrangement = { pile1: trim(arr.pile1), pile2: trim(arr.pile2), pile3: trim(arr.pile3) }
+  const finalArr: PlayerArrangement = { pile1: arr.pile1.slice(0, 3), pile2: arr.pile2.slice(0, 4), pile3: arr.pile3.slice(0, 2) }
   state.arrangements![seatId] = finalArr
-  const foul = checkTierCFoul(finalArr, state.community!)
+  const foul = checkHighNobleTexasFoul(finalArr, state.community!)
   state.foulMap![seatId] = foul.isFoul
   if (foul.isFoul && foul.reason) state.foulReasons![seatId] = foul.reason
   state.finalPile3![seatId] = finalArr.pile3
@@ -863,14 +962,8 @@ function startHNArrangementRound2(io: Server, roomId: string): void {
   state.submittedArrangement = new Set()
 
   aiSeats(state).forEach(seat => {
-    if (!state.auctionWonCards![seat.id]) return
-    const fullHand = [...state.cardsMap![seat.id], state.auctionWonCards![seat.id]]
-    if (seat.isMinion) {
-      const proposed=greedyArrangement(fullHand, state.community!,state.missions);state.arrangements![seat.id]={pile1:proposed.pile1,pile2:[...proposed.pile2,...proposed.pile3.slice(5)],pile3:proposed.pile3.slice(0,5)}
-      return
-    }
-    const config: AIConfig = { id: seat.id, name: seat.name, emoji: seat.emoji, personality: seat.personality! }
-    const proposed=aiDecideArrangement(config, fullHand, state.community!, state.roundNumber, 'highNoble', 0,state.missions);state.arrangements![seat.id]={pile1:proposed.pile1,pile2:[...proposed.pile2,...proposed.pile3.slice(5)],pile3:proposed.pile3.slice(0,5)}
+    const won = state.auctionWonCards![seat.id]
+    if (won) state.arrangements![seat.id] = arrangeHighNobleTexas([...state.cardsMap![seat.id], won], state.community!, state.missions)
   })
   emitHNCardZones(io, state)
 
@@ -893,8 +986,8 @@ export async function submitHNArrangementRound2(
   if (!state || state.phase !== 'arrangement_2') return { ok: false, reason: 'not_in_arrangement_2' }
   const held=[...(state.cardsMap?.[userId] ?? []), ...(state.auctionWonCards?.[userId] ? [state.auctionWonCards[userId]] : [])]
   const submitted=[...arrangement.pile1,...arrangement.pile2,...arrangement.pile3]
-  const expectedPile2=held.length-8
-  if(arrangement.pile1.length!==3||arrangement.pile2.length!==expectedPile2||arrangement.pile3.length!==5||submitted.length!==held.length||submitted.map(cardKey).sort().some((key,index)=>key!==held.map(cardKey).sort()[index]))return {ok:false,reason:'post_auction_arrangement_must_be_3_remaining_5'}
+  const expectedPile2=held.length-5
+  if(arrangement.pile1.length!==3||arrangement.pile2.length!==expectedPile2||arrangement.pile3.length!==2||submitted.length!==held.length||submitted.map(cardKey).sort().some((key,index)=>key!==held.map(cardKey).sort()[index]))return {ok:false,reason:'post_auction_arrangement_must_be_3_remaining_2'}
   state.arrangements![userId] = arrangement
   state.submittedArrangement.add(userId)
   if (allHumansSubmitted(state, state.submittedArrangement)) {
@@ -929,14 +1022,14 @@ function startHNDiscardPhase(io: Server, roomId: string): void {
   aiSeats(state).forEach(seat => {
     const arr = state.arrangements![seat.id]
     state.finalPile3![seat.id] = [...arr.pile3]
-    const foul = checkTierCFoul(arr, state.community!)
+    const foul = checkHighNobleTexasFoul(arr, state.community!)
     state.foulMap![seat.id] = foul.isFoul
     if (foul.isFoul && foul.reason) state.foulReasons![seat.id] = foul.reason
   })
   humanSeats(state).forEach(seat => {
     const arr = state.arrangements![seat.id]
     state.finalPile3![seat.id] = [...arr.pile3]
-    const foul=checkTierCFoul(arr,state.community!);state.foulMap![seat.id]=foul.isFoul
+    const foul=checkHighNobleTexasFoul(arr,state.community!);state.foulMap![seat.id]=foul.isFoul
     if(foul.reason)state.foulReasons![seat.id]=foul.reason;else delete state.foulReasons![seat.id]
   })
   void resolveHNDiscardComplete(io, roomId).catch(error => console.error('[HN] final arrangement resolve failed', error))
@@ -956,7 +1049,7 @@ async function resolveHNDiscardTimeout(io: Server, roomId: string): Promise<void
     if (state.submittedDiscard.has(seat.id)) return
     const arrangement = state.arrangements![seat.id]
     state.finalPile3![seat.id] = [...arrangement.pile3]
-    const foul = checkTierCFoul(arrangement, state.community!)
+    const foul = checkHighNobleTexasFoul(arrangement, state.community!)
     state.foulMap![seat.id] = foul.isFoul
     if (foul.reason) state.foulReasons![seat.id] = foul.reason
     else delete state.foulReasons![seat.id]
@@ -983,6 +1076,7 @@ async function resolveHNDiscardComplete(io: Server, roomId: string): Promise<voi
 
   const pile1Winner = resolvePile(1, allArrangements, state.community!, state.foulMap!)
   const hand1 = pile1Winner ? evaluateHand([...allArrangements[pile1Winner].pile1, ...state.community!.row1]) : null
+  const pile1MissionMeta=revealMissionMeta(1,playerIds,allArrangements,state.community!,state.foulMap!,state.missions??[])
   state.resolvedPileCount = 1
   emitHNCardZones(io, state)
   io.to(roomId).emit('pile_reveal', {
@@ -992,6 +1086,7 @@ async function resolveHNDiscardComplete(io: Server, roomId: string): Promise<voi
     communityCards: state.community!.row1.map(cardKey),
     arrangements: revealWinnerOnly(allArrangements, 1, pile1Winner),
     fouled: state.foulMap, foulReasons: state.foulReasons,
+    ...pile1MissionMeta,
   })
   publishSpectatorEvent(roomId, { type: 'PILE_REVEALED', pile: 1, publicHands: pile1Winner ? [{ winnerSeat: state.seats.findIndex(s => s.id === pile1Winner), handRank: hand1 ? handRankLabel(hand1) : '' }] : [] })
   publishSpectatorEvent(roomId, { type: 'PILE_RESULT', pile: 1, winnerSeats: pile1Winner ? [state.seats.findIndex(s => s.id === pile1Winner)] : [] })
@@ -1005,6 +1100,7 @@ async function resolveHNDiscardComplete(io: Server, roomId: string): Promise<voi
 
   const pile2Winner = resolvePile(2, allArrangements, state.community!, state.foulMap!)
   const hand2 = pile2Winner ? evaluateBestFive([...allArrangements[pile2Winner].pile2, ...state.community!.row2]) : null
+  const pile2MissionMeta=revealMissionMeta(2,playerIds,allArrangements,state.community!,state.foulMap!,state.missions??[])
   state.resolvedPileCount = 2
   emitHNCardZones(io, state)
   io.to(roomId).emit('pile_reveal', {
@@ -1014,6 +1110,7 @@ async function resolveHNDiscardComplete(io: Server, roomId: string): Promise<voi
     communityCards: state.community!.row2.map(cardKey),
     arrangements: revealWinnerOnly(allArrangements, 2, pile2Winner),
     fouled: state.foulMap, foulReasons: state.foulReasons,
+    ...pile2MissionMeta,
   })
   publishSpectatorEvent(roomId, { type: 'PILE_REVEALED', pile: 2, publicHands: pile2Winner ? [{ winnerSeat: state.seats.findIndex(s => s.id === pile2Winner), handRank: hand2 ? handRankLabel(hand2) : '' }] : [] })
   publishSpectatorEvent(roomId, { type: 'PILE_RESULT', pile: 2, winnerSeats: pile2Winner ? [state.seats.findIndex(s => s.id === pile2Winner)] : [] })
@@ -1063,10 +1160,10 @@ function startHNGrandFinale(io: Server, roomId: string): void {
   const turnOrder = clockwiseOrder.filter(pid => eligible.includes(pid))
 
   state.grandFinale = {
-    roundNumber: 1, foldedPlayers: [], foulPlayers, currentTurnIdx: 0, turnOrder, pile3Pot, revealedCards: {},
+    roundNumber: 1, foldedPlayers: [], foulPlayers, currentTurnIdx: 0, turnOrder, pile3Pot, revealedCards: {}, betOpened:false, checkedBeforeBet:[],
   }
 
-  io.to(roomId).emit('grand_finale_start', { roomId, roundNumber: 1, turnOrder, foulPlayers, pile3Pot })
+  io.to(roomId).emit('grand_finale_start', { roomId, roundNumber: 1, turnOrder, foulPlayers, pile3Pot, communityRevealed: 3 })
   startHNNextTurn(io, roomId)
 }
 
@@ -1075,6 +1172,8 @@ function startHNNextTurn(io: Server, roomId: string): void {
   if (!state) return
   const gf = state.grandFinale
   if (!gf) return
+  gf.betOpened??=false
+  gf.checkedBeforeBet??=[]
 
   if (gf.currentTurnIdx >= gf.turnOrder.length) {
     if (gf.roundNumber === 1) {
@@ -1088,7 +1187,11 @@ function startHNNextTurn(io: Server, roomId: string): void {
       gf.roundNumber = 2
       gf.turnOrder = counterclockwise.filter(pid => stillIn.includes(pid))
       gf.currentTurnIdx = 0
-      io.to(roomId).emit('grand_finale_round_start', { roomId, roundNumber: 2, turnOrder: gf.turnOrder, pile3Pot: gf.pile3Pot })
+      gf.betOpened=false;gf.checkedBeforeBet=[]
+      io.to(roomId).emit('grand_finale_round_start', {
+        roomId, roundNumber: 2, turnOrder: gf.turnOrder, pile3Pot: gf.pile3Pot,
+        communityRevealed: 4, revealedCommunityCard: cardKey(state.community!.row3[3]),
+      })
       startHNNextTurn(io, roomId)
       return
     } else {
@@ -1106,7 +1209,14 @@ function startHNNextTurn(io: Server, roomId: string): void {
   const callAmount = gameConfig.grandFinale.callAmount.highNoble ?? 0
   const timeLimitMs = (gameConfig.grandFinale.betTimer.highNoble ?? 30) * 1000
 
-  io.to(roomId).emit('grand_finale_turn', { roomId, playerId: currentPid, roundNumber: gf.roundNumber, callAmount, timeLimitMs })
+  // Calls cannot use credit or go all-in. Insufficient balance folds before
+  // exposing an actionable turn to either a Human or an AI seat.
+  if (gf.betOpened && (state.tokenBalance[currentPid] ?? 0) < callAmount) {
+    applyHNGrandFinaleAction(io, roomId, currentPid, 'fold')
+    return
+  }
+
+  io.to(roomId).emit('grand_finale_turn', { roomId, playerId: currentPid, roundNumber: gf.roundNumber, callAmount, currentBet:gf.betOpened?callAmount:0, legalActions:gf.betOpened?['call','fold']:['check','bet'], timeLimitMs })
 
   // Full Reconnect System Step 2B — passive ghost mode: ถ้าคนที่ถึง turn กำลัง grace-AFK อยู่ fold ทันที
   // ไม่รอ timeLimitMs (ต่างจาก auto-call ปกติของคนที่ยัง online แค่ตัดสินใจช้า) กันไม่ให้เสียเงินซ้ำๆ ทุก
@@ -1126,13 +1236,14 @@ function startHNNextTurn(io: Server, roomId: string): void {
       // ต้อง fold แทน auto-call เดิม ไม่งั้นเสียเงินไปเรื่อยๆ ขัด passive design — คน online ปกติที่
       // แค่ตัดสินใจช้า (ไม่ AFK) ยังได้ auto-call เหมือนเดิมทุกประการ ไม่กระทบ (guard clearTimeout
       // ที่ applyHNGrandFinaleAction บรรทัดแรกกันการยิงซ้อนหลัง human กดเองไปแล้วอยู่ครบแล้ว ไม่ต้องเพิ่ม)
-      const hnAutoAction = isHNPlayerAFK(state, currentPid) ? 'fold' : 'call'
+      const hnAutoAction:HNGrandFinaleAction = isHNPlayerAFK(state, currentPid) ? 'fold' : (gf.betOpened?'call':'check')
       applyHNGrandFinaleAction(io, roomId, currentPid, hnAutoAction)
     }, timeLimitMs)
   } else {
     const aiThinkMs = 7000 + Math.floor(Math.random() * 3000)
     setTimeout(() => {
-      const action = decideHNAIGrandFinaleAction(state, currentPid)
+      const decision = decideHNAIGrandFinaleAction(state, currentPid)
+      const action:HNGrandFinaleAction=gf.betOpened?decision:(decision==='call'?'bet':'check')
       applyHNGrandFinaleAction(io, roomId, currentPid, action)
     }, aiThinkMs)
   }
@@ -1146,7 +1257,7 @@ export function estimateHNWinrate(state: HNMatchState, bossId: string): number {
   if (!gf) return 0.5
 
   const myHand = finalPile3[bossId] ?? []
-  if (myHand.length !== 5) return 0
+  if (myHand.length !== 2) return 0
   const myResult = evaluateBestFive([...myHand, ...community.row3])
 
   const cardId = (c: Card) => `${c.rank}_${c.suit}`
@@ -1237,9 +1348,9 @@ export function estimateHNWinrate(state: HNMatchState, bossId: string): number {
 }
 
 function decideHNAIGrandFinaleAction(state: HNMatchState, aiId: string): 'call' | 'fold' {
-  const community3 = state.community!.row3
+  const community3 = state.community!.row3.slice(0,state.grandFinale?.roundNumber===1?3:4)
   const hand3 = (state.finalPile3 ?? {})[aiId] ?? []
-  if (hand3.length !== 5) return 'fold'
+  if (hand3.length !== 2) return 'fold'
   const result = evaluateBestFive([...hand3, ...community3])
   let callProb: number
   if (result.rankIndex >= 3) callProb = 0.99
@@ -1272,7 +1383,7 @@ function pickHNRevealCard(state: HNMatchState, playerId: string, hand: Card[], a
   const seat = seatById(state, playerId)
   if (seat?.role === 'boss' && seat.personality !== 'cipher') {
     const community = state.community!
-    const fullHand = [...hand, ...community.row3]
+    const fullHand = [...hand, ...community.row3.slice(0,state.grandFinale?.roundNumber===1?3:4)]
     const rankCount: Record<string, number> = {}
     fullHand.forEach(c => { rankCount[c.rank] = (rankCount[c.rank] ?? 0) + 1 })
     const kickers = remaining.filter(c => rankCount[c.rank] === 1)
@@ -1282,7 +1393,7 @@ function pickHNRevealCard(state: HNMatchState, playerId: string, hand: Card[], a
 }
 
 function applyHNGrandFinaleAction(
-  io: Server, roomId: string, playerId: string, action: 'call' | 'fold', chosenCardKey?: string,
+  io: Server, roomId: string, playerId: string, action: HNGrandFinaleAction, chosenCardKey?: string,
 ): void {
   const state = hnMatchStates.get(roomId)
   if (!state) return
@@ -1291,25 +1402,22 @@ function applyHNGrandFinaleAction(
   if (gf.decisionTimerId) { clearTimeout(gf.decisionTimerId); gf.decisionTimerId = undefined }
 
   let revealedCardKey: string | undefined
-  if (action === 'fold') {
+  if(action==='check'){if(gf.betOpened)return;gf.checkedBeforeBet!.push(playerId)}
+  else if (action === 'fold') {
     gf.foldedPlayers.push(playerId)
   } else {
+    if(action==='bet'){if(gf.betOpened)return;gf.betOpened=true;gf.turnOrder.push(...gf.checkedBeforeBet!.filter(id=>id!==playerId&&!gf.foldedPlayers.includes(id)));gf.checkedBeforeBet=[]}
+    else if(!gf.betOpened)return
     const callAmount = gameConfig.grandFinale.callAmount.highNoble ?? 0
-    state.tokenBalance[playerId] = (state.tokenBalance[playerId] ?? 0) - callAmount
-    gf.pile3Pot += callAmount
-    state.flowPot[2] += callAmount
-    emitHNTokenFlow(io, state)
-    const hand = (state.finalPile3 ?? {})[playerId] ?? []
-    const already = gf.revealedCards[playerId] ?? []
-    // Human เลือกใบเองได้ (ตรงกับ single-player) — ใช้ถ้าถูกต้อง ไม่งั้น fallback ไป pickHNRevealCard
-    let card = chosenCardKey
-      ? hand.find(c => cardKey(c) === chosenCardKey && !already.some(r => r.rank === c.rank && r.suit === c.suit))
-      : undefined
-    if (!card) card = pickHNRevealCard(state, playerId, hand, already)
-    if (card) {
-      gf.revealedCards[playerId] = [...already, card]
-      revealedCardKey = cardKey(card)
+    const balance=state.tokenBalance[playerId]??0
+    if(balance<callAmount){action='fold';gf.foldedPlayers.push(playerId)}
+    else{
+      state.tokenBalance[playerId] = balance - callAmount
+      gf.pile3Pot += callAmount
+      state.flowPot[2] += callAmount
+      emitHNTokenFlow(io, state)
     }
+    // Texas Hybrid keeps both hole cards private until showdown.
   }
 
   io.to(roomId).emit('grand_finale_action', {
@@ -1323,12 +1431,14 @@ function applyHNGrandFinaleAction(
 }
 
 export function submitHNGrandFinaleAction(
-  io: Server, roomId: string, playerId: string, action: 'call' | 'fold', revealedCardKey?: string,
+  io: Server, roomId: string, playerId: string, action: HNGrandFinaleAction, revealedCardKey?: string,
 ): { ok: boolean; reason?: string } {
   const state = hnMatchStates.get(roomId)
   if (!state || state.phase !== 'grand_finale') return { ok: false, reason: 'not_in_grand_finale' }
   const gf = state.grandFinale
   if (!gf || gf.turnOrder[gf.currentTurnIdx] !== playerId) return { ok: false, reason: 'not_your_turn' }
+  const legal=gf.betOpened?action==='call'||action==='fold':action==='check'||action==='bet'
+  if(!legal)return{ok:false,reason:'illegal_betting_action'}
   applyHNGrandFinaleAction(io, roomId, playerId, action, revealedCardKey)
   return { ok: true }
 }
@@ -1349,7 +1459,10 @@ function resolveHNGrandFinaleShowdown(io: Server, roomId: string, stillIn: strin
     if (!bestHand || compareHands(result, bestHand) > 0) { bestHand = result; bestId = pid }
   })
 
-  io.to(roomId).emit('grand_finale_reveal_all', { roomId, reveals })
+  io.to(roomId).emit('grand_finale_reveal_all', {
+    roomId, reveals, communityRevealed: 5,
+    revealedCommunityCard: cardKey(community3[4]), communityCards: community3.map(cardKey),
+  })
   return bestId
 }
 
@@ -1459,7 +1572,7 @@ function finalizeHNGrandFinale(
   const community3ForStats = state.community!.row3
   humanSeats(state).forEach(seat => {
     const pile3Cards = (state.finalPile3 ?? {})[seat.id]
-    if (pile3Cards && pile3Cards.length === 5) {
+    if (pile3Cards && pile3Cards.length === 2) {
       const hand3Cards = [...pile3Cards, ...community3ForStats]
       trackBestHandLive(state, seat.id, evaluateBestFive(hand3Cards), hand3Cards, 3, winnerId === seat.id)
     }
@@ -1489,13 +1602,18 @@ function finalizeHNGrandFinale(
       evaluateBestFive([...scoringArrangements[id].pile2,...state.community!.row2]).rank,
       evaluateBestFive([...scoringArrangements[id].pile3,...state.community!.row3]).rank,
     ] as readonly [string,string,string]]))
-    const scoring=scoreTierCPlusRound({playerIds:allPlayerIds,winners:[pendingP12.pile1Winner,pendingP12.pile2Winner,(winnerId&&!burned)?winnerId:''],hands,missions:state.missions??generateTierCPlusMissions('highNoble'),fouled:Object.fromEntries(foulPlayers.map(id=>[id,true]))})
+    const scoring=scoreTierCPlusRound({playerIds:allPlayerIds,winners:[pendingP12.pile1Winner,pendingP12.pile2Winner,(winnerId&&!burned)?winnerId:''],hands,missions:state.missions??generateTierCPlusMissions('highNoble'),fouled:Object.fromEntries(foulPlayers.map(id=>[id,true])),tier:'highNoble'})
     state.missionStreaks??={}
-    humanSeats(state).forEach(seat=>{if(foulPlayers.includes(seat.id)){state.missionStreaks![seat.id]=0;return}const streak=missionStreakBonus((state.missions??[]).map(m=>missionResult(m,hands[seat.id][m.pile-1] as any).complete),state.missionStreaks![seat.id]);state.missionStreaks![seat.id]=streak.streak;scoring[seat.id].streakBonus=streak.bonus;scoring[seat.id].total+=streak.bonus})
+    humanSeats(state).forEach(seat=>{if(foulPlayers.includes(seat.id)){state.missionStreaks![seat.id]=0;return}const streak=missionStreakBonus((state.missions??[]).map(m=>getTierMissionAward('highNoble',m.pile,m,hands[seat.id][m.pile-1] as any).complete),state.missionStreaks![seat.id]);state.missionStreaks![seat.id]=streak.streak;scoring[seat.id].streakBonus=streak.bonus;scoring[seat.id].total+=streak.bonus})
     state.roundScores=scoring
-    const grossPots=[stakes.pile1*allPlayerIds.length,stakes.pile2*allPlayerIds.length,pile3Pot]
+    const basePile3Pot=stakes.pile3*allPlayerIds.length
+    const callPot=Math.max(0,pile3Pot-basePile3Pot)
+    const grossPots=[stakes.pile1*allPlayerIds.length,stakes.pile2*allPlayerIds.length,basePile3Pot]
     const shares=Object.fromEntries(allPlayerIds.map(id=>[id,0])) as Record<string,number>
-    grossPots.forEach((pot,k)=>{const split=allocatePotByScore(pot,Object.fromEntries(allPlayerIds.map(id=>[id,scoring[id].piles[k].finalPileScore])),allPlayerIds);allPlayerIds.forEach(id=>shares[id]+=split[id])})
+    const pileTokenRewards=grossPots.map((pot,k)=>allocatePotByScore(pot,Object.fromEntries(allPlayerIds.map(id=>[id,scoring[id].piles[k].finalPileScore])),allPlayerIds)) as [Record<string,number>,Record<string,number>,Record<string,number>]
+    if(callPot>0&&winnerId&&!burned){const callReward=Math.floor(callPot*(1-rake));pileTokenRewards[2][winnerId]=(pileTokenRewards[2][winnerId]??0)+callReward}
+    pileTokenRewards.forEach(split=>allPlayerIds.forEach(id=>shares[id]+=split[id]))
+    ;(state as any)._pileTokenRewards=pileTokenRewards
     allPlayerIds.forEach(id=>{deltas[id]=-(stakes.pile1+stakes.pile2+stakes.pile3)+shares[id]})
     jackpotWinner=null;jackpotBonus=0;jackpotRake=0
   }
@@ -1517,7 +1635,7 @@ function finalizeHNGrandFinale(
     jackpotWinner, jackpotBonus, jackpotRake,
     tokenBalance: state.tokenBalance,
     tokenDeltas: deltas,
-    missions:state.missions,scoring:state.roundScores,
+    missions:state.missions,scoring:state.roundScores,pileTokenRewards:(state as any)._pileTokenRewards,
   })
   const winnerSeatIndex = winnerId ? state.seats.findIndex(s => s.id === winnerId) : -1
   publishSpectatorEvent(roomId, { type: 'PILE_RESULT', pile: 3, winnerSeats: winnerSeatIndex >= 0 ? [winnerSeatIndex] : [] })
@@ -1526,7 +1644,12 @@ function finalizeHNGrandFinale(
   const result = { roundNumber: state.roundNumber, pile1Winner: pendingP12?.pile1Winner ?? '', pile2Winner: pendingP12?.pile2Winner ?? '', pile3Winner: winnerId ?? '', tokenDeltas: deltas }
   state.results.push(result)
 
-  setTimeout(async () => {
+  // Tier A+ shows Grand Finale for 5s, then Round Summary with a manual
+  // Continue button and a 10s server-authoritative auto-continue deadline.
+  void (async () => {
+    state.phase = 'round_end'
+    await delay(5000)
+    await waitForHNRoundContinue(roomId, 10000)
     if (state.roundNumber >= state.totalRounds) {
       state.phase = 'match_end'
       const finalWinner = allPlayerIds.reduce((a, b) => (state.tokenBalance[a] ?? 0) > (state.tokenBalance[b] ?? 0) ? a : b)
@@ -1630,7 +1753,7 @@ function finalizeHNGrandFinale(
       await delay(2000)
       await startHNRound(io, roomId)
     }
-  }, 5000) // หน่วงให้ client เห็น Grand Finale result popup ก่อนต่อ Round (ตรงกับ single-player gfResultStage 2 timing)
+  })()
 }
 
 // ============================================================
@@ -1674,7 +1797,7 @@ export function markHNPlayerAFK(io: Server, roomId: string, userId: string): voi
 
   state.afkPlayers[userId] = {
     disconnectedAt: Date.now(),
-    graceTimer: setTimeout(() => {
+    graceTimer: global.setTimeout(() => {
       finalizeHNAFKReplacement(io, roomId, userId).catch(err => {
         console.error('[HN-AFK] finalizeHNAFKReplacement failed for', userId, 'in', roomId, err)
       })

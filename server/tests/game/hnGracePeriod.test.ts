@@ -73,10 +73,9 @@ jest.mock('../../src/game/crownVaultService', () => ({
 import { Card } from '../../src/game/deck'
 import { PlayerArrangement } from '../../src/game/foulChecker'
 import { Seat as RoomSeat } from '../../src/game/roomRegistry'
-import { greedyArrangement } from '../../src/game/aiEngine'
 import {
   startHighNobleMultiMatch, submitHNArrangement, submitHNArrangementRound2, submitHNDiscard,
-  markHNPlayerAFK, resendHNRoundStartToPlayer, getHNMatchState, requestHNAutoSort,
+  markHNPlayerAFK, resendHNRoundStartToPlayer, getHNMatchState, requestHNAutoSort, arrangeHighNobleTexas,
 } from '../../src/game/highNobleMultiEngine'
 
 // เพิ่ม timeout เฉพาะไฟล์นี้ (default jest คือ 5000ms) — เทสในนี้ใช้ jest.advanceTimersByTimeAsync
@@ -178,7 +177,7 @@ async function driveToGrandFinale() {
   // จุดอื่นในไฟล์นี้ (T1-T11) ไม่เดินไปถึง grand_finale เลยยังใช้ naiveSplit ได้ตามปกติ ไม่ต้องเปลี่ยน
   let state = getHNMatchState(roomId)!
   for (const uid of [userA, userB, userC]) {
-    await submitHNArrangement(io, roomId, uid, greedyArrangement(state.cardsMap![uid], state.community!))
+    await submitHNArrangement(io, roomId, uid, arrangeHighNobleTexas(state.cardsMap![uid], state.community!))
   }
 
   // blind_auction (decisionTimeMs=12000) + post-auction delay (3000) — ไม่ bid เลย (ไม่กระทบเทสนี้)
@@ -189,7 +188,7 @@ async function driveToGrandFinale() {
 
   state = getHNMatchState(roomId)!
   for (const uid of [userA, userB, userC]) {
-    await submitHNArrangementRound2(io, roomId, uid, greedyArrangement(state.cardsMap![uid], state.community!))
+    await submitHNArrangementRound2(io, roomId, uid, arrangeHighNobleTexas(state.cardsMap![uid], state.community!))
   }
 
   state = getHNMatchState(roomId)!
@@ -382,7 +381,7 @@ describe('Grand Finale AFK fold (Step 2B override + 2B-FIX2 stale-timer fix)', (
     expect(state.tokenBalance[userA]).toBe(before) // ไม่เสียเงิน (2B-FIX2 ทำงานถูก)
   })
 
-  test('T14: online ปกติไม่กดทัน (ไม่ AFK) → auto-call เดิมเหมือนเดิม ไม่ fold', async () => {
+  test('T14: online ปกติไม่กดทันก่อนมีเดิมพัน → auto-check และไม่ fold', async () => {
     const { roomId, userA, io } = await driveToGrandFinale()
     await resolveBossTurn() // เป็น turn ของ userA, timer auto-call ตั้งไว้
 
@@ -391,6 +390,6 @@ describe('Grand Finale AFK fold (Step 2B override + 2B-FIX2 stale-timer fix)', (
 
     const state = getHNMatchState(roomId)!
     expect(state.grandFinale!.foldedPlayers).not.toContain(userA)
-    expect(state.tokenBalance[userA]).toBe(before - 1_000) // callAmount.highNoble หักจริง (Spec v2.0 §4 — ลดจาก 2,000 เหลือ 1,000) — คน online ไม่โดนกระทบจาก 2B-FIX2
+    expect(state.tokenBalance[userA]).toBe(before) // Texas Hybrid: unopened street timeout checks for free
   })
 })

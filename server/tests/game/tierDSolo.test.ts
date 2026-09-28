@@ -20,7 +20,7 @@ describe('Tier D Solo loop', () => {
     expect(redeal.comboBotId).toBe(first.comboBotId)
     for (const seat of first.seats.filter(seat => seat.isBot)) {
       const focus = seat.id === first.comboBotId
-      expect(first.arrangements[seat.id]).toEqual(arrangeTierDBot(first.dealtHands[seat.id], first.communityPiles, seat.difficulty.skill, () => 0, focus ? first.missions : [], focus, tierDAiCandidateFraction(201)))
+      expect(first.arrangements[seat.id]).toEqual(arrangeTierDBot(first.dealtHands[seat.id], first.communityPiles, seat.difficulty.skill, () => 0, first.missions, focus, tierDAiCandidateFraction(201)))
     }
     // การรักษาบทบาทไม่ได้รับประกันว่าไพ่ที่สุ่มได้จะทำ Mission สำเร็จ
   })
@@ -192,12 +192,23 @@ describe('Tier D Solo loop', () => {
     }
   })
 
-  test('lower AI ignores Missions while the Mythic ceiling values Mission and Combo EV', () => {
+  test.each([1, 2, 3, 4, 5])('skill %i combines public Mission and Combo EV with hand strength', (skill) => {
     const state = createTierDLevel(351, 'human', random)
     const arrangement = firstValidTierDArrangement(state.dealtHands['tier-d-bot-1'], state.communityPiles)
+    const hands = ([1,2,3] as const).map(pile => evaluateBestFive([...arrangement[`pile${pile}`], ...state.communityPiles[`pile${pile}`]]))
+    const missions = hands.slice(0,2).map((hand,index) => ({ pile:(index+1) as 1|2, rank:hand.rank }))
+    expect(tierDBotArrangementUtility(arrangement, state.communityPiles, skill, missions)).toBeGreaterThan(tierDBotArrangementUtility(arrangement, state.communityPiles, skill, []))
+  })
+
+  test('every Mission-eligible AI receives the public Mission objective while arranging', () => {
     const missions = [{ pile: 1 as const, rank: 'high_card' as const }, { pile: 2 as const, rank: 'one_pair' as const }]
-    expect(tierDBotArrangementUtility(arrangement, state.communityPiles, 3, missions)).toBe(tierDBotArrangementUtility(arrangement, state.communityPiles, 3, []))
-    expect(tierDBotArrangementUtility(arrangement, state.communityPiles, 5, missions)).toBeGreaterThan(tierDBotArrangementUtility(arrangement, state.communityPiles, 5, []))
+    for (const level of [161, 201, 251, 501, 1001]) {
+      const state = createTierDLevel(level, 'human', () => 0, { missions })
+      for (const seat of state.seats.filter(seat => seat.isBot)) {
+        const focus = seat.id === state.comboBotId
+        expect(state.arrangements[seat.id]).toEqual(arrangeTierDBot(state.dealtHands[seat.id], state.communityPiles, seat.difficulty.skill, () => 0, missions, focus, tierDAiCandidateFraction(level), seat.risePersonality ? { personality: seat.risePersonality, visible: { community: state.communityPiles } } : undefined))
+      }
+    }
   })
 
   test('Shuffle-style creation preserves an explicitly absent Open Challenge', () => {

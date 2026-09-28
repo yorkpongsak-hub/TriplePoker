@@ -51,6 +51,8 @@ export interface SettleRoundOutput {
   jackpotWinner: string | null
   jackpotBonus: number
   jackpotRake: number
+  /** Authoritative gross Token allocation for each G1/G2/G3 score pool. */
+  pileRewards: [Record<string, number>, Record<string, number>, Record<string, number>]
 }
 
 // ─── ต้นรอบ: Ante -> Pot ─────────────────────────────────────
@@ -115,6 +117,7 @@ export function settleRound(input: SettleRoundInput): SettleRoundOutput {
 
   // net รวมที่ผู้ชนะ jackpot ได้จาก Pot ปกติทั้ง 3 กอง — ใช้คิดฐาน jackpotRake
   let jackpotWinnerNet = 0
+  const pileRewards: [Record<string, number>, Record<string, number>, Record<string, number>] = [{}, {}, {}]
 
   for (let k = 0; k < 3; k++) {
     const potAmount = pot[k]
@@ -128,6 +131,7 @@ export function settleRound(input: SettleRoundInput): SettleRoundOutput {
       // Canonical Tier C+ path: distribute the complete pile Pot. Rake is
       // calculated once, from positive game profit, after Match 3.
       const shares = allocatePotByScore(potAmount,input.pileScoreWeights[k],playerIds)
+      pileRewards[k] = shares
       playerIds.forEach(id=>{stacks[id]=(stacks[id]??0)+shares[id];displayDeltas[id]+=shares[id]})
     } else if (!winner) {
       // ไม่มีผู้ชนะ (foul ครบทุกคน) -> Pot ทั้งก้อนเข้า Fee & Rake
@@ -137,6 +141,7 @@ export function settleRound(input: SettleRoundInput): SettleRoundOutput {
       feeRake += potAmount - net
       stacks[winner] = (stacks[winner] ?? 0) + net
       displayDeltas[winner] += net
+      pileRewards[k][winner] = net
       if (winner === jackpotWinner) jackpotWinnerNet += net
     }
 
@@ -164,7 +169,7 @@ export function settleRound(input: SettleRoundInput): SettleRoundOutput {
     feeRake += jackpotRake
   }
 
-  return { stacks, pot, feeRake, displayDeltas, jackpotWinner:input.pileScoreWeights?null:jackpotWinner, jackpotBonus, jackpotRake }
+  return { stacks, pot, feeRake, displayDeltas, jackpotWinner:input.pileScoreWeights?null:jackpotWinner, jackpotBonus, jackpotRake, pileRewards }
 }
 
 // ─── Auto Sort Fee: Stack ผู้กด -> Fee & Rake ────────────────

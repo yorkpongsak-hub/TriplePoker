@@ -178,7 +178,10 @@ export function createTierDLevel(level: number, humanId: string, random: () => n
   const arrangements: Record<string, TierDArrangement | undefined> = {}
   // Bots arrange immediately. Human cards are intentionally left uncommitted until READY.
   for (const seat of seats) if (seat.isBot) {
-    const missionAware = tierDAiMissionsEnabled(level) && (!comboBotId || seat.id === comboBotId)
+    // Every Mission-eligible bot evaluates the same public Missions. Difficulty
+    // still controls candidate recognition; it must not remove part of the
+    // public scoring objective from ordinary (non-specialist) opponents.
+    const missionAware = tierDAiMissionsEnabled(level)
     const candidateFraction = seat.risePersonality ? tierDRiseCandidateFraction(level, seat.risePersonality) : tierDAiCandidateFraction(level)
     arrangements[seat.id] = arrangeTierDBot(dealtHands[seat.id], communityPiles, seat.difficulty.skill, random, missionAware ? missions : [], seat.id === comboBotId, candidateFraction, seat.risePersonality ? { personality: seat.risePersonality, visible: { community: communityPiles } } : undefined)
   }
@@ -486,15 +489,19 @@ function tierDBotHandsUtility(hands: BestFiveResult[], skill: number, missions: 
       + config.weakPileWeight * weakest
       - config.balanceWeight * (strongest - weakest)
   }
-  if((skill<4&&!comboFocus)||missions.length===0)return strength
+  if(missions.length===0)return strength
   const outcomes=missions.map(mission=>missionResult(mission,hands[mission.pile-1].rank))
   const missionValue=outcomes.reduce((sum,result)=>sum+result.score+result.penalty,0)
   const allComplete=outcomes.every(result=>result.complete)
   const comboExpected=allComplete?(missions.length===2?6:missions.length===3?12.5:0):0
-  // Even the specialist treats Combo as a preference, not an optimizer. Normal
-  // opponents only model Combo EV at the Mythic ceiling.
-  const strategyWeight=(comboFocus?1.5:skill>=5?0.75:0.5)*(rise ? TIER_D_RISE_SOLO_PERSONALITIES[rise.personality].comboWeight : 1)
-  return strength+strategyWeight*(missionValue+(comboFocus||skill>=5?comboExpected:0))
+  // All difficulty bands combine public Mission points and Combo/Super Combo
+  // with hand strength. Lower bands remain forgiving through their much wider
+  // candidate window and a smaller strategy weight, not by ignoring a visible
+  // scoring rule. The specialist retains a stronger preference without seeing
+  // any opponent cards or undealt cards.
+  const normalWeight=.25+Math.min(5,Math.max(1,skill))*.10
+  const strategyWeight=(comboFocus?1.5:normalWeight)*(rise ? TIER_D_RISE_SOLO_PERSONALITIES[rise.personality].comboWeight : 1)
+  return strength+strategyWeight*(missionValue+comboExpected)
 }
 
 function riseDecisionReason(personality: TierDRiseSoloPersonality, hands: BestFiveResult[], missions: readonly Mission[]): string {

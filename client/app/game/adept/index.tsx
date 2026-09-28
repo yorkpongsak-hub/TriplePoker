@@ -732,6 +732,8 @@ const GameTableLive: React.FC = () => {
         key: `${data.roomId ?? ROOM_ID}:${data.roundNumber ?? Date.now()}:g${pile.pileNumber}`,
         pile: pile.pileNumber, winnerId: pile.winner, winnerBestFive: pile.winnerBestFive,
         communityCards: pile.communityCards ?? [], handRanking: pile.winnerHandRank ?? 'WIN',
+        missionScores: Object.fromEntries(Object.entries(data.scoring ?? {}).map(([id, score]: [string, any]) => [id, score?.piles?.[pile.pileNumber - 1]?.missionScore ?? 0])),
+        localCombo: pile.pileNumber === 2 && data.scoring?.[PLAYER_ID]?.comboKind ? { kind: data.scoring[PLAYER_ID].comboKind, bonus: data.scoring[PLAYER_ID].combo ?? 0 } : undefined,
       })))
       setPileWinners(newWinners)
       setHandRanks(newHandRanks)
@@ -1143,7 +1145,6 @@ const GameTableLive: React.FC = () => {
       <View style={{ alignItems: 'flex-start', gap: 2 }}>
         {/* Label + Winner badge */}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-          <Text style={s.pileLabel}>PILE {pileNum}</Text>
           {hasWinner && (
             <View style={[s.winBadge, { backgroundColor: isWin ? 'rgba(74,222,128,0.15)' : 'rgba(248,113,113,0.15)' }]}>
               <Text style={[s.winBadgeTxt, { color: isWin ? '#4ade80' : '#f87171' }]}>
@@ -1675,6 +1676,7 @@ const GameTableLive: React.FC = () => {
             tierName="ADEPT"
             tierStars={3}
             round={roundNumber}
+            totalRounds={3}
             isWeb={isWeb}
             insetsTop={insets.top}
             opacity={(phase === 'showdown' || phase === 'result') ? 0 : 1}
@@ -1842,7 +1844,7 @@ const GameTableLive: React.FC = () => {
             </ImageBackground>
           </View>
         )}
-        <TierCPlusPileReveal reveals={pileRevealShowcases} localPlayerId={PLAYER_ID} onSequenceComplete={() => setPileRevealShowcases([])} />
+        <TierCPlusPileReveal reveals={pileRevealShowcases} localPlayerId={PLAYER_ID} playerIds={[PLAYER_ID, ...aiList.map(ai => ai.id)]} localPiles={piles} winnerName={id => id === PLAYER_ID ? myDisplayName : (aiList.find(ai => ai.id === id)?.name ?? id)} onSequenceComplete={() => setPileRevealShowcases([])} />
         <ServerLog socket={socketRef.current} onMonarchWin={setMonarchWinner} />
       </View>
     </View>

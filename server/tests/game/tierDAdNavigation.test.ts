@@ -11,14 +11,20 @@ jest.mock('../../../client/src/launch/store',()=>({useLaunchStore:()=>({hydrated
 jest.mock('../../../client/src/launch/progress',()=>({tierDUnlocked:()=>false,advancedUnlocked:()=>false}))
 jest.mock('../../../client/src/utils/authGuard',()=>({needsProfileSetup:()=>false}))
 jest.mock('../../../client/src/hooks/useConfirmTableExit',()=>({useConfirmTableExit:()=>{}}))
+jest.mock('../../../client/src/ads/postSettlementExit',()=>({leaveTierCPlusTable:jest.fn()}))
 
 test('League-only player can enter the table and rewarded ad without an advanced-table unlock',()=>{
-  ;(globalThis as any).__DEV__=false
-  const GameLayout=require('../../../client/app/game/_layout').default
-  for(const path of ['/game/tier-d','/game/tier-d/ad']){
-    mockPath.value=path
-    expect(GameLayout().type).toBe('GameStack')
+  try {
+    ;(globalThis as any).__DEV__=false
+    const GameLayout=require('../../../client/app/game/_layout').default
+    for(const path of ['/game/tier-d','/game/tier-d/ad']){
+      mockPath.value=path
+      expect(GameLayout().type).toBe('GameStack')
+    }
+    mockPath.value='/game/mastermind'
+    expect(GameLayout().type).toBe('Redirect')
+  } catch (error) {
+    const detail = error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ''}` : String(error)
+    throw new Error(`Tier D navigation test failed: ${detail}`)
   }
-  mockPath.value='/game/mastermind'
-  expect(GameLayout().type).toBe('Redirect')
 })

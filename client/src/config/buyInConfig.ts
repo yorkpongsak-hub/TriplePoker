@@ -7,9 +7,9 @@ export type BuyInTier = 'initiate' | 'adept' | 'mastermind' | 'highNoble' | 'las
 export const BUY_IN: Record<BuyInTier, number> = {
   initiate:   600,
   adept:      1_800,
-  mastermind: 4_500,
-  highNoble:  15_000,
-  lastBoss:   30_000,
+  mastermind: 7_500,
+  highNoble:  25_000,
+  lastBoss:   50_000,
 }
 
 export const AD_RESCUE_AMOUNT = 500

@@ -23,6 +23,8 @@ import BossVictoryVFX, { VictoryTier } from '../../../src/components/vfx/BossVic
 import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
 import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
 import { TierCPlusPileReveal, type TierCPlusReveal } from '../../../src/components/game/TierCPlusPileReveal'
+import ComboCardBurst from '../../../src/components/vfx/ComboCardBurst'
+import { RoundScoreSummary } from '../../../src/components/game/RoundScoreSummary'
 import { isLocalTripleSweep } from '../../../src/components/vfx/vfxPolicy'
 import {
   playCountdownWarning, playCardArrange1, playCardArrange2, playAuctionBidTick, playJackpotFanfare, playBossPileWinThunder,
@@ -380,6 +382,8 @@ const GameTableLive: React.FC = () => {
   const [allCards, setAllCards]       = useState<Record<string, Record<number, string[]>>>({})
   const [pileWinners, setPileWinners] = useState<Record<number, string>>({})
   const [pileRevealShowcases, setPileRevealShowcases] = useState<TierCPlusReveal[]>([])
+  const [awaitingG1Commit, setAwaitingG1Commit] = useState(false)
+  const [tierDComboBurst, setTierDComboBurst] = useState<{ key: string; kind: 'COMBO'|'SUPER_COMBO'; bonus: number } | null>(null)
   const [showLegendarySweep, setShowLegendarySweep] = useState(false)
   const [legendarySweepComplete, setLegendarySweepComplete] = useState(false)
   const [hasFoul, setHasFoul]         = useState<Record<string, boolean>>({})
@@ -454,6 +458,8 @@ const GameTableLive: React.FC = () => {
   // Patch Grand Finale: state ทั้งหมด
   const [gfTurnPlayerId, setGfTurnPlayerId]   = useState<string | null>(null)
   const [gfRoundNumber, setGfRoundNumber]     = useState<1 | 2>(1)
+  const [gfCommunityRevealed, setGfCommunityRevealed] = useState<1|2>(1)
+  const [gfLegalActions, setGfLegalActions] = useState<Array<'check'|'bet'|'call'|'fold'>>(['check','bet'])
   const [gfPile3Pot, setGfPile3Pot]           = useState(0)
   const [gfTimeLeft, setGfTimeLeft]           = useState(10)
   const [gfFoulPlayers, setGfFoulPlayers]     = useState<string[]>([])
@@ -462,6 +468,7 @@ const GameTableLive: React.FC = () => {
   const [gfFinalReveals, setGfFinalReveals]   = useState<Record<string, string[]>>({}) // pid -> ไพ่ส่วนตัวครบ 5 ใบตอน Showdown
   const [gfFinalResult, setGfFinalResult]     = useState<any>(null)
   const [gfResultStage, setGfResultStage]     = useState<1 | 2>(1) // 1: Grand Finale, 2: Round Summary
+  const roundSummaryContinuedRef = useRef(false)
   // Patch High Noble: ใบที่ Human เลือกหงายในตา Call ปัจจุบัน (default = ใบอ่อนสุดที่ยังไม่หงาย)
   const [gfSelectedCardKey, setGfSelectedCardKey] = useState<string | null>(null)
   const gfTimerRef = useRef<any>(null)
@@ -520,6 +527,7 @@ const GameTableLive: React.FC = () => {
   }
 
   useEffect(() => {
+    if (awaitingG1Commit) return
     const hasFoulAll = Object.keys(hasFoul).length > 0
     const winnersReady = pileWinners[1] && pileWinners[2] && pileWinners[3]
     if (!winnersReady && !hasFoulAll) return
@@ -532,7 +540,7 @@ const GameTableLive: React.FC = () => {
     setShowResult(true)
     startContinueCountdown()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(pileWinners), JSON.stringify(hasFoul), legendarySweepComplete, PLAYER_ID])
+  }, [JSON.stringify(pileWinners), JSON.stringify(hasFoul), legendarySweepComplete, PLAYER_ID, awaitingG1Commit])
 
   // ── Connect Socket (ครั้งเดียว)
   useEffect(() => {
@@ -557,23 +565,33 @@ const GameTableLive: React.FC = () => {
     socketRef.current = socket
 
     let startRequested = false
+    let resumeWatchdog: ReturnType<typeof setTimeout> | null = null
+    const requestFreshMatch = () => {
+      if (startRequested) return
+      startRequested = true
+      if (resumeWatchdog) { clearTimeout(resumeWatchdog); resumeWatchdog = null }
+      socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'mastermind', bossId })
+    }
     socket.on('connect', () => {
+      startRequested = false
       setIsReconnecting(false)
       setConnectionError(null)
       if (!accessToken) {
-        if (!startRequested) { startRequested = true; socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'mastermind', bossId }) }
+        requestFreshMatch()
         return
       }
       requestGameResume(socket, { roomId: ROOM_ID, userId: PLAYER_ID, accessToken, matchType: 'MASTERMIND' })
+      if (resumeWatchdog) clearTimeout(resumeWatchdog)
+      resumeWatchdog = setTimeout(requestFreshMatch, 6_000)
       // token ไม่ส่งจาก client (server-authoritative — escrowBuyIn คิดจาก users.token_balance สดเท่านั้น)
       // (player_join_room ถูกตัดออก — dead path เดิม: client ไม่เคย listen 'player_joined'/'arrangement_start'
       // ที่มันคืนมา แถมยังสร้างตาราง tableRegistry ซ้ำด้วย roomId เดิมอีกชั้น start_match ด้านล่างทำ
       // socket.join(roomId) ให้อยู่แล้วเหมือนกัน — pattern เดียวกับ initiate Phase 2.2)
     })
     socket.on(GAME_RESUME_RESULT_EVENT, (result: { ok: boolean; status: string; matchType: string }) => {
-      if (result.matchType !== 'MASTERMIND' || result.ok || result.status !== 'MATCH_NOT_FOUND' || startRequested) return
-      startRequested = true
-      socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'mastermind', bossId })
+      if (result.matchType !== 'MASTERMIND') return
+      if (resumeWatchdog) { clearTimeout(resumeWatchdog); resumeWatchdog = null }
+      if (!result.ok && (result.status === 'MATCH_NOT_FOUND' || result.status === 'RESUME_TIMEOUT')) requestFreshMatch()
     })
 
     // Connection status: pattern เดียวกับ highNoble/index.tsx:649-673
@@ -605,6 +623,7 @@ const GameTableLive: React.FC = () => {
     }
 
     const processRoundStart = (data: any) => {
+      if (resumeWatchdog) { clearTimeout(resumeWatchdog); resumeWatchdog = null }
       setPileRevealShowcases([])
       setPhase('arrangement')
       setRoundNumber(data.roundNumber)
@@ -741,11 +760,15 @@ const GameTableLive: React.FC = () => {
     // ลบ handler นั้นทิ้งแล้ว — VFX/SFX ย้ายมารวมที่นี่ ซึ่งเป็นจุดที่ผล Pile 1/2 มาถึงจริง
     socket.on('pile_reveal', (data: any) => {
       const pNum: number = data.pileNumber
+      if (pNum === 1) setAwaitingG1Commit(true)
+      if (pNum === 2) setAwaitingG1Commit(false)
       if ((pNum === 1 || pNum === 2) && data.winner && data.winnerBestFive?.length === 5) {
         setPileRevealShowcases(previous => [...previous, {
           key: `${data.roomId ?? ROOM_ID}:${data.roundNumber ?? Date.now()}:g${pNum}`,
           pile: pNum, winnerId: data.winner, winnerBestFive: data.winnerBestFive,
           communityCards: data.communityCards ?? [], handRanking: data.winnerHandRank ?? 'WIN',
+          missionScores: data.missionScores ?? {},
+          localCombo: pNum === 2 && (data.comboPlayers?.[PLAYER_ID] ?? 0) > 0 ? { kind: 'COMBO', bonus: data.comboPlayers[PLAYER_ID] } : undefined,
         }])
       }
       const arrangements: Record<string, string[]> = data.arrangements ?? {}
@@ -845,7 +868,7 @@ const GameTableLive: React.FC = () => {
       setPhase('auction_done')
       offerBark({ speaker: aiListRef.current[0]?.name ?? 'Oracle', event: 'AUCTION_WIN' })
     })
-    // Patch High Noble: Arrangement รอบ2 — จัดไพ่ใหม่รวมไพ่ที่ประมูลได้ (สูงสุด 12 ใบ)
+    // Tier A: post-Auction Arrangement 2, including the won card (up to 12 cards).
     socket.on('arrangement_2_start', (data: any) => {
       setPhase('arrangement_2')
       setIsReady(false); setSortDone(false); setSelected(null)
@@ -853,7 +876,7 @@ const GameTableLive: React.FC = () => {
       const cardObjs = myCards.map((k: string, i: number) => ({ id: `c2_${i}`, key: k }))
       // Final post-Auction layout is always 3 / remaining Pile 2 / 5.
       setPiles([cardObjs.slice(0, 3), cardObjs.slice(3, Math.max(3, cardObjs.length - 5)), cardObjs.slice(-5)])
-      const t = data.timer ?? 135
+      const t = data.timer ?? 68
       timerValRef.current = { val: t, max: t }
       if (timerRef.current) clearInterval(timerRef.current)
       timerRef.current = setInterval(() => {
@@ -969,6 +992,10 @@ const GameTableLive: React.FC = () => {
       console.log('🟢 [DEBUG] grand_finale_start received!', data)
       setPhase('grand_finale')
       setGfRoundNumber(1)
+      setGfCommunityRevealed(data.communityRevealed === 2 ? 2 : 1)
+      if (Array.isArray(data.communityCards)) setComm(prev => ({ ...prev, p3: data.communityCards }))
+      else if (data.revealedCommunityCard) setComm(prev => ({ ...prev, p3: [data.revealedCommunityCard] }))
+      setGfLegalActions(['check','bet'])
       setGfPile3Pot(data.pile3Pot ?? 0)
       setGfFoulPlayers(data.foulPlayers ?? [])
       setGfFoldedPlayers([])
@@ -981,12 +1008,16 @@ const GameTableLive: React.FC = () => {
       // Patch High Noble: reset selected card เมื่อเข้ารอบใหม่
       setGfSelectedCardKey(null)
       setGfRoundNumber(data.roundNumber ?? 2)
+      setGfCommunityRevealed(data.communityRevealed === 2 ? 2 : 1)
+      if (Array.isArray(data.communityCards)) setComm(prev => ({ ...prev, p3: data.communityCards }))
+      else if (data.revealedCommunityCard) setComm(prev => ({ ...prev, p3: [...prev.p3, data.revealedCommunityCard] }))
       setGfPile3Pot(data.pile3Pot ?? gfPile3Pot)
     })
     // Patch Grand Finale: ตา player คนนี้
     socket.on('grand_finale_turn', (data: any) => {
       setGfTurnPlayerId(data.playerId ?? null)
       gfCallAmount.current = data.callAmount ?? 0
+      setGfLegalActions(data.legalActions ?? (data.currentBet > 0 ? ['call','fold'] : ['check','bet']))
       const totalSec = Math.ceil((data.timeLimitMs ?? 10000) / 1000)
       setGfTimeLeft(totalSec)
       if (gfTimerRef.current) clearInterval(gfTimerRef.current)
@@ -1021,7 +1052,7 @@ const GameTableLive: React.FC = () => {
       gfBlinkAnim.stopAnimation()
       // Coin Flying VFX — Call เท่านั้น (Fold ไม่มีเงินไหล) บินจากที่นั่งผู้เล่นไป Token Flow Panel
       // มุมขวาบน (มติลุงเยาะ 2026-07-26) ใช้ variant 'ante' เพราะเป็นการจ่ายจากผู้เล่นเข้ากองแบบเดียวกัน
-      if (data.action !== 'fold') {
+      if (data.action === 'bet' || data.action === 'call') {
         flyingCoinsRef.current?.fire('ante', seatTargetFor(data.playerId), SEAT_TARGETS.tokenPanel)
       }
       if (data.action === 'fold') {
@@ -1040,9 +1071,11 @@ const GameTableLive: React.FC = () => {
     // Patch Grand Finale: เทียบไพ่ Round 2 (หงายไพ่ครบทุกคนที่เหลือ)
     socket.on('grand_finale_reveal_all', (data: any) => {
       setGfFinalReveals(data.reveals ?? {})
+      if (Array.isArray(data.communityCards)) setComm(prev => ({ ...prev, p3: data.communityCards }))
     })
     // Patch Grand Finale: ผลสุดท้าย
     socket.on('grand_finale_result', (data: any) => {
+      roundSummaryContinuedRef.current = false
       setGfFinalResult(data)
       setTokenBalance(data.tokenBalance ?? {})
       syncTokenFlow(data)  // Pot จ่ายออกหมด -> กลับเป็น 0 ทั้ง 3 กอง / Fee & Rake โตตาม rake รอบนี้
@@ -1061,6 +1094,7 @@ const GameTableLive: React.FC = () => {
       // event นี้ ไม่ใช่ pile_reveal เหมือน Pile 1/2) — data.jackpotWinner คือ "whatever winner data is
       // already available" ที่ตรงตามเงื่อนไขสุดพอดีอยู่แล้ว (null ถ้าไม่ sweep)
       if (data.jackpotWinner === PLAYER_ID) playJackpotFanfare()
+      if (data.scoring?.[PLAYER_ID]?.comboKind === 'SUPER_COMBO') setTierDComboBurst({ key: `${data.roomId ?? ROOM_ID}:${Date.now()}:super`, kind: 'SUPER_COMBO', bonus: data.scoring[PLAYER_ID].combo ?? 0 })
       // SFX: Boss ชนะกอง 3 (Grand Finale) — เว้นกรณี burned (ทุกคน fold/foul = ไม่มีผู้ชนะจริง)
       if (!data.burned && data.winnerId && data.winnerId === aiListRef.current[0]?.id) playBossPileWinThunder()
     })
@@ -1142,6 +1176,7 @@ const GameTableLive: React.FC = () => {
     })
 
     return () => {
+      if (resumeWatchdog) clearTimeout(resumeWatchdog)
       if (timerRef.current) clearInterval(timerRef.current)
       if (lockupFailSafeRef.current) clearTimeout(lockupFailSafeRef.current)
       if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop() // Patch: หยุด deal anim ตอน unmount
@@ -1414,6 +1449,13 @@ const GameTableLive: React.FC = () => {
     setShowResult(false)
     // Patch Mastermind: ไม่ fade ไพ่ออกเพราะ Flow ต่อใน Round เดิม (Fog of War → Auction → Discard → Grand Finale)
     socketRef.current?.emit('player_continue', { roomId: ROOM_ID, playerId: PLAYER_ID })
+  }
+
+  const handleRoundSummaryContinue = () => {
+    if (roundSummaryContinuedRef.current) return
+    roundSummaryContinuedRef.current = true
+    socketRef.current?.emit('player_continue', { roomId: ROOM_ID, playerId: PLAYER_ID })
+    setGfFinalResult(null)
   }
 
   // auto continue ย้ายไปทำใน startContinueCountdown interval แทน (เลี่ยง re-render)
@@ -1791,7 +1833,6 @@ const GameTableLive: React.FC = () => {
       <View style={{ alignItems: 'flex-start', gap: 2 }}>
         {/* Label + Winner badge */}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-          <Text style={s.pileLabel}>PILE {pileNum}</Text>
           {hasWinner && (
             <View style={[s.winBadge, { backgroundColor: isWin ? 'rgba(74,222,128,0.15)' : 'rgba(248,113,113,0.15)' }]}>
               <Text style={[s.winBadgeTxt, { color: isWin ? '#4ade80' : '#f87171' }]}>
@@ -1809,9 +1850,9 @@ const GameTableLive: React.FC = () => {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
           {/* Community cards */}
           {/* two-layer wrapper: View ชั้นนอกถือเงา (ห้ามมี overflow:hidden กันเงาโดนตัดบน iOS) / View ชั้นในคง s.commCard เดิมทุกประการ */}
-          {k1 && CARD_IMG[k1] && <View style={pileShadowStyle}><View style={s.commCard}><Image source={CARD_IMG[k1]} style={{ width: 50, height: 72 }} resizeMode="cover" /></View></View>}
+          {(pileNum === 3 || (k1 && CARD_IMG[k1])) && <View style={pileShadowStyle}><View style={s.commCard}><Image source={k1 && CARD_IMG[k1] ? CARD_IMG[k1] : cardBackImg} style={{ width: 50, height: 72 }} resizeMode="cover" /></View></View>}
           {/* Patch 2026-07-18: ไพ่กองกลางใบ 2 ซ้อนทับใบแรก 1/3 — แยก visual จากไพ่ในมือ + ประหยัดพื้นที่โต๊ะ */}
-          {k2 && CARD_IMG[k2] && <View style={[pileShadowStyle, { marginLeft: -17 }]}><View style={s.commCard}><Image source={CARD_IMG[k2]} style={{ width: 50, height: 72 }} resizeMode="cover" /></View></View>}
+          {(pileNum === 3 || (k2 && CARD_IMG[k2])) && <View style={[pileShadowStyle, { marginLeft: -17 }]}><View style={s.commCard}><Image source={k2 && CARD_IMG[k2] ? CARD_IMG[k2] : cardBackImg} style={{ width: 50, height: 72 }} resizeMode="cover" /></View></View>}
           {/* Divider */}
           {hasWinner && <View style={{ width: 1, height: 72, backgroundColor: 'rgba(201,168,76,0.3)', marginHorizontal: 2 }} />}
           {/* Winner cards */}
@@ -2188,6 +2229,11 @@ const GameTableLive: React.FC = () => {
               return aiList.find(a => a.id === pid)?.name ?? 'AI'
             }
             const deltaForMe = gfFinalResult.tokenDeltas?.[PLAYER_ID] ?? 0
+            if (gfResultStage === 2) {
+              return <View style={[StyleSheet.absoluteFill as any, { alignItems:'center', justifyContent:'flex-start', paddingTop:200, zIndex:61, backgroundColor:'rgba(0,0,0,0.65)' }]}>
+                <RoundScoreSummary result={gfFinalResult} playerIds={[PLAYER_ID, ...aiList.map(ai => ai.id)]} playerName={winnerName} localPlayerId={PLAYER_ID} onContinue={handleRoundSummaryContinue} />
+              </View>
+            }
             // STAGE 1: Grand Finale Result (5 วินาที)
             if (gfResultStage === 1) {
               return (
@@ -2231,7 +2277,7 @@ const GameTableLive: React.FC = () => {
               <View style={[StyleSheet.absoluteFill as any, { alignItems: 'center', justifyContent: 'flex-start', paddingTop: 420, zIndex: 60, backgroundColor: 'rgba(0,0,0,0.65)' }]} pointerEvents="none">
                 <View style={{ backgroundColor: 'rgba(15,36,24,0.98)', padding: 20, borderRadius: 16, alignItems: 'stretch', borderWidth: 1.5, borderColor: '#FFD76A', minWidth: 300 }}>
                   <Text style={{ fontSize: 18, color: '#FFD76A', fontWeight: '900', letterSpacing: 2, textAlign: 'center', marginBottom: 14 }}>
-                    📊 ROUND SUMMARY
+                    ♠ ♥  ROUND SUMMARY  ♦ ♣
                   </Text>
                   {/* Pile 1 */}
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: 0.5, borderBottomColor: 'rgba(201,168,76,0.2)' }}>
@@ -2558,6 +2604,7 @@ const GameTableLive: React.FC = () => {
             tierName="MASTERMIND"
             tierStars={4}
             round={roundNumber}
+            totalRounds={5}
             isWeb={isWeb}
             insetsTop={insets.top}
             opacity={(phase === 'showdown' || phase === 'result') ? 0 : 1}
@@ -2871,14 +2918,19 @@ const GameTableLive: React.FC = () => {
                   <View style={{ alignItems: 'center', marginTop: 0, transform: [{ translateY: GF_CH }] }}>
                     <Text style={[s.pileLabel, { marginBottom: 4 }]}>PILE 3 COMMUNITY</Text>
                     <View style={{ flexDirection: 'row', gap: 4 }}>
-                      {comm.p3.map((k, i) => (
+                      {[0, 1].map(i => {
+                        const k = comm.p3[i]
+                        return (
                         <View key={i} style={{
                           width: 50, height: 72, borderRadius: 4, overflow: 'hidden',
                           borderWidth: 1.5, borderColor: '#38bdf8',
                         }}>
-                          {CARD_IMG[k] && <Image source={CARD_IMG[k]} style={{ width: 50, height: 72 }} resizeMode="cover" />}
+                          {i < gfCommunityRevealed && CARD_IMG[k]
+                            ? <Image source={CARD_IMG[k]} style={{ width: 50, height: 72 }} resizeMode="cover" />
+                            : <Image source={cardBackImg} style={{ width: 50, height: 72 }} resizeMode="cover" />}
                         </View>
-                      ))}
+                        )
+                      })}
                     </View>
                   </View>
                   {p4AI && (
@@ -2912,6 +2964,17 @@ const GameTableLive: React.FC = () => {
             <View style={s.gfActionBar}>
               <Text style={s.gfActionHint}>TAP A CARD TO CHOOSE WHICH TO REVEAL</Text>
               <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 12 }}>
+                {gfLegalActions.includes('check') && <TouchableOpacity
+                  onPress={() => socketRef.current?.emit('grand_finale_action', { roomId: ROOM_ID, playerId: PLAYER_ID, action: 'check' })}
+                  style={[s.gfActionBtn, { backgroundColor: '#173752', borderColor: '#7DD3FC' }]}>
+                  <Text style={[s.gfActionBtnTxt, { color: '#BAE6FD' }]}>CHECK</Text>
+                </TouchableOpacity>}
+                {gfLegalActions.includes('bet') && <TouchableOpacity
+                  onPress={() => socketRef.current?.emit('grand_finale_action', { roomId: ROOM_ID, playerId: PLAYER_ID, action: 'bet', ...(gfSelectedCardKey ? { revealedCardKey: gfSelectedCardKey } : {}) })}
+                  style={[s.gfActionBtn, { backgroundColor: '#4A3512', borderColor: '#FFD76A' }]}>
+                  <Text style={[s.gfActionBtnTxt, { color: '#FFF2B0' }]}>BET -{gfCallAmount.current}</Text>
+                </TouchableOpacity>}
+                {gfLegalActions.includes('call') && <>
                 <TouchableOpacity
                   onPress={() => socketRef.current?.emit('grand_finale_action', {
                     roomId: ROOM_ID, playerId: PLAYER_ID, action: 'call',
@@ -2921,11 +2984,13 @@ const GameTableLive: React.FC = () => {
                   style={[s.gfActionBtn, { backgroundColor: '#1C4830', borderColor: '#8DFFB5' }]}>
                   <Text style={[s.gfActionBtnTxt, { color: '#8DFFB5' }]}>CALL -{gfCallAmount.current}</Text>
                 </TouchableOpacity>
+                </>}
+                {gfLegalActions.includes('fold') &&
                 <TouchableOpacity
                   onPress={() => socketRef.current?.emit('grand_finale_action', { roomId: ROOM_ID, playerId: PLAYER_ID, action: 'fold' })}
                   style={[s.gfActionBtn, { backgroundColor: '#5e1a1a', borderColor: '#f87171' }]}>
                   <Text style={[s.gfActionBtnTxt, { color: '#fff' }]}>FOLD</Text>
-                </TouchableOpacity>
+                </TouchableOpacity>}
               </View>
             </View>
           )}
@@ -2942,6 +3007,7 @@ const GameTableLive: React.FC = () => {
 
         </View>
         {/* Patch 2026-07-18: Boss Victory VFX — ทับทุก layer, จบแล้วถอดตัวเอง */}
+        {phase === 'grand_finale_done' && gfFinalResult?.winnerId === PLAYER_ID && <ComboCardBurst eventKey={`${ROOM_ID}:${roundNumber}:g3-win`} kind="YOU_WIN" />}
         {royalFlushWinner && <RoyalStraightFlushVFX playerName={royalFlushWinner === PLAYER_ID ? myDisplayName : (aiList.find(a => a.id === royalFlushWinner)?.name ?? royalFlushWinner)} onClose={() => setRoyalFlushWinner(null)} />}
         {victoryVfx && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 }} pointerEvents="none">
@@ -2967,7 +3033,8 @@ const GameTableLive: React.FC = () => {
             </ImageBackground>
           </View>
         )}
-        <TierCPlusPileReveal reveals={pileRevealShowcases} localPlayerId={PLAYER_ID} onSequenceComplete={() => setPileRevealShowcases([])} />
+        <TierCPlusPileReveal reveals={pileRevealShowcases} localPlayerId={PLAYER_ID} playerIds={[PLAYER_ID, ...aiList.map(ai => ai.id)]} localPiles={piles} localIsVip={isVip} winnerName={id => id === PLAYER_ID ? myDisplayName : (aiList.find(ai => ai.id === id)?.name ?? id)} waitForG1Commit onCommitG1={() => socketRef.current?.emit('player_continue', { roomId: ROOM_ID, playerId: PLAYER_ID })} onG2Complete={() => socketRef.current?.emit('player_continue', { roomId: ROOM_ID, playerId: PLAYER_ID })} onSequenceComplete={() => setPileRevealShowcases([])} />
+        {tierDComboBurst ? <ComboCardBurst eventKey={tierDComboBurst.key} kind={tierDComboBurst.kind} bonus={tierDComboBurst.bonus} /> : null}
         <ServerLog socket={socketRef.current} onMonarchWin={setMonarchWinner} />
       </View>
     </View>

@@ -1,5 +1,5 @@
 import type { Card } from '../../src/game/deck'
-import { applyAuctionCardsToPile2 } from '../../src/game/gameLoop'
+import { applyAuctionCardsToPile2, getPostAuctionArrangementTimer } from '../../src/game/gameLoop'
 import { evaluateBestFive } from '../../src/game/handEvaluator'
 import type { PlayerArrangement } from '../../src/game/foulChecker'
 
@@ -11,6 +11,10 @@ const arrangement=(pile2:Card[]):PlayerArrangement=>({
 })
 
 describe('post-Auction G2 Best 5/6 flow',()=>{
+  test('Tier A post-Auction arrangement gets half of its configured time',()=>{
+    expect(getPostAuctionArrangementTimer('mastermind')).toBe(68)
+    expect(getPostAuctionArrangementTimer('highNoble')).toBe(120)
+  })
   test.each(['human','ai'])('%s winner receives the Auction card as fourth private G2 card',winner=>{
     const human=arrangement([c(14,'spades'),c(14,'hearts'),c(13,'clubs')])
     const ai=arrangement([c(10,'spades'),c(10,'hearts'),c(12,'clubs')])

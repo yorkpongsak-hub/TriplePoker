@@ -26,20 +26,19 @@ function mkCard(): Card {
 }
 
 describe('High Noble card-zone ledger — always 52 cards', () => {
-  test('arrangement keeps 44 hands + 6 community + 2 stock', () => {
+  test('arrangement keeps 32 hands + 9 community + 11 stock', () => {
     const zones = buildHNCardZones(makeHNState({ phase: 'arrangement', resolvedPileCount: 0 }))
-    expect(zones).toMatchObject({ stockCount: 2, communityCount: 6, auctionCount: 0, discardCount: 0, totalCards: 52 })
-    expect(Object.values(zones.handCounts).reduce((a, b) => a + b, 0)).toBe(44)
+    expect(zones).toMatchObject({ stockCount: 11, communityCount: 9, auctionCount: 0, discardCount: 0, totalCards: 52 })
+    expect(Object.values(zones.handCounts).reduce((a, b) => a + b, 0)).toBe(32)
   })
 
   test('after pile 2, played columns replace those cards without changing total', () => {
     const state = makeHNState({ phase: 'fog_of_war', resolvedPileCount: 2 })
-    Object.values(state.arrangements!).forEach(arr => { arr.pile3 = arr.pile3.slice(0, 3) })
     const zones = buildHNCardZones(state)
     expect(zones.resolvedPileCounts).toEqual({ pile1: 12, pile2: 12, pile3: 0 })
-    expect(Object.values(zones.handCounts).reduce((a, b) => a + b, 0)).toBe(12)
-    expect(zones.discardCount).toBe(10)
-    expect(zones.communityCount + zones.discardCount + 24 + 12).toBe(52)
+    expect(Object.values(zones.handCounts).reduce((a, b) => a + b, 0)).toBe(8)
+    expect(zones.discardCount).toBe(2)
+    expect(zones.stockCount + zones.communityCount + zones.discardCount + 24 + 8).toBe(52)
   })
 })
 function mkCards(n: number): Card[] {
@@ -80,14 +79,14 @@ function makeSeats(): [HNSeat, HNSeat, HNSeat, HNSeat] {
 // ไม่ใช่ผ่านเพราะ "บังเอิญไม่มีข้อมูลให้หลุด" (เข้มกว่าของจริงโดยตั้งใจ) ───
 function makeHNState(overrides: Partial<HNMatchState> = {}): HNMatchState {
   const seats = makeSeats()
-  const community: CommunityCards = { row1: mkCards(2), row2: mkCards(2), row3: mkCards(2) }
+  const community: CommunityCards = { row1: mkCards(2), row2: mkCards(2), row3: mkCards(5) }
   const cardsMap: Record<string, Card[]> = {}
   const arrangements: Record<string, PlayerArrangement> = {}
   const finalPile3: Record<string, Card[]> = {}
   seats.forEach(s => {
-    cardsMap[s.id] = mkCards(11)
-    arrangements[s.id] = { pile1: mkCards(3), pile2: mkCards(3), pile3: mkCards(5) }
-    finalPile3[s.id] = mkCards(3)
+    cardsMap[s.id] = mkCards(8)
+    arrangements[s.id] = { pile1: mkCards(3), pile2: mkCards(3), pile3: mkCards(2) }
+    finalPile3[s.id] = mkCards(2)
   })
 
   const base: HNMatchState = {
@@ -196,7 +195,7 @@ describe('High Noble boss card counting — public information only', () => {
     expect(afterHiddenMutation).toBe(first)
   })
 
-  test('guaranteed win requires beating every completion of the legally visible range', () => {
+  test('hole cards are never treated as publicly guaranteed before showdown', () => {
     const community: CommunityCards = {
       row1: [card('3', 'clubs'), card('4', 'diamonds')],
       row2: [card('6', 'clubs'), card('7', 'diamonds')],
@@ -214,7 +213,7 @@ describe('High Noble boss card counting — public information only', () => {
       revealedCards: { [OPP1]: [...state.finalPile3[OPP1]] },
     }
 
-    expect(estimateHNWinrate(state, BOSS)).toBe(1)
+    expect(estimateHNWinrate(state, BOSS)).toBe(0)
   })
 })
 
@@ -233,24 +232,24 @@ function makeIoMock() {
 // กลุ่ม SELF — เจ้าของเห็นของตัวเองครบ
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('buildHNSnapshotForPlayer — T1: arrangement — SELF เห็นไพ่ตัวเองครบ 11 ใบ', () => {
+describe('buildHNSnapshotForPlayer — T1: arrangement — SELF เห็นไพ่ตัวเองครบ 8 ใบ', () => {
   test('myCards ตรงกับ cardsMap[u_self] เป๊ะ', () => {
     const state = makeHNState({ phase: 'arrangement' })
     const snapshot = buildHNSnapshotForPlayer(state, SELF)
     expect(snapshot.myCards).toEqual(state.cardsMap![SELF].map(toKey))
-    expect(snapshot.myCards).toHaveLength(11)
+    expect(snapshot.myCards).toHaveLength(8)
   })
 })
 
-describe('buildHNSnapshotForPlayer — T2: arrangement_2 — ไพ่รวมใบประมูล (12 ใบ) ถ้าชนะ auction', () => {
-  test('myCards ต้องรวมใบที่ u_self ชนะประมูลด้วย (11 raw + 1 auction = 12, ตรง value+suit)', () => {
+describe('buildHNSnapshotForPlayer — T2: arrangement_2 — ไพ่รวมใบประมูล (9 ใบ) ถ้าชนะ auction', () => {
+  test('myCards ต้องรวมใบที่ u_self ชนะประมูลด้วย (8 raw + 1 auction = 9, ตรง value+suit)', () => {
     const auctionCard: Card = { suit: 'clubs', rank: 'A' as any, value: 14 }
     const state = makeHNState({
       phase: 'arrangement_2',
       auctionWonCards: { [SELF]: auctionCard },
     })
     const snapshot = buildHNSnapshotForPlayer(state, SELF)
-    expect(snapshot.myCards).toHaveLength(12)
+    expect(snapshot.myCards).toHaveLength(9)
     expect(snapshot.myCards).toEqual([...state.cardsMap![SELF].map(toKey), toKey(auctionCard)])
   })
 
@@ -261,7 +260,7 @@ describe('buildHNSnapshotForPlayer — T2: arrangement_2 — ไพ่รวม�
       auctionWonCards: { [SELF]: auctionCard },
     })
     const snapshot = buildHNSnapshotForPlayer(state, SELF)
-    expect(snapshot.myCards).toHaveLength(11)
+    expect(snapshot.myCards).toHaveLength(8)
     expect(snapshot.myCards).toEqual(state.cardsMap![SELF].map(toKey))
   })
 
@@ -271,7 +270,7 @@ describe('buildHNSnapshotForPlayer — T2: arrangement_2 — ไพ่รวม�
       auctionWonCards: { [OPP1]: mkCard() }, // มีคนอื่นชนะ แต่ไม่ใช่ u_self
     })
     const snapshot = buildHNSnapshotForPlayer(state, SELF)
-    expect(snapshot.myCards).toHaveLength(11)
+    expect(snapshot.myCards).toHaveLength(8)
     expect(snapshot.myCards).toEqual(state.cardsMap![SELF].map(toKey))
   })
 })

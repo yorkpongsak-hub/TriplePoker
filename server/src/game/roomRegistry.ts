@@ -54,11 +54,13 @@ export interface Seat {
 export interface GameRoom {
   roomId: string
   tier: Tier
-  seats: [Seat, Seat, Seat, Seat] // AI seats fix ตั้งแต่สร้าง, ที่เหลือเป็น Human slots
+  seats: Seat[] // 4 seats for legacy tiers; Tier A+ supports 3-5 total seats
   createdAt: number
   timeoutAt: number | null        // เผื่อไว้ (Mastermind/HighNoble ยังใช้ AI-fill timeout ปกติ)
   status: 'waiting' | 'full' | 'in_progress' | 'closed'
   isPrivate: boolean
+  /** Immutable matchmaking lane chosen before the first player joins. */
+  missionsEnabled?: boolean
   pin?: string
   hostUserId?: string
   // Spectator MVP: immutable matchmaking lane. LIVE rooms never mix with STANDARD rooms.
@@ -72,7 +74,7 @@ export interface GameRoom {
   timeoutStage?: 'waiting' | 'awaiting_choice' | 'extended' | 'awaiting_deadlock_choice'
   // LobbyMatchmaking_Spec_v1_1 §Adept: stage ของ timer ใหม่ — ใช้ตัดสินใจใน resolveAdeptWaitExpiry()
   // (humanCount ตอน timer หมดจะบอกเองว่าอยู่ stage ไหน แต่เก็บ field นี้ไว้ส่งให้ client โชว์ label ถูก)
-  waitStage?: 'waiting_2nd' | 'waiting_3rd'
+  waitStage?: 'waiting_2nd' | 'waiting_3rd' | 'waiting_4th'
 }
 
 // ─── Config ต่อ Tier ────────────────────────────────────────────
@@ -154,8 +156,8 @@ function bossSeat(): Seat {
 
 // LobbyMatchmaking_Spec_v1_1 §HighNoble public: เหมือน Adept public — ไม่ fix ตำแหน่งใดๆ ตั้งแต่สร้าง
 // ห้อง ทุกที่นั่งว่างหมด รอ Human คนแรก join ก่อนค่อยสุ่ม Boss/Monarch จริง (ดู joinRoom())
-function buildHighNoblePublicInitialSeats(): [Seat, Seat, Seat, Seat] {
-  return [emptySeat(), emptySeat(), emptySeat(), emptySeat()]
+function buildHighNoblePublicInitialSeats(): Seat[] {
+  return [emptySeat(), emptySeat(), emptySeat(), emptySeat(), emptySeat()]
 }
 
 // แปลงผลลัพธ์จาก rollHighNobleBoss() เป็น Seat จริง — ใช้ร่วมกัน 2 จุด: finalizeBossSeat() (private
@@ -170,12 +172,13 @@ function makeRoomId(tier: Tier): string {
   return `${tier}_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e4)}`
 }
 
-function buildInitialSeats(tier: Tier, isPrivate: boolean): [Seat, Seat, Seat, Seat] {
+function buildInitialSeats(tier: Tier, isPrivate: boolean): Seat[] {
   // Adept: private (PIN) ใช้ layout เดิม (Sage seat 0 ทันที) | public (auto-match) v1.1 ว่างหมดทุกที่นั่ง
   if (tier === 'adept') return isPrivate ? buildAdeptPrivateInitialSeats() : buildAdeptPublicInitialSeats()
   // HighNoble: private ใช้ layout เดิม (Boss placeholder seat 0 ทันที, real roll ตอนห้องเต็มผ่าน
   // finalizeBossSeat) | public v1.1 ว่างหมดทุกที่นั่งเหมือน Adept (real roll ตอน Human คนแรก join)
   if (tier === 'highNoble' && !isPrivate) return buildHighNoblePublicInitialSeats()
+  if (tier === 'highNoble' && isPrivate) return [bossSeat(), emptySeat(), emptySeat(), emptySeat(), emptySeat()]
 
   const cfg = TIER_ROOM_CONFIG[tier]
   const aiCount = 4 - cfg.humanSeatsRequired
@@ -185,7 +188,7 @@ function buildInitialSeats(tier: Tier, isPrivate: boolean): [Seat, Seat, Seat, S
     // Patch Multiplayer HighNoble (private เท่านั้นตอนนี้): seat 0 = Boss placeholder — seat 1+ (ถ้ามี, Mastermind) = generic AI filler
     seats.push(i === 0 && tier === 'highNoble' ? bossSeat() : aiSeat(i))
   }
-  return seats as [Seat, Seat, Seat, Seat]
+  return seats
 }
 
 export function humanCount(room: GameRoom): number {
@@ -232,13 +235,20 @@ export async function getRoom(roomId: string): Promise<GameRoom | null> {
   return typeof raw === 'string' ? JSON.parse(raw) : (raw as unknown as GameRoom)
 }
 
+/** Pure lane guard used before any public seat is assigned. Legacy rooms default to Missions ON. */
+export function matchesPublicRoomLane(room: GameRoom, tier: Tier, liveMode: 'STANDARD'|'LIVE', missionsEnabled: boolean): boolean {
+  return room.tier === tier && room.status === 'waiting' && !room.isPrivate
+    && (room.liveMode ?? 'STANDARD') === liveMode
+    && (room.missionsEnabled ?? true) === missionsEnabled
+}
+
 // §4.1: จับ user ใหม่เข้า "โต๊ะที่รอนานที่สุด" เสมอ — Redis SMEMBERS ไม่การันตีลำดับ ต้องดึงมาเทียบ createdAt เอง
-export async function findOpenRoom(tier: Tier, liveMode: 'STANDARD' | 'LIVE' = 'STANDARD'): Promise<GameRoom | null> {
+export async function findOpenRoom(tier: Tier, liveMode: 'STANDARD' | 'LIVE' = 'STANDARD', missionsEnabled = true): Promise<GameRoom | null> {
   const roomIds = await redis.smembers(openSetKey(tier))
   const candidates: GameRoom[] = []
   for (const roomId of roomIds) {
     const room = await getRoom(roomId)
-    if (room && room.status === 'waiting' && !room.isPrivate && (room.liveMode ?? 'STANDARD') === liveMode) candidates.push(room)
+    if (room && matchesPublicRoomLane(room, tier, liveMode, missionsEnabled)) candidates.push(room)
   }
   if (candidates.length === 0) return null
   return candidates.reduce((oldest, r) => (r.createdAt < oldest.createdAt ? r : oldest))
@@ -273,7 +283,7 @@ export async function joinPrivateRoomByPin(
 
 // ─── สร้างห้องใหม่ — AI seats fix ตาม config ทันที ──────────────
 // (เรียกจาก findOrCreateRoom() เท่านั้น — public room เสมอ, isPrivate default false)
-export async function createRoom(tier: Tier, isPrivate = false, liveMode: 'STANDARD' | 'LIVE' = 'STANDARD', liveEnabledByUserId?: string): Promise<GameRoom> {
+export async function createRoom(tier: Tier, isPrivate = false, liveMode: 'STANDARD' | 'LIVE' = 'STANDARD', liveEnabledByUserId?: string, missionsEnabled = true): Promise<GameRoom> {
   const cfg = TIER_ROOM_CONFIG[tier]
   // Adept/HighNoble public v1.1: ยังไม่เริ่มนับ timer ใดๆ ตอนสร้างห้อง — รอ Human คนแรก join ก่อน (ดู
   // joinRoom()) เพราะ findOrCreateRoomAndJoin() เรียก createRoom() แล้ว join ทันทีในธุรกรรมเดียวกันเสมออยู่แล้ว
@@ -287,6 +297,7 @@ export async function createRoom(tier: Tier, isPrivate = false, liveMode: 'STAND
     timeoutAt,
     status: 'waiting',
     isPrivate,
+    missionsEnabled,
     liveMode,
     liveEnabledByUserId,
   }
@@ -296,10 +307,10 @@ export async function createRoom(tier: Tier, isPrivate = false, liveMode: 'STAND
 
 // isNew: บอก caller ว่าห้องที่ได้เป็นห้องใหม่ (ไม่มีคนรอ) หรือห้องเดิมที่มีคนอยู่แล้ว —
 // ใช้ตัดสินใจ broadcast "server_activity" (table_open) เฉพาะห้องที่เพิ่งเกิดขึ้นจริง
-export async function findOrCreateRoom(tier: Tier, liveMode: 'STANDARD' | 'LIVE' = 'STANDARD', liveEnabledByUserId?: string): Promise<{ room: GameRoom; isNew: boolean }> {
-  const open = await findOpenRoom(tier, liveMode)
+export async function findOrCreateRoom(tier: Tier, liveMode: 'STANDARD' | 'LIVE' = 'STANDARD', liveEnabledByUserId?: string, missionsEnabled = true): Promise<{ room: GameRoom; isNew: boolean }> {
+  const open = await findOpenRoom(tier, liveMode, missionsEnabled)
   if (open) return { room: open, isNew: false }
-  return { room: await createRoom(tier, false, liveMode, liveEnabledByUserId), isNew: true }
+  return { room: await createRoom(tier, false, liveMode, liveEnabledByUserId, missionsEnabled), isNew: true }
 }
 
 // ─── Distributed lock (Redis SET NX EX) ─────────────────────────
@@ -337,10 +348,10 @@ async function withLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
 // ล็อกต่อ tier ตลอดช่วง find/create + จองที่นั่ง กันสองคำขอชนกันได้ห้องคนละใบ หรือแย่งที่นั่งเดียวกัน
 export async function findOrCreateRoomAndJoin(
   tier: Tier, userId: string, userName: string, avatarUrl?: string,
-  liveMode: 'STANDARD' | 'LIVE' = 'STANDARD', liveEnabledByUserId?: string,
+  liveMode: 'STANDARD' | 'LIVE' = 'STANDARD', liveEnabledByUserId?: string, missionsEnabled = true,
 ): Promise<JoinResult> {
-  return withLock(`matchmaking:${tier}:${liveMode}`, async () => {
-    const { room, isNew } = await findOrCreateRoom(tier, liveMode, liveEnabledByUserId)
+  return withLock(`matchmaking:${tier}:${liveMode}:missions:${missionsEnabled ? 'on' : 'off'}`, async () => {
+    const { room, isNew } = await findOrCreateRoom(tier, liveMode, liveEnabledByUserId, missionsEnabled)
     const result = await joinRoom(room.roomId, userId, userName, undefined, avatarUrl)
     return { ...result, isNew }
   })
@@ -348,10 +359,10 @@ export async function findOrCreateRoomAndJoin(
 
 export async function createNewPublicRoomAndJoin(
   tier: Tier, userId: string, userName: string, avatarUrl?: string,
-  liveMode: 'STANDARD' | 'LIVE' = 'STANDARD', liveEnabledByUserId?: string,
+  liveMode: 'STANDARD' | 'LIVE' = 'STANDARD', liveEnabledByUserId?: string, missionsEnabled = true,
 ): Promise<JoinResult> {
-  return withLock(`matchmaking:${tier}:${liveMode}`, async () => {
-    const room = await createRoom(tier, false, liveMode, liveEnabledByUserId)
+  return withLock(`matchmaking:${tier}:${liveMode}:missions:${missionsEnabled ? 'on' : 'off'}`, async () => {
+    const room = await createRoom(tier, false, liveMode, liveEnabledByUserId, missionsEnabled)
     const result = await joinRoom(room.roomId, userId, userName, undefined, avatarUrl)
     return { ...result, isNew: true }
   })
@@ -364,6 +375,7 @@ export async function createPrivateRoom(
   hostName: string,
   isVipHost: boolean,
   pin?: string,
+  missionsEnabled = true,
 ): Promise<GameRoom> {
   const vipPin = isVipHost && pin ? pin : undefined
   if (vipPin && !isValidRoomPin(vipPin)) {
@@ -385,6 +397,7 @@ export async function createPrivateRoom(
     timeoutAt: Date.now() + cfg.waitTimeoutMs,
     status: 'waiting',
     isPrivate: true,
+    missionsEnabled,
     pin: vipPin,
     hostUserId,
   }
@@ -469,6 +482,9 @@ export async function joinRoom(
       room.waitStage = 'waiting_3rd'
       room.timeoutAt = Date.now() + gameConfig.matchmakingTimeouts.highNoble.thirdHumanWaitMs
     } else if (hCount === 3) {
+      room.waitStage = 'waiting_4th'
+      room.timeoutAt = Date.now() + gameConfig.matchmakingTimeouts.highNoble.thirdHumanWaitMs
+    } else if (hCount === 4) {
       room.waitStage = undefined
       room.timeoutAt = null
     }
@@ -659,6 +675,20 @@ export async function fillWithMinion(roomId: string): Promise<GameRoom | null> {
   return room
 }
 
+/** Start Tier A+ with Boss plus the currently seated players (3-5 total). */
+export async function lockHighNobleCurrentCapacity(roomId: string): Promise<GameRoom | null> {
+  const room = await getRoom(roomId)
+  if (!room || room.status !== 'waiting' || room.tier !== 'highNoble') return null
+  const occupied = room.seats.filter(seat => seat.type !== 'empty')
+  if (occupied.length < 3 || occupied.length > 5 || !occupied.some(seat => seat.isBoss)) return null
+  room.seats = occupied
+  room.status = 'full'
+  room.waitStage = undefined
+  room.timeoutAt = null
+  await saveRoom(room)
+  return room
+}
+
 // ─── HighNoble Dynamic Capacity (v1.1) — 2-stage wait timer scanner + resolver ──
 // โครงเหมือน Adept ทุกอย่าง (ดู resolveAdeptWaitExpiry ด้านบน) ยกเว้นตอนเติมที่นั่งที่เหลือเมื่อไม่มี
 // Human คนที่ 3 ทันเวลา — HighNoble มีที่นั่ง AI แค่ 1 ที่ (Boss/Monarch เท่านั้น สุ่มไปแล้วตอน Human
@@ -696,10 +726,15 @@ export async function resolveHighNobleWaitExpiry(roomId: string): Promise<HighNo
       return { action: 'closed' }
     }
 
-    // Stage 2 (thirdHumanWaitMs) หมดเวลา มี 2 Human แล้วยังไม่มีคนที่ 3 — เติม Minion ที่นั่งที่เหลือ
-    const filled = await fillWithMinion(roomId)
-    if (!filled) return { action: 'noop' }
-    return { action: 'ai_filled', room: filled }
+    // Tier A+ may start at the current capacity (Boss + 2/3 Humans = 3/4 seats).
+    // Empty seats are removed rather than filled, while four Humans naturally
+    // produce the five-seat maximum.
+    room.seats = room.seats.filter(seat => seat.type !== 'empty')
+    room.status = 'full'
+    room.waitStage = undefined
+    room.timeoutAt = null
+    await saveRoom(room)
+    return { action: 'ai_filled', room }
   })
 }
 
@@ -711,7 +746,8 @@ export async function finalizeBossSeat(room: GameRoom): Promise<GameRoom> {
   const humanUserIds = room.seats.filter(s => s.type === 'human' && s.userId).map(s => s.userId!)
   const result = await rollHighNobleBoss(humanUserIds)
 
-  room.seats[0] = bossSeatFromRoll(result)
+  const bossIdx = room.seats.findIndex(seat => seat.isBoss)
+  if (bossIdx >= 0) room.seats[bossIdx] = bossSeatFromRoll(result)
 
   await saveRoom(room)
   return room

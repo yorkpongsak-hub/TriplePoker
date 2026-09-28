@@ -40,14 +40,13 @@ describe('Tier S+ The Last Boss AI engine', () => {
     expect(result.selectedCardIds).toEqual(expect.arrayContaining(['10_spades', 'J_spades', 'Q_spades', 'K_spades', 'A_spades']))
   })
 
-  test('Pile 3 cannot ignore weak community cards to use a five-card private Royal Flush', () => {
+  test('Pile 3 uses canonical Best 5 of 7 and may ignore weak community cards', () => {
     const privatePile = cards('10_spades', 'J_spades', 'Q_spades', 'K_spades', 'A_spades')
     const board = cards('2_clubs', '7_diamonds')
     const result = evaluatePileBest(privatePile, board)
 
-    expect(result.rank).not.toBe('royal_flush')
-    expect(result.selectedCardIds).toEqual(expect.arrayContaining(['2_clubs', '7_diamonds']))
-    expect(result.selectedCardIds.filter(id => privatePile.some(card => card.id === id))).toHaveLength(3)
+    expect(result.rank).toBe('royal_flush')
+    expect(result.selectedCardIds).toEqual(['10_spades', 'J_spades', 'Q_spades', 'K_spades', 'A_spades'])
   })
 
   test('mandatory discard lock cannot be changed by the Boss', () => {

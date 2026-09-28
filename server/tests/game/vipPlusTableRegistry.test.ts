@@ -3,6 +3,7 @@ import {
   VipPlusTableError,
   VipPlusTableRegistry,
 } from '../../src/game/vipPlusTableRegistry'
+import { resolveVipPlusWagerSnapshot } from '../../src/game/vipPlusFoundation'
 
 const player = (number: number, tokenBalance = 100_000) => ({
   playerId: `p${number}`,
@@ -20,7 +21,7 @@ describe('VIP Plus Gate 3 table registry', () => {
     expect(table.seats.H1?.playerId).toBe('p1')
     expect(table.wager.optionId).toBe('INITIATE_WAGER')
     expect(table.wager.callAmount).toBe(50)
-    expect(table.wager.buyIn).toBe(2_000)
+    expect(table.wager.buyIn).toBe(resolveVipPlusWagerSnapshot('INITIATE_WAGER').buyIn)
     expect(table.status).toBe('WAITING')
   })
 
@@ -32,11 +33,13 @@ describe('VIP Plus Gate 3 table registry', () => {
   })
 
   test('checks required Buy-in at create, join, and confirm', () => {
-    expect(() => registry.create(player(1, 1_999), 'INITIATE_WAGER')).toThrow('INSUFFICIENT_TOKENS')
+    const initiateBuyIn = resolveVipPlusWagerSnapshot('INITIATE_WAGER').buyIn
+    const adeptBuyIn = resolveVipPlusWagerSnapshot('ADEPT_WAGER').buyIn
+    expect(() => registry.create(player(1, initiateBuyIn - 1), 'INITIATE_WAGER')).toThrow('INSUFFICIENT_TOKENS')
     const table = registry.create(player(1), 'ADEPT_WAGER')
-    expect(() => registry.join(table.tableId, player(2, 14_999))).toThrow('INSUFFICIENT_TOKENS')
-    registry.join(table.tableId, player(2, 15_000))
-    expect(() => registry.confirm(table.tableId, 'p2', 14_999, VIP_PLUS_ENTRY_TERMS_VERSION)).toThrow('INSUFFICIENT_TOKENS')
+    expect(() => registry.join(table.tableId, player(2, adeptBuyIn - 1))).toThrow('INSUFFICIENT_TOKENS')
+    registry.join(table.tableId, player(2, adeptBuyIn))
+    expect(() => registry.confirm(table.tableId, 'p2', adeptBuyIn - 1, VIP_PLUS_ENTRY_TERMS_VERSION)).toThrow('INSUFFICIENT_TOKENS')
   })
 
   test('requires the exact entry terms version', () => {

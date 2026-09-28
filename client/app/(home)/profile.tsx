@@ -33,6 +33,7 @@ import LeagueAwardsPanel from '../../src/components/profile/LeagueAwardsPanel'
 import MyBadgesPanel from '../../src/components/profile/MyBadgesPanel'
 import { BADGES } from '../../assets/badges/BADGE_MANIFEST'
 import AvatarFrame from '../../src/components/game/AvatarFrame'
+import { RELEASE_SCOPE } from '../../src/config/releaseScope'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
@@ -193,7 +194,7 @@ export default function ProfileScreen() {
   const isVip    = vipStatus !== 'none' // VIP Shimmer Effect — ใช้ vip_status ที่มีอยู่แล้ว ไม่สร้าง state/query ใหม่
   // Batch 2 (VIP-02) — สิทธิ์เข้า VIP Plus ต้องเป็น vip_pro เท่านั้น ห้ามใช้ isVip เดิม (นั่นคือ !== 'none'
   // กว้างเกินไป จะทำให้ VIP ธรรมดาเห็นปุ่มด้วย) เก็บ selector แยกต่างหากจากของเดิมทั้งหมด
-  const isVipPlusEligible = vipStatus === 'vip_pro'
+  const isVipPlusEligible = RELEASE_SCOPE.vipPlus && vipStatus === 'vip_pro'
 
   // ─── Tier Unlock Celebration (Ceiling Model) — เด้ง VFX ที่ Profile ตอนเปิดแอป ───
   // tier_unlocked_max = single source of truth (server เขียนผ่าน checkTierUnlock() ใน settleEscrow)

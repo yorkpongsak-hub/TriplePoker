@@ -40,6 +40,7 @@ jest.mock('../../src/game/bossStatsService', () => ({
 
 import { Card } from '../../src/game/deck'
 import { PlayerArrangement } from '../../src/game/foulChecker'
+import { gameConfig } from '../../src/config/gameConfig'
 import {
   MonarchSeat, MonarchMatchState, settleMonarchMatch, resolveMonarchBossTurn, resolveG1,
   startMonarchMatch, startMonarchRound, submitMonarchArrangement, submitMonarchGrandFinaleAction,
@@ -308,7 +309,7 @@ describe('settleAndEndMonarchMatch — disconnect resolution (มติ commit-b
 
     expect(updateMonarchArrangementDraft(roomId, humanUserId, latestDraft).ok).toBe(true)
     expect(startMonarchArrangementTimer(io, roomId, humanUserId).ok).toBe(true)
-    await jest.advanceTimersByTimeAsync(60_000)
+    await jest.advanceTimersByTimeAsync(gameConfig.monarchConfig.arrangementDeadlineMs)
 
     const sealed = getMonarchMatchState(roomId)!.arrangements![humanUserId]
     expect(toKeys(sealed.pile1)).toEqual(latestDraft.g1)

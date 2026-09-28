@@ -21,7 +21,7 @@ export interface GameResumeRequest {
 
 export type GameResumeResult =
   | { ok: true; status: 'RESUMED'; roomId: string; matchType: GameResumeMatchType; serverVersion?: number }
-  | { ok: false; status: 'MATCH_NOT_FOUND' | 'NOT_A_MEMBER' | 'MATCH_ENDED' | 'UNAUTHORIZED' | 'UNSUPPORTED_MATCH_TYPE'; roomId: string; matchType: GameResumeMatchType }
+  | { ok: false; status: 'MATCH_NOT_FOUND' | 'NOT_A_MEMBER' | 'MATCH_ENDED' | 'UNAUTHORIZED' | 'RESUME_TIMEOUT' | 'UNSUPPORTED_MATCH_TYPE'; roomId: string; matchType: GameResumeMatchType }
 
 export function isGameResumeRequest(value: unknown): value is GameResumeRequest {
   if (!value || typeof value !== 'object') return false

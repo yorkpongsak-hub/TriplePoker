@@ -78,8 +78,8 @@ export const gameConfig = {
   // แหล่งเดียวสำหรับ Call Amount คือ grandFinale.callAmount เท่านั้น validateGameConfig() เช็คให้)
   tokenPot: {
     tiers: {
-      // Per-seat contribution to each Match Pot. Across exactly three Matches
-      // this is the full Buy-in, in the canonical 20/30/50 split.
+      // Per-seat contribution to each Match Pot. C/B play 3 Matches; A/A+/S
+      // play 5, so the unchanged per-Match stakes consume the full Buy-in.
       initiate:   { pile1: 40,   pile2: 60,   pile3: 100   },
       adept:      { pile1: 120,  pile2: 180,  pile3: 300   },
       mastermind: { pile1: 300,  pile2: 450,  pile3: 750   },
@@ -118,9 +118,9 @@ export const gameConfig = {
     // by client/src/config/buyInConfig.ts and validated against tierCPlusScoring.
     initiate:   600,
     adept:      1_800,
-    mastermind: 4_500,
-    highNoble:  15_000,
-    lastBoss:   30_000,
+    mastermind: 7_500,
+    highNoble:  25_000,
+    lastBoss:   50_000,
   },
   adRescueAmount: 500,  // token ต่อ 1 rewarded ad ตอน token < buyIn (Buy-in Spec §3 — คนละ mechanism กับ debtRecovery.adReward แต่ค่าเท่ากัน)
 
@@ -174,7 +174,7 @@ export const gameConfig = {
   // ─── Arrangement Timer ───────────────────────────────────────
   // เวลาจัดไพ่ต่อ Tier (วินาที). รูปแบบเวลาที่ owner ระบุเป็น M.SS:
   // C 2:45, B 2:30, A 2:15, A+ 2:00, S 1:50, S+ 1:40.
-  // arrangement_2 หลัง Auction อ่านค่าเดียวกันนี้ด้วย เพื่อให้ client และ server ไม่ drift.
+  // Tier A arrangement_2 หลัง Auction ใช้ครึ่งหนึ่งของค่านี้; Tier อื่นอ่านค่าเต็มตาม flow เดิม.
   arrangementTimer: {
     initiate:   165,
     adept:      150,
