@@ -28,6 +28,7 @@ export function tournamentRewardBand(level:number):TournamentRewardBand|undefine
 export function tournamentTokenReward(rank:number,band:TournamentRewardBand){return rank===1?band.rank1:rank===2?band.rank2:rank===3?band.rank3:rank<=20?band.rank4To20:0}
 export function tournamentTrophy(rank:number){return rank===1?'Gold':rank===2?'Silver':rank===3?'Bronze':null}
 export function tournamentScore(current:number,baseline:number){return Math.max(0,Math.trunc(current)-Math.trunc(baseline))}
+export function tournamentBaseline(current:number,earnedAfterStart:number){return Math.max(0,Math.trunc(current)-Math.max(0,Math.trunc(earnedAfterStart)))}
 export function mockIncrement(tournamentId:string,userId:string,slot:number){const n=hash(`${tournamentId}:${userId}:${slot}`)%5;return n===0?0:5+(hash(`${userId}:${slot}:gain`)%6)}
 /** Persisted slots make mock progress idempotent, slow, irregular and independent of owner score. */
 export function advanceSyntheticEntries(entries:readonly MiniTournamentEntry[],startAt:number,now=Date.now(),tournamentId='event'){

@@ -169,7 +169,7 @@ const GameTable1: React.FC = () => {
     setStatus('connecting');
     setLog([]);
     setPayload(null);
-    addLog(`Connecting to ${SERVER_URL}...`);
+    addLog('Connecting to game server...');
 
     const socket = io(SERVER_URL, { transports: ['websocket'] });
     socketRef.current = socket;

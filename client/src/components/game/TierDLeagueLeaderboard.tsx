@@ -59,7 +59,7 @@ export function TierDLeagueLeaderboard({serverUrl,accessToken,userId,level,previ
    if(next.introRequired){setIntroOpen(true);return}
    if(next.rewardPresentationRequired&&next.finalReward){setRewardOpen(true);return}
    beginRanking(next)
-  }).catch(e=>live&&setError(e instanceof Error?e.message:'Could not load League ranking.'))
+  }).catch(e=>{if(__DEV__)console.warn('[TIER_D_LEADERBOARD] load failed',e);if(live)setError('Could not load League ranking. Please try again.')})
   return()=>{live=false;if(timer.current)clearTimeout(timer.current);if(autoTimer.current)clearTimeout(autoTimer.current)}
  // onAutoComplete is normally an inline parent callback. Keeping it out of this
  // request effect prevents a parent timer render from polling the leaderboard.
@@ -79,6 +79,11 @@ export function TierDLeagueLeaderboard({serverUrl,accessToken,userId,level,previ
  const remaining=snapshot?.endsAt?Math.max(0,Date.parse(snapshot.endsAt)-clock):0
  const remainingLabel=snapshot?.endsAt?(remaining<=0?t('ranking.tournamentEnded',{},locale):t('ranking.hoursRemaining',{hours:Math.max(1,Math.ceil(remaining/3_600_000))},locale)):t('ranking.top20',{},locale)
  const ownerOutside=snapshot?.currentUser.entry&&snapshot.currentUser.rank!==null&&snapshot.currentUser.rank>20?snapshot.currentUser.entry:null
+ const continueFromRanking=()=>{
+  if(autoTimer.current){clearTimeout(autoTimer.current);autoTimer.current=null}
+  if(entryMode==='autoReward'&&onAutoCompleteRef.current)onAutoCompleteRef.current()
+  else onClose()
+ }
  const enterTournament=()=>{if(!snapshot?.tournamentId)return;setIntroOpen(false);void fetch(`${serverUrl}/tier-d/leaderboard/intro-seen`,{method:'POST',headers:{Authorization:`Bearer ${accessToken}`,'Content-Type':'application/json'},body:JSON.stringify({tournamentId:snapshot.tournamentId})}).catch(()=>{});beginRanking(snapshot)}
  const viewFinalStandings=()=>{if(!snapshot?.tournamentId)return;setRewardOpen(false);void fetch(`${serverUrl}/tier-d/leaderboard/reward-seen`,{method:'POST',headers:{Authorization:`Bearer ${accessToken}`,'Content-Type':'application/json'},body:JSON.stringify({tournamentId:snapshot.tournamentId})}).catch(()=>{});beginRanking(snapshot)}
 
@@ -96,6 +101,7 @@ export function TierDLeagueLeaderboard({serverUrl,accessToken,userId,level,previ
    {ownerOutside?<View style={[s.row,s.me]}><Text style={[s.rank,s.meText]}>#{displayRank??ownerOutside.rank}</Text><View style={[s.avatarFallback,s.meAvatar]}><Text style={s.avatarText}>{ownerOutside.displayName.slice(0,1).toUpperCase()}</Text></View><Text style={[s.name,s.meText]} numberOfLines={1}>{ownerOutside.displayName}  · YOU</Text><Text style={s.flag}>{languageFlag[ownerOutside.languageCode??'en']??languageFlag.en}</Text><Text style={[s.streak,s.meText]}>🔥{ownerOutside.longestWinStreak}</Text><Text style={[s.points,s.mePoints]}>{ownerOutside.leaguePoints.toLocaleString()} LP</Text></View>:null}
    {displayRank!==null?<Text style={s.footer}>{t('ranking.rank',{rank:displayRank},locale)}  ·  {formatInteger(snapshot.currentUser.leaguePoints,locale)} LP</Text>:null}
   </>}
+  {entryMode==='autoReward'?<GameActionButton accessibilityLabel={t('common.continue',{},locale)} label={t('common.continue',{},locale)} onPress={continueFromRanking} style={s.continue}/>:null}
  </View><ThumbUpVFX visible={rankUpVfxVisible} label="Good job" onFinish={()=>setRankUpVfxVisible(false)}/></View>
 }
 
@@ -136,6 +142,7 @@ const s=StyleSheet.create({
  streak:{width:52,textAlign:'right',color:'#ffbf61',fontSize:10,fontWeight:'900'},
  points:{width:70,textAlign:'right',color:'#8DFFB5',fontWeight:'900'},
  footer:{color:'#FFD76A',fontWeight:'900',textAlign:'center',paddingTop:8},
+ continue:{marginTop:10},
  state:{color:'#C8C4B0',textAlign:'center',lineHeight:20},
  disabled:{paddingVertical:42,gap:8},
  disabledTitle:{color:'#FFD76A',fontWeight:'900',fontSize:16,textAlign:'center'},

@@ -11,6 +11,7 @@ const NEXT_LEVEL_DIFFICULTIES = ['ด่านโหด', 'โคตรหิน
 
 type Reward = { items: { itemKey: string; quantity: number }[]; adBonusQuantity: number; canWatchAd?: boolean }
 export type DuelSettlement = { duels?: { duel: number; stake: number; playerStake?: number; opponentStake?: number; pot?: number; playerScore: number; opponentScore: number; grossPayout?: number; playerTokens: number; opponentTokens: number; fee?: number; playerNet: number }[]; playerExchangeFees?: number; finalProfit?: number; tokenChange?: number; latestTokenBalance?: number }
+type DuelRow = NonNullable<DuelSettlement['duels']>[number]
 type Props = { level: number; leagueName?: string; playerScore: number; opponentScore: number; streak: number; longestStreak?: number; comboCount?: number; level250Unlocked: boolean; playerWon: boolean; openChallengePassed?: boolean; duelSettlement?: DuelSettlement; latestTokenBalance?: number; reward?: Reward; rewardEligible?: boolean; rewardClaimed?: boolean; claimingReward?: boolean; watchingAd?: boolean; competition?: { rank?: number; items?: string[]; awarded?: boolean }; elapsedMs?: number; personalBestMs?: number; onClaimReward?: () => void; onWatchAd?: () => void; onRanking?: () => void; onNext: () => void }
 
 const formatTime = (ms?: number) => { const total = Math.max(0, Math.floor((ms ?? 0) / 1000)); return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}` }
@@ -30,7 +31,17 @@ export function TierDSoloResult({ level, leagueName, playerScore, opponentScore,
     return () => animation.stop()
   }, [actionMotion, detailsMotion, playerWon, praiseMotion])
 
-  if (!playerWon) return <View style={s.lossPanel}><Text style={s.lossTitle}>LEVEL {level} REMAINS</Text><Text style={s.lossScore}>YOU {playerScore} — {opponentScore} HIGHEST AI</Text>{duelSettlement?<DuelSettlementBreakdown value={duelSettlement}/>:null}{!openChallengePassed ? <Text style={s.lossHint}>OPEN CHALLENGE FAILED · G1+G2+G3 SWEEP REQUIRED</Text> : null}{onRanking ? <GameActionButton size="small" variant="secondary" animation="none" label="LEAGUE TOP 20" onPress={onRanking} /> : null}<GameActionButton label="TRY AGAIN" onPress={onNext} /></View>
+  if (!playerWon) {
+    const duels = duelSettlement?.duels ?? []
+    let latestLostDuel: DuelRow | undefined
+    for (let index = duels.length - 1; index >= 0; index -= 1) {
+      if (duels[index].playerScore < duels[index].opponentScore) { latestLostDuel = duels[index]; break }
+    }
+    const shownPlayerScore = latestLostDuel?.playerScore ?? playerScore
+    const shownOpponentScore = latestLostDuel?.opponentScore ?? opponentScore
+    const opponentLabel = latestLostDuel ? 'LATEST AI' : 'HIGHEST AI'
+    return <View style={s.lossPanel}><Text style={s.lossTitle}>LEVEL {level} REMAINS</Text><Text style={s.lossScore}>YOU {shownPlayerScore} — {shownOpponentScore} {opponentLabel}</Text>{duelSettlement?<DuelSettlementBreakdown value={duelSettlement}/>:null}{!openChallengePassed ? <Text style={s.lossHint}>OPEN CHALLENGE FAILED · G1+G2+G3 SWEEP REQUIRED</Text> : null}{onRanking ? <GameActionButton size="small" variant="secondary" animation="none" label="LEAGUE TOP 20" onPress={onRanking} /> : null}<GameActionButton label="TRY AGAIN" onPress={onNext} /></View>
+  }
 
   const mustClaim = rewardEligible && !rewardClaimed
   const decadeStart = Math.floor(level / 10) * 10
