@@ -526,7 +526,7 @@ const GameTableLive: React.FC = () => {
       console.warn('[game] Using DEV_FAKE_USER_ID for PLAYER_ID:', PLAYER_ID)
     }
 
-    const socket = io(SERVER_URL, { auth: { accessToken }, transports: ['websocket'], reconnection: true, reconnectionDelay: 1000 })
+    const socket = io(SERVER_URL, { auth: { accessToken }, transports: ['polling', 'websocket'], reconnection: true, reconnectionDelay: 1000 })
     socketRef.current = socket
     socket.on('arrangement_rejected', (data: { reason?: string }) => {
       setIsReady(false)

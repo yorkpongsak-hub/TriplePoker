@@ -636,7 +636,7 @@ const GameTableLive: React.FC = () => {
     // Full Reconnect System Step 2C — เปิด reconnection จริง (เดิม false — เน็ตสะดุดแป๊บเดียวก็ค้างจอ
     // ถาวร ไม่มีทางกลับมาเองเลย) ค่า attempts/delay ตรงกับ adept/index.tsx:497-499
     const socket = io(SERVER_URL, {
-      auth: { accessToken }, transports: ['websocket'], reconnection: true, reconnectionAttempts: 5, reconnectionDelay: 1000,
+      auth: { accessToken }, transports: ['polling', 'websocket'], reconnection: true, reconnectionAttempts: 5, reconnectionDelay: 1000,
     })
     socketRef.current = socket
 
