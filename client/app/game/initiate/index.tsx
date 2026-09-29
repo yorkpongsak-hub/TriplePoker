@@ -508,6 +508,9 @@ const GameTableLive: React.FC = () => {
 
   // ── Connect Socket (ครั้งเดียว)
   useEffect(() => {
+    // A fresh install rehydrates auth asynchronously. Connecting once with a
+    // null token is rejected by the server and previously never recovered.
+    if (!accessToken) return
     // Auth guard: userId ว่างแปลว่าหลุด auth guard มาได้ (authStore ยังไม่ sync) — ห้ามเข้าโต๊ะต่อ
     // เพราะ escrow จะผูก token จริงเข้ากับ id ที่ไม่มีอยู่จริง คืนไม่ได้ — fail loud แทน fail silent
     if (!PLAYER_ID) {
@@ -563,6 +566,7 @@ const GameTableLive: React.FC = () => {
     })
 
     socket.on('connect_error', (err: any) => {
+      console.warn('[initiate] socket connect_error', err?.message)
       setConnectionError(err?.message || 'Cannot reach the game server.')
     })
 
@@ -846,7 +850,7 @@ const GameTableLive: React.FC = () => {
       })
       socket.disconnect()
     }
-  }, [])
+  }, [PLAYER_ID, accessToken])
 
   // ── Deal Animation
   const startDealAnimation = () => {
@@ -922,7 +926,7 @@ const GameTableLive: React.FC = () => {
   // แรกสุดที่ setPhase('dealing') เป็น no-op (phase เป็น 'dealing' อยู่แล้วตั้งแต่ initial state)
   useEffect(() => {
     console.log('[DEAL] dealing-effect ran, phase=', phase, 'dealTrigger=', dealTrigger, 'at', Date.now())
-    if (phase === 'dealing') {
+    if (phase === 'dealing' && dealTrigger > 0) {
       const t = setTimeout(() => startDealAnimation(), 300)
       return () => { console.log('[DEAL] dealing-effect cleanup, clearing pending timeout at', Date.now()); clearTimeout(t) }
     }
