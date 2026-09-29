@@ -54,3 +54,13 @@ and keep their production feature surfaces fail-closed.
 The secret Monarch encounter is also deferred until after Android 1.0. Keep
 `MONARCH_ENABLED` fail-closed and do not restore its High Noble entry roll unless
 the owner explicitly reopens it after launch.
+
+## Post-1.0 roadmap
+
+The owner plans to reconsider frozen work after Android 1.0, targeting an update
+before Lunar New Year 2027. Full Simplified Chinese playability is the priority
+for that release window. Do not automatically enable Arena, Sovereign, Monarch,
+or another frozen feature after 1.0: reopen each behind its existing flag only
+after its own implementation, migration, regression, localization, and physical
+device gates pass. Prefer shipping complete Chinese support for the stable 1.0
+tiers separately rather than coupling it to an unfinished advanced mode.
