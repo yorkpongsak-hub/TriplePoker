@@ -1,11 +1,23 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Animated, Image, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
-import * as Speech from 'expo-speech'
 import { audio } from '../../audio'
 import { registerTierEntry, TIER_WELCOME_NAMES, type LaunchTierId, type TierEntryGreeting } from '../../game/tierWelcome'
 
 const SHEET = require('../../../assets/characters/tier_welcome_character_sheet.png')
 type Position = 'center' | 'left' | 'right'
+type SpeechModule = typeof import('expo-speech')
+
+let speechModule: SpeechModule | null | undefined
+function getSpeechModule(): SpeechModule | null {
+  if (speechModule !== undefined) return speechModule
+  try {
+    // Keep older development clients usable until they are rebuilt with ExpoSpeech.
+    speechModule = require('expo-speech') as SpeechModule
+  } catch {
+    speechModule = null
+  }
+  return speechModule
+}
 
 const randomPosition = (): Position => ['center', 'left', 'right'][Math.floor(Math.random() * 3)] as Position
 const jitter = (amount: number) => Math.round((Math.random() * 2 - 1) * amount)
@@ -66,10 +78,13 @@ export function TierWelcomeCharacter({ playerId, tierId }: { playerId?: string; 
     later(() => {
       const settings = audio.getSettings()
       if (!settings.muted && settings.master > 0) {
-        spoke.current = true
-        Speech.speak(nextMessage, {
-          language: 'en-US', rate: .92, pitch: 1.12, volume: settings.master,
-        })
+        const speech = getSpeechModule()
+        if (speech) {
+          spoke.current = true
+          speech.speak(nextMessage, {
+            language: 'en-US', rate: .92, pitch: 1.12, volume: settings.master,
+          })
+        }
       }
     }, 720 + talkShift)
     ;[3, 4, 3, 4, 3].forEach((mouthFrame, index) => {
@@ -95,7 +110,7 @@ export function TierWelcomeCharacter({ playerId, tierId }: { playerId?: string; 
     return () => {
       active = false
       clearTimers()
-      if (spoke.current) Speech.stop()
+      if (spoke.current) getSpeechModule()?.stop()
     }
   }, [clearTimers, play, playerId, tierId])
 
