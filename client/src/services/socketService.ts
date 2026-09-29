@@ -22,7 +22,7 @@ export function connectSocket(authToken: string): AppSocket {
   if (socket?.connected) return socket;
 
   socket = io(SOCKET_URL, {
-    auth: { token: authToken },
+    auth: { accessToken: authToken },
     transports: ['websocket'],
     reconnection: true,
     reconnectionAttempts: 5,

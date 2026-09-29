@@ -42,6 +42,7 @@ import {
 import { broadcastTableUpdate } from "./lobbySocket";
 import { registerVipPlusSocket } from './vipPlusSocket';
 import { registerVipPrivateCrewSocket } from './vipPrivateCrewSocket';
+import { validateSocketPacket } from '../security/runtimeSecurity';
 import { GAME_RESUME_EVENT, GAME_RESUME_RESULT_EVENT, isGameResumeRequest, type GameResumeResult } from './gameResumeProtocol';
 import { pauseTierDItemAd, resumeTierDItemAd, finishTierDRevealAnimation, finishTierDTripleSweepVfx, startTierDSolo, resumeTierDSolo, playTierDGame, stageTierDArrangement, useTierDItem, resumeTierDTimer, startTierDTimerAfterDeal, refreshTierDSoloInventory, continueTierDDuel } from '../game/tierDSoloRuntime';
 
@@ -274,6 +275,34 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
   }, 3_000);
 
   io.on("connection", (socket: Socket) => {
+    // Root namespace authentication is established once by index.ts. Every
+    // legacy packet still carries a userId/playerId for compatibility, but it
+    // may never select another account. Limit packets before any game handler
+    // performs database work.
+    socket.use(([event, data], next) => {
+      const rate = socket.data.packetRate as { count: number; resetAt: number } | undefined
+      const now = Date.now()
+      if (!rate || rate.resetAt <= now) socket.data.packetRate = { count: 1, resetAt: now + 10_000 }
+      else if (rate.count >= 120) return next(new Error('RATE_LIMITED'))
+      else rate.count += 1
+
+      const packetError = validateSocketPacket(socket.data.authUserId, data)
+      if (packetError) return next(new Error(packetError))
+      const roomId = data && typeof data === 'object' && !Array.isArray(data) && typeof data.roomId === 'string'
+        ? data.roomId : undefined
+      if (roomId) {
+        const owner = socket.data.authUserId as string
+        const solo = getMatchState(roomId)
+        const multi = getMultiMatchState(roomId)
+        const highNoble = getHNMatchState(roomId)
+        const monarch = getMonarchMatchState(roomId)
+        if (solo && solo.humanPlayerId !== owner) return next(new Error('NOT_A_MEMBER'))
+        if (multi && !multi.humanPlayerIds.includes(owner)) return next(new Error('NOT_A_MEMBER'))
+        if (highNoble && !highNoble.seats.some(seat => seat.isHuman && seat.id === owner)) return next(new Error('NOT_A_MEMBER'))
+        if (monarch && monarch.humanUserId !== owner) return next(new Error('NOT_A_MEMBER'))
+      }
+      next()
+    })
     const tierDOn=tierDOwnerRegistrar(socket,async token=>{
       const {data,error}=await supabase.auth.getUser(token)
       return error?undefined:data.user?.id
@@ -356,8 +385,8 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
 
     // Patch 03: ผูก Lobby realtime (subscribe/unsubscribe ต่อ Tier)
     registerLobbySocket(io, socket);
-    registerVipPlusSocket(io, socket);
-    registerVipPrivateCrewSocket(io, socket);
+    if (process.env.VIP_PLUS_5P_ENABLED === 'true') registerVipPlusSocket(io, socket);
+    if (process.env.VIP_PRIVATE_CREW_ENABLED === 'true') registerVipPrivateCrewSocket(io, socket);
 
     // ──────────────────────────────────────────────────────────
     // EVENT: player_join_room
@@ -369,6 +398,10 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
       tokenBalance: number;
       isVip: boolean;
     }) => {
+      if (process.env.NODE_ENV === 'production') {
+        socket.emit('room_error', { code: 'LEGACY_EVENT_DISABLED', message: 'This connection path is unavailable.' })
+        return
+      }
       const { roomId, playerId, tokenBalance, isVip } = data;
       socket.join(roomId);
 
@@ -634,6 +667,8 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
     });
 
     socket.on("player_continue", (data: { roomId: string }) => {
+      const tracked = socketUserMap.get(socket.id)
+      if (!tracked || tracked.userId !== socket.data.authUserId || tracked.roomId !== data.roomId) return
       resolveContinue(data.roomId)
     });
     socket.on("hn_round_continue", (data: { roomId: string; userId: string }, ack?: (result: { ok: boolean; reason?: string }) => void) => {
@@ -947,6 +982,9 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
       const { roomId, userId, choice } = data;
       const room = await getRoomFromRegistry(roomId);
       if (!room) return;
+      if (!room.seats.some(seat => seat.type === 'human' && seat.userId === socket.data.authUserId)) {
+        socket.emit('room_error', { message: 'You are not a member of this table.' }); return
+      }
 
       // High Noble ทุก choice ต้องเป็น Host เท่านั้น (§6.1) — Adept ไม่ gate เพราะมี Human รอแค่คนเดียว
       if (room.tier === "highNoble" && room.hostUserId && userId !== room.hostUserId) {
@@ -983,6 +1021,10 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
     // (แก้ race: server อาจ emit round_start ก่อน client พร้อม)
     socket.on("game_join", async (data: { roomId: string; userId: string; tier?: RoomTier }) => {
       const { roomId, userId, tier } = data;
+      const allowed = tier === 'highNoble'
+        ? getHNMatchState(roomId)?.seats.some(seat => seat.isHuman && seat.id === userId)
+        : getMultiMatchState(roomId)?.humanPlayerIds.includes(userId)
+      if (!allowed) { socket.emit('room_error', { message: 'You are not a member of this table.' }); return }
       socket.join(roomId);
       socket.join(userId);
       trackMatchmakingSocket(socket.id, { userId, roomId, tier: tier ?? 'adept' });

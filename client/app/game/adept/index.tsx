@@ -540,7 +540,7 @@ const GameTableLive: React.FC = () => {
     // A5 (Bug A fix, 2026-07-17): เปิด reconnection จริง (เดิม false — เน็ตสะดุดแป๊บเดียวก็ค้างจอถาวร
     // ไม่มีทางกลับมาเองเลย) ค่า attempts/delay ตามที่ socketService.ts ใช้อยู่แล้วที่อื่นในโปรเจค
     const socket = io(SERVER_URL, {
-      transports: ['websocket'], reconnection: true, reconnectionAttempts: 5, reconnectionDelay: 1000,
+      auth: { accessToken }, transports: ['websocket'], reconnection: true, reconnectionAttempts: 5, reconnectionDelay: 1000,
     })
     socketRef.current = socket
 

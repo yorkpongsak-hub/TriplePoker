@@ -568,7 +568,7 @@ const GameTableLive: React.FC = () => {
 
     // Connection status: reconnection:true (เดิม false) ให้ disconnect/connect_error หมุน retry จริง
     // pattern เดียวกับ highNoble/adept (ดู isReconnecting/connectionError ด้านบน)
-    const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: true, reconnectionAttempts: 5, reconnectionDelay: 1000 })
+    const socket = io(SERVER_URL, { auth: { accessToken }, transports: ['websocket'], reconnection: true, reconnectionAttempts: 5, reconnectionDelay: 1000 })
     socketRef.current = socket
 
     let startRequested = false

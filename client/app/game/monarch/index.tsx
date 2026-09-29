@@ -806,6 +806,7 @@ export default function MonarchScreen() {
   const params = useLocalSearchParams<{ roomId?: string; userId?: string }>()
   const roomId = params.roomId ?? ''
   const userId = params.userId ?? ''
+  const accessToken = useAuthStore(s => s.session?.access_token)
   const socketRef = useRef<Socket | null>(null)
   const insets = useSafeAreaInsets()
   const isWeb = Platform.OS === 'web'
@@ -1307,7 +1308,8 @@ export default function MonarchScreen() {
   }
 
   useEffect(() => {
-    const socket = io(SERVER_URL, { transports: ['websocket'] })
+    if (!accessToken) return
+    const socket = io(SERVER_URL, { auth: { accessToken }, transports: ['websocket'] })
     socketRef.current = socket
 
     socket.on('connect', () => {
@@ -1451,7 +1453,7 @@ export default function MonarchScreen() {
       sfxLayerService.stopAll()
       socket.disconnect()
     }
-  }, [roomId, userId])
+  }, [roomId, userId, accessToken])
 
   // tap-swap เดียวกับ Initiate/Mastermind/HighNoble (initiate/index.tsx:812-821) — เลือกใบแรก
   // แล้ว tap ใบที่สองเพื่อสลับตำแหน่งข้ามกอง

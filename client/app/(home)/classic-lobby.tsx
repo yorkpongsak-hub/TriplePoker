@@ -350,7 +350,7 @@ export default function LobbyScreen() {
     setMatchmakingError(null);
     setMmTier(tier);
     setMmSeats([]);
-    const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: false });
+    const socket = io(SERVER_URL, { auth: { accessToken }, transports: ['websocket'], reconnection: false });
     socketRef.current = socket;
 
     socket.on('connect', () => {
@@ -547,7 +547,7 @@ export default function LobbyScreen() {
 
   useEffect(() => {
     if (!userId) return; // Lobby อยู่ใต้ auth guard เสมอ แต่กันไว้เผื่อ userId ยังไม่ hydrate ทัน
-    const lobbySocket = io(SERVER_URL, { transports: ['websocket'], reconnection: false });
+    const lobbySocket = io(SERVER_URL, { auth: { accessToken }, transports: ['websocket'], reconnection: false });
     lobbySocketRef.current = lobbySocket;
 
     lobbySocket.on('connect', () => {

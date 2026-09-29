@@ -4,6 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router'
 import { io, Socket } from 'socket.io-client'
 import { useUserStore } from '../../../src/store/userStore'
 import { useSpectatorStore } from '../../../src/store/spectatorStore'
+import { useAuthStore } from '../../../src/store/authStore'
 import { DelayedSpectatorEvent, SpectatorSnapshot } from '../../../src/types/spectator.types'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
@@ -11,13 +12,14 @@ const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 export default function SpectatorScreen() {
   const { broadcastId } = useLocalSearchParams<{ broadcastId: string }>()
   const userId = useUserStore(s => s.userId)
+  const accessToken = useAuthStore(s => s.session?.access_token)
   const state = useSpectatorStore()
   const socketRef = useRef<Socket | null>(null)
 
   useEffect(() => {
-    if (!broadcastId || !userId) return
+    if (!broadcastId || !userId || !accessToken) return
     state.connect(broadcastId)
-    const socket = io(SERVER_URL, { transports: ['websocket'] })
+    const socket = io(SERVER_URL, { auth: { accessToken }, transports: ['websocket'] })
     socketRef.current = socket
     socket.on('connect', () => socket.emit('spectator:join', { broadcastId, userId }))
     socket.on('spectator:snapshot', (snapshot: SpectatorSnapshot) => state.hydrate(snapshot))
@@ -26,7 +28,7 @@ export default function SpectatorScreen() {
     socket.on('spectator:broadcast-ended', () => state.end())
     socket.on('spectator:error', ({ code }: { code: string }) => state.fail(code))
     return () => { socket.emit('spectator:leave', { broadcastId, userId }); socket.disconnect(); state.reset() }
-  }, [broadcastId, userId])
+  }, [broadcastId, userId, accessToken])
 
   const exit = () => router.back()
   const round = [...state.events].reverse().find(e => e.payload.type === 'ROUND_STARTED')?.payload.round ?? state.snapshot?.round ?? 0

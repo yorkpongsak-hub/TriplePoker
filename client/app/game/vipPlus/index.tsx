@@ -235,7 +235,7 @@ export default function VipPlusTableScreen() {
       Alert.alert('VIP Pro Required', 'This table is available to active VIP Pro members only.', [{ text: 'Back', onPress: () => router.back() }])
       return
     }
-    const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: true })
+    const socket = io(SERVER_URL, { auth: { accessToken }, transports: ['websocket'], reconnection: true })
     socketRef.current = socket
     socket.on('connect', async () => {
       socket.emit('vip_plus:list_tables', authPayload())
