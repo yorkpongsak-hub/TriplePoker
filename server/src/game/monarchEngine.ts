@@ -29,6 +29,7 @@ import { evaluateHand, compareHands, HandResult } from './handEvaluator'
 import { FoulCheckResult, PlayerArrangement } from './foulChecker'
 import { AIPersonality, pickRandomMinions } from './aiEngine'
 import { gameConfig, getMonarchSpawnRate, isRoyalHour } from '../config/gameConfig'
+import { isMonarchEnabled } from '../config/releaseFeatures'
 import { supabaseAdmin } from '../config/supabase'
 import { escrowBuyIn, settleEscrow } from './gameLoop'
 import { rollAndRecordMonarchRelic, MonarchRelicResult } from './monarchSpawn'
@@ -135,6 +136,10 @@ function delay(ms: number): Promise<void> {
 // getMonarchSpawnRate() คูณ Royal Hour multiplier ให้แล้วถ้าเข้าเงื่อนไข (Batch 1 Task 4) — คูณเฉพาะ
 // base ก่อนบวก pity step ไม่ใช่คูณทั้ง effectiveRate (ห้าม Royal Hour ข้าม pity)
 export async function rollMonarchEntry(userId: string): Promise<boolean> {
+  // Android 1.0 launch gate: preserve Monarch for later without reading or
+  // mutating pity state unless the owner explicitly enables the encounter.
+  if (!isMonarchEnabled()) return false
+
   const cfg = gameConfig.monarchConfig
   let pity = 0
   try {

@@ -7,7 +7,7 @@
 - HTTP requests are limited per IP and route. Authentication, reward, claim, purchase, and ad-completion paths use the tighter bucket. Socket connections and packets have separate limits.
 - HTTP bodies are limited to 64 KiB and Socket.IO messages to 32 KiB. Server request and connection timeouts are bounded.
 - Browser CORS is allow-list based in production. React Native clients without an Origin header remain supported.
-- Sovereign, VIP Plus 5-player, and VIP Private Crew server surfaces are fail-closed unless their exact environment flag is `true`.
+- Sovereign, VIP Plus 5-player, VIP Private Crew, and the secret Monarch encounter are fail-closed unless their exact environment flag is `true`.
 - `/health/live` reports process liveness. `/health/ready` verifies the configured Supabase Data API before reporting ready.
 
 ## Required production environment
@@ -15,7 +15,7 @@
 1. Copy the variable names from `server/.env.example`; never copy local values into Git, screenshots, chat, or logs.
 2. Obtain the current Supabase **publishable** key for `SUPABASE_ANON_KEY` and the current **secret** key for `SUPABASE_SERVICE_ROLE_KEY` from Project Settings → API Keys.
 3. Configure `ALLOWED_ORIGINS` with exact HTTPS origins only. Do not use `*`.
-4. Keep `SOVEREIGN_ENABLED`, `VIP_PLUS_5P_ENABLED`, and `VIP_PRIVATE_CREW_ENABLED` false for Android 1.0 unless their separate release gates pass.
+4. Keep `SOVEREIGN_ENABLED`, `VIP_PLUS_5P_ENABLED`, `VIP_PRIVATE_CREW_ENABLED`, and `MONARCH_ENABLED` false for Android 1.0 unless their separate release gates pass.
 5. Put the API behind the hosting provider's edge rate limit/WAF. The in-process limiter is a bounded first line of defense, not a shared multi-instance quota.
 
 ## Staging finding requiring owner action

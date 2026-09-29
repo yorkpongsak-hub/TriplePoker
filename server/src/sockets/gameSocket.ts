@@ -43,6 +43,7 @@ import { broadcastTableUpdate } from "./lobbySocket";
 import { registerVipPlusSocket } from './vipPlusSocket';
 import { registerVipPrivateCrewSocket } from './vipPrivateCrewSocket';
 import { validateSocketPacket } from '../security/runtimeSecurity';
+import { isMonarchEnabled } from '../config/releaseFeatures';
 import { GAME_RESUME_EVENT, GAME_RESUME_RESULT_EVENT, isGameResumeRequest, type GameResumeResult } from './gameResumeProtocol';
 import { pauseTierDItemAd, resumeTierDItemAd, finishTierDRevealAnimation, finishTierDTripleSweepVfx, startTierDSolo, resumeTierDSolo, playTierDGame, stageTierDArrangement, useTierDItem, resumeTierDTimer, startTierDTimerAfterDeal, refreshTierDSoloInventory, continueTierDDuel } from '../game/tierDSoloRuntime';
 
@@ -779,7 +780,7 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
         // เส้นทางเดียวที่จะสุ่มเจอ Monarch ได้ (rollHighNobleBoss() ไม่มีทางคืน Monarch อีกแล้ว) ถ้าติด
         // Monarch ดึง human คนนี้ออกไปโต๊ะ solo ใหม่ทันที ไม่เข้า findOrCreateRoomAndJoin/joinRoom ของ
         // High Noble ปกติเลย — pity ผูกกับ userId ของคนนี้เอง (Batch 1 Task 3)
-        if (tier === 'highNoble' && missionsEnabled && !data.pin && !data.forceNew && await rollMonarchEntry(userId)) {
+        if (isMonarchEnabled() && tier === 'highNoble' && missionsEnabled && !data.pin && !data.forceNew && await rollMonarchEntry(userId)) {
           const monarchRoomId = `monarch_${userId}_${Date.now()}`;
           const state = await startMonarchMatch(
             io, monarchRoomId, userId,

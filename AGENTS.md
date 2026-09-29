@@ -50,3 +50,7 @@ The owner narrowed all pre-launch implementation, audit, and test work on
 and Tier D. Do not modify, debug, benchmark, or run heavy tests for Arena or
 Sovereign unless the owner explicitly reopens that scope. Preserve their source
 and keep their production feature surfaces fail-closed.
+
+The secret Monarch encounter is also deferred until after Android 1.0. Keep
+`MONARCH_ENABLED` fail-closed and do not restore its High Noble entry roll unless
+the owner explicitly reopens it after launch.
