@@ -552,6 +552,10 @@ const GameTableLive: React.FC = () => {
 
   // ── Connect Socket (ครั้งเดียว)
   useEffect(() => {
+    // Persisted auth rehydrates asynchronously after a fresh install/rebuild.
+    // Do not create the one-shot socket with an empty token: the server rejects
+    // it as UNAUTHORIZED and the old [] effect never recovered when auth arrived.
+    if (!accessToken) return
     // Auth guard: userId ว่างแปลว่าหลุด auth guard มาได้ (authStore ยังไม่ sync) — ห้ามเข้าโต๊ะต่อ
     // เพราะ escrow จะผูก token จริงเข้ากับ id ที่ไม่มีอยู่จริง คืนไม่ได้ — fail loud แทน fail silent
     if (!PLAYER_ID) {
@@ -604,6 +608,7 @@ const GameTableLive: React.FC = () => {
 
     // Connection status: pattern เดียวกับ highNoble/index.tsx:649-673
     socket.on('connect_error', (err: any) => {
+      console.warn('[mastermind] socket connect_error', err?.message)
       setConnectionError(err?.message || 'Cannot reach the game server.')
     })
     socket.on('disconnect', (reason: string) => {
@@ -1202,7 +1207,7 @@ const GameTableLive: React.FC = () => {
       gfBlinkAnim.stopAnimation()
       socket.disconnect()
     }
-  }, [])
+  }, [PLAYER_ID, accessToken, bossId])
 
   // Android hardware back — ยืนยันก่อนออกโต๊ะกลางเกม (มติลุงเยาะ 2026-08-13, pattern เดียวกับ
   // vipPlus/index.tsx's WAITING-screen back handler แต่ครอบคลุมกลางแมตช์ด้วย — ไม่มี Tier ไหนเคยมี
