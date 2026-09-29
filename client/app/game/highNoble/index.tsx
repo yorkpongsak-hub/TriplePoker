@@ -43,6 +43,7 @@ import PlayerHandView from '../../../src/components/game/PlayerHandView'
 import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
 import TokenFlowPanel from '../../../src/components/game/TokenFlowPanel'
 import CharacterBarkBubble, { useCharacterBarks } from '../../../src/components/game/CharacterBarkBubble'
+import { TierWelcomeCharacter } from '../../../src/components/game/TierWelcomeCharacter'
 import GFHandView from '../../../src/components/game/GFHandView'
 import BossHandRow from '../../../src/components/game/BossHandRow'
 import GameTopBar from '../../../src/components/game/GameTopBar'
@@ -2112,6 +2113,7 @@ const GameTableLive: React.FC = () => {
   // =================================================================
   return (
     <View style={[s.root, isWeb && s.webOuter]}>
+      <TierWelcomeCharacter playerId={PLAYER_ID} tierId="high_noble" />
       <GameServerStatusLight socketRef={socketRef} />
       <CharacterBarkBubble bark={bark} />
       <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" />

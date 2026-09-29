@@ -43,6 +43,7 @@ import BossHandRow from '../../../src/components/game/BossHandRow'
 import { SharedGameTableSurface } from '../../../src/components/game/SharedGameTable'
 import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
 import GameTopBar from '../../../src/components/game/GameTopBar'
+import { TierWelcomeCharacter } from '../../../src/components/game/TierWelcomeCharacter'
 import MatchEndOverlay from '../../../src/components/game/MatchEndOverlay'
 import { TierInfoModal } from '../../../src/components/game/TierInfoModal'
 import type { TierInfoLabel } from '../../../src/config/tierInfoData'
@@ -1303,6 +1304,7 @@ const GameTableLive: React.FC = () => {
   // =================================================================
   return (
     <View style={[s.root, isWeb && s.webOuter]}>
+      <TierWelcomeCharacter playerId={PLAYER_ID} tierId="initiate" />
       <GameServerStatusLight socketRef={socketRef} />
       <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" />
       <View style={[s.gameContainer, isWeb && s.webFrame]}>
