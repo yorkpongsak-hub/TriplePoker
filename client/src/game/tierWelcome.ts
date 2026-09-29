@@ -11,9 +11,11 @@ export const TIER_WELCOME_NAMES: Record<LaunchTierId, string> = {
 }
 
 type TierWelcomeSeen = Partial<Record<LaunchTierId, true>>
+export type TierEntryGreeting = 'welcome' | 'cheer' | 'none'
 
 const keyFor = (playerId: string) => `tierWelcomeSeen:${playerId}`
-const claims = new Map<string, Promise<boolean>>()
+const lastTierKeyFor = (playerId: string) => `tierWelcomeLastTier:${playerId}`
+const entries = new Map<string, Promise<TierEntryGreeting>>()
 
 async function readSeen(playerId: string): Promise<TierWelcomeSeen> {
   const raw = await AsyncStorage.getItem(keyFor(playerId))
@@ -26,22 +28,32 @@ async function readSeen(playerId: string): Promise<TierWelcomeSeen> {
   }
 }
 
-/** Atomically claims the one-time welcome within this app process. */
-export function claimTierWelcome(playerId: string, tierId: LaunchTierId): Promise<boolean> {
-  const claimKey = `${playerId}:${tierId}`
-  const existing = claims.get(claimKey)
+/** Registers table entry and chooses the one-time welcome or tier-switch cheer. */
+export function registerTierEntry(playerId: string, tierId: LaunchTierId): Promise<TierEntryGreeting> {
+  const existing = entries.get(playerId)
   if (existing) return existing
 
-  const claim = (async () => {
-    const seen = await readSeen(playerId)
-    if (seen[tierId]) return false
-    seen[tierId] = true
-    await AsyncStorage.setItem(keyFor(playerId), JSON.stringify(seen))
-    return true
-  })().finally(() => claims.delete(claimKey))
+  const entry = (async () => {
+    const [seen, lastTier] = await Promise.all([
+      readSeen(playerId),
+      AsyncStorage.getItem(lastTierKeyFor(playerId)),
+    ])
 
-  claims.set(claimKey, claim)
-  return claim
+    if (!seen[tierId]) {
+      seen[tierId] = true
+      await AsyncStorage.multiSet([
+        [keyFor(playerId), JSON.stringify(seen)],
+        [lastTierKeyFor(playerId), tierId],
+      ])
+      return 'welcome'
+    }
+
+    await AsyncStorage.setItem(lastTierKeyFor(playerId), tierId)
+    return lastTier && lastTier !== tierId ? 'cheer' : 'none'
+  })().finally(() => entries.delete(playerId))
+
+  entries.set(playerId, entry)
+  return entry
 }
 
 export async function resetTierWelcomeForDebug(playerId: string, tierId: LaunchTierId) {

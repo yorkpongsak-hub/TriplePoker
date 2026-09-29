@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Animated, Image, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
 import * as Speech from 'expo-speech'
 import { audio } from '../../audio'
-import { claimTierWelcome, TIER_WELCOME_NAMES, type LaunchTierId } from '../../game/tierWelcome'
+import { registerTierEntry, TIER_WELCOME_NAMES, type LaunchTierId, type TierEntryGreeting } from '../../game/tierWelcome'
 
 const SHEET = require('../../../assets/characters/tier_welcome_character_sheet.png')
 type Position = 'center' | 'left' | 'right'
@@ -15,6 +15,7 @@ export function TierWelcomeCharacter({ playerId, tierId }: { playerId?: string; 
   const [visible, setVisible] = useState(false)
   const [frame, setFrame] = useState(0)
   const [position, setPosition] = useState<Position>('center')
+  const [message, setMessage] = useState('')
   const timers = useRef<ReturnType<typeof setTimeout>[]>([])
   const spoke = useRef(false)
   const opacity = useRef(new Animated.Value(0)).current
@@ -31,8 +32,10 @@ export function TierWelcomeCharacter({ playerId, tierId }: { playerId?: string; 
     timers.current.push(setTimeout(fn, Math.max(0, ms)))
   }, [])
 
-  const play = useCallback(() => {
+  const play = useCallback((greeting: Exclude<TierEntryGreeting, 'none'>) => {
     clearTimers()
+    const nextMessage = greeting === 'cheer' ? 'Cheer Cheer!!' : `Welcome to Tier ${TIER_WELCOME_NAMES[tierId]}!`
+    setMessage(nextMessage)
     setPosition(randomPosition())
     setFrame(0)
     setVisible(true)
@@ -64,7 +67,7 @@ export function TierWelcomeCharacter({ playerId, tierId }: { playerId?: string; 
       const settings = audio.getSettings()
       if (!settings.muted && settings.master > 0) {
         spoke.current = true
-        Speech.speak(`Welcome to Tier ${TIER_WELCOME_NAMES[tierId]}!`, {
+        Speech.speak(nextMessage, {
           language: 'en-US', rate: .92, pitch: 1.12, volume: settings.master,
         })
       }
@@ -85,8 +88,8 @@ export function TierWelcomeCharacter({ playerId, tierId }: { playerId?: string; 
   useEffect(() => {
     let active = true
     if (playerId) {
-      claimTierWelcome(playerId, tierId)
-        .then(shouldPlay => { if (active && shouldPlay) play() })
+      registerTierEntry(playerId, tierId)
+        .then(greeting => { if (active && greeting !== 'none') play(greeting) })
         .catch(error => console.warn('[tier-welcome] persistence failed', error))
     }
     return () => {
@@ -105,19 +108,19 @@ export function TierWelcomeCharacter({ playerId, tierId }: { playerId?: string; 
   return (
     <>
       {__DEV__ && !visible ? (
-        <Pressable accessibilityRole="button" accessibilityLabel="Replay Tier Welcome" onPress={play} style={styles.debugButton}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Replay Tier Welcome" onPress={() => play('welcome')} style={styles.debugButton}>
           <Text style={styles.debugText}>Replay Tier Welcome</Text>
         </Pressable>
       ) : null}
       {visible ? (
-        <View accessibilityViewIsModal accessibilityLabel={`Welcome to Tier ${TIER_WELCOME_NAMES[tierId]}`} style={styles.overlay}>
+        <View accessibilityViewIsModal accessibilityLabel={message} style={styles.overlay}>
           <Animated.View style={[styles.characterGroup, {
             width: frameWidth,
             transform: [{ translateX: horizontal }, { translateY: bounce }, { rotate }, { scale }],
             opacity,
           }]}>
             <View style={styles.bubble}>
-              <Text style={styles.bubbleText}>Welcome to Tier{`\n`}{TIER_WELCOME_NAMES[tierId]}!</Text>
+              <Text style={styles.bubbleText}>{message}</Text>
               <Text style={styles.heart}>♥</Text>
             </View>
             <View style={{ width: frameWidth, height: frameHeight, overflow: 'hidden' }}>
