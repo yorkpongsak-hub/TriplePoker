@@ -308,6 +308,8 @@ const GameTableLive: React.FC = () => {
   const timerRef    = useRef<any>(null)
   const countdownAnimTimeoutRef = useRef<any>(null)
   const dealAnimCompositeRef = useRef<Animated.CompositeAnimation | null>(null)
+  const dealRevealFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const dealRunRef = useRef(0)
   // Reduce Motion preference (Settings modal, AsyncStorage local) — โหลดครั้งเดียวตอน mount แล้ว
   // เก็บใน ref (ไม่ trigger re-render) ให้ startDealAnimation() อ่านสดตอนถูกเรียกจริง
   const reduceMotionRef = useRef(false)
@@ -640,6 +642,7 @@ const GameTableLive: React.FC = () => {
       setDealDone(false)
 
       const myCards: string[] = data.cards[PLAYER_ID] ?? []
+      console.log('[DEAL] Tier C local card count=', myCards.length)
       const cardObjs = myCards.map((k: string, i: number) => ({ id: `c${i}`, key: k }))
       setPiles([cardObjs.slice(0, 3), cardObjs.slice(3, 6), cardObjs.slice(6, 11)])
 
@@ -833,6 +836,7 @@ const GameTableLive: React.FC = () => {
       if (resumeWatchdog) clearTimeout(resumeWatchdog)
       if (timerRef.current) clearInterval(timerRef.current)
       if (countdownAnimTimeoutRef.current) clearTimeout(countdownAnimTimeoutRef.current)
+      if (dealRevealFallbackRef.current) clearTimeout(dealRevealFallbackRef.current)
       if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop()
       stopMatchEndAnimations()
       if (jackpotTimeoutRef.current) clearTimeout(jackpotTimeoutRef.current)
@@ -865,6 +869,19 @@ const GameTableLive: React.FC = () => {
 
     // Reduce Motion: ย่นเวลารวมจาก 4s เหลือ ~1.2s ตามสัดส่วนเดิม (DEAL_COUNT ไม่เปลี่ยน)
     const dealDurationMs = reduceMotionRef.current ? 1200 : 4000
+    const dealRun = ++dealRunRef.current
+    if (dealRevealFallbackRef.current) clearTimeout(dealRevealFallbackRef.current)
+    const revealCurrentDeal = () => {
+      if (dealRunRef.current !== dealRun) return
+      setDealDone(true)
+      setShowLockup(false)
+      setPhase('arrangement')
+      fadeCards.stopAnimation()
+      Animated.timing(fadeCards, { toValue: 1, duration: 300, useNativeDriver: false }).start()
+    }
+    // Native Animated can visually complete but report finished=false after an
+    // interrupted attachment. Never leave the real hand permanently transparent.
+    dealRevealFallbackRef.current = setTimeout(revealCurrentDeal, dealDurationMs + 700)
     const delayPerCard = (dealDurationMs - 1000) / DEAL_COUNT // ~68ms ต่อใบ (ปกติ) / ~4.5ms (Reduce Motion)
     const anims: Animated.CompositeAnimation[] = []
 
@@ -895,12 +912,9 @@ const GameTableLive: React.FC = () => {
       // ถ้าโดน .stop() ตัดกลางคัน (finished=false) เพราะรอบใหม่มาแทรก ห้ามทำ reveal logic นี้
       // ไม่งั้น phase/fadeCards จะเพี้ยนไปตามข้อมูล deal รอบเก่าที่ถูกยกเลิกไปแล้ว
       if (!finished) return
-      setDealDone(true)
-      setShowLockup(false)
-      setPhase('arrangement')
-      // เผยไพ่กลับมาให้เห็นหลัง deal เสร็จ (fadeCards ถูกกดไว้ที่ 0 ตอนเริ่ม dealing)
-      fadeCards.stopAnimation()
-      Animated.timing(fadeCards, { toValue: 1, duration: 300, useNativeDriver: false }).start()
+      if (dealRevealFallbackRef.current) clearTimeout(dealRevealFallbackRef.current)
+      dealRevealFallbackRef.current = null
+      revealCurrentDeal()
     })
   }
 
