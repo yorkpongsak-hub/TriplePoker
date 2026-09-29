@@ -367,6 +367,9 @@ const GameTableLive: React.FC = () => {
 
   // ── Game state
   const [phase, setPhase]             = useState<'dealing'|'arrangement'|'arrangement_2'|'countdown'|'showdown'|'fog_of_war'|'blind_auction'|'auction_done'|'discard'|'discard_done'|'grand_finale'|'grand_finale_done'|'result'|'end'>('dealing')
+  const [dealRunId, setDealRunId] = useState(0)
+  const dealRunRef = useRef(0)
+  const dealRevealFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [dealDone, setDealDone]         = useState(false)
   const [dealCount, setDealCount]       = useState(0)
   const [roundNumber, setRoundNumber] = useState(1)
@@ -607,6 +610,7 @@ const GameTableLive: React.FC = () => {
 
   // ── Connect Socket (ครั้งเดียว)
   useEffect(() => {
+    if (!accessToken) return
     // Auth guard: userId ว่างแปลว่าหลุด auth guard มาได้ (authStore ยังไม่ sync) — ห้ามเข้าโต๊ะต่อ
     // เพราะ escrow จะผูก token จริงเข้ากับ id ที่ไม่มีอยู่จริง คืนไม่ได้ — fail loud แทน fail silent
     if (!PLAYER_ID) {
@@ -651,6 +655,7 @@ const GameTableLive: React.FC = () => {
     })
 
     socket.on('connect_error', (err: any) => {
+      console.warn('[highNoble] socket connect_error', err?.message)
       setConnectionError(err?.message || 'Cannot reach the game server.')
     })
 
@@ -762,8 +767,11 @@ const GameTableLive: React.FC = () => {
       // เริ่ม deal animation
       setPhase('dealing')
       setDealDone(false)
+      dealRunRef.current += 1
+      setDealRunId(dealRunRef.current)
 
       const myCards: string[] = data.cards[PLAYER_ID] ?? []
+      console.log('[DEAL] High Noble local card count=', myCards.length)
       const cardObjs = myCards.map((k: string, i: number) => ({ id: `c${i}`, key: k }))
       setPiles([cardObjs.slice(0, 3), cardObjs.slice(3, 6), cardObjs.slice(6, 8)])
 
@@ -1457,6 +1465,7 @@ const GameTableLive: React.FC = () => {
     return () => {
       if (roundSummaryTimerRef.current) clearInterval(roundSummaryTimerRef.current)
       if (timerRef.current) clearInterval(timerRef.current)
+      if (dealRevealFallbackRef.current) clearTimeout(dealRevealFallbackRef.current)
       if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop() // Patch: หยุด deal anim ตอน unmount
       // Patch 2026-07-18: หยุด win-pulse/win-opacity/confetti ก่อน unmount เสมอ (pattern Adept) — ไม่งั้น
       // Animated.loop/confetti recursion ที่ไม่มีวันจบเองจะไปชน native attach ตอน mount รอบถัดไป
@@ -1471,7 +1480,7 @@ const GameTableLive: React.FC = () => {
       gfBlinkAnim.stopAnimation()
       socket.disconnect()
     }
-  }, [])
+  }, [PLAYER_ID, accessToken, ROOM_ID])
 
   // ── Deal Animation
   // Patch 2026-07-17: composite ref เก็บ Animated.parallel ไว้เรียก .stop() (พอร์ต pattern จาก Adept)
@@ -1501,6 +1510,17 @@ const GameTableLive: React.FC = () => {
 
     // Reduce Motion: ย่นเวลารวมจาก 10s เหลือ ~1.2s ตามสัดส่วนเดิม (DEAL_COUNT ไม่เปลี่ยน)
     const dealDurationMs = reduceMotionRef.current ? 1200 : 4000
+    const dealRun = dealRunId
+    if (dealRevealFallbackRef.current) clearTimeout(dealRevealFallbackRef.current)
+    const revealCurrentDeal = () => {
+      if (dealRunRef.current !== dealRun) return
+      setDealDone(true)
+      setShowLockup(false)
+      setPhase('arrangement')
+      fadeCards.stopAnimation()
+      Animated.timing(fadeCards, { toValue: 1, duration: 300, useNativeDriver: false }).start()
+    }
+    dealRevealFallbackRef.current = setTimeout(revealCurrentDeal, dealDurationMs + 700)
     const delayPerCard = (dealDurationMs - 1000) / activeDealCount
     const anims: Animated.CompositeAnimation[] = []
 
@@ -1529,23 +1549,18 @@ const GameTableLive: React.FC = () => {
     dealComposite.start(({ finished }) => {
       dealAnimCompositeRef.current = null
       if (!finished) return // ถูก .stop() กลางทาง — ห้ามแตะ phase (กันเด้งไป arrangement ผิดจังหวะ)
-      setDealDone(true)
-      setShowLockup(false)
-      setPhase('arrangement')
-      // Patch 2026-07-18: เผยไพ่กลับมาให้เห็นหลัง deal เสร็จ (fadeCards ถูกกดไว้ที่ 0 ตอนเริ่ม dealing
-      // ใน processRoundStart) — stopAnimation ก่อนเสมอกันชนกับ timing ค้างจากรอบก่อน (pattern Adept)
-      fadeCards.stopAnimation()
-      Animated.timing(fadeCards, { toValue: 1, duration: 300, useNativeDriver: false }).start()
+      if (dealRevealFallbackRef.current) clearTimeout(dealRevealFallbackRef.current)
+      dealRevealFallbackRef.current = null
+      revealCurrentDeal()
     })
   }
 
-  // เริ่ม deal เมื่อ phase เปลี่ยนเป็น dealing
+  // เริ่ม deal เมื่อได้รับ round_start จริงเท่านั้น
   useEffect(() => {
-    if (phase === 'dealing') {
-      const t = setTimeout(() => startDealAnimation(), 300)
-      return () => clearTimeout(t)
-    }
-  }, [phase])
+    if (dealRunId === 0) return
+    const t = setTimeout(() => startDealAnimation(), 300)
+    return () => clearTimeout(t)
+  }, [dealRunId])
 
   // ── Card swap
   const handleCardPress = useCallback((pi: number, ci: number) => {
