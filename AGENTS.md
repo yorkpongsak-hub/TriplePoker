@@ -42,3 +42,11 @@ Windows PowerShell in `C:\Dev\TriplePoker\client` with:
 
 Do not default to launching the Expo host from WSL. The Windows LAN host is the
 owner-confirmed faster and more reliable workflow for this project.
+
+## Pre-launch tier boundary
+
+The owner narrowed all pre-launch implementation, audit, and test work on
+2026-09-29 to High Noble and the tiers below it: High Noble, Mastermind, Adept,
+and Tier D. Do not modify, debug, benchmark, or run heavy tests for Arena or
+Sovereign unless the owner explicitly reopens that scope. Preserve their source
+and keep their production feature surfaces fail-closed.
