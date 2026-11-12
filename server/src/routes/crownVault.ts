@@ -88,7 +88,7 @@ export default async function crownVaultRoutes(fastify: FastifyInstance) {
 
     const { crownAmount, requestId } = request.body ?? {}
     if (!Number.isSafeInteger(crownAmount) || crownAmount <= 0 || !requestId || requestId.length > 100) {
-      return reply.status(400).send({ error: 'crownAmount ต้องเป็นเลขบวก' })
+      return reply.status(400).send({ error: 'crownAmount must be a positive integer' })
     }
 
     const result = await exchangeTokenToCrown(userId, crownAmount, requestId)

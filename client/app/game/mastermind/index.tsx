@@ -1071,11 +1071,12 @@ const GameTableLive: React.FC = () => {
       if (data.action === 'fold') {
         setGfFoldedPlayers(prev => [...prev, data.playerId])
       } else if (data.revealedCard) {
-        console.log('🔴 [DEBUG] revealedCard from server:', data.revealedCard, 'playerId:', data.playerId)
-        if (data.playerId === PLAYER_ID) {
-          console.log('🔴 [DEBUG] piles[2] keys:', piles[2].map(c => c.key))
-        }
-        setGfRevealedCards(prev => ({ ...prev, [data.playerId]: [...(prev[data.playerId] ?? []), data.revealedCard] }))
+        // กันไพ่ใบเดิมถูกเพิ่มซ้ำ (เช่น event ส่งซ้ำหลัง reconnect) ทำให้นับจำนวนไพ่ที่หงายเพี้ยน
+        setGfRevealedCards(prev => {
+          const current = prev[data.playerId] ?? []
+          if (current.includes(data.revealedCard)) return prev
+          return { ...prev, [data.playerId]: [...current, data.revealedCard] }
+        })
       }
       setGfPile3Pot(data.pile3Pot ?? 0)
       setTokenBalance(data.tokenBalance ?? {})
@@ -1723,7 +1724,8 @@ const GameTableLive: React.FC = () => {
               // (แยกทิศจาก P1 — กันดูสับสนว่าใบไหนเป็นของใคร ขนาด offset เท่าเดิม)
               transform: [{ translateY: isCalledSlot ? 10 : 0 }],
             }}>
-              {isCalledSlot
+              {/* กัน key ว่าง/ไม่มีรูป -> ตกไปโชว์หลังไพ่แทนช่องว่างเปล่า (เหมือน guard ฝั่ง P1) */}
+              {isCalledSlot && CARD_IMG[revealSource[revealIdx]]
                 ? <Image source={CARD_IMG[revealSource[revealIdx]]} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />
                 : <Image source={cardBackImg} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />
               }

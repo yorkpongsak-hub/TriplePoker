@@ -3,6 +3,8 @@ import th from './locales/th'
 import zhCN from './locales/zh-CN'
 import type { Locale, TranslationKey } from './types'
 export type { Locale, TranslationKey, TranslationShape } from './types'
+// __DEV__ เป็น global ของ RN/Metro — ประกาศ type ไว้ให้ server tsc (เทส launchTranslations) รู้จัก ไม่มีผลตอน runtime
+declare const __DEV__: boolean
 export { formatCompact, formatCountdown, formatDate, formatInteger, formatPercent, formatToken } from './formatters'
 export const supportedLocales: readonly Locale[] = ['en', 'th', 'zh-CN']
 export const localeNames: Record<Locale, string> = { en: 'English', th: 'ไทย', 'zh-CN': '简体中文' }

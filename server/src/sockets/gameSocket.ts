@@ -146,7 +146,7 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
     timedOut.forEach((t) => {
       io.to(t.tableId).emit("adept_table_timeout", {
         tableId: t.tableId,
-        message: "หาผู้เล่นไม่ครบภายในเวลา กรุณาออกจากโต๊ะเพื่อรอคิวใหม่ หรือเล่น Tier ที่ต่ำกว่า",
+        message: "Not enough players joined in time. Please leave the table to re-queue, or play a lower tier.",
       });
       deleteTable(t.tableId);
     });
@@ -174,7 +174,7 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
           io.to(room.roomId).emit("room_ai_filled", {
             roomId: room.roomId,
             seats: filled.seats,
-            message: "หา Human ไม่ครบภายในเวลา — เติม AI ให้แทน",
+            message: "Not enough players joined in time. AI players have filled the empty seats.",
           });
           // Patch Multiplayer: ต้องเริ่มเกมจริงหลัง AI-fill ด้วย (เดิมลืม — ห้องค้าง 'full' เฉยๆ ไม่เริ่มเกม)
           await markInProgress(room.roomId);
@@ -688,7 +688,7 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
         socket.emit("adept_table_created", { table });
         io.to(`lobby:adept`).emit("lobby:tableUpdate", { tier: "adept", table });
       } catch (err: any) {
-        socket.emit("adept_create_error", { message: err.message ?? "สร้างโต๊ะไม่สำเร็จ" });
+        socket.emit("adept_create_error", { message: err.message ?? "Could not create the table." });
       }
     });
 
@@ -937,7 +937,7 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
         // Server Activity feed: createPrivateRoom() สร้างห้องใหม่เสมอ ไม่มี branch เจอห้องเดิม
         io.emit("server_activity", { kind: "private_table_open", tier, roomId: room.roomId, timestamp: Date.now() });
       } catch (err: any) {
-        socket.emit("room_error", { message: err.message ?? "สร้างห้องไม่สำเร็จ" });
+        socket.emit("room_error", { message: err.message ?? "Could not create the room." });
       }
     });
 

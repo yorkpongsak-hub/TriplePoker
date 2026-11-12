@@ -177,13 +177,22 @@ export function createTierDLevel(level: number, humanId: string, random: () => n
   const openChallenge = tierDDuelActive(level) ? undefined : level > 1000 && lockedRules && 'openChallenge' in lockedRules ? lockedRules.openChallenge : generateOpenChallenge(level, random)
   const guidedRevealPiles: TierDGameNumber[] = lockedRules?.guidedRevealPiles ?? (level <= 20 ? [1, 2, 3] : level <= 40 ? [1, 2] : level <= 50 ? [1] : [])
   // 4 seats × 11 cards + 6 community cards is still a single standard deck.
-  const deck = shuffleWith(deckCopy(), random)
+  // บางดีล (น้อยมาก) ไม่มีวิธีจัด G1 < G2 < G3 ได้เลยสำหรับบอท -> firstValidTierDArrangement throw
+  // ทำให้ startTierDSolo พังทั้งด่าน: แจกใหม่ด้วย random ตัวเดิม (ยัง deterministic ตาม seed)
+  let deck: Card[] = []
   let cursor = 0
-  const dealtHands: Record<string, Card[]> = {}
+  let dealtHands: Record<string, Card[]> = {}
+  let communityPiles: TierDCommunityPiles = { pile1: [], pile2: [], pile3: [] }
+  let arrangements: Record<string, TierDArrangement | undefined> = {}
+  for (let attempt = 1; ; attempt++) {
+  deck = shuffleWith(deckCopy(), random)
+  cursor = 0
+  dealtHands = {}
   for (const seat of seats) { dealtHands[seat.id] = deck.slice(cursor, cursor + 11); cursor += 11 }
-  const communityPiles = { pile1: deck.slice(cursor, cursor + 2), pile2: deck.slice(cursor + 2, cursor + 4), pile3: deck.slice(cursor + 4, cursor + 6) }
+  communityPiles = { pile1: deck.slice(cursor, cursor + 2), pile2: deck.slice(cursor + 2, cursor + 4), pile3: deck.slice(cursor + 4, cursor + 6) }
   cursor += 6
-  const arrangements: Record<string, TierDArrangement | undefined> = {}
+  arrangements = {}
+  try {
   // Bots arrange immediately. Human cards are intentionally left uncommitted until READY.
   for (const seat of seats) if (seat.isBot) {
     // Every Mission-eligible bot evaluates the same public Missions. Difficulty
@@ -194,6 +203,11 @@ export function createTierDLevel(level: number, humanId: string, random: () => n
     const botIndex = aiSeats.findIndex(aiSeat => aiSeat.id === seat.id)
     const searchBudget = tierDSearchBudgetForBotIndex(botIndex)
     arrangements[seat.id] = arrangeTierDBot(dealtHands[seat.id], communityPiles, seat.difficulty.skill, random, missionAware ? missions : [], seat.id === comboBotId, candidateFraction, seat.risePersonality ? { personality: seat.risePersonality, visible: { community: communityPiles } } : undefined, searchBudget)
+  }
+  break
+  } catch (error) {
+    if (attempt >= 20 || !(error instanceof Error) || !error.message.startsWith('No valid G1 < G2 < G3')) throw error
+  }
   }
   const games: TierDGameState[] = [1, 2, 3].map(game => ({
     game: game as TierDGameNumber,
