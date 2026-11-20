@@ -149,7 +149,10 @@ export const gameConfig = {
       fogOfWar:            true,
       blindAuction:        true,
       grandFinaleBetting:  true,
-      discardPhase:        true,
+      // ยกเลิก Discard แล้ว (2026-09-27): arrangement_2 หลัง Auction คือ layout สุดท้าย
+      // ไพ่ประมูลอยู่ G2 (Best 5 จาก 6) — startDiscardPhase() เหลือเป็น compatibility bridge
+      // ที่ผ่านไปทันที · ค่านี้ไม่มีโค้ด runtime อ่าน เก็บไว้ให้ตรงกับ flow จริงเท่านั้น
+      discardPhase:        false,
       aiMode:              "first_valid",  // Minion AI
     },
     highNoble: {
@@ -157,7 +160,8 @@ export const gameConfig = {
       fogOfWar:            true,
       blindAuction:        true,
       grandFinaleBetting:  true,
-      discardPhase:        true,
+      // ยกเลิก Discard แล้ว: arrangement_2 (3 / 3-หรือ-4 / 2) คือ layout สุดท้าย — ดู startHNDiscardPhase()
+      discardPhase:        false,
       aiMode:              "dde",          // จตุรเทพ AI
     },
     lastBoss: {

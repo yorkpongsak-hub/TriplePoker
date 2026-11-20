@@ -101,14 +101,16 @@ export const PROGRESSIVE_MECHANICS: Record<Tier, {
     fogOfWar:           true,
     blindAuction:       true,
     grandFinaleBetting: true,
-    discardPhase:       true,
+    // ยกเลิก Discard แล้ว — arrangement_2 หลัง Auction คือ layout สุดท้าย (ตรงกับ server gameConfig.ts)
+    discardPhase:       false,
   },
   boss: {
     showdownStyle:      'sequential',
     fogOfWar:           true,
     blindAuction:       true,
     grandFinaleBetting: true,
-    discardPhase:       true,
+    // ยกเลิก Discard แล้ว — ดู comment ของ pro ด้านบน
+    discardPhase:       false,
   },
   lastBoss: {
     showdownStyle:      'sequential',
