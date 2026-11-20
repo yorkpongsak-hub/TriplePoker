@@ -1,0 +1,10 @@
+{
+  "name": "triplepoker-stack-prototype",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node serve.cjs",
+    "test": "node --test tests/*.test.mjs",
+    "typecheck": "tsc -p jsconfig.json --noEmit"
+  }
+}

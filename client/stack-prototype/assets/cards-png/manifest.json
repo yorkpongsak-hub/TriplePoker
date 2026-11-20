@@ -1,0 +1,277 @@
+[
+  {
+    "file": "forest_A.png",
+    "suit": "forest",
+    "rank": "A"
+  },
+  {
+    "file": "forest_2.png",
+    "suit": "forest",
+    "rank": "2"
+  },
+  {
+    "file": "forest_3.png",
+    "suit": "forest",
+    "rank": "3"
+  },
+  {
+    "file": "forest_4.png",
+    "suit": "forest",
+    "rank": "4"
+  },
+  {
+    "file": "forest_5.png",
+    "suit": "forest",
+    "rank": "5"
+  },
+  {
+    "file": "forest_6.png",
+    "suit": "forest",
+    "rank": "6"
+  },
+  {
+    "file": "forest_7.png",
+    "suit": "forest",
+    "rank": "7"
+  },
+  {
+    "file": "forest_8.png",
+    "suit": "forest",
+    "rank": "8"
+  },
+  {
+    "file": "forest_9.png",
+    "suit": "forest",
+    "rank": "9"
+  },
+  {
+    "file": "forest_10.png",
+    "suit": "forest",
+    "rank": "10"
+  },
+  {
+    "file": "forest_J.png",
+    "suit": "forest",
+    "rank": "J"
+  },
+  {
+    "file": "forest_Q.png",
+    "suit": "forest",
+    "rank": "Q"
+  },
+  {
+    "file": "forest_K.png",
+    "suit": "forest",
+    "rank": "K"
+  },
+  {
+    "file": "fire_A.png",
+    "suit": "fire",
+    "rank": "A"
+  },
+  {
+    "file": "fire_2.png",
+    "suit": "fire",
+    "rank": "2"
+  },
+  {
+    "file": "fire_3.png",
+    "suit": "fire",
+    "rank": "3"
+  },
+  {
+    "file": "fire_4.png",
+    "suit": "fire",
+    "rank": "4"
+  },
+  {
+    "file": "fire_5.png",
+    "suit": "fire",
+    "rank": "5"
+  },
+  {
+    "file": "fire_6.png",
+    "suit": "fire",
+    "rank": "6"
+  },
+  {
+    "file": "fire_7.png",
+    "suit": "fire",
+    "rank": "7"
+  },
+  {
+    "file": "fire_8.png",
+    "suit": "fire",
+    "rank": "8"
+  },
+  {
+    "file": "fire_9.png",
+    "suit": "fire",
+    "rank": "9"
+  },
+  {
+    "file": "fire_10.png",
+    "suit": "fire",
+    "rank": "10"
+  },
+  {
+    "file": "fire_J.png",
+    "suit": "fire",
+    "rank": "J"
+  },
+  {
+    "file": "fire_Q.png",
+    "suit": "fire",
+    "rank": "Q"
+  },
+  {
+    "file": "fire_K.png",
+    "suit": "fire",
+    "rank": "K"
+  },
+  {
+    "file": "water_A.png",
+    "suit": "water",
+    "rank": "A"
+  },
+  {
+    "file": "water_2.png",
+    "suit": "water",
+    "rank": "2"
+  },
+  {
+    "file": "water_3.png",
+    "suit": "water",
+    "rank": "3"
+  },
+  {
+    "file": "water_4.png",
+    "suit": "water",
+    "rank": "4"
+  },
+  {
+    "file": "water_5.png",
+    "suit": "water",
+    "rank": "5"
+  },
+  {
+    "file": "water_6.png",
+    "suit": "water",
+    "rank": "6"
+  },
+  {
+    "file": "water_7.png",
+    "suit": "water",
+    "rank": "7"
+  },
+  {
+    "file": "water_8.png",
+    "suit": "water",
+    "rank": "8"
+  },
+  {
+    "file": "water_9.png",
+    "suit": "water",
+    "rank": "9"
+  },
+  {
+    "file": "water_10.png",
+    "suit": "water",
+    "rank": "10"
+  },
+  {
+    "file": "water_J.png",
+    "suit": "water",
+    "rank": "J"
+  },
+  {
+    "file": "water_Q.png",
+    "suit": "water",
+    "rank": "Q"
+  },
+  {
+    "file": "water_K.png",
+    "suit": "water",
+    "rank": "K"
+  },
+  {
+    "file": "sky_A.png",
+    "suit": "sky",
+    "rank": "A"
+  },
+  {
+    "file": "sky_2.png",
+    "suit": "sky",
+    "rank": "2"
+  },
+  {
+    "file": "sky_3.png",
+    "suit": "sky",
+    "rank": "3"
+  },
+  {
+    "file": "sky_4.png",
+    "suit": "sky",
+    "rank": "4"
+  },
+  {
+    "file": "sky_5.png",
+    "suit": "sky",
+    "rank": "5"
+  },
+  {
+    "file": "sky_6.png",
+    "suit": "sky",
+    "rank": "6"
+  },
+  {
+    "file": "sky_7.png",
+    "suit": "sky",
+    "rank": "7"
+  },
+  {
+    "file": "sky_8.png",
+    "suit": "sky",
+    "rank": "8"
+  },
+  {
+    "file": "sky_9.png",
+    "suit": "sky",
+    "rank": "9"
+  },
+  {
+    "file": "sky_10.png",
+    "suit": "sky",
+    "rank": "10"
+  },
+  {
+    "file": "sky_J.png",
+    "suit": "sky",
+    "rank": "J"
+  },
+  {
+    "file": "sky_Q.png",
+    "suit": "sky",
+    "rank": "Q"
+  },
+  {
+    "file": "sky_K.png",
+    "suit": "sky",
+    "rank": "K"
+  },
+  {
+    "file": "joker_1.png",
+    "suit": "joker",
+    "rank": "wild"
+  },
+  {
+    "file": "joker_2.png",
+    "suit": "joker",
+    "rank": "wild"
+  },
+  {
+    "file": "joker_3.png",
+    "suit": "joker",
+    "rank": "wild"
+  }
+]
