@@ -17,7 +17,15 @@ of Git. Record decisions and remaining release checks in docs/RELAUNCH_2026-09-0
 
 ## Launch schedule guard
 
-The current target is an Android Version 1.0 launch in late October 2026. When
+The owner paused active Rise and Stack work for approximately one week on
+2026-10-02 while the multiplayer test phone is being repaired. Do not resume
+feature implementation, heavy testing, deployment, or release operations until
+the owner explicitly resumes the project, except for an owner-requested urgent
+correctness, security, policy, or data-loss fix.
+
+The Android Version 1.0 launch target moved by at least two weeks from the prior
+late-October target; treat mid-November 2026 as the earliest window, not a fixed
+ship date. When
 the owner requests any new feature or material scope expansion before launch,
 first assess its impact on the release critical path (RC stability, automated
 regression, Android device QA, migrations, privacy/ads compliance, store assets,
