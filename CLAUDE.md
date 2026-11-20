@@ -9,7 +9,7 @@
 
 - **ลุงเยาะ** (Asst. Prof. Pongnathee Maneekul) — Founder & Chief Architect, The Sage Unicorn Studio Co., Ltd.
 - Solo indie developer ทำทุก role
-- เป้าหมาย: รายได้เสริม 10,000–30,000 THB/เดือน | **Launch: October 2026 (Android Only)**
+- เป้าหมาย: รายได้เสริม 10,000–30,000 THB/เดือน | **Launch: Android Version 1.0 (Android Only) — เลื่อนจากปลายตุลาคม 2026 อย่างน้อย 2 สัปดาห์ (มติ 2026-10-02) ยังไม่กำหนดวันแน่นอน ดู "สถานะ 2026-11-20" ด้านล่าง**
 
 ---
 
@@ -177,6 +177,30 @@
 - **Cleanup:** ลบ debug logging ที่ค้างมาจากการไล่บั๊กเก่า — `[ANIM-DEBUG]` ใน `highNoble/index.tsx`+`mastermind/index.tsx` (92 บรรทัดรวม) และ `[DEBUG_SOCKETMAP]`/`[DEBUG_AFK_TRIGGER]` ใน `gameSocket.ts` (ยิงทุก connect/disconnect บน production จริงโดยไม่มี `__DEV__` กันเลย) · ลบไฟล์ backup timestamp เก่า (`.backup_2026081*`) และ asset กำพร้าที่ไม่มีโค้ดอ้างอิงอีก 4 ไฟล์
 - **QA รวมยืนยันซ้ำหลายรอบตลอด session:** full suite **87/87 suites, 790/790 tests ผ่าน** + `hnGracePeriod.test.ts` 15/15 แยก, `tsc --noEmit` ผ่าน 0 error ทั้ง client/server, ไม่มี secret หลุดใหม่, working tree สะอาด 100%
 
+### 📍 สถานะ 2026-11-20 (ล่าสุด — ถ้าขัดกับหัวข้อเก่าด้านบน ให้ยึดหัวข้อนี้)
+
+> บันทึกรายละเอียดรายวันตั้งแต่ ก.ย. 2026 อยู่ที่ `docs/RELAUNCH_2026-09-05.md` (เอกสารหลักแทน CLAUDE.md สำหรับ log ยาวๆ) · ผล QA รวม: `docs/QA_FULL_PROJECT_REPORT.md`
+
+**Scope Android 1.0 (มติลุงเยาะ 2026-09-29):** เฉพาะ **Tier D (Rise) / Initiate / Adept / Mastermind / High Noble** เท่านั้น
+- **ปิดแบบ fail-closed ใน 1.0 (เก็บ source/data ไว้):** Arena / Grandmaster / Sovereign (S+) / Last Boss, **Monarch encounter** (`MONARCH_ENABLED` ต้องเป็น `true` ตรงตัวถึงจะเปิด), VIP Plus 5P, VIP Private Crew sockets
+- ห้ามแก้/debug/benchmark/รันเทสหนักของ Arena/Sovereign ก่อน launch จนกว่าลุงจะเปิด scope ใหม่
+- **Launch schedule guard:** ฟีเจอร์ใหม่หรือขยาย scope ก่อน launch ต้องเตือนผลกระทบต่อตารางเวลาเป็นภาษาไทยก่อนลงมือเสมอ (เวลาที่เลื่อนมาไม่ใช่ใบอนุญาตเพิ่มฟีเจอร์)
+- **Ads:** RC ปัจจุบันปิด production Ads ทั้งหมด · Rewarded Ads ปิดใน production จนกว่าจะมี AdMob SSV · Interstitial (natural break หลังชนะ Token ใน Tier D Duel/Initiate/Mastermind, ห่างกัน ≥5 นาที, VIP ยกเว้น) เปิดได้ใน RC หลังเท่านั้น
+- **Telemetry 2A–2D.1:** โค้ดเสร็จ, migration 088–091 **ยังไม่ได้รัน**, ทุก flag (`TELEMETRY_ENABLED` / `EXPO_PUBLIC_TELEMETRY_ENABLED`) ปิดเป็นค่าเริ่มต้น · รายละเอียด `docs/TELEMETRY_*.md`
+
+**Git:** งานทั้งหมดอยู่บน `feature/central-economy-ledger` (103 commits นำ `main`) push แล้ว · **PR #10 เข้า `main` เปิดรอลุง review** (https://github.com/yorkpongsak-hub/TriplePoker/pull/10) · repo ไม่มี GitHub CI — ผลเทสมาจากรันในเครื่องเท่านั้น · commit ล่าสุด 2026-11-20: แยกงานค้างตั้งแต่ ต.ค. เป็น 5 ชุด (`72a173e` แก้เกม Tier C G3 reveal/drag-to-swap/production sign-in, `41b8fc2` telemetry, `25f0d33` schema extraction scripts, `c773f5b` STACK prototype, `728fb6a` docs)
+
+**Pending ก่อน Launch (เรียงตาม priority):**
+1. **Device QA บนมือถือ Android จริง (ยังไม่ได้ทำ):** Adept 5 แมตช์ → Mastermind 5 แมตช์ (รวม `arrangement_2`) → High Noble/Four Gods → multiplayer 2 เครื่อง → reconnect/escrow → signed RC · เช็คเพิ่ม: Tier Welcome (เสียงเปิด/ปิด, ไม่เล่นซ้ำหลัง cold restart), Royal Flush global moment, Game Over ตอน stack ติดลบ, flag ใน Top 20, Tier D AI กองต้อง G1<G2<G3, drag-to-swap, จอแคบ/กว้าง
+2. **Supabase keys:** legacy JWT `anon`/`service_role` ใน env ถูก Data API ปฏิเสธแล้ว ต้องเปลี่ยนเป็น publishable key (client/server) + secret key (server) จาก dashboard ก่อน QA ต่อ (ห้ามให้ secret เข้า Git/log)
+3. **Staging schema baseline:** ledger staging มีแค่ 005/006 (ส่วนใหญ่รันมือ) ห้าม push migration แบบ blind · ทางที่เลือก = schema-only snapshot จาก production ผ่าน `database/baseline/*.ps1` — รอลุงรัน `Test-ProductionConnection.ps1` เอง แล้วค่อย review ก่อน restore · จากนั้นถึงจะรัน 088→091 บน staging ได้ (ต้องขออนุมัติแยก)
+4. **ยืนยันสถานะ migration 010/044/045** บน production
+5. **ก่อนเปิด Ads production:** แยก flag Interstitial/Rewarded, UMP consent, AdMob App/Unit IDs, Data Safety + privacy policy, `app-ads.txt`, AdMob review, QA no-fill/background/VIP exemption บน signed build
+6. **ก่อนเปิด Telemetry:** เช็ค Railway proxy/client IP, rebuild dev client (native module `expo-crypto` ใหม่), กำหนด retention + Data Safety
+7. **Flaky ที่ต้องจับตา:** `hnGracePeriod` T14 เคยพังเป็นครั้งคราว (ช่วง 2A) ปัจจุบันผ่าน แต่ยังไม่นับว่าแก้แล้ว · `vipPlusMatchEngine` privacy assertion พังเฉพาะตอน jest หลาย process ซ้อนกัน
+
+**หลัง 1.0 (roadmap ก่อนตรุษจีน 2027):** พ.ย. = stabilization + telemetry · ธ.ค. = ภาษาจีนตัวย่อครบทุกหน้า (ห้าม fallback อังกฤษเงียบๆ) · ม.ค. 2027 = native review + QA + staged rollout · Arena/Sovereign/Monarch กลับมาได้ทีละตัว แต่ต้องผ่าน CPU budget (Arena 10–50% / Last Boss 30–70% ต่อ match 1–5, server-authoritative) + `test:arena-heavy` จนจบก่อนเปิด · อีก 7 ภาษาที่อนุมัติไว้ยังไม่ได้เริ่ม · ยังไม่มี lint config
+
 ---
 
 ## 🔧 Workflow Rules
@@ -186,7 +210,7 @@
 3. **Assets:** boss art `boss_[key].png` (512×640) + avatar 256×256 ที่ `assets/bosses/` | card back `card_back_[skin_key].png` (360×504 @2x)
 4. **เอกสาร:** pattern `TriplePoker_[Topic]_v[X]_[Y].md` — เอกสาร canon อยู่ที่ `docs/`
 5. ก่อนรัน bash ที่เกี่ยวกับ path ให้ confirm path จริงก่อน
-6. Tests ต้องผ่านครบก่อนถือว่างานเสร็จ — **baseline ล่าสุด ณ 2026-09-01: 87/87 suites, 790/790 tests ผ่าน** (`npm.cmd test`: main suite ไม่รวม `hnGracePeriod.test.ts` + แยก runInBand ต่างหาก 1 suite/15 tests) ยืนยันซ้ำหลายรอบระหว่าง merge PR #9/แก้บั๊ก audio/cleanup debug logging ตลอด session · จำนวน suite/test เปลี่ยนจาก baseline 2026-08-15 (86/796) เพราะ merge PR #9 เข้ามาใหม่ ไม่ใช่เทสหาย · client/server TypeScript `--noEmit` ผ่าน 0 error ทั้งคู่ · **`vipPlusMatchEngine.test.ts` เจอ flaky privacy assertion เป็นครั้งคราว** (พังเฉพาะตอนรันหลาย jest process ซ้อนกันในเครื่องเดียว รันเดี่ยวสะอาด — ไม่ใช่บั๊กจริง แค่ resource contention ของแซนด์บ็อกซ์ทดสอบ) · **วิธีรันบน Windows: ใช้ `npm.cmd test`** (PowerShell บล็อก `npm.ps1`; script นี้แยก `hnGracePeriod.test.ts` ไปรันแบบ `--runInBand` ให้อัตโนมัติ)
+6. Tests ต้องผ่านครบก่อนถือว่างานเสร็จ — **baseline ล่าสุด ณ 2026-11-20: main 143/143 suites, 1,176/1,176 tests + `hnGracePeriod` 15/15 ผ่าน** (`npm.cmd test`; ไม่รวม `test:arena-heavy` 3 ไฟล์ที่ตั้งใจแยกไว้เพราะ Arena ปิดใน 1.0) · ตรวจเพิ่มทุกครั้ง: server `npm run build`, client `npx tsc --noEmit`, client `npm run check:i18n`, server `npm run check:migrations` · (ประวัติ) baseline 2026-09-01: 87/87 suites, 790/790 tests ผ่าน (`npm.cmd test`: main suite ไม่รวม `hnGracePeriod.test.ts` + แยก runInBand ต่างหาก 1 suite/15 tests) ยืนยันซ้ำหลายรอบระหว่าง merge PR #9/แก้บั๊ก audio/cleanup debug logging ตลอด session · จำนวน suite/test เปลี่ยนจาก baseline 2026-08-15 (86/796) เพราะ merge PR #9 เข้ามาใหม่ ไม่ใช่เทสหาย · client/server TypeScript `--noEmit` ผ่าน 0 error ทั้งคู่ · **`vipPlusMatchEngine.test.ts` เจอ flaky privacy assertion เป็นครั้งคราว** (พังเฉพาะตอนรันหลาย jest process ซ้อนกันในเครื่องเดียว รันเดี่ยวสะอาด — ไม่ใช่บั๊กจริง แค่ resource contention ของแซนด์บ็อกซ์ทดสอบ) · **วิธีรันบน Windows: ใช้ `npm.cmd test`** (PowerShell บล็อก `npm.ps1`; script นี้แยก `hnGracePeriod.test.ts` ไปรันแบบ `--runInBand` ให้อัตโนมัติ)
 
 ## 🎨 Official Theme (WebsiteTheme_Spec_v1_0)
 
