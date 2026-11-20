@@ -1331,6 +1331,17 @@ const GameTableLive: React.FC = () => {
     playCardArrange2() // SFX: แตะไพ่ใบที่สอง — สลับสำเร็จ
   }, [isReady, phase, selected, piles])
 
+  const handleCardDrop = useCallback((from: { pi: number; ci: number }, to: { pi: number; ci: number }) => {
+    if (isReady || (phase !== 'arrangement' && phase !== 'arrangement_2') || (from.pi === to.pi && from.ci === to.ci)) return
+    setPiles(current => {
+      if (!current[from.pi]?.[from.ci] || !current[to.pi]?.[to.ci]) return current
+      const next = current.map(pile => [...pile]) as [CardData[], CardData[], CardData[]]
+      ;[next[from.pi][from.ci], next[to.pi][to.ci]] = [next[to.pi][to.ci], next[from.pi][from.ci]]
+      return next
+    })
+    setSelected(null); setSortDone(false); playCardArrange2()
+  }, [isReady, phase])
+
   // Auto Sort (เสียทุกครั้งที่กด ไม่มีรอบฟรี - มติลุงเยาะ 2026-07-25) ค่า Auto Sort อ่านจาก server
   // (ดู gameConfig.autoSortFee / getAutoSortFee() — ห้าม hardcode ตัวเลขในนี้อีก)
   // Server-authoritative: ต้องขออนุญาต + ให้ server หัก fee เข้า Fee & Rake ก่อน ถึงจะจัดไพ่ให้จริง
@@ -2067,7 +2078,7 @@ const GameTableLive: React.FC = () => {
   // =================================================================
   return (
     <View style={[s.root, isWeb && s.webOuter]}>
-      <TierWelcomeCharacter playerId={PLAYER_ID} tierId="mastermind" />
+      <TierWelcomeCharacter playerId={PLAYER_ID} tierId="mastermind" ready={phase === 'arrangement'} />
       <GameServerStatusLight socketRef={socketRef} />
       <CharacterBarkBubble bark={bark} />
       <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" />
@@ -2859,6 +2870,7 @@ const GameTableLive: React.FC = () => {
                     piles={piles}
                     selected={selected}
                     onCardPress={handleCardPress}
+                    onCardDrop={!isReady && (phase === 'arrangement' || phase === 'arrangement_2') ? handleCardDrop : undefined}
                     isVip={isVip}
                     visiblePiles={(phase === 'arrangement' || phase === 'arrangement_2') ? [0, 1, 2] : [2]}
                   />

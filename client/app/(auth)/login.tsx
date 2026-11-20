@@ -32,7 +32,6 @@ const C = {
   textPrimary: '#F5F2E8',
   textSec:     '#C8C4B0',
   textDim:     '#7A7A6A',
-  devOrange:   '#ff6400',
   errorRed:    '#FF6B6B',
 }
 
@@ -40,8 +39,8 @@ export default function LoginScreen() {
   const insets = useSafeAreaInsets()
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError]         = useState<string | null>(null)
-  const [devEmail, setDevEmail]       = useState('')
-  const [devPassword, setDevPassword] = useState('')
+  const [email, setEmail]       = useState('')
+  const [password, setPassword] = useState('')
   const authenticatedUser = useAuthStore(state => state.user)
   const routedUserId = useRef<string | null>(null)
 
@@ -79,18 +78,17 @@ export default function LoginScreen() {
     }
   }
 
-  // DEV ONLY -- Email/Password login สำหรับเทส
-  const handleDevEmailLogin = async () => {
+  const handleEmailLogin = async () => {
     setIsLoading(true)
     setError(null)
     try {
       const { error: authError } = await supabase.auth.signInWithPassword({
-        email:    devEmail,
-        password: devPassword,
+        email: email.trim(),
+        password,
       })
       if (authError) throw authError
     } catch (e: any) {
-      setError('Dev login failed: ' + (e?.message ?? 'unknown error'))
+      setError('Email or password is incorrect. Please try again.')
     } finally {
       setIsLoading(false)
     }
@@ -129,51 +127,54 @@ export default function LoginScreen() {
           </View>
         )}
 
-        {/* DEV Login -- เฉพาะ __DEV__ */}
-        {__DEV__ && (
-          <View style={styles.devBox}>
-            <Text style={styles.devBoxLabel}>DEV LOGIN (TEST ONLY)</Text>
+        <View style={styles.emailBox}>
+            <Text style={styles.emailBoxLabel}>SIGN IN WITH EMAIL</Text>
 
-            <Text style={styles.devLabel}>Email</Text>
+            <Text style={styles.emailLabel}>Email</Text>
             <TextInput
-              style={styles.devInput}
-              placeholder="test1@triplepoker.dev"
+              accessibilityLabel="Email address"
+              style={styles.emailInput}
+              placeholder="Email address"
               placeholderTextColor={C.textDim}
               autoCapitalize="none"
+              autoComplete="email"
               keyboardType="email-address"
-              value={devEmail}
-              onChangeText={setDevEmail}
+              value={email}
+              onChangeText={setEmail}
             />
 
-            <Text style={styles.devLabel}>Password</Text>
+            <Text style={styles.emailLabel}>Password</Text>
             <TextInput
-              style={styles.devInput}
-              placeholder="password"
+              accessibilityLabel="Password"
+              style={styles.emailInput}
+              placeholder="Password"
               placeholderTextColor={C.textDim}
               secureTextEntry
               autoCapitalize="none"
-              value={devPassword}
-              onChangeText={setDevPassword}
+              autoComplete="current-password"
+              value={password}
+              onChangeText={setPassword}
             />
 
             <TouchableOpacity
-              style={styles.devLoginBtn}
-              onPress={handleDevEmailLogin}
-              disabled={isLoading}
+              accessibilityRole="button"
+              accessibilityLabel="Sign in with email"
+              style={[styles.emailLoginBtn, (isLoading || !email.trim() || !password) && styles.loginBtnDisabled]}
+              onPress={handleEmailLogin}
+              disabled={isLoading || !email.trim() || !password}
             >
-              <Text style={styles.devLoginBtnText}>
-                {isLoading ? 'Signing in...' : 'Dev Email Login'}
+              <Text style={styles.emailLoginBtnText}>
+                {isLoading ? 'Signing in...' : 'Sign In'}
               </Text>
             </TouchableOpacity>
           </View>
-        )}
 
         <TouchableOpacity style={styles.googleBtn} onPress={() => router.replace('/launch')}>
           <Text style={styles.googleBtnText}>Play Three Piles - Free Solo</Text>
         </TouchableOpacity>
 
         {/* Section label */}
-        <Text style={styles.sectionLabel}>SIGN IN FOR ADVANCED TABLES</Text>
+        <Text style={styles.sectionLabel}>OR CONTINUE WITH</Text>
 
         {/* Google */}
         <TouchableOpacity
@@ -254,32 +255,32 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  // DEV Box
-  devBox: {
+  // Email sign-in
+  emailBox: {
     alignSelf:       'stretch',
-    backgroundColor: 'rgba(255,100,0,0.08)',
+    backgroundColor: 'rgba(255,215,106,0.06)',
     borderRadius:    10,
     borderWidth:     1,
-    borderColor:     'rgba(255,100,0,0.4)',
+    borderColor:     'rgba(255,215,106,0.35)',
     padding:         14,
     marginBottom:    20,
   },
-  devBoxLabel: {
-    color:         C.devOrange,
+  emailBoxLabel: {
+    color:         C.gold,
     fontSize:      11,
     fontWeight:    '700',
     letterSpacing: 1.5,
     marginBottom:  10,
     textAlign:     'center',
   },
-  devLabel: {
-    color:        C.devOrange,
+  emailLabel: {
+    color:        C.textSec,
     fontSize:     11,
     fontWeight:   '700',
     marginTop:    6,
     marginBottom: 4,
   },
-  devInput: {
+  emailInput: {
     backgroundColor:   C.card,
     borderRadius:      8,
     borderWidth:       1,
@@ -291,21 +292,22 @@ const styles = StyleSheet.create({
     // web: ปิด outline default ของ browser
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' } as any : {}),
   },
-  devLoginBtn: {
-    backgroundColor: 'rgba(255,100,0,0.3)',
+  emailLoginBtn: {
+    backgroundColor: C.goldDark,
     borderRadius:    8,
     paddingVertical: 12,
     alignItems:      'center',
     borderWidth:     1,
-    borderColor:     'rgba(255,100,0,0.6)',
+    borderColor:     C.gold,
     marginTop:       12,
   },
-  devLoginBtnText: {
-    color:         C.devOrange,
+  emailLoginBtnText: {
+    color:         '#18261D',
     fontSize:      14,
     fontWeight:    '700',
     letterSpacing: 0.5,
   },
+  loginBtnDisabled: { opacity: 0.45 },
 
   // Section label
   sectionLabel: {
@@ -313,6 +315,7 @@ const styles = StyleSheet.create({
     fontSize:      10,
     letterSpacing: 3,
     fontWeight:    '700',
+    marginTop:     24,
     marginBottom:  14,
   },
 

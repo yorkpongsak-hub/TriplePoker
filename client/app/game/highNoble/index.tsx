@@ -2128,7 +2128,7 @@ const GameTableLive: React.FC = () => {
   // =================================================================
   return (
     <View style={[s.root, isWeb && s.webOuter]}>
-      <TierWelcomeCharacter playerId={PLAYER_ID} tierId="high_noble" />
+      <TierWelcomeCharacter playerId={PLAYER_ID} tierId="high_noble" ready={phase === 'arrangement'} />
       <GameServerStatusLight socketRef={socketRef} />
       <CharacterBarkBubble bark={bark} />
       <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" />

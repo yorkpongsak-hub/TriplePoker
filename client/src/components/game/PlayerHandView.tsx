@@ -13,9 +13,9 @@
  * The Sage Unicorn Studio Co., Ltd.
  */
 
-import React, { useEffect } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Image, Pressable, StyleSheet, Text, useWindowDimensions, View,
+  GestureResponderEvent, Image, Pressable, StyleSheet, Text, useWindowDimensions, View,
 } from 'react-native'
 import Animated, {
   useAnimatedStyle, useSharedValue, withRepeat, withTiming,
@@ -31,6 +31,8 @@ export interface PlayerHandViewProps {
   // ไพ่ที่ถูกเลือกเพื่อสลับ (null = ยังไม่เลือก)
   selected: { pi: number; ci: number } | null
   onCardPress: (pi: number, ci: number) => void
+  /** Optional launch-safe drag swap. Tap-to-swap remains available. */
+  onCardDrop?: (from: { pi: number; ci: number }, to: { pi: number; ci: number }) => void
   isVip: boolean
 
   // ── Optional (เผื่อ mastermind/highNoble ใน Phase 3 — initiate ยังไม่ส่ง) ──
@@ -81,6 +83,58 @@ const FRAME_H_PAD = 6      // paddingHorizontal ของกรอบทอง
 const FRAME_W_RATIO = 0.98 // กรอบทองกว้าง 98% ของจอ
 
 const AspectView = Animated.createAnimatedComponent(View)
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable)
+
+type CardPosition = { pi: number; ci: number }
+type CardRefRegistry = (position: CardPosition, ref: any | null) => void
+type DropResolver = (from: CardPosition, pageX: number, pageY: number) => void
+type DragPreview = (from: CardPosition, pageX: number, pageY: number) => void
+
+function useCardDrag(enabled: boolean, from: CardPosition, onTap: () => void, beginDrag?: () => void, previewDrop?: DragPreview, resolveDrop?: DropResolver) {
+  const x = useSharedValue(0)
+  const y = useSharedValue(0)
+  const dragging = useSharedValue(0)
+  const start = useRef({ pageX: 0, pageY: 0 })
+  const moved = useRef(false)
+  const suppressPress = useRef(false)
+  const reset = useCallback(() => {
+    x.value = withTiming(0, { duration: 150 })
+    y.value = withTiming(0, { duration: 150 })
+    dragging.value = 0
+  }, [dragging, x, y])
+  const touchHandlers = useMemo(() => enabled ? {
+    onTouchStart: (event: GestureResponderEvent) => {
+      start.current = { pageX: event.nativeEvent.pageX, pageY: event.nativeEvent.pageY }
+      moved.current = false
+      suppressPress.current = false
+      beginDrag?.()
+    },
+    onTouchMove: (event: GestureResponderEvent) => {
+      const dx = event.nativeEvent.pageX - start.current.pageX
+      const dy = event.nativeEvent.pageY - start.current.pageY
+      if (Math.abs(dx) > 6 || Math.abs(dy) > 6) moved.current = true
+      if (moved.current) {
+        dragging.value = 1
+        x.value = dx
+        y.value = dy
+        previewDrop?.(from, event.nativeEvent.pageX, event.nativeEvent.pageY)
+      }
+    },
+    onTouchEnd: (event: GestureResponderEvent) => {
+      if (moved.current) {
+        suppressPress.current = true
+        resolveDrop?.(from, event.nativeEvent.pageX, event.nativeEvent.pageY)
+      }
+      reset()
+    },
+    onTouchCancel: () => { previewDrop?.(from, Number.NaN, Number.NaN); reset() },
+  } : {}, [beginDrag, dragging, enabled, from.ci, from.pi, previewDrop, reset, resolveDrop, x, y])
+  const handlePress = useCallback(() => {
+    if (suppressPress.current) { suppressPress.current = false; return }
+    onTap()
+  }, [onTap])
+  return { x, y, dragging, touchHandlers, handlePress }
+}
 
 interface LayoutTarget { cw: number; ch: number; hardMinCw: number; minExposed: number; maxExposed: number }
 
@@ -146,13 +200,22 @@ const FreeCard: React.FC<{
   code: string; first: boolean; selected: boolean; discardMarked: boolean; winning: boolean; onPress: () => void
   cw: number; ch: number; overlapML: number; zIndex: number
   images: Record<string, any>
-}> = ({ code, first, selected, discardMarked, winning, onPress, cw, ch, overlapML, zIndex, images }) => {
+  position: CardPosition; dragEnabled: boolean; dropTarget: boolean; registerCardRef: CardRefRegistry; beginDrag?: () => void; previewDrop?: DragPreview; resolveDrop?: DropResolver
+}> = ({ code, first, selected, discardMarked, winning, onPress, cw, ch, overlapML, zIndex, images, position, dragEnabled, dropTarget, registerCardRef, beginDrag, previewDrop, resolveDrop }) => {
   const pulse = useSharedValue(1)
   useEffect(() => { pulse.value = winning ? withRepeat(withTiming(.42, { duration: 620 }), -1, true) : 1 }, [pulse, winning])
   const pulseStyle = useAnimatedStyle(() => ({ opacity: pulse.value }))
+  const drag = useCardDrag(dragEnabled, position, onPress, beginDrag, previewDrop, resolveDrop)
+  const dragStyle = useAnimatedStyle(() => ({
+    zIndex: drag.dragging.value ? 1000 : zIndex,
+    elevation: drag.dragging.value ? 30 : 0,
+    transform: [{ translateX: drag.x.value }, { translateY: drag.y.value }],
+  }))
   return (
-  <Pressable
-    onPress={onPress}
+  <AnimatedPressable
+    ref={(ref: any) => registerCardRef(position, ref)}
+    onPress={drag.handlePress}
+    {...drag.touchHandlers}
     style={[
       styles.card,
       { width: cw, height: ch },
@@ -160,6 +223,7 @@ const FreeCard: React.FC<{
       selected && styles.cardSel,
       winning && styles.cardWin,
       { zIndex },
+      dragStyle,
     ]}
   >
     {images[code]
@@ -167,7 +231,8 @@ const FreeCard: React.FC<{
       : <Text style={styles.fallbackTxt}>{code}</Text>}
     {discardMarked && <View pointerEvents="none" style={styles.discardMark}><Text style={styles.discardMarkText}>×</Text></View>}
     {winning && <Animated.View pointerEvents="none" style={[styles.cardWinGlow, pulseStyle]} />}
-  </Pressable>
+    {dropTarget && <View pointerEvents="none" style={styles.dropTargetGlow} />}
+  </AnimatedPressable>
 )}
 
 // ── ไพ่ 1 ใบในโหมด VIP (pivot-rotation fan + เด้งตอนเลือกด้วย Reanimated) ──
@@ -179,7 +244,8 @@ const FanCard: React.FC<{
   cw: number; ch: number; zIndex: number
   angleDeg: number; R: number; left: number; top: number
   images: Record<string, any>
-}> = ({ code, selected, discardMarked, winning, onPress, cw, ch, zIndex, angleDeg, R, left, top, images }) => {
+  position: CardPosition; dragEnabled: boolean; dropTarget: boolean; registerCardRef: CardRefRegistry; beginDrag?: () => void; previewDrop?: DragPreview; resolveDrop?: DropResolver
+}> = ({ code, selected, discardMarked, winning, onPress, cw, ch, zIndex, angleDeg, R, left, top, images, position, dragEnabled, dropTarget, registerCardRef, beginDrag, previewDrop, resolveDrop }) => {
   const lift = useSharedValue(0)
   // เด้งขึ้นตอนถูกเลือก (Reanimated v4 — withTiming)
   useEffect(() => {
@@ -188,6 +254,7 @@ const FanCard: React.FC<{
   const pulse = useSharedValue(1)
   useEffect(() => { pulse.value = winning ? withRepeat(withTiming(.42, { duration: 620 }), -1, true) : 1 }, [pulse, winning])
   const pulseStyle = useAnimatedStyle(() => ({ opacity: pulse.value }))
+  const drag = useCardDrag(dragEnabled, position, onPress, beginDrag, previewDrop, resolveDrop)
 
   const aStyle = useAnimatedStyle(() => ({
     // RN typing เข้มกับ transform array ที่ปนหลาย key — cast ผ่าน (ค่าถูกต้องตอน runtime)
@@ -198,7 +265,11 @@ const FanCard: React.FC<{
       { rotate: `${angleDeg}deg` },
       { translateY: -R },
       { translateY: lift.value },
+      { translateX: drag.x.value },
+      { translateY: drag.y.value },
     ] as any,
+    zIndex: drag.dragging.value ? 1000 : zIndex,
+    elevation: drag.dragging.value ? 30 : 0,
   }))
 
   return (
@@ -209,7 +280,9 @@ const FanCard: React.FC<{
       ]}
     >
       <Pressable
-        onPress={onPress}
+        ref={(ref: any) => registerCardRef(position, ref)}
+        onPress={drag.handlePress}
+        {...drag.touchHandlers}
         style={[
           styles.card,
           { width: cw, height: ch },
@@ -222,6 +295,7 @@ const FanCard: React.FC<{
           : <Text style={styles.fallbackTxt}>{code}</Text>}
         {discardMarked && <View pointerEvents="none" style={styles.discardMark}><Text style={styles.discardMarkText}>×</Text></View>}
         {winning && <Animated.View pointerEvents="none" style={[styles.cardWinGlow, pulseStyle]} />}
+        {dropTarget && <View pointerEvents="none" style={styles.dropTargetGlow} />}
       </Pressable>
     </AspectView>
   )
@@ -237,7 +311,8 @@ const PileColumn: React.FC<{
   fanAngleScale?: number
   discardMarked?: { pi: number; ci: number } | null
   winningCardKeys?: string[]
-}> = ({ cards, pi, isVip, selected, onCardPress, cw, ch, exposed, images, fanAngleScale = 1, discardMarked, winningCardKeys = [] }) => {
+  dragEnabled: boolean; dropTarget: CardPosition | null; registerCardRef: CardRefRegistry; beginDrag?: () => void; previewDrop?: DragPreview; resolveDrop?: DropResolver
+}> = ({ cards, pi, isVip, selected, onCardPress, cw, ch, exposed, images, fanAngleScale = 1, discardMarked, winningCardKeys = [], dragEnabled, dropTarget, registerCardRef, beginDrag, previewDrop, resolveDrop }) => {
   const n = cards.length
   const center = n > 1 ? (n - 1) / 2 : 0
 
@@ -269,6 +344,7 @@ const PileColumn: React.FC<{
                 angleDeg={angleDeg} R={R}
                 left={baseLeft} top={baseTop}
                 images={images}
+                position={{ pi, ci }} dragEnabled={dragEnabled} dropTarget={dropTarget?.pi === pi && dropTarget?.ci === ci} registerCardRef={registerCardRef} beginDrag={beginDrag} previewDrop={previewDrop} resolveDrop={resolveDrop}
               />
             )
           })}
@@ -295,6 +371,7 @@ const PileColumn: React.FC<{
               onPress={() => onCardPress(pi, ci)}
               cw={cw} ch={ch} overlapML={overlapML} zIndex={ci}
               images={images}
+              position={{ pi, ci }} dragEnabled={dragEnabled} dropTarget={dropTarget?.pi === pi && dropTarget?.ci === ci} registerCardRef={registerCardRef} beginDrag={beginDrag} previewDrop={previewDrop} resolveDrop={resolveDrop}
             />
           )
         })}
@@ -304,7 +381,7 @@ const PileColumn: React.FC<{
 }
 
 const PlayerHandView: React.FC<PlayerHandViewProps> = ({
-  piles, selected, onCardPress, isVip,
+  piles, selected, onCardPress, onCardDrop, isVip,
   visiblePiles = [0, 1, 2],
   revealedCards,
   cardImages = CARD_IMG,
@@ -313,6 +390,45 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
   winningCardKeys,
 }) => {
   const { width: screenW } = useWindowDimensions()
+  const [dropTarget, setDropTarget] = useState<CardPosition | null>(null)
+  const cardRefs = useRef(new Map<string, { position: CardPosition; ref: any }>())
+  const measuredCards = useRef<{ position: CardPosition; x: number; y: number; width: number; height: number }[]>([])
+  const registerCardRef = useCallback<CardRefRegistry>((position, ref) => {
+    const key = `${position.pi}:${position.ci}`
+    if (ref) cardRefs.current.set(key, { position, ref })
+    else cardRefs.current.delete(key)
+  }, [])
+  const measureCards = useCallback(() => {
+    const candidates = [...cardRefs.current.values()]
+    return Promise.all(candidates.map(entry => new Promise<{ position: CardPosition; x: number; y: number; width: number; height: number } | null>(resolve => {
+      if (!entry.ref?.measureInWindow) { resolve(null); return }
+      entry.ref.measureInWindow((x: number, y: number, width: number, height: number) => resolve({ position: entry.position, x, y, width, height }))
+    }))).then(measured => measured.filter((item): item is NonNullable<typeof item> => Boolean(item)))
+  }, [])
+  const beginDrag = useCallback(() => {
+    setDropTarget(null)
+    void measureCards().then(measured => { measuredCards.current = measured })
+  }, [measureCards])
+  const targetAt = useCallback((from: CardPosition, pageX: number, pageY: number) => {
+    const targets = measuredCards.current.filter(item => item.position.pi !== from.pi || item.position.ci !== from.ci)
+        .filter(item => pageX >= item.x && pageX <= item.x + item.width && pageY >= item.y && pageY <= item.y + item.height)
+    return targets.at(-1)?.position ?? null
+  }, [])
+  const previewDrop = useCallback<DragPreview>((from, pageX, pageY) => {
+    const target = targetAt(from, pageX, pageY)
+    setDropTarget(current => current?.pi === target?.pi && current?.ci === target?.ci ? current : target)
+  }, [targetAt])
+  const resolveDrop = useCallback<DropResolver>((from, pageX, pageY) => {
+    const target = targetAt(from, pageX, pageY)
+    setDropTarget(null)
+    if (target) { onCardDrop?.(from, target); return }
+    // A very fast drag can finish before native measurement callbacks return.
+    void measureCards().then(measured => {
+      measuredCards.current = measured
+      const lateTarget = targetAt(from, pageX, pageY)
+      if (lateTarget) onCardDrop?.(from, lateTarget)
+    })
+  }, [measureCards, onCardDrop, targetAt])
 
   // กองที่จะแสดงจริง (รองรับ Fog of War ของ Tier บนใน Phase 3)
   const shown = [0, 1, 2].filter(i => visiblePiles.includes(i))
@@ -371,6 +487,7 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
         fanAngleScale={handFanAngleScale}
         discardMarked={discardMarked}
         winningCardKeys={winningCardKeys?.[p.pi]}
+        dragEnabled={Boolean(onCardDrop)} dropTarget={dropTarget} registerCardRef={registerCardRef} beginDrag={beginDrag} previewDrop={previewDrop} resolveDrop={resolveDrop}
       />
     )
 
@@ -404,6 +521,7 @@ const PlayerHandView: React.FC<PlayerHandViewProps> = ({
           images={cardImages}
           discardMarked={discardMarked}
           winningCardKeys={winningCardKeys?.[pi]}
+          dragEnabled={Boolean(onCardDrop)} dropTarget={dropTarget} registerCardRef={registerCardRef} beginDrag={beginDrag} previewDrop={previewDrop} resolveDrop={resolveDrop}
         />
   )
 
@@ -464,6 +582,7 @@ const styles = StyleSheet.create({
   cardSelVip: { borderColor: '#6ec87a', borderWidth: 2 }, // เด้งทำผ่าน Reanimated แทน transform static
   cardWin: { borderColor: '#FFF2A5', borderWidth: 2, shadowColor: '#FFD469', shadowOpacity: .9, shadowRadius: 9, elevation: 7 },
   cardWinGlow: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, borderWidth: 2, borderColor: '#FFF7C7', borderRadius: 4, backgroundColor: 'rgba(255,211,105,.17)' },
+  dropTargetGlow: { ...StyleSheet.absoluteFill, borderWidth: 3, borderColor: '#7DE7FF', borderRadius: 4, backgroundColor: 'rgba(125,231,255,.22)', shadowColor: '#FFD76A', shadowOpacity: 1, shadowRadius: 10, elevation: 12 },
   discardMark: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(52,5,5,0.24)' },
   discardMarkText: { color: '#FF4D4D', fontSize: 42, lineHeight: 44, fontWeight: '900', textShadowColor: '#240000', textShadowRadius: 3 },
   fallbackTxt: { fontSize: 8 },

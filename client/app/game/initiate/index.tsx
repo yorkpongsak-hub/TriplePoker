@@ -376,6 +376,8 @@ const GameTableLive: React.FC = () => {
   const [allCards, setAllCards]       = useState<Record<string, Record<number, string[]>>>({})
   const [pileWinners, setPileWinners] = useState<Record<number, string>>({})
   const [pileRevealShowcases, setPileRevealShowcases] = useState<TierCPlusReveal[]>([])
+  const [showdownPanelReady, setShowdownPanelReady] = useState(false)
+  const panelCountdownStartedRef = useRef(false)
   const [hasFoul, setHasFoul]         = useState<Record<string, boolean>>({})
   // Haptic เตือน Foul ของฉันเอง — ยิงครั้งเดียวตอน hasFoul[PLAYER_ID] เปลี่ยนจาก false → true
   useEffect(() => {
@@ -502,9 +504,15 @@ const GameTableLive: React.FC = () => {
     const hasTripleSweep = Boolean(winnersReady && pileWinners[1] === pileWinners[2] && pileWinners[2] === pileWinners[3])
     if (hasTripleSweep && !jackpotVfxComplete) return
     setShowResult(true)
-    startContinueCountdown()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(pileWinners), JSON.stringify(hasFoul), jackpotVfxComplete])
+
+  useEffect(() => {
+    if (!showResult || !showdownPanelReady || panelCountdownStartedRef.current) return
+    panelCountdownStartedRef.current = true
+    startContinueCountdown()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showResult, showdownPanelReady])
 
   // ── Connect Socket (ครั้งเดียว)
   useEffect(() => {
@@ -594,6 +602,9 @@ const GameTableLive: React.FC = () => {
       setRoundNumber(data.roundNumber)
       setIsReady(false); setSortDone(false); setSelected(null)
       setAllCards({}); setPileWinners({})
+      setPileRevealShowcases([])
+      setShowdownPanelReady(false)
+      panelCountdownStartedRef.current = false
       setHasFoul({}); setFoulReasons({}); setTokenDeltas({})
       setShowResult(false)
       setJackpotWinner(null); setJackpotVfxComplete(false)
@@ -717,13 +728,15 @@ const GameTableLive: React.FC = () => {
       })
 
       setAllCards(newAllCards)
-      setPileRevealShowcases(results.filter((pile: any) => (pile.pileNumber === 1 || pile.pileNumber === 2) && pile.winner && pile.winnerBestFive?.length === 5).map((pile: any) => ({
+      const showcases = results.filter((pile: any) => (pile.pileNumber === 1 || pile.pileNumber === 2 || pile.pileNumber === 3) && pile.winner && pile.winnerBestFive?.length === 5).map((pile: any) => ({
         key: `${data.roomId ?? ROOM_ID}:${data.roundNumber ?? Date.now()}:g${pile.pileNumber}`,
         pile: pile.pileNumber, winnerId: pile.winner, winnerBestFive: pile.winnerBestFive,
         communityCards: pile.communityCards ?? [], handRanking: pile.winnerHandRank ?? 'WIN',
         missionScores: Object.fromEntries(Object.entries(data.scoring ?? {}).map(([id, score]: [string, any]) => [id, score?.piles?.[pile.pileNumber - 1]?.missionScore ?? 0])),
         localCombo: pile.pileNumber === 2 && data.scoring?.[PLAYER_ID]?.comboKind ? { kind: data.scoring[PLAYER_ID].comboKind, bonus: data.scoring[PLAYER_ID].combo ?? 0 } : undefined,
-      })))
+      })).sort((a: TierCPlusReveal, b: TierCPlusReveal) => a.pile - b.pile)
+      setPileRevealShowcases(showcases)
+      setShowdownPanelReady(showcases.length === 0)
       setPileWinners(newWinners)
       setHandRanks(newHandRanks)
       setHasFoul(newFouled)
@@ -945,6 +958,19 @@ const GameTableLive: React.FC = () => {
     playCardArrange2()
   }, [isReady, phase, selected, piles])
 
+  const handleCardDrop = useCallback((from: { pi: number; ci: number }, to: { pi: number; ci: number }) => {
+    if (isReady || phase !== 'arrangement' || (from.pi === to.pi && from.ci === to.ci)) return
+    setPiles(current => {
+      if (!current[from.pi]?.[from.ci] || !current[to.pi]?.[to.ci]) return current
+      const next = current.map(pile => [...pile]) as [CardData[], CardData[], CardData[]]
+      ;[next[from.pi][from.ci], next[to.pi][to.ci]] = [next[to.pi][to.ci], next[from.pi][from.ci]]
+      return next
+    })
+    setSelected(null)
+    setSortDone(false)
+    playCardArrange2()
+  }, [isReady, phase])
+
   const handleAutoSort = () => {
     if (roundNumber !== 1 || phase !== 'arrangement') return
     if (!comm.p1[0]) return
@@ -981,6 +1007,8 @@ const GameTableLive: React.FC = () => {
     blinkAnim.stopAnimation(); blinkAnim.setValue(1)
     btnBlinkAnim.stopAnimation(); btnBlinkAnim.setValue(1)
     setShowResult(false)
+    setShowdownPanelReady(false)
+    panelCountdownStartedRef.current = false
     const adTicket = profitableAdTicketRef.current
     profitableAdTicketRef.current = undefined
     await showProfitableAiInterstitial(adTicket, accessToken)
@@ -993,6 +1021,11 @@ const GameTableLive: React.FC = () => {
       socketRef.current?.emit('player_continue', { roomId: ROOM_ID, playerId: PLAYER_ID })
     })
   }
+
+  const finishPileRevealSequence = useCallback(() => {
+    setPileRevealShowcases([])
+    setShowdownPanelReady(true)
+  }, [])
 
   // auto continue ย้ายไปทำใน startContinueCountdown interval แทน (เลี่ยง re-render)
 
@@ -1322,7 +1355,7 @@ const GameTableLive: React.FC = () => {
   // =================================================================
   return (
     <View style={[s.root, isWeb && s.webOuter]}>
-      <TierWelcomeCharacter playerId={PLAYER_ID} tierId="initiate" />
+      <TierWelcomeCharacter playerId={PLAYER_ID} tierId="initiate" ready={phase === 'arrangement'} />
       <GameServerStatusLight socketRef={socketRef} />
       <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" />
       <View style={[s.gameContainer, isWeb && s.webFrame]}>
@@ -1731,6 +1764,7 @@ const GameTableLive: React.FC = () => {
                   piles={piles}
                   selected={selected}
                   onCardPress={handleCardPress}
+                  onCardDrop={!isReady && phase === 'arrangement' ? handleCardDrop : undefined}
                   isVip={isVip}
                 />
               </View>
@@ -1776,14 +1810,14 @@ const GameTableLive: React.FC = () => {
 
         </SharedGameTableSurface>
         {/* ── SHOWDOWN RESULT (กลางจอ) — Feedback C5: ครอบด้วยพื้นหลัง free/vip ชุดเดียวกับ Profile/Lobby ── */}
-        {showResult && pileRevealShowcases.length === 0 && (phase === 'showdown' || phase === 'result') && (
+        {showResult && showdownPanelReady && pileRevealShowcases.length === 0 && (phase === 'showdown' || phase === 'result') && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: -200, zIndex: 200 }}>
             <ImageBackground source={isVip ? SHOWDOWN_BG_VIP : SHOWDOWN_BG_FREE} resizeMode="cover" style={{ flex: 1, padding: 12 }}>
               <ShowdownResult />
             </ImageBackground>
           </View>
         )}
-        <TierCPlusPileReveal reveals={pileRevealShowcases} localPlayerId={PLAYER_ID} playerIds={[PLAYER_ID, ...aiList.map(ai => ai.id)]} localPiles={piles} winnerName={id => id === PLAYER_ID ? myDisplayName : (aiList.find(ai => ai.id === id)?.name ?? id)} onSequenceComplete={() => setPileRevealShowcases([])} />
+        <TierCPlusPileReveal reveals={pileRevealShowcases} localPlayerId={PLAYER_ID} playerIds={[PLAYER_ID, ...aiList.map(ai => ai.id)]} localPiles={piles} winnerName={id => id === PLAYER_ID ? myDisplayName : (aiList.find(ai => ai.id === id)?.name ?? id)} onSequenceComplete={finishPileRevealSequence} />
         <ServerLog socket={socketRef.current} onMonarchWin={setMonarchWinner} />
       </View>
     </View>

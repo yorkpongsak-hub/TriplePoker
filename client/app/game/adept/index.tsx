@@ -980,6 +980,17 @@ const GameTableLive: React.FC = () => {
     playCardArrange2()
   }, [isReady, phase, selected, piles])
 
+  const handleCardDrop = useCallback((from: { pi: number; ci: number }, to: { pi: number; ci: number }) => {
+    if (isReady || phase !== 'arrangement' || (from.pi === to.pi && from.ci === to.ci)) return
+    setPiles(current => {
+      if (!current[from.pi]?.[from.ci] || !current[to.pi]?.[to.ci]) return current
+      const next = current.map(pile => [...pile]) as [CardData[], CardData[], CardData[]]
+      ;[next[from.pi][from.ci], next[to.pi][to.ci]] = [next[to.pi][to.ci], next[from.pi][from.ci]]
+      return next
+    })
+    setSelected(null); setSortDone(false); playCardArrange2()
+  }, [isReady, phase])
+
   // Auto Sort (Adept เสีย fee ทุกครั้ง ไม่มีรอบฟรี - มติลุงเยาะ 2026-07-25)
   // Server-authoritative: ต้องขออนุญาต + ให้ server หัก fee เข้า Fee & Rake ก่อน ถึงจะจัดไพ่ให้จริง
   // (ห้ามจัดไพ่ก่อนแล้วค่อยแจ้ง server ไม่งั้นผู้เล่นได้ของฟรีเมื่อ request ล้มเหลว)
@@ -1412,7 +1423,7 @@ const GameTableLive: React.FC = () => {
   // =================================================================
   return (
     <View style={[s.root, isWeb && s.webOuter]}>
-      <TierWelcomeCharacter playerId={PLAYER_ID} tierId="adept" />
+      <TierWelcomeCharacter playerId={PLAYER_ID} tierId="adept" ready={phase === 'arrangement'} />
       <GameServerStatusLight socketRef={socketRef} />
       <CharacterBarkBubble bark={bark} />
       <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" />
@@ -1827,6 +1838,7 @@ const GameTableLive: React.FC = () => {
                   piles={piles}
                   selected={selected}
                   onCardPress={handleCardPress}
+                  onCardDrop={!isReady && phase === 'arrangement' ? handleCardDrop : undefined}
                   isVip={isVip}
                 />
               </View>

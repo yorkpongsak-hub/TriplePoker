@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Animated, Image, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
+import { Animated, Image, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
 import { audio } from '../../audio'
 import { registerTierEntry, TIER_WELCOME_NAMES, type LaunchTierId, type TierEntryGreeting } from '../../game/tierWelcome'
 
 const SHEET = require('../../../assets/characters/tier_welcome_character_sheet.png')
+const CHILD_VOICE_RATE = .86
+const CHILD_VOICE_PITCH = 1.48
 type Position = 'center' | 'left' | 'right'
 type SpeechModule = typeof import('expo-speech')
 
@@ -22,7 +24,7 @@ function getSpeechModule(): SpeechModule | null {
 const randomPosition = (): Position => ['center', 'left', 'right'][Math.floor(Math.random() * 3)] as Position
 const jitter = (amount: number) => Math.round((Math.random() * 2 - 1) * amount)
 
-export function TierWelcomeCharacter({ playerId, tierId }: { playerId?: string; tierId: LaunchTierId }) {
+export function TierWelcomeCharacter({ playerId, tierId, ready }: { playerId?: string; tierId: LaunchTierId; ready: boolean }) {
   const { width } = useWindowDimensions()
   const [visible, setVisible] = useState(false)
   const [frame, setFrame] = useState(0)
@@ -82,7 +84,10 @@ export function TierWelcomeCharacter({ playerId, tierId }: { playerId?: string; 
         if (speech) {
           spoke.current = true
           speech.speak(nextMessage, {
-            language: 'en-US', rate: .92, pitch: 1.12, volume: settings.master,
+            language: 'en-US',
+            rate: CHILD_VOICE_RATE,
+            pitch: CHILD_VOICE_PITCH,
+            volume: settings.master,
           })
         }
       }
@@ -102,7 +107,7 @@ export function TierWelcomeCharacter({ playerId, tierId }: { playerId?: string; 
 
   useEffect(() => {
     let active = true
-    if (playerId) {
+    if (playerId && ready) {
       registerTierEntry(playerId, tierId)
         .then(greeting => { if (active && greeting !== 'none') play(greeting) })
         .catch(error => console.warn('[tier-welcome] persistence failed', error))
@@ -112,7 +117,7 @@ export function TierWelcomeCharacter({ playerId, tierId }: { playerId?: string; 
       clearTimers()
       if (spoke.current) getSpeechModule()?.stop()
     }
-  }, [clearTimers, play, playerId, tierId])
+  }, [clearTimers, play, playerId, ready, tierId])
 
   const frameWidth = Math.min(190, Math.max(132, width * .39))
   const frameHeight = frameWidth * 2
@@ -122,11 +127,6 @@ export function TierWelcomeCharacter({ playerId, tierId }: { playerId?: string; 
 
   return (
     <>
-      {__DEV__ && !visible ? (
-        <Pressable accessibilityRole="button" accessibilityLabel="Replay Tier Welcome" onPress={() => play('welcome')} style={styles.debugButton}>
-          <Text style={styles.debugText}>Replay Tier Welcome</Text>
-        </Pressable>
-      ) : null}
       {visible ? (
         <View accessibilityViewIsModal accessibilityLabel={message} style={styles.overlay}>
           <Animated.View style={[styles.characterGroup, {
@@ -176,10 +176,4 @@ const styles = StyleSheet.create({
   },
   bubbleText: { color: '#30242b', fontSize: 15, lineHeight: 18, fontWeight: '800', textAlign: 'center' },
   heart: { color: '#ec5f91', fontSize: 13, marginTop: 1 },
-  debugButton: {
-    position: 'absolute', top: 50, right: 8, zIndex: 49000, elevation: 49000,
-    paddingHorizontal: 9, paddingVertical: 6, borderRadius: 8,
-    borderWidth: 1, borderColor: '#ff91bd', backgroundColor: 'rgba(45,20,38,.86)',
-  },
-  debugText: { color: '#ffd2e3', fontSize: 9, fontWeight: '800' },
 })

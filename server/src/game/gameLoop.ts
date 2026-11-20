@@ -874,7 +874,7 @@ export async function submitArrangement(
     pileResults: [
       { pileNumber: 1, arrangements: revealArrangements(allArrangements, 1), winner: p1Winner, winnerHandRank: hand1W ? handRankLabel(hand1W) : '', winnerBestFive: p1Winner ? [...allArrangements[p1Winner].pile1, ...community.row1].map(cardKey) : [], communityCards: community.row1.map(cardKey), fouled },
       { pileNumber: 2, arrangements: revealArrangements(allArrangements, 2), winner: p2Winner, winnerHandRank: hand2W ? handRankLabel(hand2W) : '', winnerBestFive: hand2W?.bestFive.map(cardKey) ?? [], communityCards: community.row2.map(cardKey), fouled },
-      { pileNumber: 3, arrangements: revealArrangements(allArrangements, 3), winner: p3Winner, winnerHandRank: hand3W ? handRankLabel(hand3W) : '', fouled },
+      { pileNumber: 3, arrangements: revealArrangements(allArrangements, 3), winner: p3Winner, winnerHandRank: hand3W ? handRankLabel(hand3W) : '', winnerBestFive: hand3W?.bestFive.map(cardKey) ?? [], communityCards: community.row3.map(cardKey), fouled },
     ],
     missions:state.missions,scoring,pileTokenRewards,
     // Token Flow Panel — เฉพาะ Tier C (Adept ไม่ได้รับฟิลด์ชุดนี้ พฤติกรรมเดิมทุกประการ)
@@ -2873,7 +2873,7 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
     pileResults: [
       { pileNumber: 1, arrangements: revealArrangements(allArrangements, 1), winner: p1Winner, winnerHandRank: hand1W ? handRankLabel(hand1W) : '', winnerBestFive: p1Winner ? [...allArrangements[p1Winner].pile1, ...community.row1].map(cardKey) : [], communityCards: community.row1.map(cardKey), fouled },
       { pileNumber: 2, arrangements: revealArrangements(allArrangements, 2), winner: p2Winner, winnerHandRank: hand2W ? handRankLabel(hand2W) : '', winnerBestFive: hand2W?.bestFive.map(cardKey) ?? [], communityCards: community.row2.map(cardKey), fouled },
-      { pileNumber: 3, arrangements: revealArrangements(allArrangements, 3), winner: p3Winner, winnerHandRank: hand3W ? handRankLabel(hand3W) : '', fouled },
+      { pileNumber: 3, arrangements: revealArrangements(allArrangements, 3), winner: p3Winner, winnerHandRank: hand3W ? handRankLabel(hand3W) : '', winnerBestFive: hand3W?.bestFive.map(cardKey) ?? [], communityCards: community.row3.map(cardKey), fouled },
     ],
     tokenDeltas:   deltas,
     tokenBalance:  state.tokenBalance,

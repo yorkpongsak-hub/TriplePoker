@@ -151,9 +151,16 @@ export default function RootLayout() {
       console.log('[ESCROW] no pending match marker')
       return
     }
+  const wasOnGameRouteRef = useRef(GAME_TABLE_ROUTES.has(segments.join('/')))
 
     settlementCheckRunningRef.current = true
     let pending: PendingMatch | null = null
+    // A marker also represents the match currently being played. Never poll
+    // for its settlement while the player is still on a live table.
+    if (GAME_TABLE_ROUTES.has(segmentsRef.current)) {
+      settlementRetryRef.current = null
+      return
+    }
     try {
       pending = JSON.parse(raw) as PendingMatch
       console.log('[ESCROW] checking pending settlement:', pending.tier, pending.startedAt)
@@ -164,6 +171,7 @@ export default function RootLayout() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ since: pending.startedAt }),
+    if (GAME_TABLE_ROUTES.has(segmentsRef.current)) return
       })
       const result = await response.json()
       const settlement = result?.settlement
@@ -226,6 +234,18 @@ export default function RootLayout() {
           .then(res => res.json())
           .then(async (data: { recovered?: boolean }) => {
             if (data?.recovered) {
+
+  // If a match route was hiding settlement polling, check once after leaving
+  // the table. A normally completed match has already cleared its marker.
+  useEffect(() => {
+    const isOnGameRoute = GAME_TABLE_ROUTES.has(segments.join('/'))
+    const wasOnGameRoute = wasOnGameRouteRef.current
+    wasOnGameRouteRef.current = isOnGameRoute
+    if (!session?.access_token || !wasOnGameRoute || isOnGameRoute) return
+    void checkPendingSettlement()
+  // checkPendingSettlement intentionally reads the latest session/route refs.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [segments.join('/'), session?.access_token])
               await refreshProfile()
               Alert.alert('Tokens Returned', 'Tokens from your unfinished match have been returned.')
             }

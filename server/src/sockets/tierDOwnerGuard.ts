@@ -11,7 +11,13 @@ export function tierDOwnerRegistrar(socket: Pick<Socket,'on'|'emit'|'handshake'>
         if(typeof ack==='function')ack(false)
         socket.emit('tier_d_error',{message:'Unauthorized Tier D session. Please sign in again.'});return
       }
-      try{await handler(data,ack)}catch{
+      try{await handler(data,ack)}catch(error){
+        console.error('[TIER_D_ACTION_FAILED]', {
+          event,
+          roomId: data?.roomId,
+          playerId: data?.playerId,
+          error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : error,
+        })
         if(typeof ack==='function')ack(false)
         socket.emit('tier_d_error',{message:'Tier D action failed.'})
       }

@@ -6,7 +6,7 @@ import ComboCardBurst from '../vfx/ComboCardBurst'
 
 export type TierCPlusReveal = {
   key: string
-  pile: 1 | 2
+  pile: 1 | 2 | 3
   winnerId: string
   winnerBestFive: string[]
   communityCards: string[]
@@ -15,7 +15,7 @@ export type TierCPlusReveal = {
   localCombo?: { kind: 'COMBO' | 'SUPER_COMBO'; bonus: number }
 }
 
-/** Runs the canonical Best-5 flip presentation used by Tier D for G1/G2. */
+/** Runs the canonical Best-5 flip presentation for each available winning pile. */
 export function TierCPlusPileReveal({ reveals, localPlayerId, playerIds, localPiles, localIsVip = false, winnerName, waitForG1Commit = false, onCommitG1, onG2Complete, onSequenceComplete }: { reveals: TierCPlusReveal[]; localPlayerId: string; playerIds: string[]; localPiles: readonly (readonly { key: string }[])[]; localIsVip?: boolean; winnerName: (winnerId: string) => string; waitForG1Commit?: boolean; onCommitG1?: () => void; onG2Complete?: () => void; onSequenceComplete: () => void }) {
   const [index, setIndex] = useState(0)
   const [commitReady, setCommitReady] = useState(false)
@@ -35,9 +35,9 @@ export function TierCPlusPileReveal({ reveals, localPlayerId, playerIds, localPi
   const centerCards = reveal.winnerBestFive.filter(card => reveal.communityCards.includes(card))
   const winnerCards = reveal.winnerBestFive.filter(card => !reveal.communityCards.includes(card))
 
-  const remainingPiles = reveal.pile === 1 ? [2, 3] : [3]
+  const remainingPiles = reveal.pile === 1 ? [2, 3] : reveal.pile === 2 ? [3] : []
   const localCards = remainingPiles.flatMap(pile => (localPiles[pile - 1] ?? []).map(card => card.key))
-  const remainingCount = reveal.pile === 1 ? 8 : 5
+  const remainingCount = reveal.pile === 1 ? 8 : reveal.pile === 2 ? 5 : 0
   return <View pointerEvents="box-none" style={styles.layer}>
     <RemainingHands localCards={localCards} localIsVip={localIsVip} opponents={playerIds.filter(id => id !== localPlayerId)} remainingCount={remainingCount} />
     {Object.entries(reveal.missionScores ?? {}).filter(([, score]) => score > 0).map(([playerId, score]) => <MissionScoreFloat key={`${reveal.key}:${playerId}`} eventKey={`${reveal.key}:${playerId}`} score={score} seat={playerId === localPlayerId ? 'user' : Math.max(0, playerIds.filter(id => id !== localPlayerId).indexOf(playerId)) as 0|1|2} />)}
@@ -49,6 +49,7 @@ export function TierCPlusPileReveal({ reveals, localPlayerId, playerIds, localPi
       handRanking={reveal.handRanking}
       winnerName={winnerName(reveal.winnerId)}
       winnerOrigin={reveal.winnerId === localPlayerId ? 'bottom' : 'top'}
+      completionHoldMs={reveal.pile === 3 ? 5000 : 3200}
       onComplete={() => {
         if (waitForG1Commit && reveal.pile === 1) { setCommitReady(true); return }
         if (index + 1 >= reveals.length) { onSequenceComplete(); if (reveal.pile === 2) onG2Complete?.() }

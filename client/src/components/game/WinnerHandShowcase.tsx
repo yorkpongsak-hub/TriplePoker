@@ -4,10 +4,10 @@ import { AnimatedCardFlip } from './AnimatedCardFlip'
 import { handRankKey, t } from '../../i18n'
 import { useI18n } from '../../i18n/store'
 
-export type WinnerHandShowcaseProps = { pile: 1 | 2 | 3; centerCards: string[]; winnerCards: string[]; handRanking: string; winnerName?: string; winnerOrigin: 'bottom' | 'top'; isCombo?: boolean; isSuperCombo?: boolean; onComplete: () => void }
+export type WinnerHandShowcaseProps = { pile: 1 | 2 | 3; centerCards: string[]; winnerCards: string[]; handRanking: string; winnerName?: string; winnerOrigin: 'bottom' | 'top'; isCombo?: boolean; isSuperCombo?: boolean; completionHoldMs?: number; onComplete: () => void }
 
 /** Presentation-only. All cards, winner identity and hand label are canonical inputs. */
-export function WinnerHandShowcase({ pile, centerCards, winnerCards, handRanking, winnerName, winnerOrigin, isCombo, isSuperCombo, onComplete }: WinnerHandShowcaseProps) {
+export function WinnerHandShowcase({ pile, centerCards, winnerCards, handRanking, winnerName, winnerOrigin, isCombo, isSuperCombo, completionHoldMs = 3200, onComplete }: WinnerHandShowcaseProps) {
   const locale = useI18n(state => state.locale)
   const label = useRef(new Animated.Value(0)).current
   const rankLeadMs = 200
@@ -21,9 +21,9 @@ export function WinnerHandShowcase({ pile, centerCards, winnerCards, handRanking
     Animated.timing(label, { toValue: 1, duration: 160, useNativeDriver: true }).start()
     // Keep the assembled canonical hand on the felt long enough to read before
     // the existing all-player showdown panel takes over.
-    const complete = setTimeout(() => onCompleteRef.current(), centerDuration + winnerDuration + 3200)
+    const complete = setTimeout(() => onCompleteRef.current(), centerDuration + winnerDuration + completionHoldMs)
     return () => { clearTimeout(complete); label.stopAnimation() }
-  }, [centerCards.length, winnerCards.length, label])
+  }, [centerCards.length, completionHoldMs, winnerCards.length, label])
   const winnerDelay = rankLeadMs + 550 + Math.max(0, centerCards.length - 1) * 130
   const originY = winnerOrigin === 'bottom' ? 210 : -210
   // The finished hand always occupies the G1 showcase slot.  G2/G3 therefore
