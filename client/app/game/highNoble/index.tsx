@@ -484,8 +484,6 @@ const GameTableLive: React.FC = () => {
   const [victoryVfx, setVictoryVfx] = useState<VictoryTier | null>(null)
   const [matchResult, setMatchResult]   = useState<any>(null)
 
-  // ── Discard
-  const [showDiscard, setShowDiscard]         = useState(false)
   const [buyInAmount, setBuyInAmount]       = useState(0)
   const [showLockup, setShowLockup]         = useState(false)
   // Patch Blind Auction: state ทั้งหมดสำหรับประมูล
@@ -510,8 +508,6 @@ const GameTableLive: React.FC = () => {
   // Patch 2026-07-18: เก็บ setTimeout id ของ pileFadeAnim ไว้ clear ได้ตอนออก phase/unmount ก่อน
   // timeout ทำงาน (เดิมไม่มีทางยกเลิก timeout ที่รอ start animation อยู่เลย)
   const pileFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // Patch: ปุ่ม Confirm discard กะพริบตอนเหลือ 5 วิสุดท้าย
-  const confirmBlinkAnim = useRef(new Animated.Value(1)).current
   // Patch Grand Finale: state ทั้งหมด
   const [gfTurnPlayerId, setGfTurnPlayerId]   = useState<string | null>(null)
   const [gfRoundNumber, setGfRoundNumber]     = useState<1 | 2>(1)
@@ -535,21 +531,7 @@ const GameTableLive: React.FC = () => {
   // Patch: Animated.Value สำหรับ Health Bar — ไม่ trigger re-render ทั้ง tree
   const gfHealthAnim = useRef(new Animated.Value(1)).current
   const gfCallAmount = useRef(0)
-  // Patch Discard Phase: state ใหม่ — ไพ่มาจาก Server (5-6 ใบ) ไม่ใช่ piles[2] เดิม
-  const [discardHandKeys, setDiscardHandKeys]   = useState<string[]>([])
-  const [discardSuggested, setDiscardSuggested] = useState<string[]>([])
-  const [discardTimeLeft, setDiscardTimeLeft]   = useState(20)
-  // Haptic เตือน Discard timer ใกล้หมดเวลา — ยิงตอนแตะ 3s พอดี (จุดเดียวกับที่ discardSub text เปลี่ยนสีแดง)
-  useEffect(() => {
-    if (discardTimeLeft === 3) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {})
-  }, [discardTimeLeft])
-  const discardTimerRef = useRef<any>(null)
-  const [discardSelected, setDiscardSelected] = useState<number[]>([])
-  // Patch (บั๊กแก้) High Noble: Discard แบบ 3 กอง — เลือกทิ้งจากกองไหนก็ได้ใน 11-12 ใบ ให้เหลือกองละ 3 ใบเป๊ะ
-  const [isHNDiscard, setIsHNDiscard] = useState(false)
-  const [discardPiles, setDiscardPiles] = useState<{ pile1: string[]; pile2: string[]; pile3: string[] }>({ pile1: [], pile2: [], pile3: [] })
-  const [discardNeed, setDiscardNeed] = useState<{ pile1: number; pile2: number; pile3: number }>({ pile1: 0, pile2: 0, pile3: 0 })
-  const [discardSelByPile, setDiscardSelByPile] = useState<{ pile1: number[]; pile2: number[]; pile3: number[] }>({ pile1: [], pile2: [], pile3: [] })
+
 
   // ── VFX
   const winPulse      = useRef(new Animated.Value(1)).current
@@ -723,7 +705,6 @@ const GameTableLive: React.FC = () => {
       setContinueCountdown(SHOWDOWN_TIMER_SEC)
       continueValRef.current = SHOWDOWN_TIMER_SEC
       if (continueTimerRef.current) clearInterval(continueTimerRef.current)
-      setShowDiscard(false); setDiscardSelected([])
       // Patch 2026-07-18: ต้อง stopAnimation ก่อน setValue เสมอ กัน native-driven timing ที่ยังค้างจาก
       // handleContinue ชนกัน — กดไพ่ให้ซ่อน (0) ตอนเริ่มรอบใหม่ ไม่ใช่ 1 (fadeCards bind ค้างแล้ว ไม่มี
       // literal ternary คอยบังตอน dealing อีกต่อไป — ค่านี้คือตัวซ่อนไพ่จริงตอน dealing)
@@ -1068,7 +1049,6 @@ const GameTableLive: React.FC = () => {
 
       const toCardObjs = (keys: string[], prefix: string) => keys.map((k: string, i: number) => ({ id: `${prefix}${i}`, key: k }))
       const submittedArrangement = !!data.ownSubmitted?.arrangement
-      const submittedDiscard = !!data.ownSubmitted?.discard
 
       // ── มือตัวเอง ต่อ phase (Q9: submit แล้ว → myArrangement ที่จัดแล้ว, ยังไม่ submit → myCards ดิบ) ──
       if (mappedPhase === 'arrangement') {
@@ -1158,116 +1138,12 @@ const GameTableLive: React.FC = () => {
         if (currentTurnId) setGfTimeLeft(10) // เต็มใหม่ตาม design ล็อก (ค่า default เดียวกับ useState เดิม)
       }
 
-      // ── Discard-in-progress (D3): ยังไม่ submit discard → derive discardNeed จาก myArrangement เอง
-      // (สูตรเดียวกับที่ server ใช้คำนวณ needDiscard: pileN.length - 3) ไม่ต้องรอ field ใหม่จาก server ──
-      if (mappedPhase === 'discard' && !submittedDiscard && data.myArrangement) {
-        const arr = data.myArrangement
-        setDiscardPiles({ pile1: arr.pile1, pile2: arr.pile2, pile3: arr.pile3 })
-        const need = {
-          pile1: Math.max(0, arr.pile1.length - 3),
-          pile2: Math.max(0, arr.pile2.length - 3),
-          pile3: Math.max(0, arr.pile3.length - 3),
-        }
-        setDiscardNeed(need)
-        const lastIdx = (len: number, n: number) => Array.from({ length: n }, (_, i) => len - n + i)
-        setDiscardSelByPile({
-          pile1: lastIdx(arr.pile1.length, need.pile1),
-          pile2: lastIdx(arr.pile2.length, need.pile2),
-          pile3: lastIdx(arr.pile3.length, need.pile3),
-        })
-        setIsHNDiscard(true)
-        setShowDiscard(true)
-        const totalSec = 20 // เต็มใหม่ตาม design ล็อก (ค่าเดียวกับ discardTimer.highNoble default)
-        setDiscardTimeLeft(totalSec)
-        if (discardTimerRef.current) clearInterval(discardTimerRef.current)
-        let left = totalSec
-        discardTimerRef.current = setInterval(() => {
-          left -= 1
-          setDiscardTimeLeft(Math.max(0, left))
-          if (left <= 0) clearInterval(discardTimerRef.current)
-        }, 1000)
-      }
     }
     socket.on('game_state_snapshot', applySnapshot)
     socket.on('hn_card_zones', (zones: HNCardZones) => setCardZones(zones))
 
-    // Patch Discard Phase: เริ่มเลือกทิ้งไพ่
-    socket.on('discard_phase_start', (data: any) => {
-      const hand: string[] = data.hand ?? []
-      const suggested: string[] = data.suggestedKeep ?? []
-      setDiscardHandKeys(hand)
-      setDiscardSuggested(suggested)
-      // default: เลือกทิ้งไพ่ที่ "ไม่ใช่" suggestedKeep (กากบาทคำแนะนำ)
-      const defaultDiscardIdx = hand
-        .map((k, i) => ({ k, i }))
-        .filter(({ k }) => !suggested.includes(k))
-        .map(({ i }) => i)
-      setDiscardSelected(defaultDiscardIdx)
-      setShowDiscard(true)
-      setPhase('discard')
-      const totalSec = Math.ceil((data.decisionTimeMs ?? 10000) / 1000)
-      setDiscardTimeLeft(totalSec)
-      if (discardTimerRef.current) clearInterval(discardTimerRef.current)
-      let left = totalSec
-      discardTimerRef.current = setInterval(() => {
-        left -= 1
-        setDiscardTimeLeft(Math.max(0, left))
-        if (left <= 5 && left > 0) {
-          // Patch 2026-07-18: stopAnimation ก่อน start ใหม่ทุกครั้ง กัน tick ถี่เกินจน animation
-          // ก่อนหน้ายังไม่จบซ้อนกัน ("Animated node already attached to a view")
-          confirmBlinkAnim.stopAnimation()
-          Animated.sequence([
-            Animated.timing(confirmBlinkAnim, { toValue: 0.3, duration: 350, useNativeDriver: true }),
-            Animated.timing(confirmBlinkAnim, { toValue: 1,   duration: 350, useNativeDriver: true }),
-          ]).start()
-        }
-        if (left <= 0) clearInterval(discardTimerRef.current)
-      }, 1000)
-    })
-    // Patch (บั๊กแก้) High Noble: เปิด Discard แบบ 3 กอง
-    socket.on('discard_phase_start_highnoble', (data: any) => {
-      setIsHNDiscard(true)
-      const p1 = data.pile1 ?? []
-      const p2 = data.pile2 ?? []
-      const p3 = data.pile3 ?? []
-      const need = data.needDiscard ?? { pile1: 0, pile2: 0, pile3: 0 }
-      setDiscardPiles({ pile1: p1, pile2: p2, pile3: p3 })
-      setDiscardNeed(need)
-      // Patch: default เลือกทิ้ง "ใบสุดท้าย" ของแต่ละกองตามจำนวนที่ต้องทิ้ง (ขึ้นกากบาทไว้ก่อนเลย)
-      // ผู้เล่นกดเปลี่ยนเองได้ — ถ้าไม่กดอะไรเลย ระบบจะทิ้งตามนี้อัตโนมัติตอนหมดเวลา
-      const lastIdx = (len: number, n: number) => Array.from({ length: n }, (_, i) => len - n + i)
-      setDiscardSelByPile({
-        pile1: lastIdx(p1.length, need.pile1),
-        pile2: lastIdx(p2.length, need.pile2),
-        pile3: lastIdx(p3.length, need.pile3),
-      })
-      setShowDiscard(true)
-      setPhase('discard')
-      const totalSec = Math.ceil((data.decisionTimeMs ?? 20000) / 1000)
-      setDiscardTimeLeft(totalSec)
-      if (discardTimerRef.current) clearInterval(discardTimerRef.current)
-      let left = totalSec
-      discardTimerRef.current = setInterval(() => {
-        left -= 1
-        setDiscardTimeLeft(Math.max(0, left))
-        if (left <= 5 && left > 0) {
-          // Patch 2026-07-18: stopAnimation ก่อน start ใหม่ทุกครั้ง กัน tick ถี่เกินจน animation
-          // ก่อนหน้ายังไม่จบซ้อนกัน ("Animated node already attached to a view")
-          confirmBlinkAnim.stopAnimation()
-          Animated.sequence([
-            Animated.timing(confirmBlinkAnim, { toValue: 0.3, duration: 350, useNativeDriver: true }),
-            Animated.timing(confirmBlinkAnim, { toValue: 1,   duration: 350, useNativeDriver: true }),
-          ]).start()
-        }
-        if (left <= 0) clearInterval(discardTimerRef.current)
-      }, 1000)
-    })
+    // Discard ถูกยกเลิกแล้ว - server ยังส่ง event นี้ตอน arrangement_2 เป็น layout สุดท้าย (ห้ามลบ listener)
     socket.on('discard_phase_result', (data: any) => {
-      if (discardTimerRef.current) clearInterval(discardTimerRef.current)
-      // Patch 2026-07-18: discard จบแล้ว modal กำลังจะปิด — หยุด confirmBlinkAnim ก่อนเสมอ
-      // กัน "Animated node already attached to a view" ตอน modal unmount ระหว่าง blink ยังเล่นอยู่
-      confirmBlinkAnim.stopAnimation()
-      setShowDiscard(false)
       setPhase('discard_done')
       const myFinalHand: string[] = data.myFinalHand ?? []
       if (myFinalHand.length > 0) {
@@ -1470,13 +1346,12 @@ const GameTableLive: React.FC = () => {
       // Patch 2026-07-18: หยุด win-pulse/win-opacity/confetti ก่อน unmount เสมอ (pattern Adept) — ไม่งั้น
       // Animated.loop/confetti recursion ที่ไม่มีวันจบเองจะไปชน native attach ตอน mount รอบถัดไป
       stopMatchEndAnimations()
-      // Patch 2026-07-18: safety-net หยุด fogBlinkAnim/pileFadeAnim/confirmBlinkAnim/gfBlinkAnim ตอน
+      // Patch 2026-07-18: safety-net หยุด fogBlinkAnim/pileFadeAnim/gfBlinkAnim ตอน
       // unmount เสมอ — เผื่อ component unmount กลาง phase ก่อนถึงจุด stop ปกติใน handler ถัดไป
       if (pileFadeTimeoutRef.current) { clearTimeout(pileFadeTimeoutRef.current); pileFadeTimeoutRef.current = null }
       pileFadeAnim.stopAnimation()
       fogBlinkLoopRef.current?.stop()
       fogBlinkLoopRef.current = null
-      confirmBlinkAnim.stopAnimation()
       gfBlinkAnim.stopAnimation()
       socket.disconnect()
     }
@@ -1620,52 +1495,6 @@ const GameTableLive: React.FC = () => {
         pile2: piles[1].map(c => c.key),
         pile3: piles[2].map(c => c.key),
       },
-    })
-  }
-  // Patch Discard Phase: ยืนยันเลือกทิ้งไพ่จากมือ Server (5-6 ใบ) เหลือ 3 ใบ
-  const handleDiscardConfirm = () => {
-    const maxDiscard = discardHandKeys.length - 3
-    if (discardSelected.length !== maxDiscard) return
-    playReadyButton()
-    if (discardTimerRef.current) clearInterval(discardTimerRef.current)
-    const keepKeys = discardHandKeys.filter((_, i) => !discardSelected.includes(i))
-    socketRef.current?.emit('hn_discard_submit', { roomId: ROOM_ID, userId: PLAYER_ID, keepKeys })
-    // Patch 2026-07-18: ปิด modal เอง (กดยืนยันก่อนหมดเวลา) — หยุด confirmBlinkAnim ก่อนเสมอ
-    confirmBlinkAnim.stopAnimation()
-    setShowDiscard(false)
-  }
-
-  // Patch (บั๊กแก้) High Noble: toggle เลือกทิ้งทีละกอง
-  const toggleDiscardPile = (pile: 'pile1' | 'pile2' | 'pile3', idx: number) => {
-    playCardArrange1()
-    setDiscardSelByPile(cur => {
-      const list = cur[pile]
-      const next = list.includes(idx) ? list.filter(i => i !== idx) : [...list, idx]
-      return { ...cur, [pile]: next }
-    })
-  }
-  const handleDiscardConfirmHighNoble = () => {
-    const okP1 = discardSelByPile.pile1.length === discardNeed.pile1
-    const okP2 = discardSelByPile.pile2.length === discardNeed.pile2
-    const okP3 = discardSelByPile.pile3.length === discardNeed.pile3
-    if (!okP1 || !okP2 || !okP3) return
-    playReadyButton()
-    if (discardTimerRef.current) clearInterval(discardTimerRef.current)
-    const keepFrom = (pile: 'pile1' | 'pile2' | 'pile3') =>
-      discardPiles[pile].filter((_, i) => !discardSelByPile[pile].includes(i))
-    const keepKeys = [...keepFrom('pile1'), ...keepFrom('pile2'), ...keepFrom('pile3')]
-    socketRef.current?.emit('hn_discard_submit', { roomId: ROOM_ID, userId: PLAYER_ID, keepKeys })
-    // Patch 2026-07-18: ปิด modal เอง (กดยืนยันก่อนหมดเวลา) — หยุด confirmBlinkAnim ก่อนเสมอ
-    confirmBlinkAnim.stopAnimation()
-    setShowDiscard(false)
-    setIsHNDiscard(false)
-  }
-  const toggleDiscard = (idx: number) => {
-    playCardArrange1()
-    setDiscardSelected(prev => {
-      if (prev.includes(idx)) return prev.filter(i => i !== idx)
-      if (prev.length >= 2) return prev
-      return [...prev, idx]
     })
   }
   // Patch Blind Auction: กดเลือกราคา — ล็อคทันที กดได้ครั้งเดียว/ใบ (1 คนเลือกได้แค่ 1 ใบ)
@@ -2484,111 +2313,6 @@ const GameTableLive: React.FC = () => {
               </View>
             </View>
           )}
-
-          {/* ── DISCARD OVERLAY ── */}
-          {showDiscard && !isHNDiscard && (
-            <View style={s.overlay}>
-              <Text style={s.discardTitle}>Choose cards to discard (keep 3)</Text>
-              <Text style={[s.discardSub, { color: discardTimeLeft <= 3 ? '#f87171' : '#FFD76A' }]}>
-                {discardSelected.length}/{discardHandKeys.length - 3} selected — {discardTimeLeft}s left
-              </Text>
-              {/* Patch: โชว์ Community Pile3 ประกอบการตัดสินใจ (บังคับรวมในการประเมิน Hand เสมอ) */}
-              <View style={{ alignItems: 'center', marginTop: 6, marginBottom: 4 }}>
-                <Text style={[s.pileLabel, { marginBottom: 4 }]}>COMMUNITY (Pile 3)</Text>
-                <View style={{ flexDirection: 'row', gap: 6 }}>
-                  {comm.p3.map((k, i) => (
-                    <View key={i} style={{ width: 50, height: 72, borderRadius: 4, overflow: 'hidden', borderWidth: 1.5, borderColor: '#38bdf8' }}>
-                      {CARD_IMG[k] && <Image source={CARD_IMG[k]} style={{ width: 50, height: 72 }} resizeMode="cover" />}
-                    </View>
-                  ))}
-                </View>
-              </View>
-              {/* Patch: แยก 2 แถว — ไม่แนะนำให้ทิ้ง (เก็บ) / แนะนำให้ทิ้ง */}
-              {([
-                { label: 'Not recommended to discard', filterFn: (key: string) => discardSuggested.includes(key) },
-                { label: 'Recommended to discard', filterFn: (key: string) => !discardSuggested.includes(key) },
-              ]).map((group, gi) => {
-                const items = discardHandKeys
-                  .map((key, idx) => ({ key, idx }))
-                  .filter(({ key }) => group.filterFn(key))
-                if (items.length === 0) return null
-                return (
-                  <View key={gi} style={{ alignItems: 'center', marginBottom: 10 }}>
-                    <Text style={[s.pileLabel, { marginBottom: 4, color: gi === 1 ? '#FFC857' : '#8DFFB5' }]}>{group.label}</Text>
-                    <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
-                      {items.map(({ key, idx }) => {
-                        const isSel = discardSelected.includes(idx)
-                        return (
-                          <TouchableOpacity key={`${key}-${idx}`} onPress={() => toggleDiscard(idx)} activeOpacity={0.8}
-                            style={[s.discardCard, isSel && s.discardCardSel]}>
-                            {CARD_IMG[key] && <Image source={CARD_IMG[key]} style={{ width: 56, height: 80 }} resizeMode="cover" />}
-                            {isSel && <View style={s.discardX}><Text style={s.discardXTxt}>✕</Text></View>}
-                          </TouchableOpacity>
-                        )
-                      })}
-                    </View>
-                  </View>
-                )
-              })}
-              <Animated.View style={{ opacity: confirmBlinkAnim }}>
-                <TouchableOpacity
-                  style={[s.discardBtn, {
-                    flex: 0, alignSelf: 'center', minHeight: 48, justifyContent: 'center', paddingVertical: 14,
-                    backgroundColor: discardTimeLeft <= 5
-                      ? '#5e1a1a'
-                      : (discardSelected.length === (discardHandKeys.length - 3) ? '#1a5e20' : '#2a2a2a'),
-                    borderColor: discardTimeLeft <= 5 ? '#f87171' : 'rgba(201,168,76,0.2)',
-                  }]}
-                  onPress={handleDiscardConfirm} disabled={discardSelected.length !== (discardHandKeys.length - 3)}>
-                  <Text style={[s.discardBtnTxt, discardTimeLeft <= 5 && { color: '#f87171' }]} numberOfLines={1}>Confirm discard ✓</Text>
-                </TouchableOpacity>
-              </Animated.View>
-            </View>
-          )}
-          {/* Patch (บั๊กแก้) High Noble: Discard Modal แบบ 3 กอง — เลือกทิ้งจากกองไหนก็ได้ ให้เหลือกองละ 3 ใบ */}
-          {showDiscard && isHNDiscard && (() => {
-            const allOk = discardSelByPile.pile1.length === discardNeed.pile1
-              && discardSelByPile.pile2.length === discardNeed.pile2
-              && discardSelByPile.pile3.length === discardNeed.pile3
-            return (
-              <View style={s.overlay}>
-                <Text style={s.discardTitle}>Choose cards to discard (keep 3 per pile)</Text>
-                <Text style={[s.discardSub, { color: discardTimeLeft <= 3 ? '#f87171' : '#FFD76A' }]}>
-                  {discardTimeLeft}s left
-                </Text>
-                {(['pile1', 'pile2', 'pile3'] as const).map((pile, pIdx) => (
-                  <View key={pile} style={{ alignItems: 'center', marginBottom: 10 }}>
-                    <Text style={[s.pileLabel, { marginBottom: 4, color: discardSelByPile[pile].length === discardNeed[pile] ? '#8DFFB5' : '#FFC857' }]}>
-                      PILE {pIdx + 1} — Discard {discardSelByPile[pile].length}/{discardNeed[pile]}
-                    </Text>
-                    <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
-                      {discardPiles[pile].map((key, idx) => {
-                        const isSel = discardSelByPile[pile].includes(idx)
-                        return (
-                          <TouchableOpacity key={`${pile}-${key}-${idx}`} onPress={() => toggleDiscardPile(pile, idx)} activeOpacity={0.8}
-                            style={[s.discardCard, isSel && s.discardCardSel]}>
-                            {CARD_IMG[key] && <Image source={CARD_IMG[key]} style={{ width: 56, height: 80 }} resizeMode="cover" />}
-                            {isSel && <View style={s.discardX}><Text style={s.discardXTxt}>✕</Text></View>}
-                          </TouchableOpacity>
-                        )
-                      })}
-                    </View>
-                  </View>
-                ))}
-                <Animated.View style={{ opacity: confirmBlinkAnim }}>
-                  <TouchableOpacity
-                    style={[s.discardBtn, {
-                      flex: 0, alignSelf: 'center', minHeight: 48, justifyContent: 'center', paddingVertical: 14,
-                      backgroundColor: discardTimeLeft <= 5 ? '#5e1a1a' : (allOk ? '#1a5e20' : '#2a2a2a'),
-                      borderColor: discardTimeLeft <= 5 ? '#f87171' : 'rgba(201,168,76,0.2)',
-                    }]}
-                    onPress={handleDiscardConfirmHighNoble} disabled={!allOk}>
-                    <Text style={[s.discardBtnTxt, discardTimeLeft <= 5 && { color: '#f87171' }]} numberOfLines={1}>Confirm discard ✓</Text>
-                  </TouchableOpacity>
-                </Animated.View>
-              </View>
-            )
-          })()}
 
           {/* ── COUNTDOWN OVERLAY ── */}
           {/* Patch 2026-07-18: ค้าง mount ไว้เสมอ toggle แค่ opacity (pattern Adept adept:1328-1330) —
@@ -3451,15 +3175,9 @@ const s = StyleSheet.create({
   continueBtn:       { marginTop: 8, backgroundColor: '#1a3a6e', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 40, borderWidth: 1.5, borderColor: '#38bdf8' },
   continueBtnTxt:    { color: '#fff', fontSize: 13, fontWeight: '800', letterSpacing: 2 },
 
-  // Discard
+  // Overlay title/sub (เดิมของ Discard - Blind Auction ใช้ร่วม)
   discardTitle:   { fontSize: 14, color: '#c9a84c', fontWeight: '800', marginBottom: 6, textAlign: 'center' },
   discardSub:     { fontSize: 11, color: 'rgba(201,168,76,0.5)', marginBottom: 16, letterSpacing: 1 },
-  discardCard:    { width: 56, height: 80, borderRadius: 6, overflow: 'hidden', borderWidth: 2, borderColor: 'rgba(201,168,76,0.3)' },
-  discardCardSel: { borderColor: '#f87171', borderWidth: 3, opacity: 0.6 },
-  discardX:       { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(248,113,113,0.4)' },
-  discardXTxt:    { fontSize: 28, color: '#f87171', fontWeight: '900' },
-  discardBtn:     { flex: 1, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(201,168,76,0.2)', minWidth: 150 },
-  discardBtnTxt:  { color: '#fff', fontSize: 12, fontWeight: '700', letterSpacing: 0.5 },
 
   // Countdown
   countdownLabel: { fontSize: 13, color: '#c9a84c', letterSpacing: 4, fontWeight: '800', marginBottom: 10 },
