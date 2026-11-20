@@ -29,6 +29,7 @@ import { evaluateHand, compareHands, HandResult } from './handEvaluator'
 import { FoulCheckResult, PlayerArrangement } from './foulChecker'
 import { AIPersonality, pickRandomMinions } from './aiEngine'
 import { gameConfig, getMonarchSpawnRate, isRoyalHour } from '../config/gameConfig'
+import { isMonarchEnabled } from '../config/releaseFeatures'
 import { supabaseAdmin } from '../config/supabase'
 import { escrowBuyIn, settleEscrow } from './gameLoop'
 import { rollAndRecordMonarchRelic, MonarchRelicResult } from './monarchSpawn'
@@ -88,7 +89,7 @@ export interface MonarchMatchState {
     humanRevealOrder?: string[]
   }
   matchEnded?: boolean
-  // Arrangement deadline (60s, ไม่มี auto-arrange ช่วยแล้ว) arrangementDeadlineAt
+  // Arrangement deadline follows Tier A+ (120s, ไม่มี auto-arrange ช่วยแล้ว) arrangementDeadlineAt
   // เป็น epoch ms ส่งออกผ่าน buildMonarchRoundSnapshot ให้ Batch 2 เอาไปทำ UI countdown ต่อ
   arrangementDeadlineAt?: number
   arrangementTimer?: ReturnType<typeof setTimeout>
@@ -135,6 +136,10 @@ function delay(ms: number): Promise<void> {
 // getMonarchSpawnRate() คูณ Royal Hour multiplier ให้แล้วถ้าเข้าเงื่อนไข (Batch 1 Task 4) — คูณเฉพาะ
 // base ก่อนบวก pity step ไม่ใช่คูณทั้ง effectiveRate (ห้าม Royal Hour ข้าม pity)
 export async function rollMonarchEntry(userId: string): Promise<boolean> {
+  // Android 1.0 launch gate: preserve Monarch for later without reading or
+  // mutating pity state unless the owner explicitly enables the encounter.
+  if (!isMonarchEnabled()) return false
+
   const cfg = gameConfig.monarchConfig
   let pity = 0
   try {
@@ -1077,7 +1082,7 @@ export async function settleMonarchMatch(io: Server, state: MonarchMatchState): 
     // Batch 3D-1 Task 4: try/catch แยกของตัวเอง — relic roll พลาดต้อง "ไม่" ทำให้ settlement/badge/
     // Pot×2 ข้างบนพัง (ทุกอย่างข้างบนคำนวณ/เขียนเสร็จไปแล้วก่อนถึงบรรทัดนี้) log error พอ ไม่ throw ต่อ
     try {
-      relicResult = await rollAndRecordMonarchRelic(state.humanUserId)
+      relicResult = await rollAndRecordMonarchRelic(state.humanUserId, state.roomId)
     } catch (err) {
       console.error('[MONARCH_RELIC] Unexpected error rolling relic for', state.humanUserId, err)
     }

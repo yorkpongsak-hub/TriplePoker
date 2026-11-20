@@ -4,8 +4,8 @@
 // ============================================================
 
 import { bossArrange, BossType } from '../../src/ai/bossAI';
-import { checkFoul, CommunityCards } from '../../src/game/foulChecker';
-import { evaluateHand } from '../../src/game/handEvaluator';
+import { checkTierCFoul, CommunityCards } from '../../src/game/foulChecker';
+import { evaluateBestFive, evaluateHand } from '../../src/game/handEvaluator';
 import { Card } from '../../src/game/deck';
 
 // ─── Test Fixtures ────────────────────────────────────────────
@@ -66,7 +66,7 @@ describe('bossAI — 4 จตุรเทพ', () => {
 
       it(`[${bossType}] should return arrangement that passes FoulChecker`, () => {
         const result = bossArrange(bossType, mockCards, mockCommunity);
-        expect(checkFoul(result, mockCommunity).isFoul).toBe(false);
+        expect(checkTierCFoul(result, mockCommunity).isFoul).toBe(false);
       });
 
       it(`[${bossType}] should return pile1=3, pile2=3, pile3=5`, () => {
@@ -103,7 +103,7 @@ describe('bossAI — 4 จตุรเทพ', () => {
     it('should consistently return valid arrangements (10 runs)', () => {
       for (let i = 0; i < 10; i++) {
         const result = bossArrange('reaper', mockCards, mockCommunity);
-        expect(checkFoul(result, mockCommunity).isFoul).toBe(false);
+        expect(checkTierCFoul(result, mockCommunity).isFoul).toBe(false);
       }
     });
 
@@ -125,7 +125,7 @@ describe('bossAI — 4 จตุรเทพ', () => {
     it('should consistently return valid arrangements (10 runs)', () => {
       for (let i = 0; i < 10; i++) {
         const result = bossArrange('crag', mockCards, mockCommunity);
-        expect(checkFoul(result, mockCommunity).isFoul).toBe(false);
+        expect(checkTierCFoul(result, mockCommunity).isFoul).toBe(false);
       }
     });
 
@@ -143,7 +143,7 @@ describe('bossAI — 4 จตุรเทพ', () => {
     it('should consistently return valid arrangements (10 runs)', () => {
       for (let i = 0; i < 10; i++) {
         const result = bossArrange('cortex', mockCards, mockCommunity);
-        expect(checkFoul(result, mockCommunity).isFoul).toBe(false);
+        expect(checkTierCFoul(result, mockCommunity).isFoul).toBe(false);
       }
     });
 
@@ -173,7 +173,7 @@ describe('bossAI — 4 จตุรเทพ', () => {
         .mockImplementation(() => original());
 
       const result = bossArrange('cipher', mockCards, mockCommunity);
-      expect(checkFoul(result, mockCommunity).isFoul).toBe(false);
+      expect(checkTierCFoul(result, mockCommunity).isFoul).toBe(false);
       spy.mockRestore();
     });
 
@@ -186,14 +186,14 @@ describe('bossAI — 4 จตุรเทพ', () => {
         .mockImplementation(() => original());
 
       const result = bossArrange('cipher', mockCards, mockCommunity);
-      expect(checkFoul(result, mockCommunity).isFoul).toBe(false);
+      expect(checkTierCFoul(result, mockCommunity).isFoul).toBe(false);
       spy.mockRestore();
     });
 
     it('should consistently return valid arrangements (20 runs, real random)', () => {
       for (let i = 0; i < 20; i++) {
         const result = bossArrange('cipher', mockCards, mockCommunity);
-        expect(checkFoul(result, mockCommunity).isFoul).toBe(false);
+        expect(checkTierCFoul(result, mockCommunity).isFoul).toBe(false);
       }
     });
   });

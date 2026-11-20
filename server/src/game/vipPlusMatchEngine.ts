@@ -1,10 +1,14 @@
 import { Server } from 'socket.io'
 import { Card, createDeck, shuffleDeck } from './deck'
 import { compareHands, evaluateHand, HandResult, handRankLabel } from './handEvaluator'
-import { escrowBuyIn, refundEscrow, settleEscrow } from './gameLoop'
+import { escrowBuyIn, refundEscrow } from './gameLoop'
 import { recordMatchStats } from './matchStatsService'
 import { supabaseAdmin } from '../config/supabase'
 import { gameConfig } from '../config/gameConfig'
+import { checkTierUnlock } from './tierUnlockService'
+import { getAscendantStatus } from './crownVaultService'
+import { economyService } from '../economy/economyService'
+import type { AccountRef } from '../economy/economyTypes'
 import {
   getVipPlusActionOrder,
   getVipPlusAuctionCardCount,
@@ -20,6 +24,7 @@ import {
   VipPlusSeat,
 } from './vipPlusFoundation'
 import { VipPlusWaitingTable, vipPlusTableRegistry } from './vipPlusTableRegistry'
+import { broadcastHumanRoyalFlush } from './royalFlushBroadcast'
 
 export type VipPlusMatchPhase = 'INITIAL_ARRANGE' | 'BETTING' | 'BLIND_AUCTION' | 'REARRANGE' | 'MATCH_COMPLETE'
 
@@ -92,6 +97,7 @@ export interface VipPlusMatchState {
   // มติลุงเยาะ — Avatar หน้าชื่อผู้เล่นทุกที่นั่งในเกม (mirror displayNameBySeat) null = Blank seat หรือ
   // ผู้เล่นไม่เคยตั้ง avatar เลย ให้ client fallback เป็น emoji default
   avatarUrlBySeat: Record<VipPlusSeat, string | null>
+  isVipBySeat: Record<VipPlusSeat, boolean>
   seatStatus: Record<VipPlusSeat, 'CONNECTED' | 'DISCONNECTED' | 'FORFEITED' | 'BLANK'>
   hands: Record<string, Card[]>
   center: VipPlusCenterCards
@@ -291,6 +297,7 @@ export async function startVipPlusMatch(
   const playerBySeat = {} as Record<VipPlusSeat, string>
   const displayNameBySeat = {} as Record<VipPlusSeat, string>
   const avatarUrlBySeat = {} as Record<VipPlusSeat, string | null>
+  const isVipBySeat = {} as Record<VipPlusSeat, boolean>
   const hands: Record<string, Card[]> = {}
   const humanSeats: VipPlusSeat[] = []
   const blankSeats: VipPlusSeat[] = []
@@ -300,6 +307,7 @@ export async function startVipPlusMatch(
     playerBySeat[seat] = playerId
     displayNameBySeat[seat] = occupant?.displayName ?? 'Blank'
     avatarUrlBySeat[seat] = occupant?.avatarUrl ?? null
+    isVipBySeat[seat] = occupant?.isVip ?? false
     if (occupant) humanSeats.push(seat)
     else blankSeats.push(seat)
     hands[playerId] = deal.handsBySeat[seat]
@@ -316,6 +324,7 @@ export async function startVipPlusMatch(
     blankSeats,
     displayNameBySeat,
     avatarUrlBySeat,
+    isVipBySeat,
     seatStatus: Object.fromEntries(VIP_PLUS_SEATS.map(seat => [seat, blankSeats.includes(seat) ? 'BLANK' : 'CONNECTED'])) as VipPlusMatchState['seatStatus'],
     hands,
     center: deal.center,
@@ -351,7 +360,7 @@ export async function startVipPlusMatch(
     phase: state.phase,
     deadlineAt: state.deadlineAt,
     center: visibleVipPlusCenterKeys(state),
-    seats: VIP_PLUS_SEATS.map(seat => ({ seat, displayName: state.displayNameBySeat[seat], avatarUrl: state.avatarUrlBySeat[seat], status: state.seatStatus[seat], isBlank: state.blankSeats.includes(seat) })),
+    seats: VIP_PLUS_SEATS.map(seat => ({ seat, displayName: state.displayNameBySeat[seat], avatarUrl: state.avatarUrlBySeat[seat], isVip: state.isVipBySeat[seat], status: state.seatStatus[seat], isBlank: state.blankSeats.includes(seat) })),
     wager: state.wager,
     pot: state.pot,
     // Feedback ลุงเยาะ — บั๊กที่ลุงเจอจริง: เล่น HOLDEM_G3 เกมแรก มือดันมี G3 5 ใบ (ต้องมีแค่ 2) ต้นเหตุคือ
@@ -501,7 +510,7 @@ export function buildVipPlusSnapshot(roomId: string, playerId: string) {
     // Feedback ลุงเยาะ (เทสมือถือรอบ 2) — เผื่อ client reconnect กลางแมตช์โดยไม่เคยผ่าน Waiting Chamber
     // เลย (ไม่มี table state เดิมให้ใช้) ต้องมีค่าจริงจาก state ตรงๆ ไม่ต้องพึ่ง default
     centerRuleset: state.centerRuleset, foulRuleEnabled: state.foulRuleEnabled,
-    seats: VIP_PLUS_SEATS.map(seat => ({ seat, displayName: state.displayNameBySeat[seat], avatarUrl: state.avatarUrlBySeat[seat], status: state.seatStatus[seat], isBlank: state.blankSeats.includes(seat) })),
+    seats: VIP_PLUS_SEATS.map(seat => ({ seat, displayName: state.displayNameBySeat[seat], avatarUrl: state.avatarUrlBySeat[seat], isVip: state.isVipBySeat[seat], status: state.seatStatus[seat], isBlank: state.blankSeats.includes(seat) })),
     center: visibleVipPlusCenterKeys(state),
     hand: state.hands[playerId].map(vipPlusCardKey),
     arrangement: ownArrangement ? Object.fromEntries(Object.entries(ownArrangement).map(([group, cards]) => [group, cards.map(vipPlusCardKey)])) : null,
@@ -674,9 +683,9 @@ function seatForPlayer(state: VipPlusMatchState, playerId: string): VipPlusSeat 
   return VIP_PLUS_SEATS.find(seat => state.playerBySeat[seat] === playerId)
 }
 
-let bettingIo: Pick<Server, 'to'> | null = null
+let bettingIo: Pick<Server, 'to' | 'emit'> | null = null
 
-export function attachVipPlusBettingIo(io: Pick<Server, 'to'>): void {
+export function attachVipPlusBettingIo(io: Pick<Server, 'to' | 'emit'>): void {
   bettingIo = io
 }
 
@@ -930,10 +939,16 @@ function settleVipPlusGroup(state: VipPlusMatchState, group: 1 | 2 | 3): void {
   // เฉพาะ HOLDEM_G3's G3 เท่านั้น (7 ใบ scoring แต่ใช้จริงแค่ 5) กองอื่น/ruleset อื่น winningCards มี 5 ใบ
   // อยู่แล้วเลยเท่ากับ highlightedCards เป๊ะ (ไม่มีใบ "เกิน" ให้ต้องแยก)
   const highlightedCards = winner ? bestVipPlusCombo(winnerScoringCards).cards.map(vipPlusCardKey) : []
+  const winnerSeat = winner ? seatForPlayer(state, winner) : undefined
+  const winnerBest = winner ? bestVipPlusCombo(winnerScoringCards) : null
+  if (bettingIo && winner && winnerSeat && isHumanPlayer(state, winner) && winnerBest?.result.rank === 'royal_flush') {
+    broadcastHumanRoyalFlush(bettingIo, { eventId: `${state.roomId}:${state.gameNumber}:g${group}`, playerId: winner, playerName: state.displayNameBySeat[winnerSeat], cards: winnerBest.cards })
+  }
   bettingIo?.to(state.roomId).emit('vip_plus:group_settled', {
     gameNumber: state.gameNumber,
     group,
     winnerSeat: winner ? seatForPlayer(state, winner) : null,
+    winnerDisplayName: winner ? state.displayNameBySeat[seatForPlayer(state, winner)!] : null,
     winnerHandName,
     winningCards,
     highlightedCards,
@@ -976,10 +991,73 @@ async function persistVipPlusResult(state: VipPlusMatchState, result: ReturnType
   if (error) console.error('[VIP_PLUS] result persistence failed:', error)
 }
 
+// Central Economy Ledger Phase 7 Round 5 — settle ทั้งแมตช์ในธุรกรรมเดียว (human ทุกคนที่เล่นจริง เท่านั้น
+// — Blank seat ไม่มี escrow ไม่มี real playerId ไม่เข้ามาถึงจุดนี้อยู่แล้วเพราะ rankVipPlusMatch() วนแค่
+// state.humanSeats) แบบเดียวกับ settleAdeptMatchViaLedger/settleHNMatchViaLedger — เหตุผลเดียวกัน: settle
+// แยกต่อคนจะไม่มีทางแยก "รวมเงินที่ระบบเก็บไปจริง" ออกจากผลรวม net ของทุกคนได้ถูกต้อง
+// ⚠️ ไม่มี NPC_POOL entry เลยรอบนี้ (VIP Plus เป็น Human-only ล้วน ไม่มี AI/Boss ร่วมเศรษฐกิจ) burnAmount
+// ต้องรวม state.auctionBurn เข้ากับ state.feeRake ด้วยเสมอ — auctionBurn เป็นคนละ bucket แยกจาก feeRake
+// ไม่เคยถูกรวมเข้าไปที่ไหนเลย ถ้าลืมจุดนี้เงินประมูลจะหายจาก actual_supply เงียบๆ (บั๊กคลาสเดียวกับ
+// state.pot ของ Mastermind ที่เจอมาก่อนหน้านี้ในรอบเดียวกันของโปรเจค)
+export async function settleVipPlusMatchViaLedger(
+  state: VipPlusMatchState, rankings: VipPlusRankingRow[],
+): Promise<Record<VipPlusSeat, number | null>> {
+  const burnAmount = state.feeRake + state.auctionBurn
+  const entries: Array<{ account: AccountRef; netAmount: number }> = rankings
+    .map(row => ({ account: { accountType: 'PLAYER' as const, accountId: row.playerId }, netAmount: row.finalStack }))
+    .filter(e => e.netAmount !== 0)
+
+  if (entries.length > 0) {
+    try {
+      await economyService.settleMatchResult({
+        idempotencyKey: `MATCH_SETTLEMENT:${Object.values(state.escrowIds).sort().join(':')}`,
+        currency: 'TOKEN',
+        entries,
+        burnAmount,
+        reason: 'MATCH_SETTLEMENT',
+        context: { matchId: state.roomId, tier: 'vipPlus' },
+        metadata: { bettingTier: state.wager.bettingTier },
+      })
+    } catch (err) {
+      console.error('[VIP_PLUS]', Date.now(), 'Ledger settleMatchResult failed for', state.roomId, err)
+      return Object.fromEntries(rankings.map(row => [row.seat, null])) as Record<VipPlusSeat, number | null>
+    }
+  }
+
+  const results = {} as Record<VipPlusSeat, number | null>
+  await Promise.all(rankings.map(async row => {
+    const escrowId = state.escrowIds[row.playerId]
+    if (!escrowId) { results[row.seat] = null; return }
+    const { error: updateError } = await supabaseAdmin
+      .from('match_escrow')
+      .update({ status: 'settled', final_stack: row.finalStack, settled_at: new Date().toISOString() })
+      .eq('escrow_id', escrowId)
+      .eq('status', 'in_match')
+    if (updateError) {
+      console.error('[VIP_PLUS]', Date.now(), 'Ledger settle: match_escrow update failed for', escrowId, updateError)
+      results[row.seat] = null
+      return
+    }
+    const { data: userRow, error: readError } = await supabaseAdmin
+      .from('users').select('token_balance').eq('user_id', row.playerId).single()
+    if (readError || !userRow) {
+      console.error('[VIP_PLUS]', Date.now(), 'Ledger settle: failed to re-read token_balance for', row.playerId, readError)
+      results[row.seat] = null
+      return
+    }
+    const newBalance = Number(userRow.token_balance)
+    console.log('[VIP_PLUS]', Date.now(), 'Settled via ledger', row.playerId, '| finalStack', row.finalStack, '| New balance:', newBalance)
+    try { await checkTierUnlock(row.playerId, newBalance) } catch (err) { console.error('[TIER_UNLOCK] Unexpected error calling checkTierUnlock:', err, '| userId:', row.playerId) }
+    try { await getAscendantStatus(row.playerId) } catch (err) { console.error('[CROWN-VAULT] Unexpected error calling getAscendantStatus:', err, '| userId:', row.playerId) }
+    results[row.seat] = newBalance
+  }))
+  return results
+}
+
 export async function finalizeVipPlusMatch(
   state: VipPlusMatchState,
   dependencies: {
-    settle?: typeof settleEscrow
+    settleMatch?: typeof settleVipPlusMatchViaLedger
     persist?: (state: VipPlusMatchState, result: ReturnType<typeof rankVipPlusMatch>) => Promise<void>
     recordStats?: typeof recordMatchStats
   } = {},
@@ -1009,14 +1087,14 @@ export async function finalizeVipPlusMatch(
   }
   const profitFeeTotal = result.rankings.reduce((sum, row) => sum + row.profitFee, 0)
   state.matchResult = result
-  const settle = dependencies.settle ?? settleEscrow
-  const walletBalances = Object.fromEntries(await Promise.all(result.rankings.map(async row => {
-    try { return [row.seat, await settle(row.playerId, state.escrowIds[row.playerId], row.finalStack)] as const }
-    catch (error) {
-      console.error('[VIP_PLUS] escrow settlement failed:', row.playerId, error)
-      return [row.seat, null] as const
-    }
-  })))
+  const settleMatch = dependencies.settleMatch ?? settleVipPlusMatchViaLedger
+  let walletBalances: Record<VipPlusSeat, number | null>
+  try {
+    walletBalances = await settleMatch(state, result.rankings)
+  } catch (error) {
+    console.error('[VIP_PLUS] ledger settlement threw:', error)
+    walletBalances = Object.fromEntries(result.rankings.map(row => [row.seat, null])) as Record<VipPlusSeat, number | null>
+  }
   try { await (dependencies.persist ?? persistVipPlusResult)(state, result) }
   catch (error) { console.error('[VIP_PLUS] result persistence threw:', error) }
   // มติลุงเยาะ — จบแมตช์ต้องอัพเดทสถิติผู้เล่น (games_played/games_won/xp/daily streak/best_hands) เหมือน
@@ -1104,7 +1182,7 @@ function emitVipPlusGameStarted(state: VipPlusMatchState): void {
     phase: state.phase,
     deadlineAt: state.deadlineAt,
     center: visibleVipPlusCenterKeys(state),
-    seats: VIP_PLUS_SEATS.map(seat => ({ seat, displayName: state.displayNameBySeat[seat], avatarUrl: state.avatarUrlBySeat[seat], status: state.seatStatus[seat], isBlank: state.blankSeats.includes(seat) })),
+    seats: VIP_PLUS_SEATS.map(seat => ({ seat, displayName: state.displayNameBySeat[seat], avatarUrl: state.avatarUrlBySeat[seat], isVip: state.isVipBySeat[seat], status: state.seatStatus[seat], isBlank: state.blankSeats.includes(seat) })),
     wager: state.wager,
     pot: state.pot,
     // Feedback ลุงเยาะ (เทสมือถือรอบ 2) — ส่งซ้ำทุกเกม (ไม่ใช่แค่ตอนเริ่มแมตช์) เผื่อ client รีเฟรช/reconnect

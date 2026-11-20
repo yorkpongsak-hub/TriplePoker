@@ -25,6 +25,11 @@ jest.mock('../../src/utils/nameValidator', () => ({
   validateDisplayName: mockValidateDisplayName,
 }))
 
+const mockGrantWelcomeBonusIfNeeded = jest.fn()
+jest.mock('../../src/game/welcomeBonusService', () => ({
+  grantWelcomeBonusIfNeeded: (...args: unknown[]) => mockGrantWelcomeBonusIfNeeded(...args),
+}))
+
 import Fastify, { FastifyInstance } from 'fastify'
 import { authRoutes } from '../../src/routes/auth'
 
@@ -45,6 +50,7 @@ beforeEach(() => {
   mockUpdate.mockClear()
   mockFrom.mockClear()
   mockValidateDisplayName.mockReset()
+  mockGrantWelcomeBonusIfNeeded.mockReset().mockResolvedValue(undefined)
 })
 
 describe('POST /auth/register', () => {
@@ -166,6 +172,19 @@ describe('POST /auth/register', () => {
     expect(mockFrom).toHaveBeenCalledWith('users')
     expect(mockUpdate).toHaveBeenCalledWith({ display_name: 'Regular Player' })
     expect(mockEq).toHaveBeenCalledWith('user_id', AUTH_USER.id)
+
+    // Welcome Bonus — Central Economy Ledger Phase 7 Round 8 (2026-08-13)
+    expect(mockGrantWelcomeBonusIfNeeded).toHaveBeenCalledWith(AUTH_USER.id)
+    await app.close()
+  })
+})
+
+describe('Guest registration is disabled', () => {
+  test('POST /auth/guest-init is not exposed', async () => {
+    const app = await buildApp()
+    const res = await app.inject({ method: 'POST', url: '/auth/guest-init' })
+    expect(res.statusCode).toBe(404)
+    expect(mockGrantWelcomeBonusIfNeeded).not.toHaveBeenCalled()
     await app.close()
   })
 })

@@ -53,26 +53,23 @@ export const gameConfig = {
       min: 50,                  // Token ต่ำสุดจากการดู Ad เมื่อ Token < 100
       max: 100,                 // Token สูงสุดจากการดู Ad เมื่อ Token < 100
     },
+    adRewardCooldownHours: 1,   // ดู Ad รับรางวัลได้ทุกกี่ชั่วโมง (Redis SET NX EX cooldown lock)
     loginBonus: {
       free: 200,                // +200 Token เมื่อดูโฆษณาครั้งแรกของวัน
       vip:  300,                // +300 Token อัตโนมัติสำหรับ VIP
     },
-    // ได้เมื่อเล่นจบอย่างน้อย 1 แมตช์ในวันนั้น (Asia/Bangkok), ไม่ใช่แค่เปิดแอป
-    // วันที่ 7 จบรอบและวันถัดไปวนกลับวันที่ 1
+    // Daily Streak eligibility is earned by one completed game in Bangkok time.
+    // Claim rewards are issued separately and atomically by the daily-streak route.
     playStreak: {
-      rewards: [
-        { token: 100, xp: 5 },
-        { token: 150, xp: 5 },
-        { token: 200, xp: 10 },
-        { token: 250, xp: 10 },
-        { token: 300, xp: 15 },
-        { token: 400, xp: 20 },
-        { token: 700, xp: 35 },
-      ],
-      cycleDays: 7,
-      maxShields: 2,
-      day7ShieldBonus: 1,
+      cycleDays: 8,
+      dailyBaseToken: 40, // Canonical Tier C G1 contribution; validated against tokenPot below.
     },
+    // Streak Milestone Bonus (มติลุงเยาะ 2026-08-14) — แยกจาก playStreak.rewards ข้างบนโดยสิ้นเชิง
+    // (XP ต่อวันยังแจกอัตโนมัติเหมือนเดิมทุกประการ ไม่แตะ) แทนที่เฉพาะ TOKEN ที่เคยแจกอัตโนมัติทุกวัน
+    // ด้วยระบบใหม่: milestone วันที่ 3/5/7 เท่านั้น (วันที่ 1 ไม่มีรางวัล) ต้องกด Claim เองที่หน้า
+    // /streak (สมาชิกฟรีดูโฆษณาก่อน VIP ข้ามได้) — เช็คสิทธิ์ผ่าน getClaimableStreakMilestone() ใน
+    // matchStatsService.ts เทียบกับ users.streak_claimed_milestone (รีเซ็ตเป็น 0 เองตอนวนรอบใหม่)
+    streakMilestoneRewards: { 3: 300, 5: 500, 7: 1000 } as Record<number, number>,
   },
 
   // ─── Token Pot ───────────────────────────────────────────────
@@ -81,11 +78,13 @@ export const gameConfig = {
   // แหล่งเดียวสำหรับ Call Amount คือ grandFinale.callAmount เท่านั้น validateGameConfig() เช็คให้)
   tokenPot: {
     tiers: {
-      initiate:   { pile1: 10,  pile2: 20,   pile3: 40   },
-      adept:      { pile1: 60,  pile2: 100,  pile3: 140  },
-      mastermind: { pile1: 200, pile2: 300,  pile3: 500  },
-      highNoble:  { pile1: 500, pile2: 1_000,pile3: 1_500},
-      lastBoss:   { pile1: 1_000,pile2: 2_000,pile3: 3_000},
+      // Per-seat contribution to each Match Pot. C/B play 3 Matches; A/A+/S
+      // play 5, so the unchanged per-Match stakes consume the full Buy-in.
+      initiate:   { pile1: 40,   pile2: 60,   pile3: 100   },
+      adept:      { pile1: 120,  pile2: 180,  pile3: 300   },
+      mastermind: { pile1: 300,  pile2: 450,  pile3: 750   },
+      highNoble:  { pile1: 1_000,pile2: 1_500,pile3: 2_500},
+      lastBoss:   { pile1: 2_000,pile2: 3_000,pile3: 5_000},
     },
     // Patch (2026-07-17): ยกเลิก rakeJackpot 10% ของ Triple Sweep — ใช้ rake อัตราเดียว 5% ทุกกรณี
     // ทุก Tier (ดู gameLoop.ts/highNobleMultiEngine.ts ที่คำนวณ jackpotRake)
@@ -115,15 +114,13 @@ export const gameConfig = {
   // หักจาก users.token_balance ครั้งเดียวตอนเข้าโต๊ะ (escrow) — settle กลับครั้งเดียวตอนจบแมตช์
   // ค่านี้แทนที่ baseline 5000 เดิมที่ hardcode กระจายอยู่ทั่ว gameLoop.ts/highNobleMultiEngine.ts ทั้งหมด
   buyIn: {
-    initiate:   500,
-    adept:      2_000,  // Buy-in Spec v1.1 — แก้บั๊ก game balance: worst case จริง 1,500 > buy-in เดิม 1,000
-    // มติลุงเยาะ 2026-07-25: ขึ้นจาก 9,000 -> 15,000 เพราะ worst case จริงของ Tier นี้ (ante 1,000 +
-    // Auto Sort 165 + Auction 150 + Grand Finale Call 600 x 2 = 2,515/รอบ x 5 รอบ = 12,575) ทะลุ
-    // buy-in เดิม ผู้เล่นที่ Call ทุกครั้งจะหมด stack ก่อนจบแมตช์ (เคสเดียวกับที่ Adept แก้ไปแล้วใน
-    // Buy-in Spec v1.1) — 15,000 ครอบคลุม worst case + เหลือ headroom เผื่อ Triple Sweep ซ้อน
-    mastermind: 15_000,
-    highNoble:  30_000,
-    lastBoss:   60_000,  // reserve — Arena Phase 3
+    // Tier C+ canonical score-share economy (2026-09-27). Keep these mirrored
+    // by client/src/config/buyInConfig.ts and validated against tierCPlusScoring.
+    initiate:   600,
+    adept:      1_800,
+    mastermind: 7_500,
+    highNoble:  25_000,
+    lastBoss:   50_000,
   },
   adRescueAmount: 500,  // token ต่อ 1 rewarded ad ตอน token < buyIn (Buy-in Spec §3 — คนละ mechanism กับ debtRecovery.adReward แต่ค่าเท่ากัน)
 
@@ -175,18 +172,15 @@ export const gameConfig = {
   },
 
   // ─── Arrangement Timer ───────────────────────────────────────
-  // *** ADDED v1.1 — เวลาจัดไพ่ต่อ Tier (วินาที) ***
-  // Patch v1.2 (2026-07-24): "Tier สูง = เดิมพันสูง = ต้องให้เวลาคิดมากขึ้น" (กลับจาก design เดิม
-  // ที่เคยลดเวลาลงตาม Tier) — initiate/adept พับ client-side tierBonus (+15) เข้ามาไว้ที่นี่จุดเดียว
-  // (ผู้เล่นเห็นตัวเลขเท่าเดิมทุกประการ ดู client index.tsx) mastermind/highNoble ยืดขึ้นจริงตาม design
-  // ใหม่ — arrangement_2 (รอบ 2 หลัง auction) อ่านค่าเดียวกันนี้ ทั้ง client display และ server
-  // enforcement (resolveArrangementRound2Timeout/resolveHNArrangementTimeout) จะอัปเดตตามอัตโนมัติ
+  // เวลาจัดไพ่ต่อ Tier (วินาที). รูปแบบเวลาที่ owner ระบุเป็น M.SS:
+  // C 2:45, B 2:30, A 2:15, A+ 2:00, S 1:50, S+ 1:40.
+  // Tier A arrangement_2 หลัง Auction ใช้ครึ่งหนึ่งของค่านี้; Tier อื่นอ่านค่าเต็มตาม flow เดิม.
   arrangementTimer: {
-    initiate:   105,
-    adept:      90,
-    mastermind: 105,
-    highNoble:  120, // R1+R2 ใช้ค่านี้ทั้งคู่ — ครั้งหน้าแก้ที่นี่จุดเดียว (R1 มี server enforcement ด้วย — resolveHNArrangementTimeout)
-    lastBoss:   75, // แยกจาก highNoble — ให้เวลาคิดมากขึ้นเพราะ AI เก่งระดับ DDE/MCTS
+    initiate:   165,
+    adept:      150,
+    mastermind: 135,
+    highNoble:  120,
+    lastBoss:   100,
   },
 
   // ─── Discard Timer ────────────────────────────────────────────
@@ -421,7 +415,7 @@ export const gameConfig = {
     // Batch 1 Task 6 — เวลาจัดไพ่ก่อนหมดเวลา auto-seal (ห้ามช่วยจัด ดู forceSealMonarchArrangement
     // ใน monarchEngine.ts) ยังไม่มี UI countdown ในบัตช์นี้ (client ได้ค่านี้ผ่าน monarch_round_start's
     // arrangementDeadlineAt แล้ว เตรียมไว้ให้ Batch 2 ใช้ต่อ)
-    arrangementDeadlineMs: 60_000,
+    arrangementDeadlineMs: 120_000,
     // Personality Lock ของ Monarch — แบ่ง Total Hand Strength (bestArrangement) เป็น 4 ช่วงด้วย quartile threshold
     // (Spec v1.3 ให้แค่คำบรรยายเชิงคุณภาพ "แข็งมาก/ปานกลาง/ปานกลางค่อนอ่อน/อ่อน" — ตัวเลขนี้เป็นค่าเริ่มต้นที่ปรับจูนได้หลัง playtest จริง)
     handStrengthQuartile: { veryStrong: 0.75, medium: 0.5, mediumWeak: 0.25 },
@@ -663,6 +657,10 @@ export function validateGameConfig(): void {
     if (rangeMinToken != null && gateMinToken !== rangeMinToken) {
       errors.push(`progressionGate.${tier}.minToken (${gateMinToken}) ≠ tierRanges.${tier}.min (${rangeMinToken}) — ต้อง align กันเสมอ`);
     }
+  }
+
+  if (gameConfig.dailyEconomy.playStreak.dailyBaseToken !== gameConfig.tokenPot.tiers.initiate.pile1) {
+    errors.push('dailyEconomy.playStreak.dailyBaseToken must equal Initiate Match 1 G1 base stake');
   }
 
   if (errors.length > 0) {

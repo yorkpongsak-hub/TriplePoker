@@ -18,6 +18,8 @@ export interface ArenaSeatView {
   // Human: preset avatar key (resolve ผ่าน AvatarDisplay/PRESET_AVATARS) อาจว่างถ้ายังไม่ตั้งค่า
   // AI (Boss/Sentinel/Minion): สัญลักษณ์ตัวอักษรเดิม ('♛'/'♠')
   avatar: string
+  // Human เท่านั้น (AI ไม่มี vip_status จริง) — ใช้โชว์กรอบทอง VIP หน้าที่นั่ง เหมือน Adept/High Noble
+  isVip: boolean
   controller: 'HUMAN' | 'AI'
   isLocal: boolean
   isBoss: boolean
@@ -77,6 +79,8 @@ export interface ArenaClientSnapshot {
     currentSeat: 1 | 2 | 3 | 4 | null
     players: Array<{ seat: 1 | 2 | 3 | 4; displayName: string; status: 'WAITING' | 'CURRENT' | 'CALLED' | 'FOLDED' | 'SHOWDOWN'; revealedCards: string[] }>
   }
+  callReveal?: null | { id: string; seat: 1 | 2 | 3 | 4; displayName: string; pile: 2 | 3; round: 1 | 2; cards: string[] }
+  gfAction?: null | { id: string; seat: 1 | 2 | 3 | 4; displayName: string; pile: 2 | 3; round: 1 | 2; decision: 'CALL' | 'FOLD'; cards: string[] }
   bossPresentation: null | {
     bossId: 'MONARCH' | 'SOREN' | 'DUAL'
     title: string
@@ -90,7 +94,10 @@ export interface ArenaClientSnapshot {
     speaker: 'MONARCH' | 'SOREN'
     text: string
   }
-  result: null | { title: string; lines: ArenaResultLine[]; playNetCrest: number; entryFeeCrest: number; netCrest: number; psGained: number }
+  result: null | {
+    title: string; lines: ArenaResultLine[]; playNetCrest: number; entryFeeCrest: number; netCrest: number; psGained: number
+    bossVictory: null | { tier: 'sentinel' | 'god' | 'monarch'; title: string | null }
+  }
   reveal: null | {
     pile: 1 | 2 | 3
     winnerSeat: 1 | 2 | 3 | 4 | null
@@ -112,5 +119,5 @@ export type ArenaClientIntent =
   | { type: 'AUCTION_BID'; round: 'FACE_UP' | 'BLIND'; cardIndex: 0 | 1; amountCrest: 0 | 3 | 6 | 9 | 12 }
   | { type: 'JOKER_DECLARE'; mode: 'WILD' | 'ANTE_X2'; targetPile: 1 | 2 | 3; availableCrest: number }
   | { type: 'GF_ACTION'; decision: 'CALL' | 'FOLD'; revealCardIds?: string[] }
-  | { type: 'DISCARD'; cardId: string }
+  | ({ type: 'DISCARD'; cardId: string } & ArenaPileArrangement)
   | ({ type: 'FINAL_LOCK' } & ArenaPileArrangement)

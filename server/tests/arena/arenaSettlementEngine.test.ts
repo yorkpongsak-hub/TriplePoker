@@ -38,7 +38,6 @@ describe('Gate 6 - Arena settlement and conservation', () => {
 
   test('Battle Rewards ที่เหลือจบ Match แล้วเข้า Crown Sink', () => {
     const engine = new ArenaSettlementEngine(balances)
-    engine.execute({ type: 'BOSS_FEE', commandId: 'fee', playerIds: ['p1', 'p2', 'p3'], feeCrest: 24 })
     fundThreePiles(engine, 1)
     engine.execute({ type: 'AUCTION', commandId: 'auction', game: 1, winnerId: 'p2', amountCrest: 9 })
     engine.execute({ type: 'PILE_PAYOUT', commandId: 'pay-1', game: 1, pile: 1, winnerId: 'p1' })
@@ -50,7 +49,9 @@ describe('Gate 6 - Arena settlement and conservation', () => {
       entries: players.map(userId => ({ userId, deltaCrest: -12, persisted: true })),
     })
     expect(engine.resultBreakdown().every(row => row.entryFee === 12)).toBe(true)
-    expect(engine.totals()).toMatchObject({ battleRewardsCrest: 0, crownSinkCrest: 129, pots: { 1: 0, 2: 0, 3: 0 } })
+    // Boss Fee ถูกยกเลิกแล้ว (มติลุงเยาะ 2026-08-13 — ซ้ำซ้อนกับค่าธรรมเนียมท้ายแมตช์) เหลือแค่ ENTRY_FEE
+    // (12×4=48) + Battle Rewards ที่ไม่มีใคร Sweep เก็บ (9) เข้า Crown Sink = 57
+    expect(engine.totals()).toMatchObject({ battleRewardsCrest: 0, crownSinkCrest: 57, pots: { 1: 0, 2: 0, 3: 0 } })
     expect(engine.totals().conservedTotalCrest).toBe(800)
   })
 

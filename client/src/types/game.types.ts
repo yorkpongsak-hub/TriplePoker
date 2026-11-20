@@ -102,6 +102,17 @@ export interface PileResult {
   payout: number;
   burned: boolean;
   isTie: boolean;
+  scoring?: {
+    winScore: number;
+    missionScore: number;
+    comboScore: number;
+    tripleSweepScore: number;
+    penalties: number;
+    finalPileScore: number;
+    totalPileScore: number;
+    sharePercent: number;
+    grossPileReward: number;
+  };
   rankings: Array<{
     playerId: string;
     handRank: HandRank;

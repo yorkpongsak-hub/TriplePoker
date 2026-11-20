@@ -352,7 +352,7 @@ export default function CollectiblesScreen() {
 
           <Text style={styles.title}>OFFICIAL COLLECTIBLES</Text>
           <Text style={styles.subtitle}>&ldquo;Only for those who earned the right to own them.&rdquo;</Text>
-          <Text style={styles.blurb}>These collectibles celebrate real achievements inside the TRIPLEPOKER universe.</Text>
+          <Text style={styles.blurb}>These collectibles celebrate real achievements inside the TRIPLEPOKER : RISE universe.</Text>
 
           {view === 'store' ? (
             <>

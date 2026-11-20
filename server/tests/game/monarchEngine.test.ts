@@ -23,6 +23,7 @@ jest.mock('../../src/game/monarchSpawn', () => ({
 }))
 
 const mockRecordMatchStats = jest.fn(async (..._args: any[]) => undefined)
+const mockAwardPerformanceScore = jest.fn(async (..._args: any[]) => undefined)
 const mockRecordBossResult = jest.fn(async (input: any) => {
   await mockRecordMonarchEncounter(input.userId)
   if (input.won) await mockRecordMonarchVictory(input.userId)
@@ -30,12 +31,16 @@ const mockRecordBossResult = jest.fn(async (input: any) => {
 jest.mock('../../src/game/matchStatsService', () => ({
   recordMatchStats: (...args: any[]) => mockRecordMatchStats(...args),
 }))
+jest.mock('../../src/game/psEngine', () => ({
+  awardPerformanceScore: (...args: any[]) => mockAwardPerformanceScore(...args),
+}))
 jest.mock('../../src/game/bossStatsService', () => ({
   recordBossResult: (input: any) => mockRecordBossResult(input),
 }))
 
 import { Card } from '../../src/game/deck'
 import { PlayerArrangement } from '../../src/game/foulChecker'
+import { gameConfig } from '../../src/config/gameConfig'
 import {
   MonarchSeat, MonarchMatchState, settleMonarchMatch, resolveMonarchBossTurn, resolveG1,
   startMonarchMatch, startMonarchRound, submitMonarchArrangement, submitMonarchGrandFinaleAction,
@@ -304,7 +309,7 @@ describe('settleAndEndMonarchMatch — disconnect resolution (มติ commit-b
 
     expect(updateMonarchArrangementDraft(roomId, humanUserId, latestDraft).ok).toBe(true)
     expect(startMonarchArrangementTimer(io, roomId, humanUserId).ok).toBe(true)
-    await jest.advanceTimersByTimeAsync(60_000)
+    await jest.advanceTimersByTimeAsync(gameConfig.monarchConfig.arrangementDeadlineMs)
 
     const sealed = getMonarchMatchState(roomId)!.arrangements![humanUserId]
     expect(toKeys(sealed.pile1)).toEqual(latestDraft.g1)

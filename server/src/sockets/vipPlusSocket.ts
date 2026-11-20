@@ -1,4 +1,5 @@
 import { Server, Socket } from 'socket.io'
+import { GAME_RESUME_EVENT, GAME_RESUME_RESULT_EVENT, isGameResumeRequest } from './gameResumeProtocol'
 import { supabase, supabaseAdmin } from '../config/supabase'
 import { gameConfig } from '../config/gameConfig'
 import { getVipPlusAccess } from '../game/vipPlusAccess'
@@ -9,11 +10,12 @@ import {
   vipPlusTableRegistry,
 } from '../game/vipPlusTableRegistry'
 import { attachVipPlusBettingIo, buildVipPlusSnapshot, forfeitVipPlusMatch, getVipPlusMatchState, markVipPlusConnected, markVipPlusDisconnected, startVipPlusMatch, submitVipPlusArrangement, submitVipPlusAuctionBid, submitVipPlusBettingAction, submitVipPlusRearrangement } from '../game/vipPlusMatchEngine'
+import { resolveProfileAvatar } from '../game/profileAvatarService'
 
 // มติลุงเยาะ — เพิ่ม avatarUrl ให้ Avatar หน้าชื่อผู้เล่นทุกที่นั่ง (Waiting Chamber + ในเกม) ตาม pattern
 // เดียวกับ Monarch (monarch/index.tsx's MonarchPlayerAvatar) — avatar_url เก็บ preset key/emoji/URL จริง
 // (ชื่อ column ทำให้เข้าใจผิดว่าเป็น URL เสมอ แต่จริงๆ resolve หลายแบบฝั่ง client)
-type AuthenticatedProfile = { playerId: string; displayName: string; tokenBalance: number; avatarUrl: string | null }
+type AuthenticatedProfile = { playerId: string; displayName: string; tokenBalance: number; avatarUrl: string | null; isVip: boolean }
 const vipPlusSocketPlayers = new Map<string, { playerId: string; tableId: string }>()
 
 async function authenticateProfile(userId: string, accessToken?: string | null): Promise<AuthenticatedProfile | null> {
@@ -23,7 +25,7 @@ async function authenticateProfile(userId: string, accessToken?: string | null):
 
   const { data: profile, error: profileError } = await supabaseAdmin
     .from('users')
-    .select('display_name, token_balance, avatar_url')
+    .select('display_name, token_balance, avatar_url, profile_image_url, vip_status')
     .eq('user_id', userId)
     .single()
   if (profileError || !profile) return null
@@ -31,7 +33,8 @@ async function authenticateProfile(userId: string, accessToken?: string | null):
     playerId: userId,
     displayName: profile.display_name ?? 'Player',
     tokenBalance: profile.token_balance ?? 0,
-    avatarUrl: profile.avatar_url ?? null,
+    avatarUrl: await resolveProfileAvatar(profile),
+    isVip: (profile.vip_status ?? 'none') !== 'none',
   }
 }
 
@@ -54,6 +57,24 @@ async function finalEntryRecheck(tableId: string): Promise<void> {
 }
 
 export function registerVipPlusSocket(io: Server, socket: Socket): void {
+  socket.on(GAME_RESUME_EVENT, async (request: unknown) => {
+    if (!isGameResumeRequest(request) || request.matchType !== 'VIP_PLUS') return
+    const profile = await authenticateProfile(request.userId, request.accessToken)
+    if (!profile) {
+      socket.emit(GAME_RESUME_RESULT_EVENT, { ok: false, status: 'UNAUTHORIZED', roomId: request.roomId, matchType: request.matchType })
+      return
+    }
+    const snapshot = buildVipPlusSnapshot(request.roomId, profile.playerId)
+    if (!snapshot) {
+      socket.emit(GAME_RESUME_RESULT_EVENT, { ok: false, status: 'MATCH_NOT_FOUND', roomId: request.roomId, matchType: request.matchType })
+      return
+    }
+    socket.join(request.roomId); socket.join(profile.playerId)
+    vipPlusSocketPlayers.set(socket.id, { playerId: profile.playerId, tableId: request.roomId })
+    markVipPlusConnected(request.roomId, profile.playerId)
+    socket.emit('vip_plus:match_snapshot', snapshot)
+    socket.emit(GAME_RESUME_RESULT_EVENT, { ok: true, status: 'RESUMED', roomId: request.roomId, matchType: request.matchType })
+  })
   attachVipPlusBettingIo(io)
   // Batch 1 (VIP-05 fix) — sweeper ปล่อยที่นั่ง Waiting Chamber ที่หลุดเกิน grace (C2/C7)
   // startSweeper() เป็น idempotent เรียกซ้ำได้ทุก connection โดยไม่สร้าง interval ซ้ำ

@@ -5,6 +5,9 @@ import { assertVip, assertVipPro, VipStatus } from '../middleware/vipGuard'
 import { getAvatarPreset, isAvatarKeyAllowed, DEFAULT_AVATAR_KEY } from '../constants/avatarPresets'
 import { getAscendantStatus } from '../game/crownVaultService'
 import { getTableSkinState, selectTableSkin } from '../game/tableSkinService'
+import { getClaimableStreakMilestone, getBangkokDateString, getStreakCycleStartDate } from '../game/matchStatsService'
+import { economyService } from '../economy/economyService'
+import { gameConfig } from '../config/gameConfig'
 
 // camelCase ตาม tier_unlocked_max ceiling model (TIER_ORDER ฝั่ง tierUnlockService.ts) -
 // ไม่รวม 'D' (ค่าเริ่มต้นก่อนปลดล็อค ไม่มีอะไรให้ฉลอง) และไม่รวม last_boss (Last Boss อยู่ใน The Arena
@@ -13,7 +16,8 @@ const VALID_TIERS = ['initiate', 'adept', 'mastermind', 'highNoble', 'grandmaste
 
 export async function profileRoutes(app: FastifyInstance) {
 
-  // บันทึกเวลาล่าสุดทุกครั้งที่ผู้เล่นเปิดหน้า Profile โดยยืนยันตัวตนและใช้เวลาจากฝั่ง Server
+  // Record the first game visit of each Bangkok calendar day. The conditional
+  // update is atomic, so multiple devices cannot write repeatedly on the same day.
   app.post('/profile/touch-last-login', async (request, reply) => {
     const token = request.headers.authorization?.replace('Bearer ', '')
     if (!token) return reply.status(401).send({ error: 'Unauthorized' })
@@ -22,16 +26,20 @@ export async function profileRoutes(app: FastifyInstance) {
     if (authError || !authData.user) return reply.status(401).send({ error: 'Invalid token' })
 
     const lastLoginAt = new Date().toISOString()
+    const bangkokNow = new Date(Date.now() + 7 * 60 * 60 * 1000)
+    const bangkokDayStartUtc = new Date(Date.UTC(
+      bangkokNow.getUTCFullYear(), bangkokNow.getUTCMonth(), bangkokNow.getUTCDate(), -7,
+    )).toISOString()
     const { data: updated, error: updateError } = await supabaseAdmin
       .from('users')
       .update({ last_login: lastLoginAt })
       .eq('user_id', authData.user.id)
+      .or(`last_login.is.null,last_login.lt.${bangkokDayStartUtc}`)
       .select('last_login')
       .maybeSingle()
 
     if (updateError) return reply.status(500).send({ error: 'DB_ERROR' })
-    if (!updated) return reply.status(404).send({ error: 'USER_NOT_FOUND' })
-    return reply.send({ success: true, lastLoginAt: updated.last_login })
+    return reply.send({ success: true, updated: !!updated, lastLoginAt: updated?.last_login ?? null })
   })
 
   app.post<{ Body: { path?: string } }>('/profile/beyond-path', async (request, reply) => {
@@ -290,5 +298,73 @@ export async function profileRoutes(app: FastifyInstance) {
     }
 
     return reply.send({ success: true, avatarKey })
+  })
+
+  // ── POST /profile/claim-streak-reward ───────────────────────────────
+  // Streak Milestone Bonus (มติลุงเยาะ 2026-08-14) — milestone วันที่ 3/5/7 เท่านั้น (วันที่ 1 ไม่มี
+  // รางวัล) ต้องกด Claim เองจากหน้า /streak เท่านั้น ไม่มีการแจกอัตโนมัติที่ไหนอีกแล้ว (ดู
+  // matchStatsService.ts's comment — เดิมเคย mint อัตโนมัติทุกวัน ถูกถอดออกแล้ว) client รับผิดชอบ
+  // บังคับดูโฆษณาก่อนเรียก endpoint นี้เองสำหรับสมาชิกฟรี (ผ่านหน้า /watch-ad?mode=gate) — endpoint
+  // นี้ไม่เช็ค VIP/ad เลย เพราะเป็นแค่ "ให้รางวัลถ้ามีสิทธิ์" ล้วนๆ ไม่ใช่ gate
+  app.post('/profile/claim-streak-reward', async (request, reply) => {
+    const compatibilityToken = request.headers.authorization?.replace('Bearer ', '')
+    if (!compatibilityToken) return reply.status(401).send({ error: 'Unauthorized' })
+    const compatibilityAuth = await supabase.auth.getUser(compatibilityToken)
+    if (compatibilityAuth.error || !compatibilityAuth.data.user) return reply.status(401).send({ error: 'Invalid token' })
+    // Replaced by /daily-streak/claim. Keep this endpoint as an explicit
+    // non-rewarding compatibility response so an old client cannot mint the
+    // former 3/5/7 milestone reward beside the new daily reward.
+    return reply.status(410).send({ error: 'DAILY_STREAK_REPLACED' })
+    /*
+    const token = request.headers.authorization?.replace('Bearer ', '')
+    if (!token) return reply.status(401).send({ error: 'Unauthorized' })
+    const { data: authData, error: authError } = await supabase.auth.getUser(token)
+    if (authError || !authData.user) return reply.status(401).send({ error: 'Invalid token' })
+    const userId = authData.user.id
+
+    const { data: user, error: readError } = await supabaseAdmin
+      .from('users')
+      .select('streak_count, streak_claimed_milestone, last_played_date')
+      .eq('user_id', userId)
+      .maybeSingle()
+    if (readError) return reply.status(500).send({ error: 'DB_ERROR' })
+    if (!user) return reply.status(404).send({ error: 'USER_NOT_FOUND' })
+
+    const milestone = getClaimableStreakMilestone(user.streak_count ?? 0, user.streak_claimed_milestone ?? 0)
+    if (!milestone) return reply.status(400).send({ error: 'NOTHING_TO_CLAIM' })
+
+    const tokenAmount = gameConfig.dailyEconomy.streakMilestoneRewards[milestone]
+    const todayStr = getBangkokDateString(new Date())
+    const cycleStart = getStreakCycleStartDate(user.last_played_date ?? null, user.streak_count ?? 0, todayStr)
+
+    try {
+      await economyService.mint({
+        // ผูกกับวันเริ่ม cycle ไม่ใช่วันที่กด: retry ข้ามวันหลัง mint สำเร็จแต่ marker update ล้มเหลว
+        // จะ replay transaction เดิม ไม่ mint ซ้ำ ส่วน cycle ใหม่ยัง claim milestone เดิมได้ตามปกติ
+        idempotencyKey: `STREAK_MILESTONE:${userId}:${milestone}:${cycleStart}`,
+        to: { accountType: 'PLAYER', accountId: userId },
+        currency: 'TOKEN',
+        amount: tokenAmount,
+        reason: 'STREAK_MILESTONE_BONUS',
+        actor: 'streak_milestone_system',
+      })
+    } catch (err: any) {
+      return reply.status(500).send({ error: 'MINT_FAILED', message: err?.message ?? 'unknown error' })
+    }
+
+    const { data: updated, error: updateError } = await supabaseAdmin
+      .from('users')
+      .update({ streak_claimed_milestone: milestone })
+      .eq('user_id', userId)
+      .select('token_balance')
+      .maybeSingle()
+    if (updateError) return reply.status(500).send({ error: 'DB_ERROR' })
+
+    return reply.send({
+      success: true,
+      milestone,
+      tokensAwarded: tokenAmount,
+      newTokenBalance: updated?.token_balance ?? null,
+    }) */
   })
 }

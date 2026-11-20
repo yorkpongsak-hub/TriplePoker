@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { supabase, supabaseAdmin } from '../config/supabase'
 import { validateDisplayName } from '../utils/nameValidator'
+import { grantWelcomeBonusIfNeeded } from '../game/welcomeBonusService'
 
 export async function authRoutes(app: FastifyInstance) {
 
@@ -62,6 +63,10 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'USER_NOT_FOUND', message: 'User record not found. Please complete sign-in first.' })
     }
 
+    // Welcome Bonus is best-effort and idempotent; registration must never fail because of it.
+    await grantWelcomeBonusIfNeeded(authData.user.id)
+
     return reply.send({ success: true, user: updated })
   })
+
 }

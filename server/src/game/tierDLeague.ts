@@ -1,0 +1,41 @@
+/** Canonical League Mode progression. This module deliberately contains no
+ * leaderboard, seasonal, auction, or Ranked/Relax mechanics. */
+export type LeagueId = 'bronze' | 'silver' | 'gold' | 'platinum' | 'diamond' | 'elite' | 'master' | 'grandmaster' | 'legend' | 'mythic'
+export type TierUnlock = 'C' | 'B' | 'A' | 'A+'
+
+export interface TierDLeagueDefinition {
+  id: LeagueId
+  name: string
+  startLevel: number
+  endLevel: number | null
+  aiOpponents: 1 | 2 | 3
+  arrangeSeconds: number | null
+  trophyLevel: number | null
+  unlocksTier?: TierUnlock
+}
+
+const LEAGUES: readonly TierDLeagueDefinition[] = [
+  { id: 'bronze', name: 'Bronze', startLevel: 1, endLevel: 50, aiOpponents: 1, arrangeSeconds: null, trophyLevel: 50 },
+  { id: 'silver', name: 'Silver', startLevel: 51, endLevel: 100, aiOpponents: 1, arrangeSeconds: 330, trophyLevel: 100 },
+  { id: 'gold', name: 'Gold', startLevel: 101, endLevel: 150, aiOpponents: 1, arrangeSeconds: 270, trophyLevel: 150 },
+  { id: 'platinum', name: 'Platinum', startLevel: 151, endLevel: 200, aiOpponents: 2, arrangeSeconds: 240, trophyLevel: 200 },
+  { id: 'diamond', name: 'Diamond', startLevel: 201, endLevel: 250, aiOpponents: 2, arrangeSeconds: 210, trophyLevel: 250 },
+  { id: 'elite', name: 'Elite', startLevel: 251, endLevel: 350, aiOpponents: 2, arrangeSeconds: 195, trophyLevel: 350, unlocksTier: 'C' },
+  { id: 'master', name: 'Master', startLevel: 351, endLevel: 500, aiOpponents: 3, arrangeSeconds: 180, trophyLevel: 500, unlocksTier: 'B' },
+  { id: 'grandmaster', name: 'Grandmaster', startLevel: 501, endLevel: 700, aiOpponents: 3, arrangeSeconds: 170, trophyLevel: 700, unlocksTier: 'A' },
+  { id: 'legend', name: 'Legend', startLevel: 701, endLevel: 1000, aiOpponents: 3, arrangeSeconds: 160, trophyLevel: 1000, unlocksTier: 'A+' },
+  { id: 'mythic', name: 'Mythic', startLevel: 1001, endLevel: null, aiOpponents: 3, arrangeSeconds: 150, trophyLevel: 1500 },
+]
+
+export const TIER_D_PILE_BASE_SCORES = { 1: 4, 2: 6, 3: 8 } as const
+export function getCurrentLeague(level: number): TierDLeagueDefinition {
+  assertLevel(level)
+  return LEAGUES.find(league => level >= league.startLevel && (league.endLevel === null || level <= league.endLevel))!
+}
+export function tierDBotCountForLevel(level: number): 1 | 2 | 3 { return getCurrentLeague(level).aiOpponents }
+export function getArrangeTimerSeconds(level: number): number | null { return getCurrentLeague(level).arrangeSeconds }
+export function hasHandMultiplier(level: number): boolean { return level >= 51 }
+export function hasMissions(level: number): boolean { return level >= 51 }
+export function isLeagueFinalLevel(level: number): boolean { return getCurrentLeague(level).trophyLevel === level }
+export function tierUnlockForLevel(level: number): TierUnlock | undefined { return isLeagueFinalLevel(level) ? getCurrentLeague(level).unlocksTier : undefined }
+function assertLevel(level: number): void { if (!Number.isInteger(level) || level < 1) throw new Error('Tier D level must be a positive integer') }

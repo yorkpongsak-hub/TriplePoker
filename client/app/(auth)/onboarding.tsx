@@ -2,18 +2,18 @@
 // Onboarding Slideshow -- 6 หน้า สอนกติกาเกมให้ผู้เล่นใหม่ก่อนเข้า Lobby ครั้งแรก
 // The Sage Unicorn Studio Co., Ltd.
 //
-import { Video, ResizeMode } from "expo-av";
 // หมายเหตุ: ข้อความทุก slide เป็น copy ที่ lock แล้ว ห้ามแก้คำ -- มีแค่แทนอักขระ
 // em dash / arrow ด้วย ASCII ("--" / "->") ตามกฎห้ามใช้ Unicode พิเศษใน .tsx
 
-import React, { useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
+import { launchTelemetry } from '../../src/telemetry/launch'
 import {
   View, Text, Pressable, ScrollView, StyleSheet, StatusBar, Image,
   NativeSyntheticEvent, NativeScrollEvent, LayoutChangeEvent,
 } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import { router } from 'expo-router'
-import AsyncStorage from '@react-native-async-storage/async-storage'
+import { Image as ExpoImage } from 'expo-image'
 
 // ─── ธีมสีหลัก (Website Theme Spec v1.0) ─── (ใช้ comment ธรรมดา ไม่มี Unicode พิเศษ)
 const C = {
@@ -122,6 +122,7 @@ const COMMUNITY_OVERLAP = -17 // ไพ่กองกลาง (community) ซ�
 const TOTAL_SLIDES = 6
 
 export default function OnboardingScreen() {
+  useEffect(() => { void launchTelemetry.tutorialStart('tier_d_guide'); void launchTelemetry.tutorialStep('tier_d_guide',1) }, [])
   const scrollRef = useRef<ScrollView>(null)
   const [index, setIndex] = useState(0)
 
@@ -137,17 +138,20 @@ export default function OnboardingScreen() {
   const goToSlide = (i: number) => {
     scrollRef.current?.scrollTo({ x: i * containerWidth, animated: true })
     setIndex(i)
+    if (i >= 0 && i < TOTAL_SLIDES) void launchTelemetry.tutorialStep('tier_d_guide',i+1)
   }
 
   const handleScrollEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const i = Math.round(e.nativeEvent.contentOffset.x / containerWidth)
     setIndex(i)
+    if (i >= 0 && i < TOTAL_SLIDES) void launchTelemetry.tutorialStep('tier_d_guide',i+1)
   }
 
-  const handleFinish = async () => {
-    // ทั้ง Skip และ Let's Play ทำผลลัพธ์เดียวกัน -- mark ว่าเคยดูแล้ว ไม่ต้องโชว์ซ้ำอัตโนมัติอีก
-    await AsyncStorage.setItem('onboarding_seen', '1')
-    router.replace('/(home)/profile')
+  const handleFinish = () => {
+    if (index === TOTAL_SLIDES-1) void launchTelemetry.tutorialComplete('tier_d_guide')
+    // This is a read-only guide. Leaving must return to the entrance door and
+    // must not create a match, reset progress, or write an onboarding flag.
+    router.replace('/game/tier-d/entry')
   }
 
   const handleNext = () => {
@@ -168,9 +172,9 @@ export default function OnboardingScreen() {
     <View style={styles.root} onLayout={handleRootLayout}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
 
-      {/* Skip -- มุมขวาบนทุกหน้า */}
+      {/* Close -- มุมขวาบนทุกหน้า */}
       <Pressable style={styles.skipBtn} onPress={handleFinish} hitSlop={10}>
-        <Text style={styles.skipText}>Skip</Text>
+        <Text style={styles.skipText}>Close</Text>
       </Pressable>
 
       <ScrollView
@@ -198,7 +202,7 @@ export default function OnboardingScreen() {
         ))}
       </View>
 
-      {/* Bottom nav: Back / Next-or-Let's Play */}
+      {/* Bottom nav: Back / Next-or-Close Guide */}
       <View style={styles.navRow}>
         <Pressable
           onPress={handleBack}
@@ -209,7 +213,7 @@ export default function OnboardingScreen() {
         </Pressable>
 
         <Pressable onPress={handleNext} style={[styles.navBtn, styles.nextBtn]}>
-          <Text style={styles.nextBtnText}>{index === TOTAL_SLIDES - 1 ? "Let's Play!" : 'Next'}</Text>
+          <Text style={styles.nextBtnText}>{index === TOTAL_SLIDES - 1 ? 'Close Guide' : 'Next'}</Text>
         </Pressable>
       </View>
     </View>
@@ -396,7 +400,7 @@ const TIER_LADDER: { stars: string; letter: string; name: string; desc: string; 
   { stars: '★★', letter: 'C', name: 'Initiate', desc: 'Learn the flow -- you vs 3 AI' },
   { stars: '★★★', letter: 'B', name: 'Adept', desc: 'Real players join the table' },
   { stars: '★★★★', letter: 'A', name: 'Mastermind', desc: 'Fog of War · Blind Auction · Grand Finale Betting · The Nine Sentinels' },
-  { stars: '★★★★★', letter: 'A+', name: 'High Noble', desc: 'Face the Four Gods -- the elite of TriplePoker' },
+  { stars: '★★★★★', letter: 'A+', name: 'High Noble', desc: 'Face the Four Gods -- the elite of TriplePoker : Rise' },
   { stars: '★★★★★⚡', letter: '???', name: '???', desc: 'Something waits above...', locked: true },
 ]
 
@@ -418,7 +422,7 @@ function Slide4() {
           </View>
         ))}
       </View>
-      <Text style={styles.tagline}>Start simple. Go deep. Master TriplePoker.</Text>
+      <Text style={styles.tagline}>Start simple. Go deep. Master TriplePoker : Rise.</Text>
     </View>
   )
 }
@@ -428,13 +432,11 @@ function Slide5() {
   return (
     <View style={styles.slideBody}>
       <View style={styles.arenaGlowBox}>
-        <Video
-          source={require('../../assets/videos/intro.mp4')}
+        <ExpoImage
+          source={require('../../assets/videos/intro.webp')}
           style={StyleSheet.absoluteFill}
-          resizeMode={ResizeMode.COVER}
-          isLooping={false}
-          shouldPlay={true}
-          isMuted={true}
+          contentFit="cover"
+          autoplay
         />
       </View>
 
@@ -480,7 +482,7 @@ function Slide6() {
 
       <View style={[styles.calloutBox, { borderColor: C.red }]}>
         <Text style={styles.calloutText}>
-          Use Auto-Sort when in doubt -- free for your first Tier: Initiate !
+          Auto-Sort is a tutorial aid available only in Round 1 of each Initiate match.
         </Text>
       </View>
     </View>

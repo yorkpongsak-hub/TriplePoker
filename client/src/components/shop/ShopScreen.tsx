@@ -14,7 +14,7 @@
 // จึงเป็น UI shell ที่โชว์ toast "Coming Soon" แทนการยิง API จริง (กัน UX หลอกว่าเงินถูกหักแต่ backend ไม่ทำงาน)
 // ยกเว้น interaction ที่ canon บังคับให้มี UI จริง: VIP PRO lock bottom sheet + Loot Box odds modal ก่อนซื้อ
 
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
 import {
   View,
   Text,
@@ -27,10 +27,13 @@ import {
 } from 'react-native'
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated'
 import { router, useFocusEffect } from 'expo-router'
+import { Image } from 'expo-image'
 import { useAuthStore } from '../../store/authStore'
 import { ThemedBackground } from '../ui/ThemedBackground'
 import { glassPanel, glassPanelDense, textOnGlass } from '../../ui/glassStyles'
 import { TIER_CONFIG } from '../../config/tierConfig'
+import { BADGES } from '../../../assets/badges/BADGE_MANIFEST'
+import { planFromVipStatus } from '../../membership/entitlements'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
@@ -57,7 +60,7 @@ const C = {
 
 const fmt = (n: number) => n.toLocaleString('en-US')
 
-type TabKey = 'items' | 'fun' | 'vip' | 'packs' | 'cosmetics' | 'vault'
+type TabKey = 'items' | 'fun' | 'vip' | 'packs' | 'cosmetics' | 'vault' | 'badges'
 
 // Tier progression lock — Competitive Items ปลดล็อคทีละ Tier (มติลุงเยาะ 2026-07-26)
 // ceiling model เดียวกับ profile.tsx (TIER_ORDER local const): 'D' = ยังไม่เคยปลด Tier ไหนเลย
@@ -82,7 +85,20 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'vip',        label: 'VIP' },
   { key: 'packs',      label: 'TOKEN PACKS' },
   { key: 'vault',      label: 'CROWN VAULT' },
+  { key: 'badges',     label: 'BADGES' },
 ]
+
+// Badge Shop — response shape ของ GET /badges/status (server/src/routes/badges.ts).
+// Badge ที่ยังไม่ปลดล็อค (unlocked:false) ซื้อไม่ได้เด็ดขาด — server เช็คซ้ำเสมอตอน POST /badges/buy
+interface BadgeStatusEntry {
+  key: string
+  name: string
+  category: 'tier' | 'achievement'
+  price: number
+  hint: string
+  unlocked: boolean
+  owned: boolean
+}
 
 // The Crown Vault — response shape ของ GET /crown-vault/status (server/src/routes/crownVault.ts)
 interface AscendantStatusData {
@@ -146,7 +162,6 @@ const COMPETITIVE_ITEMS: CatalogItem[] = [
   { key: 'vision',           name: "Oracle's Vision",      icon: '👁️', price: 300,  desc: 'Peek at a hidden community card before it reveals.', unlockTier: 'initiate' },
   { key: 'auction_veil',     name: 'Shadow Bid',           icon: '🌑', price: 200,  desc: 'Hide your Blind Auction bid from other players.', unlockTier: 'initiate' },
   { key: 'chrono_shard',     name: 'Chrono Shard',         icon: '⏳', price: 250,  desc: 'Extend your arrangement timer for one round.', unlockTier: 'adept' },
-  { key: 'free_sort',        name: 'Free Sort',            icon: '🃏', price: 0,    desc: 'Waive the Auto Sort fee for one round.', tiered: [15, 40, 80], unlockTier: 'adept' },
   { key: 'alliance_of_fate', name: 'Alliance of Fate',     icon: '🤝', price: 400,  desc: 'Temporarily team up with another player for one pile.', unlockTier: 'adept' },
   { key: 'streak_shield',    name: 'Eternal Streak',       icon: '🔥', price: 350,  desc: 'Protect your win streak from breaking on one loss.', unlockTier: 'mastermind' },
   { key: 'swap',             name: "The Alchemist's Swap", icon: '⚗️', price: 600,  desc: 'Swap one card in your hand for a random new one.', unlockTier: 'mastermind' },
@@ -195,10 +210,9 @@ const LOOT_BOXES: LootBoxDef[] = [
   {
     key: 'mystery_pouch', name: 'Mystery Pouch', icon: '📦', price: 500, itemCount: 2,
     odds: [
-      { itemName: 'Chrono Shard',  percent: 30 },
-      { itemName: 'Shadow Bid',    percent: 30 },
+      { itemName: 'Chrono Shard',  percent: 35 },
+      { itemName: 'Shadow Bid',    percent: 35 },
       { itemName: "Oracle's Vision", percent: 25 },
-      { itemName: 'Free Sort',     percent: 10 },
       { itemName: 'Eternal Streak', percent: 5 },
     ],
   },
@@ -284,25 +298,32 @@ const TOKEN_PACKS: TokenPack[] = [
 interface VipPlan {
   tier: 'vip' | 'vip_pro'
   label: string
-  priceTHB: number       // ราคา Monthly
-  price3moTHB: number    // ราคา Special แบบ 3 Months
+  priceTHB: number
+  priceYearTHB: number
+  freeMonths: number
   accent: string
   ribbon?: string
-  benefits: string[]
+  adBenefits: string[]
+  accessBenefits: string[]
+  socialBenefits: string[]
 }
 
 const VIP_PLANS: VipPlan[] = [
   {
-    tier: 'vip', label: 'VIP', priceTHB: 99, price3moTHB: 259, accent: C.silver,
-    benefits: ['No Ads', '+300 Tokens daily', 'All Cosmetics', 'Bag Expansion purchases unlocked', 'VIP Milestone Rewards'],
+    tier: 'vip', label: 'Pro', priceTHB: 149, priceYearTHB: 1490, freeMonths: 2, accent: C.silver,
+    adBenefits: ['No forced interstitial ads', 'Post-game Analysis opens immediately', 'Optional rewarded ads remain available for extra rewards'],
+    accessBenefits: ['Create private tables', 'Protect private tables with a PIN', 'Create and use Golf Group mode'],
+    socialBenefits: [],
   },
   {
-    tier: 'vip_pro', label: 'VIP PRO', priceTHB: 199, price3moTHB: 499, accent: C.gold, ribbon: 'BEST VALUE',
-    benefits: ['Everything in VIP', '+400 Tokens daily', 'All Competitive Items', 'Grand Master (D30)', 'Exclusive Badge & Avatar Frame'],
+    tier: 'vip_pro', label: 'Pro Plus', priceTHB: 499, priceYearTHB: 3992, freeMonths: 4, accent: C.gold, ribbon: 'SOCIAL STATUS',
+    adBenefits: ['No forced interstitial ads', 'Post-game Analysis opens immediately', 'Optional rewarded ads remain available for extra rewards'],
+    accessBenefits: ['All Pro gameplay-access benefits'],
+    socialBenefits: ['Gift and Tip', 'Heart, Rose and other Pro Plus social items', 'Pro Plus badge and identity', 'Social/status benefits never improve gameplay odds'],
   },
 ]
 
-type BillingPeriod = 'monthly' | '3mo'
+type BillingPeriod = 'monthly' | 'yearly'
 
 // ─── Small building blocks ──────────────────────────────────────────────
 
@@ -364,23 +385,50 @@ function ShopItemCard({
   )
 }
 
-// ─── VIP PRO Upgrade Bottom Sheet ───────────────────────────────────────
+// ─── Badge Card (Badge Shop — badge PNG จริงจาก BADGE_MANIFEST.ts แทน emoji icon ของ
+// ShopItemCard) — locked: มืดลง + hint เกณฑ์ปลดล็อคแทนปุ่มซื้อ, unlocked: ราคา + ปุ่ม BUY, owned: OWNED ─
+function BadgeShopCard({ badge, busy, onBuy }: { badge: BadgeStatusEntry; busy: boolean; onBuy: () => void }) {
+  const source = (BADGES as Record<string, any>)[badge.key]
+  return (
+    <GlassCard style={s.itemCard}>
+      <Image source={source} style={[s.badgeImg, !badge.unlocked && s.badgeImgLocked]} contentFit="contain" />
+      <Text style={s.itemName} numberOfLines={1}>{badge.name}</Text>
+      {badge.owned ? (
+        <View style={[s.buyBtn, s.ownedBtn]}>
+          <Text style={s.ownedBtnTxt}>✓ OWNED</Text>
+        </View>
+      ) : badge.unlocked ? (
+        <PressScale onPress={onBuy} disabled={busy} style={s.buyBtnWrap}>
+          <View style={s.buyBtn}>
+            <Text style={s.buyBtnTxt}>{busy ? '...' : `${fmt(badge.price)} 🪙`}</Text>
+          </View>
+        </PressScale>
+      ) : (
+        <View style={[s.buyBtn, s.lockBtn]}>
+          <Text style={s.lockBtnTxt} numberOfLines={2}>🔒 {badge.hint}</Text>
+        </View>
+      )}
+    </GlassCard>
+  )
+}
+
+// ─── Pro Plus Upgrade Bottom Sheet ───────────────────────────────────────
 function VipUpgradeSheet({ visible, onClose, onUpgrade }: { visible: boolean; onClose: () => void; onUpgrade: () => void }) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <TouchableOpacity style={s.sheetOverlay} activeOpacity={1} onPress={onClose}>
         <View style={s.sheetBox}>
           <View style={s.sheetHandle} />
-          <Text style={s.sheetTitle}>🔒 VIP PRO REQUIRED</Text>
-          <Text style={s.sheetSub}>Competitive Items are exclusive to VIP PRO members.</Text>
+          <Text style={s.sheetTitle}>🔒 PRO PLUS REQUIRED</Text>
+          <Text style={s.sheetSub}>This social/status collection is exclusive to Pro Plus members.</Text>
           <View style={s.sheetBenefits}>
-            {VIP_PLANS[1].benefits.map((b, i) => (
+            {VIP_PLANS[1].socialBenefits.map((b, i) => (
               <Text key={i} style={s.sheetBenefitRow}>✦  {b}</Text>
             ))}
           </View>
           <PressScale onPress={onUpgrade}>
             <View style={s.sheetUpgradeBtn}>
-              <Text style={s.sheetUpgradeTxt}>UPGRADE TO VIP PRO — ฿{VIP_PLANS[1].priceTHB}/mo</Text>
+              <Text style={s.sheetUpgradeTxt}>UPGRADE TO PRO PLUS — ฿{VIP_PLANS[1].priceTHB}/mo</Text>
             </View>
           </PressScale>
           <TouchableOpacity onPress={onClose} style={{ marginTop: 10, alignItems: 'center' }}>
@@ -461,9 +509,13 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
   }, [toastMsg])
 
   const vipStatus  = profile?.vip_status ?? 'none'
+  const currentPlan = planFromVipStatus(vipStatus)
   const isVip      = vipStatus !== 'none'
   const isVipPro   = vipStatus === 'vip_pro'
   const tokenBalance = profile?.token_balance ?? 0
+  // มติลุงเยาะ 2026-08-15 — โชว์ Crown ควบคู่ Token ที่หัวหน้า Shop ด้วย (มาจาก profile เดียวกัน เลย
+  // อัปเดตอัตโนมัติทุกครั้งที่ purchase handler เรียก refreshProfile() อยู่แล้ว ไม่ต้อง plumb เพิ่ม)
+  const crownBalance = profile?.crown_balance ?? 0
 
   // Tier progression lock — ceiling model จาก tier_unlocked_max (ไม่ลดกลับแม้ token จะลดลงทีหลัง)
   const unlockedIdx = CEILING_ORDER.indexOf((profile?.tier_unlocked_max as any) ?? 'D')
@@ -500,8 +552,7 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
   }
 
   const handleSubscribe = (plan: VipPlan, period: BillingPeriod) => {
-    // TODO(RevenueCat): ต่อ purchase flow จริงตอน integrate IAP subscription (Sprint 7)
-    handleComingSoon(`${plan.label} — ${period === 'monthly' ? 'Monthly' : '3 Months'}`)
+    handleComingSoon(`${plan.label} — ${period === 'monthly' ? 'Monthly' : 'Yearly'}`)
   }
 
   const handleBuyTokenPack = (pack: TokenPack) => {
@@ -515,6 +566,7 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
   const [vault, setVault] = useState<CrownVaultData | null>(null)
   const [vaultBusy, setVaultBusy] = useState(false)
   const [exchangeInput, setExchangeInput] = useState('')
+  const exchangeRequestRef = useRef<{ id: string; amount: number } | null>(null)
   const [confirmAction, setConfirmAction] = useState<'exchange' | 'ascendant' | 'arena' | null>(null)
 
   const vaultAuthHeaders = () => ({
@@ -540,12 +592,21 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
   const handleConfirmExchange = async () => {
     const crownAmount = parseInt(exchangeInput, 10)
     if (!crownAmount || crownAmount <= 0) { setConfirmAction(null); return }
+    if (!exchangeRequestRef.current || exchangeRequestRef.current.amount !== crownAmount) {
+      exchangeRequestRef.current = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        amount: crownAmount,
+      }
+    }
     setVaultBusy(true)
     try {
       const res = await fetch(`${SERVER_URL}/crown-vault/exchange`, {
-        method: 'POST', headers: vaultAuthHeaders(), body: JSON.stringify({ crownAmount }),
+        method: 'POST', headers: vaultAuthHeaders(),
+        body: JSON.stringify({ crownAmount, requestId: exchangeRequestRef.current.id }),
       })
       const data = await res.json()
+      // ได้คำตอบแน่นอนแล้ว ไม่ว่า success/business error คำขอถัดไปถือเป็น intent ใหม่
+      exchangeRequestRef.current = null
       if (data.success) {
         setToastMsg(`Exchanged ${fmt(crownAmount)} Crown`)
         setExchangeInput('')
@@ -599,6 +660,51 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
     }
   }
 
+  // ─── Badge Shop — เช็ค unlocked/owned จริงฝั่ง server ทุกครั้ง (badgeUnlockService.ts) ───────
+  const [badges, setBadges] = useState<BadgeStatusEntry[] | null>(null)
+  const [badgeBusyKey, setBadgeBusyKey] = useState<string | null>(null)
+
+  const fetchBadgeStatus = useCallback(async () => {
+    if (!session?.access_token) return
+    try {
+      const res = await fetch(`${SERVER_URL}/badges/status`, { headers: vaultAuthHeaders() })
+      const data = await res.json()
+      if (data.success) setBadges(data.badges)
+    } catch (e) {
+      console.error('[ShopScreen] fetchBadgeStatus failed:', e)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.access_token])
+
+  useEffect(() => {
+    if (activeTab === 'badges') fetchBadgeStatus()
+  }, [activeTab, fetchBadgeStatus])
+
+  const handleBuyBadge = async (badgeKey: string) => {
+    setBadgeBusyKey(badgeKey)
+    try {
+      const res = await fetch(`${SERVER_URL}/badges/buy`, {
+        method: 'POST', headers: vaultAuthHeaders(), body: JSON.stringify({ badgeKey }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setToastMsg('Badge purchased!')
+        await Promise.all([fetchBadgeStatus(), refreshProfile()])
+      } else {
+        setToastMsg(
+          data.error === 'INSUFFICIENT_TOKENS' ? 'Not enough Token'
+          : data.error === 'NOT_UNLOCKED' ? 'Badge not unlocked yet'
+          : data.error === 'ALREADY_OWNED' ? 'Already owned'
+          : 'Purchase failed — try again'
+        )
+      }
+    } catch (e) {
+      setToastMsg('Purchase failed — try again')
+    } finally {
+      setBadgeBusyKey(null)
+    }
+  }
+
   return (
     <ThemedBackground isVip={isVip}>
       <View style={s.root}>
@@ -626,6 +732,9 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
         <View style={s.tokenRow}>
           <GlassCard dense style={s.tokenChip}>
             <Text style={s.tokenChipTxt}>🪙 {fmt(tokenBalance)}</Text>
+          </GlassCard>
+          <GlassCard dense style={s.tokenChip}>
+            <Text style={s.crownChipTxt}>👑 {fmt(crownBalance)}</Text>
           </GlassCard>
         </View>
 
@@ -747,27 +856,41 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
           {/* ── VIP (comparison cards) ── */}
           {activeTab === 'vip' && (
             <View style={{ gap: 14 }}>
+              <GlassCard dense style={s.vipCard}>
+                <Text style={s.vipLabel}>CURRENT PLAN · {currentPlan.replace('_', ' ')}</Text>
+                <Text style={s.itemDesc}>{currentPlan === 'FREE' ? 'No active subscription' : 'Active membership'}</Text>
+              </GlassCard>
               <View style={s.billingToggle}>
                 <PressScale onPress={() => setBillingPeriod('monthly')} style={{ flex: 1 }}>
                   <View style={[s.billingToggleBtn, billingPeriod === 'monthly' && s.billingToggleBtnActive]}>
                     <Text style={[s.billingToggleTxt, billingPeriod === 'monthly' && s.billingToggleTxtActive]}>Monthly</Text>
                   </View>
                 </PressScale>
-                <PressScale onPress={() => setBillingPeriod('3mo')} style={{ flex: 1 }}>
-                  <View style={[s.billingToggleBtn, billingPeriod === '3mo' && s.billingToggleBtnActive]}>
-                    <Text style={[s.billingToggleTxt, billingPeriod === '3mo' && s.billingToggleTxtActive]}>3 Months</Text>
+                <PressScale onPress={() => setBillingPeriod('yearly')} style={{ flex: 1 }}>
+                  <View style={[s.billingToggleBtn, billingPeriod === 'yearly' && s.billingToggleBtnActive]}>
+                    <Text style={[s.billingToggleTxt, billingPeriod === 'yearly' && s.billingToggleTxtActive]}>Yearly</Text>
                     <View style={s.billingSpecialBadge}>
-                      <Text style={s.billingSpecialBadgeTxt}>SPECIAL</Text>
+                      <Text style={s.billingSpecialBadgeTxt}>SAVE</Text>
                     </View>
                   </View>
                 </PressScale>
               </View>
+              <GlassCard style={s.vipCard}>
+                <Text style={s.vipLabel}>Free</Text>
+                <Text style={s.vipSavingsNote}>AD BENEFITS</Text>
+                <Text style={s.vipBenefitRow}>✦  Normal forced interstitial cadence remains</Text>
+                <Text style={s.vipBenefitRow}>✦  Watch a rewarded ad every time before Analysis</Text>
+                <Text style={s.vipBenefitRow}>✦  Reward doubling and optional ad bonuses remain available</Text>
+                <Text style={s.vipSavingsNote}>GAMEPLAY ACCESS</Text>
+                <Text style={s.vipBenefitRow}>✦  Core Solo and progression remain available</Text>
+              </GlassCard>
               {VIP_PLANS.map(plan => {
                 const isMonthly = billingPeriod === 'monthly'
-                const price = isMonthly ? plan.priceTHB : plan.price3moTHB
-                const unit = isMonthly ? '/ month' : '/ 3 months'
-                const fullPrice3mo = plan.priceTHB * 3
-                const savings = fullPrice3mo - plan.price3moTHB
+                const price = isMonthly ? plan.priceTHB : plan.priceYearTHB
+                const unit = isMonthly ? '/ month' : '/ year'
+                const activeTier = currentPlan === 'PRO' ? 'vip' : currentPlan === 'PRO_PLUS' ? 'vip_pro' : 'none'
+                const isCurrent = activeTier === plan.tier
+                const action = isCurrent ? 'MANAGE SUBSCRIPTION' : activeTier === 'vip_pro' ? 'DOWNGRADE' : 'UPGRADE'
                 return (
                   <GlassCard key={plan.tier} style={[s.vipCard, { borderColor: plan.accent }]}>
                     {plan.ribbon && (
@@ -780,26 +903,27 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
                       <View>
                         <Text style={[s.vipLabel, { color: plan.accent }]}>{plan.label}</Text>
                         <Text style={s.vipPrice}>฿{price} <Text style={s.vipPriceUnit}>{unit}</Text></Text>
-                        {!isMonthly && (
-                          <Text style={s.vipSavingsNote}>฿{fullPrice3mo} billed monthly · Save ฿{savings}</Text>
-                        )}
+                        {!isMonthly && <Text style={s.vipSavingsNote}>Equivalent to {plan.freeMonths} months free</Text>}
                       </View>
                     </View>
                     <View style={s.vipBenefits}>
-                      {plan.benefits.map((b, i) => (
-                        <Text key={i} style={s.vipBenefitRow}>✦  {b}</Text>
-                      ))}
+                      <Text style={s.vipSavingsNote}>AD BENEFITS</Text>
+                      {plan.adBenefits.map((b, i) => <Text key={`ad-${i}`} style={s.vipBenefitRow}>✦  {b}</Text>)}
+                      <Text style={s.vipSavingsNote}>GAMEPLAY ACCESS</Text>
+                      {plan.accessBenefits.map((b, i) => <Text key={`access-${i}`} style={s.vipBenefitRow}>✦  {b}</Text>)}
+                      {plan.socialBenefits.length ? <Text style={s.vipSavingsNote}>PRO PLUS SOCIAL / STATUS</Text> : null}
+                      {plan.socialBenefits.map((b, i) => <Text key={`social-${i}`} style={s.vipBenefitRow}>✦  {b}</Text>)}
                     </View>
                     <PressScale onPress={() => handleSubscribe(plan, billingPeriod)}>
                       <View style={[s.subscribeBtn, { backgroundColor: plan.accent }]}>
-                        <Text style={s.subscribeBtnTxt}>SUBSCRIBE</Text>
+                        <Text style={s.subscribeBtnTxt}>{action}</Text>
                       </View>
                     </PressScale>
                   </GlassCard>
                 )
               })}
               <Text style={s.iapDisclaimer}>
-                Subscriptions renew monthly via App Store / Google Play. Cancel anytime.
+                Purchase activation is coming later. Prices and benefits shown here are the planned Google Play offering. VIP removes inconvenience ads, not optional value-exchange ads.
               </Text>
             </View>
           )}
@@ -911,6 +1035,27 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
               <Text style={s.iapDisclaimer}>
                 Crown and Token cannot be exchanged for real money. Only Earned Crown works here — Crown Package (paid) cannot be used for Match Stake or Passes.
               </Text>
+            </View>
+          )}
+
+          {/* ── BADGES ── */}
+          {activeTab === 'badges' && (
+            <View style={{ gap: 14 }}>
+              <SectionNote text="Only badges you've already earned in-game can be purchased. Own them forever." />
+
+              <SectionTitle title="Tier Progression" />
+              <View style={s.grid}>
+                {(badges ?? []).filter(b => b.category === 'tier').map(b => (
+                  <BadgeShopCard key={b.key} badge={b} busy={badgeBusyKey === b.key} onBuy={() => handleBuyBadge(b.key)} />
+                ))}
+              </View>
+
+              <SectionTitle title="Achievement" />
+              <View style={s.grid}>
+                {(badges ?? []).filter(b => b.category === 'achievement').map(b => (
+                  <BadgeShopCard key={b.key} badge={b} busy={badgeBusyKey === b.key} onBuy={() => handleBuyBadge(b.key)} />
+                ))}
+              </View>
             </View>
           )}
 
@@ -1049,9 +1194,10 @@ const s = StyleSheet.create({
     letterSpacing: 1,
     ...textOnGlass,
   },
-  tokenRow: { alignItems: 'center', marginBottom: 10 },
+  tokenRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 10 },
   tokenChip: { paddingHorizontal: 10, paddingVertical: 7 },
   tokenChipTxt: { fontFamily: 'JetBrainsMono_600SemiBold', color: C.gold, fontSize: 13 },
+  crownChipTxt: { fontFamily: 'JetBrainsMono_600SemiBold', color: C.goldDark, fontSize: 13 },
   addBtn: {
     width: 30, height: 30, borderRadius: 15,
     backgroundColor: C.gold,
@@ -1115,7 +1261,13 @@ const s = StyleSheet.create({
   },
   buyBtnTxt: { fontFamily: 'JetBrainsMono_600SemiBold', color: C.gold, fontSize: 12 },
   lockBtn: { backgroundColor: 'rgba(255,215,106,0.10)', borderColor: C.gold },
-  lockBtnTxt: { color: C.gold, fontSize: 9, fontWeight: '800', letterSpacing: 0.3 },
+  lockBtnTxt: { color: C.gold, fontSize: 9, fontWeight: '800', letterSpacing: 0.3, textAlign: 'center' },
+
+  // Badge Shop card
+  badgeImg: { width: 56, height: 56, marginBottom: 6 },
+  badgeImgLocked: { opacity: 0.28 },
+  ownedBtn: { backgroundColor: 'rgba(141,255,181,0.12)', borderColor: C.green },
+  ownedBtnTxt: { fontFamily: 'JetBrainsMono_600SemiBold', color: C.green, fontSize: 12 },
 
   // VIP Upgrade Sheet
   sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },

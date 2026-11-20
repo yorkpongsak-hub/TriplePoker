@@ -1,6 +1,6 @@
 import { ArenaPile } from '../contracts/arenaContracts'
 
-export type SettlementReason = 'ENTRY_FEE' | 'BOSS_FEE' | 'ANTE' | 'AUCTION' | 'CALL' | 'POT_PAYOUT' | 'BATTLE_REWARD' | 'CROWN_SINK'
+export type SettlementReason = 'ENTRY_FEE' | 'ANTE' | 'AUCTION' | 'CALL' | 'POT_PAYOUT' | 'BATTLE_REWARD' | 'CROWN_SINK'
 
 export interface PlayerResultBreakdown {
   playerId: string
@@ -11,7 +11,6 @@ export interface PlayerResultBreakdown {
   jokerExtraAnte: number
   auction: number
   call: number
-  bossFee: number
   battleRewards: number
   sweepJackpot: number
   winLoss: number
@@ -20,7 +19,6 @@ export interface PlayerResultBreakdown {
 }
 
 export type SettlementCommand =
-  | { type: 'BOSS_FEE'; commandId: string; playerIds: string[]; feeCrest: number }
   | { type: 'ANTE'; commandId: string; game: 1 | 2 | 3; pile: ArenaPile; playerIds: string[]; baseCrest: number; extraCrest: number }
   | { type: 'JOKER_ANTE_BONUS'; commandId: string; game: 1 | 2 | 3; pile: ArenaPile; winnerId: string; payerIds: string[]; amountCrest: number }
   | { type: 'AUCTION'; commandId: string; game: 1 | 2 | 3; winnerId: string; amountCrest: number }
@@ -69,7 +67,7 @@ export class ArenaSettlementEngine {
       this.wallets.set(playerId, balance)
       this.breakdowns.set(playerId, {
         playerId, persisted: account.persisted, startingCrest: balance, entryFee: 0, ante: 0, jokerExtraAnte: 0, auction: 0,
-        call: 0, bossFee: 0, battleRewards: 0, sweepJackpot: 0, winLoss: 0,
+        call: 0, battleRewards: 0, sweepJackpot: 0, winLoss: 0,
         netCrest: 0, endingCrest: balance,
       })
     }
@@ -107,14 +105,6 @@ export class ArenaSettlementEngine {
 
   private apply(command: SettlementCommand): SettlementTransaction {
     switch (command.type) {
-      case 'BOSS_FEE': {
-        safeAmount(command.feeCrest, 'BOSS_FEE')
-        this.uniqueKnown(command.playerIds)
-        this.ensureFunds(command.playerIds, command.feeCrest)
-        const entries = command.playerIds.map(playerId => this.debit(playerId, command.feeCrest, 'bossFee'))
-        this.crownSinkCrest += command.feeCrest * command.playerIds.length
-        return this.transaction(command.commandId, 'BOSS_FEE', entries, {}, 0, command.feeCrest * command.playerIds.length)
-      }
       case 'ANTE': {
         // Joker ANTE_X2 is an extra-only matched ante command: base is already
         // charged, so baseCrest may be zero while extraCrest must make total > 0.
@@ -204,7 +194,7 @@ export class ArenaSettlementEngine {
     }
   }
 
-  private debit(playerId: string, amount: number, field: 'entryFee' | 'ante' | 'jokerExtraAnte' | 'auction' | 'call' | 'bossFee'): SettlementEntry {
+  private debit(playerId: string, amount: number, field: 'entryFee' | 'ante' | 'jokerExtraAnte' | 'auction' | 'call'): SettlementEntry {
     const current = this.balance(playerId)
     if (current < amount) throw new Error('INSUFFICIENT_CREST')
     this.wallets.set(playerId, current - amount)

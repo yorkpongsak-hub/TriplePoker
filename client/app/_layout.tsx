@@ -1,20 +1,99 @@
 import 'react-native-url-polyfill/auto'
-import { Stack } from 'expo-router'
+import { Stack, useSegments } from 'expo-router'
 import { Alert, AppState, Platform, View } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { StatusBar } from 'expo-status-bar'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { Asset } from 'expo-asset'
+import * as ExpoSplashScreen from 'expo-splash-screen'
 import { useFonts, Cinzel_400Regular, Cinzel_700Bold } from '@expo-google-fonts/cinzel'
 import { JetBrainsMono_400Regular, JetBrainsMono_600SemiBold } from '@expo-google-fonts/jetbrains-mono'
 import { useAuthStore } from '../src/store/authStore'
 import { useUserStore } from '../src/store/userStore'
+import GameSplash from '../src/components/ui/GameSplash'
+import { CARD_BACK_IMG, CARD_IMG } from '../src/components/game/cardAssets'
 import { PENDING_MATCH_KEY, PendingMatch } from '../src/utils/pendingMatch'
+import { audio } from '../src/audio'
+import { adProvider } from '../src/ads/adProvider'
+import { io, Socket } from 'socket.io-client'
+import GlobalRoyalFlushVFX from '../src/components/vfx/GlobalRoyalFlushVFX'
+import { launchTelemetry } from '../src/telemetry/launch'
+import type { TelemetryContext } from '../src/telemetry/types'
+
+// Native Expo splash is deliberately short; the artwork-matched React splash follows it.
+void ExpoSplashScreen.preventAutoHideAsync().catch(() => undefined)
+
+const SPLASH_ARTWORK = require('../assets/images/splash_screen.png')
+const TABLE_ARTWORK = require('../assets/images/table_default.png')
+const BOOTSTRAP_ASSETS = Array.from(new Set([
+  SPLASH_ARTWORK,
+  TABLE_ARTWORK,
+  CARD_BACK_IMG,
+  ...Object.values(CARD_IMG),
+]))
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
+const GAME_TABLE_ROUTES = new Set([
+  'game/initiate', 'game/adept', 'game/mastermind', 'game/highNoble',
+  'game/monarch', 'game/vipPlus', 'game/grandmaster', 'game/sovereign', 'game/tier-d',
+  'game/vip-crew',
+])
+type GlobalRoyalFlushEvent = { eventId: string; playerId: string; playerName: string; suit: 'spades' | 'hearts' | 'diamonds' | 'clubs'; occurredAt: number }
 
 export default function RootLayout() {
+  const segments = useSegments()
   const [fontsLoaded] = useFonts({ Cinzel_400Regular, Cinzel_700Bold, JetBrainsMono_400Regular, JetBrainsMono_600SemiBold })
+  const [audioReady, setAudioReady] = useState(false)
+  const [assetsReady, setAssetsReady] = useState(false)
+  const [showGameSplash, setShowGameSplash] = useState(true)
+  const authInitialized = useAuthStore(s => s.isInitialized)
+  const telemetryVipStatus = useAuthStore(s => s.profile?.vip_status)
+  const [royalQueue, setRoyalQueue] = useState<GlobalRoyalFlushEvent[]>([])
+  const [activeRoyal, setActiveRoyal] = useState<GlobalRoyalFlushEvent | null>(null)
+  const segmentsRef = useRef(segments.join('/'))
+  segmentsRef.current = segments.join('/')
+
+  useEffect(() => {
+    if (AppState.currentState === 'active' || Platform.OS === 'web') void launchTelemetry.active()
+    const listener = AppState.addEventListener('change', state => {
+      if (state === 'active') void launchTelemetry.active()
+      else if (state === 'background') void launchTelemetry.background()
+    })
+    return () => { listener.remove() }
+  }, [])
+  useEffect(() => { void launchTelemetry.route(segments.join('/')) }, [segments.join('/')])
+  useEffect(() => { void launchTelemetry.membershipStatus(telemetryVipStatus) }, [telemetryVipStatus])
+
+  useEffect(() => {
+    let mounted = true
+    void audio.initialize()
+      .catch(error => console.warn('[bootstrap] audio initialization failed:', error))
+      .finally(() => { if (mounted) setAudioReady(true) })
+    return () => {
+      mounted = false
+      audio.dispose()
+    }
+  }, [])
+
+  useEffect(() => {
+    void adProvider.initialize()
+      .then(() => Promise.all([adProvider.preloadRewarded(), adProvider.preloadInterstitial()]))
+      .catch((error: unknown) => console.warn('[ads] unavailable; gameplay continues', error))
+  }, [])
+
+  useEffect(() => {
+    let mounted = true
+    // The visible launch screen and the first dealt table share these image resources.
+    void Asset.loadAsync(BOOTSTRAP_ASSETS)
+      .catch(error => console.warn('[bootstrap] asset preload failed:', error))
+      .finally(() => { if (mounted) setAssetsReady(true) })
+    return () => { mounted = false }
+  }, [])
+
+  useEffect(() => {
+    void ExpoSplashScreen.hideAsync().catch(() => undefined)
+  }, [])
 
   const initAuth = useAuthStore(s => s.initAuth)
   useEffect(() => {
@@ -29,14 +108,59 @@ export default function RootLayout() {
   const refreshProfile = useAuthStore(s => s.refreshProfile)
   const setUser      = useUserStore(s => s.setUser)
 
+  // Online-only celebration feed. Events are accepted only while this client is
+  // actively playing, kept in RAM, and deliberately not replayed after reconnect.
+  useEffect(() => {
+    if (!session?.access_token) return
+    const royalSocket: Socket = io(SERVER_URL, {
+      auth: { accessToken: session.access_token }, transports: ['websocket'],
+      reconnection: true, reconnectionDelay: 1000,
+    })
+    let context: TelemetryContext | undefined
+    const sendContext = () => { if (royalSocket.connected && context) royalSocket.emit('telemetry_context', context) }
+    const unsubscribe = launchTelemetry.subscribeContext(value => { context = value; sendContext() })
+    royalSocket.on('connect', sendContext)
+    const onRoyal = (event: GlobalRoyalFlushEvent) => {
+      if (!event?.eventId || !GAME_TABLE_ROUTES.has(segmentsRef.current)) return
+      setRoyalQueue(previous => previous.some(item => item.eventId === event.eventId) ? previous : [...previous.slice(-4), event])
+    }
+    royalSocket.on('royal_flush:global_celebration', onRoyal)
+    return () => { unsubscribe(); royalSocket.off('connect', sendContext); royalSocket.off('royal_flush:global_celebration', onRoyal); royalSocket.disconnect() }
+  }, [session?.access_token])
+
+  // Never cover live play. The first queued moment begins after navigation has
+  // left the table route; additional moments play serially for five seconds each.
+  useEffect(() => {
+    if (activeRoyal || royalQueue.length === 0 || GAME_TABLE_ROUTES.has(segments.join('/'))) return
+    setActiveRoyal(royalQueue[0])
+    setRoyalQueue(previous => previous.slice(1))
+  }, [segments.join('/'), royalQueue, activeRoyal])
+
+  // Last visited means entering a game, not viewing Profile. Server applies an
+  // atomic Asia/Bangkok daily guard; this effect simply reports game navigation.
+  useEffect(() => {
+    if (!GAME_TABLE_ROUTES.has(segments.join('/')) || !session?.access_token) return
+    fetch(`${SERVER_URL}/profile/touch-last-login`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    }).catch(error => console.error('[layout] daily game visit failed:', error))
+  }, [segments.join('/'), session?.access_token])
+
   // Escrow Stale Recovery §b — เช็คครั้งเดียวต่อ session ตอนเปิดแอป/login (ก่อนผู้เล่นพยายาม join โต๊ะด้วยซ้ำ)
   // กู้คืน escrow ที่ค้าง 'in_match' เกิน 60 นาทีจาก session ก่อนหน้าที่ force-close/crash กลางแมตช์
   const recoveryCheckedRef = useRef(false)
   const settlementCheckRunningRef = useRef(false)
   const settlementRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const wasOnGameRouteRef = useRef(GAME_TABLE_ROUTES.has(segments.join('/')))
 
   const scheduleSettlementRetry = (pending: PendingMatch) => {
     if (settlementRetryRef.current) clearTimeout(settlementRetryRef.current)
+    // A marker also represents the match currently being played. Never poll
+    // for its settlement while the player is still on a live table.
+    if (GAME_TABLE_ROUTES.has(segmentsRef.current)) {
+      settlementRetryRef.current = null
+      return
+    }
     // Covers the disconnect grace period and the small race between app resume and server settlement.
     if (Date.now() - Date.parse(pending.startedAt) > 2 * 60 * 1000) return
     settlementRetryRef.current = setTimeout(() => {
@@ -47,6 +171,7 @@ export default function RootLayout() {
 
   const checkPendingSettlement = async () => {
     if (!session?.access_token || settlementCheckRunningRef.current) return
+    if (GAME_TABLE_ROUTES.has(segmentsRef.current)) return
     const raw = await AsyncStorage.getItem(PENDING_MATCH_KEY)
     if (!raw) {
       console.log('[ESCROW] no pending match marker')
@@ -109,6 +234,18 @@ export default function RootLayout() {
       settlementRetryRef.current = null
     }
   }, [session?.access_token])
+
+  // If a match route was hiding settlement polling, check once after leaving
+  // the table. A normally completed match has already cleared its marker.
+  useEffect(() => {
+    const isOnGameRoute = GAME_TABLE_ROUTES.has(segments.join('/'))
+    const wasOnGameRoute = wasOnGameRouteRef.current
+    wasOnGameRouteRef.current = isOnGameRoute
+    if (!session?.access_token || !wasOnGameRoute || isOnGameRoute) return
+    void checkPendingSettlement()
+  // checkPendingSettlement intentionally reads the latest session/route refs.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [segments.join('/'), session?.access_token])
   useEffect(() => {
     if (authUser && authProfile) {
       setUser({
@@ -136,13 +273,11 @@ export default function RootLayout() {
     }
   }, [authUser, authProfile, session])
 
-  if (!fontsLoaded) {
-    return <View style={{ flex: 1, backgroundColor: '#0a0a0a' }} />
-  }
+  const loadingProgress = (Number(fontsLoaded) + Number(audioReady) + Number(assetsReady) + Number(authInitialized)) / 4
 
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" translucent />
+      <StatusBar style="light" />
       <View style={{
         flex: 1,
         backgroundColor: '#0a0a0a',
@@ -151,13 +286,30 @@ export default function RootLayout() {
       }}>
         <View style={{
           width: Platform.OS === 'web' ? 390 : '100%',
-          height: Platform.OS === 'web' ? 780 : '100%',
+          maxWidth: '100%',
+          height: '100%',
+          maxHeight: Platform.OS === 'web' ? 780 : undefined,
           overflow: 'hidden',
           borderRadius: Platform.OS === 'web' ? 40 : 0,
           borderWidth: Platform.OS === 'web' ? 3 : 0,
           borderColor: '#2a2a2a',
         }}>
           <Stack screenOptions={{ headerShown: false }} />
+          {activeRoyal && (
+            <GlobalRoyalFlushVFX
+              eventId={activeRoyal.eventId}
+              playerName={activeRoyal.playerName}
+              suit={activeRoyal.suit}
+              onFinish={() => setActiveRoyal(null)}
+            />
+          )}
+          {showGameSplash && (
+            <GameSplash
+              progress={loadingProgress}
+              ready={fontsLoaded && audioReady && assetsReady && authInitialized}
+              onComplete={() => setShowGameSplash(false)}
+            />
+          )}
         </View>
       </View>
     </SafeAreaProvider>

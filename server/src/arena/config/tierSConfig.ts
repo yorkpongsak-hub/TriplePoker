@@ -1,6 +1,6 @@
 // Config แยกของ Arena เพื่อไม่ให้ค่าใหม่กระทบ gameConfig ของ Tier เดิม
 export const tierSConfig = Object.freeze({
-  featureEnabled: false,
+  featureEnabled: true,
   tierKey: 'grandmaster' as const,
   unlockTokenExclusive: 1_000_000,
   matchGames: 3,
@@ -27,7 +27,6 @@ export const tierSEconomyConfig = Object.freeze({
   auctionBidOptionsCrest: Object.freeze([0, 3, 6, 9, 12] as const),
   callCostCrest: 3,
   entryFeeCrest: 12,
-  bossFeeCrest: Object.freeze({ aiBoss: 24, humanBoss: 48 }),
   maximumVariableMatchCostCrest: 216,
   // 20 Crown exactly. The extra 12-Crest buffer keeps Human and AI starting
   // balances round and makes Crown Panel conservation easy to audit.
@@ -40,14 +39,13 @@ export const arenaPhaseTimeoutMs = Object.freeze({
   MATCH_BUY_IN_RESERVE: 15_000,
   DUAL_BOSS_INTRO: 30_000,
   DEAL_ANIMATION: 4_000,
-  ARRANGE_1: 30_000,
+  ARRANGE_1: 110_000,
   AUCTION_FACE_UP: 12_000,
   AUCTION_FACE_UP_RESULT: 10_000,
   AUCTION_BLIND: 12_000,
   AUCTION_BLIND_RESULT: 4_500,
   REVEAL_PILE3_COMMUNITY_CARD_2: 3_000,
-  // Temporary multi-device playtest window. Restore after Tier S flow is stable.
-  FINAL_ARRANGE: 90_000,
+  FINAL_ARRANGE: 110_000,
   JOKER_DECLARE: 15_000,
   DISCARD: 20_000,
   FINAL_LOCK: 15_000,

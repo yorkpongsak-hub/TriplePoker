@@ -1,0 +1,339 @@
+// app/(home)/victory.tsx
+// Post-Match Victory Screen — shown only to the match's #1 finisher, right after "back to lobby"
+// (มติลุงเยาะ 2026-08-13). Flow: Victory (VFX + stats) -> Ad screen (skippable, shared /watch-ad
+// route) -> Main Lobby. A single shared route parameterized by ?tier=, mirroring top10.tsx's
+// own precedent — this is a tier-agnostic post-game summary, not a gameplay screen, so CLAUDE.md's
+// "no dynamic [tier] route" rule (which governs the game tables themselves) does not apply here.
+//
+// Patch 2026-08-14 (มติลุงเยาะ): เดิมมีขั้นตอนโฆษณาในตัวเอง (step 'ad') — ย้ายไปใช้หน้า /watch-ad
+// กลาง (มี RoyalStraightFlushVFX placeholder) แทน ให้ทุกจุดที่ดูโฆษณาในแอปเห็น VFX เดียวกันหมด
+// The Sage Unicorn Studio Co., Ltd.
+
+import React, { useEffect, useState } from 'react'
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native'
+import { Image } from 'expo-image'
+import { router, useLocalSearchParams } from 'expo-router'
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated'
+import { useAuthStore } from '../../src/store/authStore'
+import { getTierProgress, TierProgress } from '../../src/config/tierConfig'
+import { AudioEvent } from '../../src/audio'
+import { useBgm } from '../../src/services/bgmService'
+import { leaveAfterClassicSettlement, type ClassicAdTier } from '../../src/ads/postSettlementExit'
+
+const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
+const tokenDropGif = require('../../assets/fx/vfx_you_win.webp')
+
+// ธีมสีหลัก (Website Theme Spec v1.0) — โทนหรูหรา/ราชวงศ์ตามที่ลุงเยาะเลือก
+const C = {
+  bgDark: '#0F2418',
+  bgPanel: '#163A25',
+  gold: '#FFD76A',
+  goldDark: '#FFC857',
+  green: '#8DFFB5',
+  text: '#F5F2E8',
+  textSec: '#C8C4B0',
+  border: '#2A4A34',
+}
+
+// อันดับ 1-3 ของ Top10 ปัจจุบัน (Tier นี้) ได้ % ตายตัว นอกนั้นสุ่มโชว์เฉยๆ ไม่ใช่ค่าจริง (มติลุงเยาะ)
+const TOP3_PERCENTILE = [99.29, 99.19, 99.09]
+
+// ความกว้าง track ของแถบ Tier Progress (px) — คงที่ กันภาพเบลอ/animate width เป็น % string ไม่ได้บน Reanimated
+const PROGRESS_BAR_WIDTH = 240
+
+function randomPercentile(): number {
+  return Math.round((Math.random() * (98 - 85) + 85) * 100) / 100
+}
+
+function formatDuration(totalSeconds: number): string {
+  const m = Math.floor(totalSeconds / 60)
+  const s = totalSeconds % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+export default function VictoryScreen() {
+  const params = useLocalSearchParams<{
+    tier?: string
+    tokensWon?: string
+    matchDurationSec?: string
+    bestHandLabel?: string
+  }>()
+  const tier = params.tier ?? 'initiate'
+  const tokensWon = Number(params.tokensWon ?? 0)
+  const matchDurationSec = Number(params.matchDurationSec ?? 0)
+  const bestHandLabel = params.bestHandLabel && params.bestHandLabel !== 'null' ? params.bestHandLabel : null
+
+  const isGuest = useAuthStore(s => s.session?.user?.is_anonymous === true)
+  const accessToken = useAuthStore(s => s.session?.access_token)
+
+  const [loaded, setLoaded] = useState(false)
+  const [percentile, setPercentile] = useState<number>(0)
+  const [xp, setXp] = useState<number>(0)
+  // แถบความก้าวหน้า Tier ถัดไป (มติลุงเยาะ 2026-08-14) — null = ยังไม่รู้ token balance จริง (เช่น
+  // timeout fallback ด้านล่าง) ซ่อนแถบไปเลยดีกว่าโชว์เลขเดา
+  const [tierProgress, setTierProgress] = useState<TierProgress | null>(null)
+
+  useBgm(AudioEvent.PERFECT_VICTORY_BGM)
+
+  useEffect(() => {
+    let cancelled = false
+    let settled = false
+    const finish = (pct: number, xpValue: number, progress: TierProgress | null) => {
+      if (cancelled || settled) return
+      settled = true
+      setPercentile(pct)
+      setXp(xpValue)
+      setTierProgress(progress)
+      setLoaded(true)
+    }
+    // Patch 2026-08-13: ลุงเยาะรายงานว่าหน้านี้ค้างหมุนไม่หยุด — refreshProfile()/fetch ด้านล่างเป็น
+    // network call ที่ไม่มี timeout ในตัว ถ้าค้างจริง (ไม่ throw ด้วยซ้ำ) โค้ดเดิมจะไม่มีวันเรียก
+    // setLoaded(true) เลย ใส่เพดานเวลา 8 วิ กันไม่ให้หน้าจอค้างตลอดไป — โผล่ด้วยค่า default แทน
+    const timeoutId = setTimeout(() => finish(randomPercentile(), 0, null), 8000)
+
+    ;(async () => {
+      let pct = randomPercentile()
+      let xpValue = 0
+      let progress: TierProgress | null = null
+      try {
+        await useAuthStore.getState().refreshProfile()
+        const profile = useAuthStore.getState().profile
+        xpValue = profile?.xp ?? 0
+        progress = getTierProgress(profile?.token_balance ?? 0)
+        try {
+          const res = await fetch(`${SERVER_URL}/stats/top10?tier=${tier}`)
+          const json = await res.json()
+          const myEntry = (json.entries ?? []).find((e: any) => e.user_id === profile?.user_id)
+          if (myEntry && myEntry.rank >= 1 && myEntry.rank <= 3) {
+            pct = TOP3_PERCENTILE[myEntry.rank - 1]
+          }
+        } catch (err) {
+          console.error('[Victory] top10 percentile lookup failed:', err)
+        }
+      } catch (err) {
+        console.error('[Victory] profile refresh failed:', err)
+      }
+      clearTimeout(timeoutId)
+      finish(pct, xpValue, progress)
+    })()
+
+    return () => { cancelled = true; clearTimeout(timeoutId) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // ── Reanimated entrance sequence — เริ่มหลังโหลดข้อมูลเสร็จเท่านั้น (pattern เดียวกับ TierUnlockOverlay) ──
+  const scrimOpacity = useSharedValue(0)
+  const vfxOpacity = useSharedValue(0)
+  const headlineOpacity = useSharedValue(0)
+  const statsOpacity = useSharedValue(0)
+  const buttonOpacity = useSharedValue(0)
+  const progressOpacity = useSharedValue(0)
+  const progressFillWidth = useSharedValue(0)
+
+  useEffect(() => {
+    if (!loaded) return
+    scrimOpacity.value = withTiming(1, { duration: 400, easing: Easing.out(Easing.cubic) })
+    vfxOpacity.value = withDelay(
+      100,
+      withTiming(1, {
+        duration: 700,
+        easing: Easing.out(Easing.cubic),
+      })
+    )
+    headlineOpacity.value = withDelay(550, withTiming(1, { duration: 400 }))
+    statsOpacity.value = withDelay(850, withTiming(1, { duration: 400 }))
+    buttonOpacity.value = withDelay(1250, withTiming(1, { duration: 300 }))
+    if (tierProgress) {
+      progressOpacity.value = withDelay(1550, withTiming(1, { duration: 300 }))
+      progressFillWidth.value = withDelay(1550, withTiming((tierProgress.pct / 100) * PROGRESS_BAR_WIDTH, { duration: 700, easing: Easing.out(Easing.cubic) }))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded])
+
+  const scrimStyle = useAnimatedStyle(() => ({ opacity: scrimOpacity.value }))
+  const vfxStyle = useAnimatedStyle(() => ({
+    opacity: vfxOpacity.value,
+  }))
+  const headlineStyle = useAnimatedStyle(() => ({ opacity: headlineOpacity.value }))
+  const statsStyle = useAnimatedStyle(() => ({ opacity: statsOpacity.value }))
+  const buttonStyle = useAnimatedStyle(() => ({ opacity: buttonOpacity.value }))
+  const progressStyle = useAnimatedStyle(() => ({ opacity: progressOpacity.value }))
+  const progressFillStyle = useAnimatedStyle(() => ({ width: progressFillWidth.value }))
+
+  const goToWatchAd = async () => {
+    const tierToAdTier:Record<string,ClassicAdTier>={initiate:'C',adept:'B',mastermind:'A',highNoble:'A_PLUS'}
+    const adTier=tierToAdTier[tier]
+    if(!adTier){router.replace('/(home)/classic-lobby');return}
+    await leaveAfterClassicSettlement({ accessToken, tier: adTier, outcome: 'WIN', exitReason: 'BACK_TO_LOBBY' })
+  }
+
+  if (!loaded) {
+    return (
+      <View style={[s.scrim, s.loadingCenter]}>
+        <ActivityIndicator color={C.gold} size="large" />
+      </View>
+    )
+  }
+
+  return (
+    <Animated.View style={[s.scrim, scrimStyle]}>
+      {/* Full-screen token celebration VFX.
+          Decorative background only — never blocks foreground controls. */}
+      <Animated.View
+        pointerEvents="none"
+        style={[s.vfxBackground, vfxStyle]}
+      >
+        <Image
+          source={tokenDropGif}
+          style={s.vfxGif}
+          contentFit="cover"
+          autoplay
+        />
+      </Animated.View>
+
+      {/* Foreground Victory UI */}
+      <View style={s.center}>
+        <Animated.Text style={[s.headline, headlineStyle]}>PERFECT VICTORY!</Animated.Text>
+
+        <Animated.View style={[s.statsCard, statsStyle]}>
+          <Text style={s.statsLine}>
+            {'⏱'} {formatDuration(matchDurationSec)}{'   '}
+            <Text style={{ color: C.green }}>+{tokensWon.toLocaleString('en-US')} Token</Text>
+            {bestHandLabel ? <>{'   🂡 '}{bestHandLabel}</> : null}
+          </Text>
+          <Text style={s.percentileLine}>Beat {percentile}% of players at this table!</Text>
+          <Text style={s.xpLine}>Total XP: {xp.toLocaleString('en-US')}</Text>
+        </Animated.View>
+
+        <Animated.View style={buttonStyle}>
+          <TouchableOpacity style={s.button} onPress={goToWatchAd} activeOpacity={0.85}>
+            <Text style={s.buttonText}>CONTINUE</Text>
+          </TouchableOpacity>
+          {isGuest && (
+            // Guest Play (มติลุงเยาะ 2026-08-13) — เชิญชวนสมัครสมาชิกหลังทำผลงานได้ดี (ชนะ)
+            // เป็นแค่คำเชิญ ไม่บังคับ — เล่นต่อแบบ guest ได้เรื่อยๆ ถ้ายังไม่อยากสมัคร
+            <TouchableOpacity style={s.registerButton} onPress={() => router.push('/(auth)/setup-profile')} activeOpacity={0.7}>
+              <Text style={s.registerButtonText}>Register to save your progress</Text>
+            </TouchableOpacity>
+          )}
+        </Animated.View>
+      </View>
+
+      {tierProgress && (
+        <Animated.View style={[s.progressFooter, progressStyle]}>
+          <View style={s.progressLabelRow}>
+            <Text style={s.progressLabel}>
+              {tierProgress.isMaxTier ? 'GRANDMASTER' : `PROGRESS TO ${tierProgress.nextTierLabel?.toUpperCase()}`}
+            </Text>
+            <Text style={s.progressPct}>{tierProgress.isMaxTier ? 'MAX TIER' : `${tierProgress.pct}%`}</Text>
+          </View>
+          <View style={s.progressTrack}>
+            <Animated.View style={[s.progressFill, progressFillStyle]} />
+          </View>
+        </Animated.View>
+      )}
+    </Animated.View>
+  )
+}
+
+const s = StyleSheet.create({
+  scrim: {
+    flex: 1,
+    backgroundColor: C.bgDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingCenter: { alignItems: 'center', justifyContent: 'center' },
+  center: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+    zIndex: 1,
+  },
+
+  // Full-screen token celebration behind all foreground UI.
+  vfxBackground: {
+    ...StyleSheet.absoluteFill,
+    zIndex: 0,
+  },
+
+  vfxGif: {
+    width: '100%',
+    height: '100%',
+  },
+
+  headline: {
+    fontFamily: 'Cinzel_700Bold',
+    color: C.gold,
+    fontSize: 26,
+    fontWeight: '900',
+    letterSpacing: 1.5,
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+
+  statsCard: {
+    backgroundColor: C.bgPanel,
+    borderWidth: 1,
+    borderColor: C.border,
+    borderRadius: 14,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    marginBottom: 28,
+    minWidth: 260,
+  },
+  statsLine: { color: C.text, fontSize: 14, fontWeight: '700', textAlign: 'center', marginBottom: 10 },
+  percentileLine: { color: C.gold, fontSize: 15, fontWeight: '800', textAlign: 'center', marginBottom: 6 },
+  xpLine: { color: C.textSec, fontSize: 12, fontWeight: '600', textAlign: 'center' },
+
+  button: {
+    backgroundColor: C.gold,
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 48,
+    borderWidth: 1.5,
+    borderColor: C.goldDark,
+    minWidth: 200,
+    alignItems: 'center',
+  },
+  buttonText: { color: C.bgDark, fontSize: 15, fontWeight: '900', letterSpacing: 1.5, textAlign: 'center' },
+
+  registerButton: { marginTop: 14, paddingVertical: 8, paddingHorizontal: 16 },
+  registerButtonText: { color: C.green, fontSize: 12, fontWeight: '700', textAlign: 'center', textDecorationLine: 'underline' },
+
+  // Tier Progress footer — ปักไว้ด้านล่างสุดของจอจริง (sibling ของ s.center ไม่ใช่ลูก) กันหน้าจอเตี้ย/
+  // สูงต่างกันแล้วแถบลอยไปคนละที่กับปุ่ม CONTINUE (มติลุงเยาะ 2026-08-14)
+  progressFooter: {
+    position: 'absolute',
+    bottom: 28,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    paddingHorizontal: 28,
+    zIndex: 2,
+  },
+  progressLabelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: PROGRESS_BAR_WIDTH,
+    marginBottom: 6,
+  },
+  progressLabel: { color: C.textSec, fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  progressPct: { color: C.gold, fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+  progressTrack: {
+    width: PROGRESS_BAR_WIDTH,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: C.bgPanel,
+    borderWidth: 1,
+    borderColor: C.border,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 3,
+    backgroundColor: C.gold,
+  },
+})

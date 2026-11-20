@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { ArenaConnectionManager } from '../connection/arenaConnectionManager'
 import { ArenaMatchAction, ArenaMatchEngine, ArenaMatchSnapshot } from '../match/arenaMatchEngine'
 import { ArenaHuman, ArenaMatchComposition, ArenaMatchmakingQueue, JoinArenaQueueResult } from '../matchmaking/arenaMatchmaking'
@@ -9,8 +10,12 @@ export interface ArenaRuntimeMatch {
 }
 
 export class ArenaRuntime {
+  // สุ่มครั้งเดียวตอน process ขึ้น กัน matchId ชนกันข้าม server restart (queueSequence รีเซ็ตเป็น 1
+  // ทุกครั้งที่ process ใหม่ แต่ arena_settlement_transactions ใน Supabase เก็บ transaction_key เดิมไว้ถาวร
+  // — ถ้า matchId ซ้ำของเก่า commandId ที่ derive จากมัน เช่น g1:payout:pile1 จะชนกับแมตช์เก่าที่เนื้อหาต่างกันจริง
+  // ทำให้ arena_apply_crest_batch RPC โยน IDEMPOTENCY_KEY_CONFLICT)
+  private readonly instanceId = randomUUID()
   private queueSequence = 1
-  private matchSequence = 1
   private queue: ArenaMatchmakingQueue
   private matches = new Map<string, ArenaRuntimeMatch>()
   private playerMatch = new Map<string, string>()
@@ -86,6 +91,6 @@ export class ArenaRuntime {
   }
 
   private matchIdFor(queueId: string): string {
-    return `arena-m-${queueId}-${this.matchSequence}`
+    return `arena-m-${this.instanceId}-${queueId}`
   }
 }

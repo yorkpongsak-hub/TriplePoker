@@ -8,14 +8,22 @@ import { AvatarDisplay } from '../../../src/components/profile/AvatarPicker'
 import ArenaOverlays from './ArenaOverlays'
 import CrownPanel from './CrownPanel'
 import FanHand from './FanHand'
+import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/game/FlyingCoins'
+import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
+import BossVictoryVFX from '../../../src/components/vfx/BossVictoryVFX'
+import { isLocalTripleSweep } from '../../../src/components/vfx/vfxPolicy'
 import { ArenaClientIntent, ArenaClientSnapshot, ArenaSeatView } from '../../../src/game/grandmaster/arenaClientTypes'
+import { playCardArrange1, playCardArrange2, playCountdownWarning, playJackpotFanfare, playBossPileWinThunder, playCardReveal, playPokerChip, playReadyButton, playCardShuffle, playAnte } from '../../../src/services/gameSfxService'
+import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
+import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
+import ComboCardBurst from '../../../src/components/vfx/ComboCardBurst'
 
 const MONARCH_TABLE = require('../../../assets/tables/boss_monarch_skin_table.png')
 
-interface Props { snapshot: ArenaClientSnapshot; onIntent: (intent: ArenaClientIntent) => void; transportStatus?: string }
+interface Props { snapshot: ArenaClientSnapshot; onIntent: (intent: ArenaClientIntent) => void; transportStatus?: string; serverOnline?: boolean }
 
 type ArrangingPhase = 'ARRANGE_1' | 'FINAL_ARRANGE' | 'FINAL_LOCK'
-type CallRevealEvent = { id: string; seat: 1 | 2 | 3 | 4; displayName: string; pile: 2 | 3; cards: string[] }
+type GFActionEvent = { id: string; seat: 1 | 2 | 3 | 4; displayName: string; pile: 2 | 3; round: 1 | 2; decision: 'CALL' | 'FOLD'; cards: string[] }
 const ARRANGING_PHASES: ArrangingPhase[] = ['ARRANGE_1', 'FINAL_ARRANGE', 'FINAL_LOCK']
 // ต้องตรงกับ styles.communityCard.height เสมอ — ใช้เลื่อนกองกลางขึ้นบนอีก 1 เท่าของความสูงไพ่กองกลาง
 const COMMUNITY_CARD_HEIGHT = 49
@@ -24,6 +32,8 @@ const COMMUNITY_CARD_HEIGHT = 49
 const STACK_CARD_W = 22
 const STACK_CARD_H = 32
 const RESOLVED_CARD_OVERLAP_STEP = 5
+const GRANDMASTER_P1_HAND_SCALE = 1.00
+const GRANDMASTER_P1_HAND_DROP = 48
 // Local/P1 cards are 62px wide at a 1.44 ratio (about 89px high).
 // Lift the whole seat block so bottom dialogs remain below the hand.
 const LOCAL_SEAT_LIFT = Math.round(62 * 1.44)
@@ -42,6 +52,11 @@ function TightFaceUpStack({ cards }: { cards: string[] }) {
       ))}
     </View>
   )
+}
+
+function TierCSideArrangementBacks({cardCount}:{cardCount:number}){
+  const counts=[3,Math.max(3,cardCount-8),5]
+  return <View style={styles.tierCSideHand}>{counts.map((count,pile)=><View key={pile} style={styles.tierCSidePile}>{Array.from({length:count}).map((_,index)=><View key={index} style={[styles.tierCSideCard,index>0&&{marginLeft:-15}]}><Image source={CARD_BACK_IMG} style={styles.tierCSideCardImage} resizeMode="cover" /></View>)}</View>)}</View>
 }
 
 function PileOneOpeningHand({ piles, width }: { piles: NonNullable<ArenaSeatView['arrangedPiles']>; width: number }) {
@@ -176,11 +191,21 @@ function ArenaDealAnimation({ width, height, localSeat }: { width: number; heigh
     return { x: (reserveIndex - 7) * 18, y: -82 }
   }
 
+  // server หัก Ante ทั้ง 3 กอง (chargeAnte x3) ก่อน transition เข้า phase DEAL_ANIMATION เสมอ
+  // (arenaMatchEngine.ts's dealGame()) — mount ของ component นี้ (key ผูก gameNumber) จึงเป็นจุดแรกที่
+  // client เห็นผลของ Ante ที่ถูกหักไปแล้วจริง เล่นทันทีไม่รอ 150ms clear-frame เหมือน playCardShuffle
+  // ด้านล่าง เพราะ Ante ในทางเศรษฐศาสตร์เกิดขึ้น "ก่อน" ภาพเริ่มแจกไพ่ (มติลุงเยาะ 2026-08-15, รอบ 2)
+  useEffect(() => { playAnte() }, [])
+
   useEffect(() => {
     // Keep one fully card-free frame between rounds. This prevents the previous
     // game's hands/community/resolved stacks from persisting under the new deal.
     const clearTimer = setTimeout(() => {
       setStarted(true)
+      // เสียง shuffle/deal ครั้งเดียวต่อรอบ ตรงจังหวะที่ไพ่เริ่มเคลื่อนจริง — component นี้ mount ใหม่ทุกเกม
+      // ผ่าน key={`deal-${snapshot.gameNumber}`} ที่จุด render (ดูด้านล่างในไฟล์นี้) จึงไม่ต้องมี ref dedupe
+      // เพิ่มเติมเหมือน hook อื่นๆ ในไฟล์นี้ — mount ใหม่ = เกมใหม่เสมอ (มติลุงเยาะ 2026-08-15, รอบ 2)
+      playCardShuffle()
       const moves = anims.map((anim, index) => {
       const target = index < 44
         ? targetFor(((index % 4) + 1) as 1 | 2 | 3 | 4, Math.floor(index / 4))
@@ -283,7 +308,7 @@ function CommunityRevealCard({ code }: { code: string }) {
   return <Animated.View style={[styles.communityRevealGlow, { opacity: glow, transform: [{ scaleX }] }]}>{cardView(code)}</Animated.View>
 }
 
-function CallRevealSpotlight({ event, width }: { event: CallRevealEvent; width: number }) {
+function GFActionSpotlight({ event, width }: { event: GFActionEvent; width: number }) {
   const opacity = useRef(new Animated.Value(0)).current
   const scale = useRef(new Animated.Value(0.72)).current
   useEffect(() => {
@@ -294,19 +319,18 @@ function CallRevealSpotlight({ event, width }: { event: CallRevealEvent; width: 
     animation.start()
     return () => animation.stop()
   }, [opacity, scale])
-  // Keep the spotlight readable without upscaling the card bitmap so far that
-  // rank/suit details become soft. This is 25% smaller than the former 180/108px range.
-  const cardWidth = Math.min(135, Math.max(81, (width - 72) / Math.max(2, event.cards.length)))
+  // Call-reveal cards intentionally render at half the previous dimensions so
+  // the source bitmap stays crisp instead of being enlarged on high-density screens.
+  const previousCardWidth = Math.min(135, Math.max(81, (width - 72) / Math.max(2, event.cards.length)))
+  const cardWidth = Math.round(previousCardWidth * 0.5)
   const cardHeight = Math.round(cardWidth * 1.44)
   return (
     <View pointerEvents="auto" style={styles.callRevealOverlay}>
-      <Text style={styles.callRevealTitle}>{event.displayName} · CALL</Text>
-      <Text style={styles.callRevealSub}>PILE {event.pile} · REVEALED CARDS</Text>
-      <Animated.View style={[styles.callRevealCards, { opacity, transform: [{ scale }] }]}>
-        {event.cards.map((code, index) => (
-          <Image key={`${event.id}-${code}-${index}`} source={CARD_IMG[code] ?? CARD_BACK_IMG} style={[styles.callRevealCard, { width: cardWidth, height: cardHeight }]} resizeMode="cover" />
-        ))}
-      </Animated.View>
+      <Text style={[styles.callRevealTitle, event.decision === 'FOLD' && styles.foldActionTitle]}>{event.displayName} · {event.decision}</Text>
+      <Text style={styles.callRevealSub}>PILE {event.pile} · ROUND {event.round}{event.decision === 'CALL' ? ' · REVEALED CARDS' : ''}</Text>
+      {event.decision === 'CALL' && <Animated.View style={[styles.callRevealCards, { opacity, transform: [{ scale }] }]}>
+        {event.cards.map((code, index) => <Image key={`${event.id}-${code}-${index}`} source={CARD_IMG[code] ?? CARD_BACK_IMG} style={[styles.callRevealCard, { width: cardWidth, height: cardHeight }]} resizeMode="cover" />)}
+      </Animated.View>}
     </View>
   )
 }
@@ -333,7 +357,7 @@ function WaitingDot({ index, progress }: { index: number; progress: SharedValue<
   return <Reanimated.View style={[styles.waitingDot, animatedStyle]} />
 }
 
-function SeatLabel({ seat, turnSeconds }: { seat: ArenaSeatView; turnSeconds?: number | null }) {
+function SeatLabel({ seat, turnSeconds, gfStatus }: { seat: ArenaSeatView; turnSeconds?: number | null; gfStatus?: 'WAITING' | 'CURRENT' | 'CALLED' | 'FOLDED' | 'SHOWDOWN' }) {
   const status = seat.connection === 'CONNECTED' ? null : seat.connection.replaceAll('_', ' ')
   if (seat.isWaiting) return (
     <View style={[styles.seatLabel, styles.waitingSeatLabel]}>
@@ -344,12 +368,15 @@ function SeatLabel({ seat, turnSeconds }: { seat: ArenaSeatView; turnSeconds?: n
   return (
     <View style={[styles.seatLabel, seat.isCurrentTurn && styles.seatTurn, seat.isBoss && styles.bossLabel]}>
       {seat.controller === 'HUMAN'
-        ? <AvatarDisplay config={{ type: 'preset', presetKey: seat.avatar, initial: seat.displayName, frameKey: 'default' }} size={28} showFrame />
+        ? /^(https?:|data:)/i.test(seat.avatar)
+          ? <Image source={{ uri: seat.avatar }} style={{ width: 28, height: 28, borderRadius: 14, borderWidth: seat.isVip ? 1.5 : 0, borderColor: '#FFD76A' }} />
+          : <AvatarDisplay config={{ type: 'preset', presetKey: seat.avatar, initial: seat.displayName, frameKey: seat.isVip ? 'gold' : 'default' }} size={28} showFrame={seat.isVip} />
         : <Text style={styles.avatar}>{seat.avatar}</Text>}
       <View>
         <Text numberOfLines={1} style={styles.seatName}>{seat.displayName}</Text>
         <Text style={styles.seatBalance}>{Math.floor(seat.crownCrest / 12)} C {seat.crownCrest % 12} Cr</Text>
         {seat.isCurrentTurn && turnSeconds !== null && turnSeconds !== undefined && <Text style={styles.seatTurnTimer}>CALL / FOLD · {turnSeconds}s</Text>}
+        {gfStatus && gfStatus !== 'WAITING' && gfStatus !== 'CURRENT' && <Text style={[styles.gfSeatStatus, gfStatus === 'FOLDED' && styles.gfSeatFolded]}>{gfStatus}</Text>}
         {status && <Text style={styles.seatStatus}>{status}</Text>}
       </View>
     </View>
@@ -371,7 +398,7 @@ function restoreSavedPiles(cards: string[], saved?: ArenaSeatView['arrangedPiles
   return [toCards(saved.pile1), toCards(saved.pile2), toCards([...saved.pile3, ...missing])]
 }
 
-export default function GrandmasterTableView({ snapshot, onIntent, transportStatus }: Props) {
+export default function GrandmasterTableView({ snapshot, onIntent, transportStatus, serverOnline = true }: Props) {
   const { width, height } = useWindowDimensions()
   const compact = width < 700 || height < 420
   const [now, setNow] = useState(Date.now())
@@ -388,46 +415,107 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
   const [auctionAwardActive, setAuctionAwardActive] = useState(false)
   const [completedBlindAwards, setCompletedBlindAwards] = useState<Set<string>>(new Set())
   const [selectedGFCardIds, setSelectedGFCardIds] = useState<string[]>([])
-  const [callRevealQueue, setCallRevealQueue] = useState<CallRevealEvent[]>([])
-  const previousGFReveals = useRef<Map<number, string[]>>(new Map())
-  const seenCallRevealEvents = useRef<Set<string>>(new Set())
+  const [royalFlushPlayer, setRoyalFlushPlayer] = useState<string | null>(null)
+  const lastRoyalRevealRef = useRef<string | null>(null)
 
   useEffect(() => {
-    previousGFReveals.current.clear()
+    const reveal = snapshot.reveal
+    if (!reveal || String(reveal.handName).toLowerCase().replace(/[ _-]/g, '') !== 'royalflush') return
+    const key = `${snapshot.matchId}:${snapshot.gameNumber}:${reveal.pile}:${reveal.winnerSeat}:${reveal.handName}`
+    if (lastRoyalRevealRef.current === key) return
+    lastRoyalRevealRef.current = key
+    setRoyalFlushPlayer(reveal.winnerDisplayName || (reveal.winnerSeat ? `SEAT ${reveal.winnerSeat}` : 'PLAYER'))
+  }, [snapshot.matchId, snapshot.gameNumber, snapshot.reveal])
+  const [gfActionQueue, setGFActionQueue] = useState<GFActionEvent[]>([])
+  const seenCallRevealEvents = useRef<Set<string>>(new Set())
+  const flyingCoinsRef = useRef<FlyingCoinsHandle>(null)
+  const firedRevealCoinsRef = useRef<string | null>(null)
+  // เก็บผู้ชนะแต่ละกองต่อเกม (ใช้ seat number แทน playerId — isLocalTripleSweep เทียบ string เฉยๆ
+  // ไม่สนโดเมนของ id ตราบใดที่ทั้งสองฝั่งใช้ระบบเดียวกันสม่ำเสมอ) เช็ค Legendary Triple Sweep
+  const pileWinnerSeatsRef = useRef<Partial<Record<1 | 2 | 3, string>>>({})
+  const [showLegendarySweep, setShowLegendarySweep] = useState(false)
+  // Boss Victory VFX (มติลุงเยาะ 2026-08-14) — โชว์เฉพาะตอนเป็นผู้ชนะโต๊ะจริงเท่านั้น (server เช็ค isLocalWinner
+  // ให้แล้ว, ส่งมาที่ snapshot.result.bossVictory เป็น null ถ้าไม่ใช่/ไม่มี AI boss ที่มีชื่อจริง) key ด้วย matchId
+  // กันยิงซ้ำ (bossVictory คงอยู่ตลอด MATCH_RESULT phase ไม่ใช่ event เกิดครั้งเดียวเหมือน tier อื่น)
+  const [victoryVfx, setVictoryVfx] = useState<{ tier: 'sentinel' | 'god' | 'monarch'; title: string | null } | null>(null)
+  const firedBossVictoryRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    const bossVictory = snapshot.result?.bossVictory
+    if (!bossVictory || firedBossVictoryRef.current === snapshot.matchId) return
+    firedBossVictoryRef.current = snapshot.matchId
+    setVictoryVfx(bossVictory)
+  }, [snapshot.result?.bossVictory, snapshot.matchId])
+
+  useEffect(() => {
     seenCallRevealEvents.current.clear()
-    setCallRevealQueue([])
+    setGFActionQueue([])
+    pileWinnerSeatsRef.current = {}
+    setShowLegendarySweep(false)
   }, [snapshot.gameNumber])
 
   useEffect(() => {
-    if (!snapshot.gfTable) return
-    const additions: CallRevealEvent[] = []
-    snapshot.gfTable.players.forEach(player => {
-      const previous = previousGFReveals.current.get(player.seat) ?? []
-      const added = player.revealedCards.filter(card => !previous.includes(card))
-      previousGFReveals.current.set(player.seat, [...player.revealedCards])
-      // Every Call reveals two cards. The final fifth showdown card is not a
-      // Call reveal and must not create another five-second spotlight.
-      if (added.length !== 2) return
-      const id = `${snapshot.gameNumber}:${snapshot.gfTable!.pile}:${snapshot.gfTable!.round}:${player.seat}:${player.revealedCards.join(',')}`
-      if (seenCallRevealEvents.current.has(id)) return
-      seenCallRevealEvents.current.add(id)
-      additions.push({ id, seat: player.seat, displayName: player.displayName, pile: snapshot.gfTable!.pile, cards: added })
-    })
-    if (additions.length) setCallRevealQueue(current => [...current, ...additions])
-  }, [snapshot.gameNumber, snapshot.gfTable])
+    const event = snapshot.gfAction
+    if (!event || seenCallRevealEvents.current.has(event.id)) return
+    seenCallRevealEvents.current.add(event.id)
+    setGFActionQueue(current => [...current, event])
+  }, [snapshot.gameNumber, snapshot.gfAction])
 
   useEffect(() => {
-    if (!callRevealQueue.length) return
-    const timer = setTimeout(() => setCallRevealQueue(current => current.slice(1)), 5_000)
+    if (!gfActionQueue.length) return
+    const timer = setTimeout(() => setGFActionQueue(current => current.slice(1)), gfActionQueue[0].decision === 'CALL' ? 2_200 : 1_400)
     return () => clearTimeout(timer)
-  }, [callRevealQueue])
+  }, [gfActionQueue])
 
-  // A pile-result reveal has priority over the per-Call spotlight. Without
-  // this, the five-second Call overlay can cover the four-second winner panel
-  // completely when the final caller closes the betting round.
+  // A final caller can move the server directly into the pile result. Keep
+  // that result waiting until every public Call reveal has played.
+  const unseenGFAction = !!snapshot.gfAction && !seenCallRevealEvents.current.has(snapshot.gfAction.id)
+  const deferPileResult = gfActionQueue.length > 0 || unseenGFAction
+
+  // Coin Flying VFX ตอน pile resolve (พอร์ตจาก highNoble/index.tsx's pattern — มติลุงเยาะ 2026-08-14)
+  // ยิงจากกึ่งกลางโต๊ะไปหาที่นั่งผู้ชนะจริง ใช้สูตร offset เดียวกับ AuctionAwardAnimation ด้านล่างเป๊ะ
+  // (ตำแหน่งเดียวกับที่ไพ่ auction บินไปตกจริง) กัน key ซ้ำด้วย gameNumber+pile ไม่ให้ยิงซ้ำระหว่าง
+  // re-render ที่ snapshot.reveal ยังเป็น pile เดิม (server คง phase REVEAL_PILE_X ค้างไว้ ~4s)
   useEffect(() => {
-    if (snapshot.reveal) setCallRevealQueue([])
-  }, [snapshot.reveal?.pile, snapshot.reveal?.winnerSeat])
+    const reveal = snapshot.reveal
+    const localSeat = local?.seat
+    if (!reveal || reveal.winnerSeat === null || !localSeat) return
+    const sig = `${snapshot.gameNumber}:${reveal.pile}`
+    if (firedRevealCoinsRef.current === sig) return
+    firedRevealCoinsRef.current = sig
+
+    // ทุกกองที่ถูกเปิดเผยผลลัพธ์ เล่นเสียงเปิดไพ่เสมอ (มติลุงเยาะ 2026-08-15, รอบ 2) — ไม่สนว่าใครชนะ
+    // ต่างจาก playBossPileWinThunder/playJackpotFanfare ด้านล่างที่มีเงื่อนไขเฉพาะ ตัวนี้ยิงทุกครั้ง
+    playCardReveal()
+
+    const others = ([1, 2, 4] as const).filter(seatNumber => seatNumber !== localSeat)
+    const seatTarget = (seatNumber: 1 | 2 | 3 | 4): Point => {
+      if (seatNumber === 3) return { x: 0, y: -Math.min(210, height * 0.31) }
+      if (seatNumber === localSeat) return { x: 0, y: Math.min(205, height * 0.31) }
+      if (seatNumber === others[0]) return { x: -Math.min(245, width * 0.38), y: 0 }
+      return { x: Math.min(245, width * 0.38), y: 0 }
+    }
+    const variant = ({ 1: 'pile1', 2: 'pile2', 3: 'pile3' } as const)[reveal.pile]
+    flyingCoinsRef.current?.fire(variant, { x: 0, y: 0 }, seatTarget(reveal.winnerSeat))
+    // ชิพ/เหรียญไหลไปหาผู้ชนะกอง — จุดเดียวกับ FlyingCoins VFX fire() ด้านบนเป๊ะ (มติลุงเยาะ 2026-08-15, รอบ 2)
+    playPokerChip()
+
+    // Boss/AI pile-win thunder (มติลุงเยาะ 2026-08-15) — ยิงเมื่อผู้ชนะกองนี้เป็น Boss หรือ AI ตัวใดก็ตาม
+    // (ไม่ใช่ human) ใช้ seat data จริงจาก bySeat แทนการเดาจาก seat number ตายตัว เพราะ FILL seat (1/2/4)
+    // ก็อาจเป็น Nine Sentinels AI ได้เหมือนกัน ไม่ใช่แค่ seat 3 (Boss) เท่านั้น
+    const winnerSeatData = bySeat.get(reveal.winnerSeat)
+    if (winnerSeatData?.isBoss || winnerSeatData?.controller === 'AI') playBossPileWinThunder()
+
+    // Legendary Triple Sweep (มติลุงเยาะ 2026-08-14) — ใช้ isLocalTripleSweep เดิมจาก vfxPolicy.ts
+    // เหมือน mastermind/highNoble ทุกประการ แค่ป้อน seat number แทน playerId (เทียบ string ล้วน
+    // ไม่สนโดเมน id ตราบใดสองฝั่งใช้ระบบเดียวกัน)
+    pileWinnerSeatsRef.current = { ...pileWinnerSeatsRef.current, [reveal.pile]: String(reveal.winnerSeat) }
+    if (isLocalTripleSweep(pileWinnerSeatsRef.current, String(localSeat))) setShowLegendarySweep(true)
+
+    // Congratulations is heard only when the local P1 seat sweeps all three piles.
+    const winners = pileWinnerSeatsRef.current
+    if (winners[1] === String(localSeat) && winners[2] === String(localSeat) && winners[3] === String(localSeat)) playJackpotFanfare()
+  }, [snapshot.reveal?.pile, snapshot.reveal?.winnerSeat, snapshot.gameNumber, local?.seat, width, height, bySeat])
 
   const localGFPlayer = snapshot.gfTable?.players.find(player => player.seat === local?.seat)
   const alreadyGFRevealed = localGFPlayer?.revealedCards ?? []
@@ -467,14 +555,18 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
 
   const [piles, setPiles] = useState<[HandCardData[], HandCardData[], HandCardData[]] | null>(null)
   const [selectedCard, setSelectedCard] = useState<{ pi: number; ci: number } | null>(null)
+  const [discardTarget, setDiscardTarget] = useState<string | null>(null)
   const finalDraftSentRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!arrangingPhase || !local) { setPiles(null); setSelectedCard(null); return }
-    setPiles(restoreSavedPiles(local.cards, local.arrangedPiles))
+    const isDiscardTurn = snapshot.phase === 'DISCARD' && local?.isCurrentTurn
+    if ((!arrangingPhase && !isDiscardTurn) || !local) { setPiles(null); setSelectedCard(null); setDiscardTarget(null); return }
+    const restored = restoreSavedPiles(local.cards, local.arrangedPiles)
+    setPiles(restored)
     setSelectedCard(null)
+    setDiscardTarget(isDiscardTurn ? restored[2].at(-1)?.key ?? null : null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [arrangingPhase, snapshot.gameNumber])
+  }, [arrangingPhase, snapshot.phase, snapshot.gameNumber, local?.isCurrentTurn])
 
   // Save every stable ARRANGE_1 edit as a server-side draft without marking
   // the player Ready. This survives reconnects and becomes the starting layout
@@ -501,13 +593,30 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
     })
   }, [arrangingPhase, onIntent, piles, seconds, snapshot.gameNumber, snapshot.phaseEndsAt])
 
-  const [discardTarget, setDiscardTarget] = useState<string | null>(null)
   useEffect(() => {
     if (snapshot.phase !== 'DISCARD' || !local?.isCurrentTurn) { setDiscardTarget(null); return }
     const pile3 = local.arrangedPiles?.pile3
     setDiscardTarget(pile3?.length ? pile3[pile3.length - 1] : null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot.phase, snapshot.gameNumber])
+
+  // เตือนเสียงครั้งเดียวตอนนับถอยหลังเหลือ 3 วิ (มติลุงเยาะ 2026-08-15) — เฉพาะช่วงที่ local ต้องตัดสินใจ
+  // จริงกับ deadline เท่านั้น (จัดไพ่/Discard ตาตัวเอง/Grand Finale ตาตัวเอง/ประมูลที่ยังไม่ล็อค) ไม่ใช่ทุก phase
+  // ที่มี phaseEndsAt เพราะ phase อัตโนมัติ (DEAL_ANIMATION/RESOLVE_PILE_X/REVEAL_PILE_X ฯลฯ) ก็มี deadline
+  // เหมือนกันแต่ผู้เล่นไม่ได้ตัดสินใจอะไร — key ผูกกับ phase+phaseEndsAt+gameNumber กันยิงซ้ำทุก 250ms tick ที่
+  // seconds ยังเป็น 3 อยู่ และรีเซ็ตเองอัตโนมัติทันทีที่ phase/deadline ใหม่เข้ามา (key เปลี่ยน)
+  const localActionPending = Boolean(arrangingPhase)
+    || (snapshot.phase === 'DISCARD' && !!local?.isCurrentTurn)
+    || !!snapshot.gf?.localTurn
+    || !!(snapshot.auction && !snapshot.auction.locked)
+  const countdownWarningFiredRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!localActionPending || seconds !== 3) return
+    const key = `${snapshot.gameNumber}:${snapshot.phase}:${snapshot.phaseEndsAt}`
+    if (countdownWarningFiredRef.current === key) return
+    countdownWarningFiredRef.current = key
+    playCountdownWarning()
+  }, [seconds, localActionPending, snapshot.gameNumber, snapshot.phase, snapshot.phaseEndsAt])
 
   if (!local) return <View style={styles.fatal}><Text style={styles.fatalText}>LOCAL SEAT NOT FOUND</Text></View>
 
@@ -518,7 +627,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
 
   const handleArrangeCardPress = (pi: number, ci: number) => {
     if (!piles) return
-    if (!selectedCard) { setSelectedCard({ pi, ci }); return }
+    if (!selectedCard) { setSelectedCard({ pi, ci }); playCardArrange1(); return }
     if (selectedCard.pi === pi && selectedCard.ci === ci) { setSelectedCard(null); return }
     const next: [HandCardData[], HandCardData[], HandCardData[]] = [[...piles[0]], [...piles[1]], [...piles[2]]]
     const swap = next[selectedCard.pi][selectedCard.ci]
@@ -526,19 +635,46 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
     next[pi][ci] = swap
     setPiles(next)
     setSelectedCard(null)
+    playCardArrange2()
   }
 
   const confirmArrangement = () => {
     if (!piles) return
     const pileKeys = { pile1: piles[0].map(card => card.key), pile2: piles[1].map(card => card.key), pile3: piles[2].map(card => card.key) }
+    // ปุ่มเดียวกันทำหน้าที่ READY (ARRANGE_1) / CONFIRM ARRANGEMENT (FINAL_ARRANGE) / FINAL LOCK (FINAL_LOCK)
+    // เล่นเสียงเดียวกันทั้ง 3 กรณี เพราะเป็น "ยืนยันการจัดไพ่" ตัวเดียวกันจริง (มติลุงเยาะ 2026-08-15, รอบ 2)
+    playReadyButton()
     if (arrangingPhase === 'FINAL_LOCK') onIntent({ type: 'FINAL_LOCK', ...pileKeys })
     else if (arrangingPhase) onIntent({ type: 'SUBMIT_ARRANGEMENT', stage: arrangingPhase, ...pileKeys })
+  }
+
+  const chooseDiscard = (pi: number, ci: number) => {
+    if (!piles || !piles[2].length) return
+    const next: [HandCardData[], HandCardData[], HandCardData[]] = [[...piles[0]], [...piles[1]], [...piles[2]]]
+    const lastIndex = next[2].length - 1
+    const chosen = next[pi][ci]
+    if (pi !== 2 || ci !== lastIndex) {
+      const previousLast = next[2][lastIndex]
+      next[pi][ci] = previousLast
+      next[2][lastIndex] = chosen
+    }
+    setPiles(next)
+    setDiscardTarget(chosen.key)
+  }
+
+  const confirmDiscard = () => {
+    if (!piles || !discardTarget) return
+    onIntent({
+      type: 'DISCARD', cardId: discardTarget,
+      pile1: piles[0].map(card => card.key), pile2: piles[1].map(card => card.key), pile3: piles[2].map(card => card.key),
+    })
   }
 
   const renderSeat = (number: 1 | 2 | 3 | 4, placement: 'top' | 'left' | 'right' | 'bottom') => {
     const seat = bySeat.get(number)
     if (!seat) return null
     const gfTurnSeconds = snapshot.gfTable && seat.isCurrentTurn ? seconds : null
+    const gfPlayer = snapshot.gfTable?.players.find(player => player.seat === number)
     if (snapshot.phase === 'DEAL_ANIMATION') return <View style={[styles.seat, styles[placement]]}><SeatLabel seat={seat} turnSeconds={gfTurnSeconds} /></View>
     if (seat.isLocal && arrangingPhase) return <View style={[styles.seat, styles[placement]]}><SeatLabel seat={seat} turnSeconds={gfTurnSeconds} /></View>
     if (seat.isLocal && snapshot.phase === 'DISCARD' && seat.isCurrentTurn) return <View style={[styles.seat, styles[placement]]}><SeatLabel seat={seat} turnSeconds={gfTurnSeconds} /></View>
@@ -546,7 +682,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
       return (
         <View style={[styles.seat, styles[placement]]}>
           <View style={styles.localHandGap}><PileOneOpeningHand piles={seat.arrangedPiles} width={Math.min(width * 0.82, 460)} /></View>
-          <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} />
+          <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} gfStatus={gfPlayer?.status} />
         </View>
       )
     }
@@ -555,7 +691,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
       return (
         <View style={[styles.seat, styles[placement]]}>
           <View style={styles.localHandGap}><PileTwoBettingHand piles={seat.arrangedPiles} width={Math.min(width * 0.82, 460)} revealedCards={revealedCards} selectedCards={selectedGFCardIds} onSelectCard={toggleGFRevealCard} selectable={!!snapshot.gf?.localTurn} /></View>
-          <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} />
+          <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} gfStatus={gfPlayer?.status} />
         </View>
       )
     }
@@ -564,7 +700,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
       return (
         <View style={[styles.seat, styles[placement]]}>
           <View style={styles.localHandGap}><PileThreeBettingHand piles={seat.arrangedPiles} width={Math.min(width * 0.82, 460)} revealedCards={revealedCards} selectedCards={selectedGFCardIds} onSelectCard={toggleGFRevealCard} selectable={!!snapshot.gf?.localTurn} /></View>
-          <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} />
+          <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} gfStatus={gfPlayer?.status} />
         </View>
       )
     }
@@ -585,21 +721,30 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
       return true
     }) : seat.cards
     const visibleCardCount = Math.max(0, seat.cardCount - pendingFaceUpAwardCount - pendingBlindAwardCount)
-    const gfPlayer = snapshot.gfTable?.players.find(player => player.seat === number)
     const gfRevealedCards = gfPlayer?.revealedCards ?? []
     const gfPileActive = !!snapshot.gfTable
     const gfPrivateCardCount = snapshot.gfTable?.pile === 2 ? 3 : 5
+    // ผู้เล่นอื่นที่ Fold ระหว่างรอบ Call/Fold ที่กำลังเล่นอยู่ (ไม่ใช่ตอนกองจบแล้ว — นั่นคือ ResolvedCardStack
+    // ที่ center board) ต้องเห็นไพ่คว่ำซ้อนกันทันทีที่ที่นั่งเขาเอง บอกว่า "ยอมแพ้รอบนี้แล้ว" ไม่ใช่ FanHand ตามปกติ
+    const gfFolded = gfPileActive && gfPlayer?.status === 'FOLDED'
     const hand = (
       <View style={side && (placement === 'left' ? styles.rotateLeft : styles.rotateRight)}>
-        <FanHand
-          cards={gfPileActive ? gfRevealedCards : visibleCards}
-          cardCount={gfPileActive ? gfPrivateCardCount : visibleCardCount}
-          faceUp={seat.isLocal || gfPileActive}
-          compact={!seat.isLocal}
-          width={seat.isLocal ? Math.min(width * 0.7, 420) : 190}
-          disabled={!seat.isLocal}
-          onCardPress={cardId => onIntent({ type: 'SELECT_CARD', cardId })}
-        />
+        {arrangingPhase&&side&&!seat.isLocal ? <TierCSideArrangementBacks cardCount={visibleCardCount} /> : gfFolded ? (
+          <View style={styles.gfFoldedStack}>
+            <CardBackStack count={gfPrivateCardCount} offset={10} />
+            <Text style={styles.gfFoldedLabel}>FOLDED</Text>
+          </View>
+        ) : (
+          <FanHand
+            cards={gfPileActive ? gfRevealedCards : visibleCards}
+            cardCount={gfPileActive ? gfPrivateCardCount : visibleCardCount}
+            faceUp={seat.isLocal || gfPileActive}
+            compact={!seat.isLocal}
+            width={seat.isLocal ? Math.min(width * 0.7, 420) : 190}
+            disabled={!seat.isLocal}
+            onCardPress={cardId => { playCardArrange1(); onIntent({ type: 'SELECT_CARD', cardId }) }}
+          />
+        )}
       </View>
     )
     // มติลุงเยาะ: ไพ่ในมือ P1 (ตัวเอง) ต้องอยู่เหนือรายชื่อ/Avatar เสมอ ห่างจากขอบล่างไพ่ไม่น้อยกว่า 30px —
@@ -608,13 +753,13 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
       return (
         <View style={[styles.seat, styles[placement]]}>
           <View style={styles.localHandGap}>{hand}</View>
-          <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} />
+          <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} gfStatus={gfPlayer?.status} />
         </View>
       )
     }
     return (
       <View style={[styles.seat, styles[placement]]}>
-        <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} />
+        <SeatLabel seat={seat} turnSeconds={gfTurnSeconds} gfStatus={gfPlayer?.status} />
         {hand}
       </View>
     )
@@ -622,6 +767,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
 
   return (
     <ImageBackground source={MONARCH_TABLE} resizeMode="cover" style={styles.root}>
+      <GameServerStatusLight online={serverOnline} />
       <View style={styles.darkWash} />
       <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
         {transportStatus && transportStatus !== 'MATCHED' && (
@@ -634,7 +780,7 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
             <Text style={styles.phase}>GAME {snapshot.gameNumber}/3  |  {snapshot.phase.replaceAll('_', ' ')}</Text>
           </View>
           <View style={[styles.timer, seconds !== null && seconds <= 3 && styles.timerDanger]}>
-            <Text style={styles.timerText}>{snapshot.gfTable?.currentSeat ? `S${snapshot.gfTable.currentSeat}` : seconds === null ? '--' : seconds}</Text>
+            <Text style={styles.timerText}>{seconds === null ? '--' : seconds}</Text>
           </View>
         </View>
 
@@ -646,6 +792,14 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
           {renderSeat(otherChallengerSeats[1], 'right')}
           {renderSeat(local.seat, 'bottom')}
 
+          {snapshot.gfTable?.currentSeat && (() => {
+            const current = snapshot.gfTable!.players.find(player => player.seat === snapshot.gfTable!.currentSeat)
+            return current ? <View pointerEvents="none" style={styles.gfTurnBanner}>
+              <Text style={styles.gfTurnRound}>PILE {snapshot.gfTable!.pile} · ROUND {snapshot.gfTable!.round}</Text>
+              <Text style={styles.gfTurnName}>{current.seat === local.seat ? 'YOUR TURN' : `${current.displayName.toUpperCase()} THINKING`}</Text>
+            </View> : null
+          })()}
+
           {isDealAnimation && <ArenaDealAnimation key={`deal-${snapshot.gameNumber}`} width={width} height={height} localSeat={local.seat} />}
           {snapshot.auctionResult && auctionAwardActive && <AuctionAwardAnimation key={`award-${snapshot.gameNumber}-${snapshot.auctionResult.card}`} result={snapshot.auctionResult} width={width} height={height} localSeat={local.seat} />}
           {snapshot.blindAuctionResults.map((result, index) => <AuctionAwardAnimation
@@ -653,6 +807,10 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
             result={{ round: 'FACE_UP', card: 'BLIND', winnerSeat: result.winnerSeat, winnerDisplayName: result.winnerDisplayName }}
             width={width} height={height} localSeat={local.seat} delayMs={index * 2000} hidden
           />)}
+
+          <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', zIndex: 55 }]}>
+            <FlyingCoins ref={flyingCoinsRef} />
+          </View>
 
           {!isDealAnimation && snapshot.cardZones.stockCount > 0 && (
             <View style={styles.stockZone}>
@@ -718,7 +876,9 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
                 {arrangingPhase === 'ARRANGE_1' ? 'ARRANGE YOUR HAND' : arrangingPhase === 'FINAL_ARRANGE' ? 'FINAL ARRANGE' : 'CONFIRM FINAL LOCK'}
               </Text>
               <Text style={styles.arrangeSub}>Tap a card, then tap another to swap. Pile 1 must not beat Pile 2; Pile 2 must not beat Pile 3.</Text>
-              <PlayerHandView piles={piles} selected={selectedCard} onCardPress={handleArrangeCardPress} isVip={false} />
+              <View style={styles.p1HandScale}>
+                <PlayerHandView piles={piles} selected={selectedCard} onCardPress={handleArrangeCardPress} isVip={false} />
+              </View>
               <Pressable onPress={confirmArrangement} hitSlop={10} style={({ pressed }) => [styles.primaryAction, pressed && styles.primaryActionPressed]}>
                 {({ pressed }) => (
                   <Text style={[styles.primaryActionText, pressed && styles.primaryActionTextPressed]}>
@@ -729,24 +889,19 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
             </View>
           )}
 
-          {snapshot.phase === 'DISCARD' && local.isCurrentTurn && (
+          {snapshot.phase === 'DISCARD' && local.isCurrentTurn && piles && (
             <View style={styles.arrangeSheet}>
-              <Text style={styles.arrangeTitle}>MANDATORY DISCARD</Text>
-              <Text style={styles.arrangeSub}>The final card in Pile 3 must be discarded. The first five cards plus two community cards rank as Best 5 of 7.</Text>
-              <View style={styles.discardRow}>
-                {discardTarget ? [discardTarget].map(code => (
-                  <Pressable
-                    key={code}
-                    disabled
-                    hitSlop={6}
-                    style={[styles.discardCard, styles.discardCardSelected]}
-                  >
-                    <Image source={CARD_IMG[code]} style={styles.discardImage} resizeMode="cover" />
-                  </Pressable>
-                )) : null}
-              </View>
+              <Text style={styles.arrangeTitle}>FINAL HAND · DISCARD</Text>
+              <Text style={styles.arrangeSub}>The last card is marked ×. Tap any card to replace it, then discard. Pile 3 uses the best 3 of your 5 cards together with both community cards.</Text>
+              <PlayerHandView
+                piles={piles}
+                selected={null}
+                discardMarked={{ pi: 2, ci: Math.max(0, piles[2].length - 1) }}
+                onCardPress={chooseDiscard}
+                isVip={false}
+              />
               <Pressable
-                onPress={() => discardTarget && onIntent({ type: 'DISCARD', cardId: discardTarget })}
+                onPress={() => { playReadyButton(); confirmDiscard() }}
                 hitSlop={10}
                 style={({ pressed }) => [styles.primaryAction, pressed && styles.primaryActionPressed]}
               >
@@ -756,8 +911,18 @@ export default function GrandmasterTableView({ snapshot, onIntent, transportStat
           )}
         </View>
       </SafeAreaView>
-      {!isDealAnimation && <ArenaOverlays snapshot={auctionAwardActive ? { ...snapshot, auction: null } : snapshot} onIntent={onIntent} selectedGFCardIds={selectedGFCardIds} requiredGFSelection={requiredGFSelection} />}
-      {callRevealQueue[0] && <CallRevealSpotlight event={callRevealQueue[0]} width={width} />}
+      {!isDealAnimation && <ArenaOverlays snapshot={{ ...snapshot, ...(auctionAwardActive ? { auction: null } : {}), ...(deferPileResult ? { reveal: null } : {}) }} onIntent={onIntent} selectedGFCardIds={selectedGFCardIds} requiredGFSelection={requiredGFSelection} />}
+      {royalFlushPlayer && <RoyalStraightFlushVFX playerName={royalFlushPlayer} onClose={() => setRoyalFlushPlayer(null)} />}
+      {gfActionQueue[0] && <GFActionSpotlight event={gfActionQueue[0]} width={width} />}
+      {snapshot.reveal?.pile === 3 && snapshot.reveal.winnerSeat === local?.seat && (
+        <ComboCardBurst eventKey={`${snapshot.matchId}:${snapshot.gameNumber}:g3-win:${snapshot.reveal.winnerSeat}`} kind="YOU_WIN" />
+      )}
+      {victoryVfx && (
+        <BossVictoryVFX tier={victoryVfx.tier} titleOverride={victoryVfx.title ?? undefined} onFinish={() => setVictoryVfx(null)} />
+      )}
+      {showLegendarySweep && !victoryVfx && (
+        <LegendaryCardVFX title="LEGENDARY VICTORY" subtitle="TRIPLE SWEEP" onFinish={() => setShowLegendarySweep(false)} />
+      )}
     </ImageBackground>
   )
 }
@@ -766,7 +931,7 @@ const styles = StyleSheet.create({
   queueBanner: { position: 'absolute', top: 10, alignSelf: 'center', zIndex: 20, paddingHorizontal: 14, paddingVertical: 6, borderRadius: 14, backgroundColor: 'rgba(8,20,13,0.94)', borderWidth: 1, borderColor: '#FFD76A' },
   queueText: { color: '#FFD76A', fontSize: 9, fontWeight: '900', letterSpacing: 1 },
   root: { flex: 1, backgroundColor: '#07150D' },
-  darkWash: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(3,10,6,0.28)' },
+  darkWash: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(3,10,6,0.28)' },
   safe: { flex: 1 },
   header: { height: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 10, backgroundColor: 'rgba(5,14,9,0.88)', borderBottomWidth: 1, borderBottomColor: 'rgba(255,215,106,0.34)' },
   backButton: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 17, borderWidth: 1, borderColor: '#3A5A44' },
@@ -783,16 +948,22 @@ const styles = StyleSheet.create({
   waitingDotsRow: { flexDirection: 'row', gap: 3, alignItems: 'center', marginLeft: 2 },
   waitingDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#FFD76A' },
   tableArea: { flex: 1, position: 'relative', overflow: 'hidden' },
-  dealOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 45, alignItems: 'center', justifyContent: 'center' },
+  dealOverlay: { ...StyleSheet.absoluteFill, zIndex: 45, alignItems: 'center', justifyContent: 'center' },
   dealCard: { position: 'absolute', width: 25, height: 36, borderRadius: 5, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,215,106,0.65)', backgroundColor: '#091808' },
   dealCardImage: { width: 25, height: 36 },
   dealingText: { position: 'absolute', top: '55%', color: 'rgba(255,215,106,0.72)', fontSize: 9, fontWeight: '900', letterSpacing: 1.5 },
-  awardOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 60, alignItems: 'center', justifyContent: 'center' },
-  callRevealOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 90, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(2,7,5,0.92)' },
+  awardOverlay: { ...StyleSheet.absoluteFill, zIndex: 60, alignItems: 'center', justifyContent: 'center' },
+  callRevealOverlay: { ...StyleSheet.absoluteFill, zIndex: 90, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(2,7,5,0.78)' },
   callRevealTitle: { color: '#FFD76A', fontSize: 20, fontWeight: '900', letterSpacing: 1.2, textAlign: 'center' },
+  foldActionTitle: { color: '#FF7A7A' },
   callRevealSub: { color: '#8DFFB5', fontSize: 10, fontWeight: '900', letterSpacing: 1.5, marginTop: 5, marginBottom: 18 },
-  callRevealCards: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14 },
-  callRevealCard: { borderRadius: 10, borderWidth: 3, borderColor: '#FF3B30', backgroundColor: '#130D1F', shadowColor: '#FFD76A', shadowOpacity: 0.9, shadowRadius: 18, elevation: 20 },
+  callRevealCards: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
+  callRevealCard: { borderRadius: 5, borderWidth: 2, borderColor: '#FF3B30', backgroundColor: '#130D1F', shadowColor: '#FFD76A', shadowOpacity: 0.9, shadowRadius: 9, elevation: 12 },
+  gfTurnBanner: { position: 'absolute', top: '57%', alignSelf: 'center', zIndex: 34, alignItems: 'center', paddingHorizontal: 16, paddingVertical: 7, borderRadius: 10, backgroundColor: 'rgba(7,20,13,0.9)', borderWidth: 1, borderColor: 'rgba(255,215,106,0.55)' },
+  gfTurnRound: { color: '#FFC857', fontSize: 9, fontWeight: '800', letterSpacing: 1.8 },
+  gfTurnName: { color: '#FFD76A', fontSize: 16, fontWeight: '900', letterSpacing: 2, marginTop: 2 },
+  gfSeatStatus: { alignSelf: 'flex-start', marginTop: 2, color: '#8DFFB5', fontSize: 7, fontWeight: '900', letterSpacing: 1 },
+  gfSeatFolded: { color: '#FF7A7A' },
   awardMessage: { position: 'absolute', top: '31%', paddingHorizontal: 18, paddingVertical: 8, borderRadius: 18, backgroundColor: 'rgba(7,18,11,0.94)', borderWidth: 1, borderColor: '#FFD76A' },
   awardTitle: { color: '#FFD76A', fontSize: 12, fontWeight: '900', letterSpacing: 1, textAlign: 'center' },
   awardCard: { width: 54, height: 78, borderRadius: 6, overflow: 'hidden', borderWidth: 2, borderColor: '#FFD76A', backgroundColor: '#130D1F', shadowColor: '#FFD76A', shadowOpacity: 0.9, shadowRadius: 12, elevation: 15 },
@@ -802,6 +973,8 @@ const styles = StyleSheet.create({
   discardZone: { position: 'absolute', right: 8, bottom: '25%', zIndex: 32, alignItems: 'center' },
   zoneLabel: { color: '#C8C4B0', fontSize: 6, fontWeight: '900', letterSpacing: 0.6, marginBottom: 3 },
   zoneStackCard: { position: 'absolute', left: 0, width: STACK_CARD_W, height: STACK_CARD_H, borderRadius: 3, borderWidth: 1, borderColor: 'rgba(255,215,106,0.45)', backgroundColor: '#091808' },
+  gfFoldedStack: { alignItems: 'center', gap: 3 },
+  gfFoldedLabel: { color: '#FF6B6B', fontSize: 8, fontWeight: '900', letterSpacing: 0.6 },
   crownPosition: { position: 'absolute', left: 8, top: 8, zIndex: 30 },
   seat: { position: 'absolute', alignItems: 'center', zIndex: 10 },
   top: { top: 4, alignSelf: 'center' },
@@ -849,6 +1022,11 @@ const styles = StyleSheet.create({
   arrangeSheet: { position: 'absolute', bottom: 8, alignSelf: 'center', width: '96%', paddingVertical: 10, borderRadius: 14, backgroundColor: 'rgba(8,20,13,0.97)', borderWidth: 1, borderColor: '#FFD76A', alignItems: 'center', zIndex: 35 },
   arrangeTitle: { color: '#FFD76A', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
   arrangeSub: { color: '#C8C4B0', fontSize: 8, marginTop: 2, marginBottom: 4, textAlign: 'center', paddingHorizontal: 12 },
+  p1HandScale: { width: '100%', marginTop: 29, marginBottom: 18, alignItems: 'center', transform: [{ translateY: GRANDMASTER_P1_HAND_DROP }, { scale: GRANDMASTER_P1_HAND_SCALE }] },
+  tierCSideHand:{flexDirection:'column',alignItems:'center',gap:4,transform:[{translateY:-36}]},
+  tierCSidePile:{flexDirection:'row',alignItems:'center',justifyContent:'center'},
+  tierCSideCard:{width:25,height:36,borderRadius:3,overflow:'hidden',borderWidth:1,borderColor:'rgba(201,168,76,.5)'},
+  tierCSideCardImage:{width:25,height:36},
   discardRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 6, paddingHorizontal: 10, marginBottom: 8 },
   discardCard: { width: 44, height: 62, borderRadius: 4, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,215,106,0.5)', backgroundColor: '#160C1E', alignItems: 'center', justifyContent: 'center' },
   discardCardSelected: { borderColor: '#FF6B6B', borderWidth: 2 },

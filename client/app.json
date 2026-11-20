@@ -1,22 +1,20 @@
 {
   "expo": {
-    "name": "TriplePoker",
+    "name": "TriplePoker : Rise",
     "slug": "triplepoker",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "splash": {
-      "resizeMode": "contain",
-      "backgroundColor": "#0a0a0a"
-    },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.sagunicorn.triplepoker"
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#0a0a0a"
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#030711",
+        "monochromeImage": "./assets/adaptive-icon-monochrome.png"
       },
       "package": "com.sagunicorn.triplepoker"
     },
@@ -25,7 +23,11 @@
       "expo-router",
       "expo-asset",
       "expo-audio",
-      "expo-font"
+      "expo-font",
+      "expo-image",
+      "expo-status-bar",
+      ["expo-splash-screen", { "backgroundColor": "#0a0a0a", "resizeMode": "contain", "image": "./assets/images/splash_screen.png" }],
+      "expo-system-ui"
     ],
     "extra": {
       "router": {},

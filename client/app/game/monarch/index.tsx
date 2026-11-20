@@ -33,10 +33,12 @@ import Reanimated, {
   Easing, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withSpring, withTiming,
 } from 'react-native-reanimated'
 import PlayerHandView, { HandCardData } from '../../../src/components/game/PlayerHandView'
+import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
 import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
 import { MINION_AVATAR } from '../../../src/constants/minionAvatars'
 import GameTopBar from '../../../src/components/game/GameTopBar'
 import { AvatarDisplay, PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
+import { useAuthStore } from '../../../src/store/authStore'
 import BossVictoryVFX from '../../../src/components/vfx/BossVictoryVFX'
 import { getReduceMotion } from '../../../src/utils/reduceMotion'
 // Batch 4 — SFX layer เท่านั้น ห้าม import bgmService (ไม่มี BGM ในโต๊ะเกมทุก Tier ตาม canon)
@@ -47,16 +49,20 @@ const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 const bossAvatarImg = require('../../../assets/bosses/boss_Monarch_avatar.png')
 const MONARCH_TABLE_SKIN = require('../../../assets/tables/boss_monarch_skin_table.png')
 
+// Monarch เป็น 1v1 (Human คนเดียวเสมอ ไม่มี human คนอื่น) — อ่าน vip_status ของ session ตรงๆ ในนี้ได้เลย
+// ไม่ต้องส่งผ่าน prop จาก caller ทั้ง 4 จุด (ต่างจาก Adept/High Noble/VIP Plus ที่มีหลาย seat จริง)
 function MonarchPlayerAvatar({ value, size }: { value?: string; size: number }) {
+  const isVip = useAuthStore(s => (s.profile?.vip_status ?? 'none') !== 'none')
   const preset = value ? PRESET_AVATARS.find(item => item.key === value) : undefined
   if (preset) {
-    return <AvatarDisplay config={{ type: 'preset', presetKey: preset.key, frameKey: 'default' }} size={size} showFrame={false} />
+    return <AvatarDisplay config={{ type: 'preset', presetKey: preset.key, frameKey: isVip ? 'gold' : 'default' }} size={size} showFrame={isVip} />
   }
+  const borderColor = isVip ? '#FFD76A' : '#2A4A34'
   if (value && /^(https?:|data:)/i.test(value)) {
-    return <Image source={{ uri: value }} style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 1.5, borderColor: '#FFD76A' }} resizeMode="cover" />
+    return <Image source={{ uri: value }} style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 1.5, borderColor }} resizeMode="cover" />
   }
   return (
-    <View style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 1.5, borderColor: '#FFD76A', backgroundColor: '#132019', alignItems: 'center', justifyContent: 'center' }}>
+    <View style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 1.5, borderColor, backgroundColor: '#132019', alignItems: 'center', justifyContent: 'center' }}>
       <Text style={{ fontSize: Math.round(size * 0.52) }}>{value || '🧑'}</Text>
     </View>
   )
@@ -800,6 +806,7 @@ export default function MonarchScreen() {
   const params = useLocalSearchParams<{ roomId?: string; userId?: string }>()
   const roomId = params.roomId ?? ''
   const userId = params.userId ?? ''
+  const accessToken = useAuthStore(s => s.session?.access_token)
   const socketRef = useRef<Socket | null>(null)
   const insets = useSafeAreaInsets()
   const isWeb = Platform.OS === 'web'
@@ -1301,7 +1308,8 @@ export default function MonarchScreen() {
   }
 
   useEffect(() => {
-    const socket = io(SERVER_URL, { transports: ['websocket'] })
+    if (!accessToken) return
+    const socket = io(SERVER_URL, { auth: { accessToken }, transports: ['websocket'] })
     socketRef.current = socket
 
     socket.on('connect', () => {
@@ -1445,7 +1453,7 @@ export default function MonarchScreen() {
       sfxLayerService.stopAll()
       socket.disconnect()
     }
-  }, [roomId, userId])
+  }, [roomId, userId, accessToken])
 
   // tap-swap เดียวกับ Initiate/Mastermind/HighNoble (initiate/index.tsx:812-821) — เลือกใบแรก
   // แล้ว tap ใบที่สองเพื่อสลับตำแหน่งข้ามกอง
@@ -1511,6 +1519,7 @@ export default function MonarchScreen() {
 
   return (
     <ImageBackground source={MONARCH_TABLE_SKIN} resizeMode="cover" style={styles.root}>
+      <GameServerStatusLight socketRef={socketRef} />
       {/* Sprint 6-7 §8.2 — Background overlay ทับพื้นหลังเดิมทั้งจอ ไม่ต้องสร้าง asset ใหม่ */}
       <View style={styles.bgOverlay} pointerEvents="none" />
 
@@ -1822,12 +1831,14 @@ export default function MonarchScreen() {
                 <Text style={styles.communityLabel}>G1 / G2 / G3</Text>
                 {/* Batch 2 Task 3 — wrapper เรืองแสงรอบมือผู้เล่น (ไม่แตะ PlayerHandView เลย) */}
                 <Reanimated.View style={[monarchHandGlowStyles.wrap, handGlowStyle]}>
-                  <PlayerHandView
-                    piles={piles}
-                    selected={selected}
-                    onCardPress={handleCardPress}
-                    isVip
-                  />
+                  <View style={styles.p1HandScale}>
+                    <PlayerHandView
+                      piles={piles}
+                      selected={selected}
+                      onCardPress={handleCardPress}
+                      isVip
+                    />
+                  </View>
                 </Reanimated.View>
                 {/* Batch 3C-1 Task 2 — ซ่อน Balance ระหว่างเกม (spec §3: "ซ่อน net token จนจบแมตช์")
                     ลบทิ้งจริง (ไม่ใช่ opacity:0) กัน layout เพี้ยนจากช่องว่างที่เหลือ */}
@@ -2444,11 +2455,11 @@ function SeatCard({ label, sub, small, avatarSource, avatarBorderColor, stillnes
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: COLOR.bg },
   battleOverlay: {
-    ...StyleSheet.absoluteFillObject, top: 48, zIndex: 40,
+    ...StyleSheet.absoluteFill, top: 48, zIndex: 40,
     backgroundColor: 'transparent', paddingHorizontal: 12,
   },
   showdownCountdownOverlay: {
-    ...StyleSheet.absoluteFillObject, zIndex: 58, backgroundColor: 'rgba(0,0,0,0.82)',
+    ...StyleSheet.absoluteFill, zIndex: 58, backgroundColor: 'rgba(0,0,0,0.82)',
     alignItems: 'center', justifyContent: 'center',
   },
   showdownCountdownLabel: { color: COLOR.gold, fontSize: 13, fontWeight: '800', letterSpacing: 4, marginBottom: 10 },
@@ -2478,7 +2489,7 @@ const styles = StyleSheet.create({
   },
   battleActionBtn: { flex: 1, maxWidth: 150 },
   preGfShade: {
-    ...StyleSheet.absoluteFillObject, top: 48, zIndex: 75, backgroundColor: 'rgba(0,0,0,0.78)',
+    ...StyleSheet.absoluteFill, top: 48, zIndex: 75, backgroundColor: 'rgba(0,0,0,0.78)',
     alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 18,
   },
   preGfCard: {
@@ -2513,7 +2524,7 @@ const styles = StyleSheet.create({
   preGfContinue: { marginTop: 9, paddingVertical: 11, borderRadius: 10, borderWidth: 1.5, borderColor: '#FFD76A', backgroundColor: '#102218', alignItems: 'center' },
   preGfContinueText: { color: '#FFD76A', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
   presentationShade: {
-    ...StyleSheet.absoluteFillObject, zIndex: 70, backgroundColor: 'rgba(0,0,0,0.65)',
+    ...StyleSheet.absoluteFill, zIndex: 70, backgroundColor: 'rgba(0,0,0,0.65)',
     alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20,
   },
   outcomeCard: {
@@ -2593,7 +2604,7 @@ const styles = StyleSheet.create({
     color: COLOR.gold, fontFamily: 'Cinzel_700Bold', fontSize: 22, letterSpacing: 3, textAlign: 'center',
   },
   // Batch 3B Task 3 — wash ทองเข้ม #FFC857 12% ซ้อนบน blackout ระหว่าง crown assembly
-  goldWash: { ...StyleSheet.absoluteFillObject, backgroundColor: '#FFC857' },
+  goldWash: { ...StyleSheet.absoluteFill, backgroundColor: '#FFC857' },
   crownWrap: { width: 240, height: 220, alignItems: 'center', justifyContent: 'center' },
   crownImgWrap: { width: 240, height: 220, alignItems: 'center', justifyContent: 'center' },
   crownImgAbsolute: { position: 'absolute', top: 0, left: 0 },
@@ -2637,6 +2648,7 @@ const styles = StyleSheet.create({
     width: '100%', backgroundColor: 'rgba(5,14,10,0.72)', borderColor: 'rgba(201,168,76,0.28)', borderWidth: 1,
     borderRadius: 12, paddingVertical: 6, paddingHorizontal: 8, marginTop: 2, alignItems: 'center',
   },
+  p1HandScale: { width: '100%', marginVertical: 18, alignItems: 'center', transform: [{ scale: 1.2 }] },
   humanIdentityRow: { position: 'absolute', left: 8, top: 6, flexDirection: 'row', alignItems: 'center', gap: 6, zIndex: 5 },
   humanAvatar: { width: 38, height: 38, borderRadius: 19, borderWidth: 1.5, borderColor: '#FFD76A' },
   humanAvatarFallback: { backgroundColor: '#132019', alignItems: 'center', justifyContent: 'center' },

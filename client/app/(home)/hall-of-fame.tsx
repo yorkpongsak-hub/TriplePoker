@@ -1,14 +1,16 @@
 // app/(home)/hall-of-fame.tsx
-// Hall of Fame แสดงผลจัดอันดับ All Matrix พร้อมอันดับและคะแนนดิบที่ใช้คำนวณ
+// Elites Ranking แสดงผลจัดอันดับ All Matrix พร้อมอันดับและคะแนนดิบที่ใช้คำนวณ
 
 import React, { useCallback, useEffect, useState } from 'react'
-import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import { ActivityIndicator, Image, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { router } from 'expo-router'
-import { ThemedBackground } from '../../src/components/ui/ThemedBackground'
+import { LinearGradient } from 'expo-linear-gradient'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { AvatarDisplay, AvatarConfig, PRESET_AVATARS } from '../../src/components/profile/AvatarPicker'
 import { glassPanel, glassPanelDense, textOnGlass } from '../../src/ui/glassStyles'
-import { useAuthStore } from '../../src/store/authStore'
 import { useBgm } from '../../src/services/bgmService'
+import { AudioEvent } from '../../src/audio'
+import { CountryBadge } from '../../src/country/CountryBadge'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
@@ -22,6 +24,7 @@ type MetricType = 'ps' | 'winrate' | 'boss_defeats' | 'xp' | 'token'
 
 interface MetricDetail { rank: number; value: number }
 interface HallOfFameEntry {
+  country_code?: string | null
   rank: number
   user_id: string
   display_name: string
@@ -46,6 +49,9 @@ function RowAvatar({ avatarUrl }: { avatarUrl: string | null }) {
   if (avatarUrl && PRESET_AVATARS.some(p => p.key === avatarUrl)) {
     const config: AvatarConfig = { type: 'preset', presetKey: avatarUrl, frameKey: 'default' }
     return <View style={s.avatar}><AvatarDisplay config={config} size={34} showFrame={false} /></View>
+  }
+  if (avatarUrl && /^(https?:|data:)/i.test(avatarUrl)) {
+    return <Image source={{ uri: avatarUrl }} style={s.avatarImage} resizeMode="cover" />
   }
   const isEmoji = !!avatarUrl && [...avatarUrl].length <= 3
   return <Text style={s.avatarEmoji}>{isEmoji ? avatarUrl : '🐉'}</Text>
@@ -72,6 +78,7 @@ function HallRow({ entry }: { entry: HallOfFameEntry }) {
         <RowAvatar avatarUrl={entry.avatar_url} />
         <View style={s.nameWrap}>
           <Text style={s.playerName} numberOfLines={1}>{entry.display_name}</Text>
+          <CountryBadge code={entry.country_code}/>
           <Text style={s.matrixLabel}>ALL MATRIX</Text>
         </View>
         <View style={s.totalWrap}>
@@ -97,9 +104,7 @@ function HallRow({ entry }: { entry: HallOfFameEntry }) {
 }
 
 export default function HallOfFameScreen() {
-  useBgm()
-  const profile = useAuthStore(state => state.profile)
-  const isVip = (profile?.vip_status ?? 'none') !== 'none'
+  useBgm(AudioEvent.ELITES_BGM)
   const [entries, setEntries] = useState<HallOfFameEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -115,7 +120,7 @@ export default function HallOfFameScreen() {
       setEntries(data.entries ?? [])
     } catch (err) {
       console.error('[HallOfFame] load failed:', err)
-      setError('Could not load Hall of Fame. Pull down to try again.')
+      setError('Could not load Elites. Pull down to try again.')
       setEntries([])
     } finally {
       refresh ? setRefreshing(false) : setLoading(false)
@@ -125,17 +130,27 @@ export default function HallOfFameScreen() {
   useEffect(() => { load() }, [load])
 
   return (
-    <ThemedBackground isVip={isVip}>
+    // มติลุงเยาะ 2026-08-15 — หน้านี้คือหน้าคัดตัวแทนไปสู้ The Last Boss ต้องโดดเด่นกว่าหน้าอื่น
+    // เลยไม่ใช้ ThemedBackground (bg_main_free/vip.png ที่ทุกหน้าใช้ร่วมกัน) แต่ใช้ gradient
+    // ม่วงพลัม-เทาสเลต-เทาชาร์โคลของตัวเอง เพื่อแยก Elite Ranking ออกจากหน้าปกติอย่างชัดเจน
+    <LinearGradient
+      colors={['#5A3D72', '#343442', '#191B24']}
+      locations={[0, 0.52, 1]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={s.fill}
+    >
+      <SafeAreaView style={s.safeArea} edges={['top']}>
       <View style={s.root}>
         <View style={s.header}>
-          <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
-            <Text style={s.backText}>‹ Back</Text>
-          </TouchableOpacity>
-          <View style={s.titleWrap}>
-            <Text style={s.title}>HALL OF FAME</Text>
+          <Text style={s.title}>ELITE RANKING</Text>
+          <View style={s.headerRow}>
+            <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
+              <Text style={s.backText}>‹ Back</Text>
+            </TouchableOpacity>
             <Text style={s.subtitle}>THE ALL MATRIX LEGENDS</Text>
+            <View style={s.headerSpacer} />
           </View>
-          <View style={s.headerSpacer} />
         </View>
 
         <ScrollView
@@ -144,56 +159,60 @@ export default function HallOfFameScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={C.gold} colors={[C.gold]} />}
         >
           <View style={s.introCard}>
-            <Text style={s.introTitle}>TOP 10 ASCENDANTS</Text>
+            <Text style={s.introTitle}>TOP 10 ELITES</Text>
             <Text style={s.introText}>Combined ranking from Performance Score, Win Rate, Boss Defeats, Player XP and Token.</Text>
           </View>
 
           {loading ? (
-            <View style={s.stateBox}><ActivityIndicator color={C.gold} /><Text style={s.stateText}>Loading Hall of Fame...</Text></View>
+            <View style={s.stateBox}><ActivityIndicator color={C.gold} /><Text style={s.stateText}>Loading Elites...</Text></View>
           ) : error ? (
             <View style={s.stateBox}><Text style={[s.stateText, { color: C.red }]}>{error}</Text></View>
           ) : entries.length === 0 ? (
-            <View style={s.stateBox}><Text style={s.stateText}>No Hall of Fame data yet.</Text></View>
+            <View style={s.stateBox}><Text style={s.stateText}>No Elites data yet.</Text></View>
           ) : entries.map(entry => <HallRow key={entry.user_id} entry={entry} />)}
 
           <Text style={s.hint}>Tap a player to view their profile</Text>
         </ScrollView>
       </View>
-    </ThemedBackground>
+      </SafeAreaView>
+    </LinearGradient>
   )
 }
 
 const s = StyleSheet.create({
+  fill: { flex: 1 },
+  safeArea: { flex: 1, backgroundColor: 'transparent' },
   root: { flex: 1 },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12 },
-  backBtn: { ...glassPanel, width: 82, paddingVertical: 8, alignItems: 'center' },
-  backText: { color: C.gold, fontSize: 13, fontWeight: '800', ...textOnGlass },
-  titleWrap: { flex: 1, alignItems: 'center' },
-  title: { color: C.gold, fontFamily: 'Cinzel_700Bold', fontSize: 18, letterSpacing: 1.2, ...textOnGlass },
-  subtitle: { color: C.silver, fontSize: 9, fontWeight: '800', letterSpacing: 1.1, marginTop: 3 },
-  headerSpacer: { width: 82 },
+  header: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
+  backBtn: { ...glassPanel, width: 90, paddingVertical: 9, alignItems: 'center' },
+  backText: { color: C.gold, fontSize: 15, fontWeight: '800', ...textOnGlass },
+  title: { color: C.gold, fontFamily: 'Cinzel_700Bold', fontSize: 24, letterSpacing: 1.2, textAlign: 'center', ...textOnGlass },
+  subtitle: { flex: 1, color: C.silver, fontSize: 12, fontWeight: '800', letterSpacing: 1.1, textAlign: 'center' },
+  headerSpacer: { width: 90 },
   scroll: { paddingHorizontal: 14, paddingBottom: 32, gap: 10 },
   introCard: { ...glassPanelDense, padding: 12, alignItems: 'center', marginBottom: 2 },
-  introTitle: { color: C.gold, fontFamily: 'Cinzel_700Bold', fontSize: 13, letterSpacing: 1 },
-  introText: { color: C.textSec, fontSize: 10, textAlign: 'center', lineHeight: 15, marginTop: 4 },
+  introTitle: { color: C.gold, fontFamily: 'Cinzel_700Bold', fontSize: 16, letterSpacing: 1 },
+  introText: { color: C.textSec, fontSize: 13, textAlign: 'center', lineHeight: 18, marginTop: 4 },
   row: { ...glassPanel, padding: 10 },
   playerLine: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  rankBadge: { width: 42, height: 32, borderWidth: 1.5, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
-  rankText: { fontFamily: 'JetBrainsMono_600SemiBold', fontSize: 12 },
+  rankBadge: { width: 48, height: 36, borderWidth: 1.5, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  rankText: { fontFamily: 'JetBrainsMono_600SemiBold', fontSize: 15 },
   avatar: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center' },
   avatarEmoji: { width: 34, fontSize: 25, textAlign: 'center' },
+  avatarImage: { width: 34, height: 34, borderRadius: 17 },
   nameWrap: { flex: 1 },
-  playerName: { color: C.textPrimary, fontSize: 14, fontWeight: '800' },
-  matrixLabel: { color: C.textDim, fontSize: 8, fontWeight: '900', letterSpacing: 0.8, marginTop: 2 },
+  playerName: { color: C.textPrimary, fontSize: 17, fontWeight: '800' },
+  matrixLabel: { color: C.textDim, fontSize: 11, fontWeight: '900', letterSpacing: 0.8, marginTop: 2 },
   totalWrap: { alignItems: 'flex-end' },
-  totalValue: { color: C.gold, fontFamily: 'JetBrainsMono_600SemiBold', fontSize: 15 },
-  totalLabel: { color: C.textDim, fontSize: 8, fontWeight: '900' },
+  totalValue: { color: C.gold, fontFamily: 'JetBrainsMono_600SemiBold', fontSize: 19 },
+  totalLabel: { color: C.textDim, fontSize: 11, fontWeight: '900' },
   metricsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10, paddingTop: 9, borderTopWidth: 1, borderTopColor: C.border },
   metricCell: { width: '31.5%', minWidth: 92, backgroundColor: 'rgba(0,0,0,0.16)', borderRadius: 8, padding: 7 },
-  metricLabel: { fontSize: 8, fontWeight: '900', letterSpacing: 0.4 },
-  metricRank: { color: C.textPrimary, fontFamily: 'JetBrainsMono_600SemiBold', fontSize: 12, marginTop: 2 },
-  metricValue: { color: C.textSec, fontSize: 8, marginTop: 1 },
+  metricLabel: { fontSize: 11, fontWeight: '900', letterSpacing: 0.4 },
+  metricRank: { color: C.textPrimary, fontFamily: 'JetBrainsMono_600SemiBold', fontSize: 15, marginTop: 2 },
+  metricValue: { color: C.textSec, fontSize: 11, marginTop: 1 },
   stateBox: { ...glassPanel, alignItems: 'center', paddingVertical: 42, gap: 9 },
-  stateText: { color: C.textSec, fontSize: 12, textAlign: 'center', paddingHorizontal: 20 },
-  hint: { color: C.textDim, fontSize: 10, textAlign: 'center', marginTop: 5 },
+  stateText: { color: C.textSec, fontSize: 15, textAlign: 'center', paddingHorizontal: 20 },
+  hint: { color: C.textDim, fontSize: 13, textAlign: 'center', marginTop: 5 },
 })

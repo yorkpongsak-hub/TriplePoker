@@ -125,7 +125,7 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
     const engine = new ArenaMatchEngine('m1', composition, createSeededRandom(1), 0)
     reserveAll(engine, 1)
     const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
-    const identities = new Map([['p1', { displayName: 'Alice', avatar: 'wolf' }], ['p2', { displayName: 'Bob', avatar: '' }], ['p3', { displayName: 'Cara', avatar: '' }]])
+    const identities = new Map([['p1', { displayName: 'Alice', avatar: 'wolf', isVip: false }], ['p2', { displayName: 'Bob', avatar: '', isVip: false }], ['p3', { displayName: 'Cara', avatar: '', isVip: false }]])
     const view = projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, identities)
     expect(view.phase).toBe('ARRANGE_1')
     const local = view.seats.find(seat => seat.playerId === 'p1')!
@@ -220,10 +220,45 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
     expect(view.gfTable?.players.find(player => player.seat === composition.seats[engine.actorIds.indexOf(callerId)].seat)?.revealedCards).toEqual(selected)
   })
 
+  test('final Pile 2 caller remains available as a public Call event after the result starts', () => {
+    const engine = new ArenaMatchEngine('m-pile2-final-call-event', composition, createSeededRandom(36), 0)
+    driveTo(engine, 'GF_PILE_2')
+    let finalActionId = ''
+    let finalCallerId = ''
+    let sequence = 0
+    while (engine.snapshot().phase === 'GF_PILE_2') {
+      finalCallerId = engine.snapshot().pendingActorIds[0]
+      finalActionId = `p2-final-call-${++sequence}`
+      engine.submit({ type: 'GF_ACTION', actionId: finalActionId, actorId: finalCallerId, decision: 'CALL' }, 10 + sequence)
+    }
+    expect(engine.snapshot().phase).toBe('REVEAL_PILE_2')
+    const view = projectArenaClientSnapshot(engine, composition, new ArenaConnectionManager(['p1', 'p2', 'p3']), 'p1', 20, new Map())
+    expect(view.callReveal).toMatchObject({
+      id: finalActionId,
+      seat: composition.seats[engine.actorIds.indexOf(finalCallerId)].seat,
+      pile: 2,
+      round: 1,
+      cards: expect.any(Array),
+    })
+    expect(view.callReveal?.cards).toHaveLength(2)
+    expect(view.gfAction).toMatchObject({ id: finalActionId, decision: 'CALL', pile: 2, round: 1, cards: view.callReveal?.cards })
+    expect(view.reveal?.pile).toBe(2)
+  })
+
+  test('Fold is projected as a visible Grand Finale action without exposing cards', () => {
+    const engine = new ArenaMatchEngine('m-pile2-fold-event', composition, createSeededRandom(37), 0)
+    driveTo(engine, 'GF_PILE_2')
+    const actorId = engine.snapshot().pendingActorIds[0]
+    engine.submit({ type: 'GF_ACTION', actionId: 'p2-visible-fold', actorId, decision: 'FOLD' }, 10)
+    const view = projectArenaClientSnapshot(engine, composition, new ArenaConnectionManager(['p1', 'p2', 'p3']), 'p1', 11, new Map())
+    expect(view.gfAction).toMatchObject({ id: 'p2-visible-fold', decision: 'FOLD', pile: 2, round: 1, cards: [] })
+    expect(view.callReveal?.id).not.toBe('p2-visible-fold')
+  })
+
   test('avatar: Human ใช้ preset key จริงจาก identities (fallback ว่างถ้าไม่มีข้อมูล), AI ใช้สัญลักษณ์ตัวอักษรเดิม', () => {
     const engine = new ArenaMatchEngine('m1b', composition, createSeededRandom(1), 0)
     const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
-    const identities = new Map([['p1', { displayName: 'Alice', avatar: 'wolf' }]]) // p2/p3 ไม่มีข้อมูล avatar เลย
+    const identities = new Map([['p1', { displayName: 'Alice', avatar: 'wolf', isVip: false }]]) // p2/p3 ไม่มีข้อมูล avatar เลย
     const view = projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, identities)
     const p1 = view.seats.find(seat => seat.playerId === 'p1')!
     const p2 = view.seats.find(seat => seat.playerId === 'p2')!
@@ -241,7 +276,7 @@ describe('projectArenaClientSnapshot - fog of war และ per-viewer gating', 
     }
     expect(engine.snapshot().phase).toBe('AUCTION_FACE_UP')
     const connections = new ArenaConnectionManager(['p1', 'p2', 'p3'])
-    const identities = new Map<string, { displayName: string; avatar: string }>()
+    const identities = new Map<string, { displayName: string; avatar: string; isVip: boolean }>()
     const beforeBid = projectArenaClientSnapshot(engine, composition, connections, 'p1', 10, identities)
     expect(beforeBid.auction).not.toBeNull()
     engine.submit({ type: 'FACE_UP_BID', actionId: 'bid-p1', actorId: 'p1', amountCrest: 12 }, 3)

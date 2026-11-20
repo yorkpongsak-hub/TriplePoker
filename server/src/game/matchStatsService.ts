@@ -14,6 +14,7 @@
 
 import { supabaseAdmin } from '../config/supabase'
 import { gameConfig } from '../config/gameConfig'
+import { membershipFromVipStatus, streakProtectionEntitlement, type Membership } from './adPolicy'
 import { HandResult, handRankLabel } from './handEvaluator'
 
 export type StatsTier = 'initiate' | 'adept' | 'mastermind' | 'highNoble'
@@ -39,7 +40,8 @@ export interface MatchStatsPlayerInput {
 const BLOCKED_USER_IDS = new Set(['Human1'])
 
 // ─── Helper: วันที่ปัจจุบันโซนเวลา Asia/Bangkok เสมอ (ห้ามใช้ UTC ตรงๆ) ───
-function getBangkokDateString(d: Date): string {
+// export ไว้ให้ routes/profile.ts's claim-streak-reward ใช้ idempotency key วันเดียวกันกับที่นี่
+export function getBangkokDateString(d: Date): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit',
   }).formatToParts(d)
@@ -49,10 +51,20 @@ function getBangkokDateString(d: Date): string {
   return `${y}-${m}-${day}`
 }
 
+/** Stable identifier for one 7-day streak cycle, independent of the claim date. */
+export function getStreakCycleStartDate(lastPlayedDate: string | null, streakCount: number, today: string): string {
+  const anchor = lastPlayedDate ?? today
+  const safeDay = Math.max(1, Math.min(gameConfig.dailyEconomy.playStreak.cycleDays, streakCount || 1))
+  const start = new Date(`${anchor}T00:00:00Z`)
+  start.setUTCDate(start.getUTCDate() - (safeDay - 1))
+  return start.toISOString().slice(0, 10)
+}
+
 export interface DailyStreakResult {
   cycleDay: number
   bestStreak: number
   shields: number
+  protectionsUsed: number
   tokenReward: number
   xpReward: number
   shieldUsed: boolean
@@ -60,22 +72,26 @@ export interface DailyStreakResult {
   rewarded: boolean
 }
 
-/** Pure daily-play calculation. Dates must be YYYY-MM-DD in Asia/Bangkok. */
+/** Pure server-side eligibility calculation. Claim rewards are deliberately not minted here. */
 export function computeDailyPlayStreak(
   previousDay: number,
   previousBest: number,
   previousPlayedDate: string | null,
-  previousShields: number,
+  previousProtectionsUsed: number,
   hadSevenDayBadge: boolean,
   today: string,
+  membership: Membership = 'FREE',
 ): DailyStreakResult {
   const cfg = gameConfig.dailyEconomy.playStreak
   const safeDay = Math.max(0, Math.min(cfg.cycleDays, previousDay || 0))
-  const safeShields = Math.max(0, Math.min(cfg.maxShields, previousShields || 0))
+  const entitlement = streakProtectionEntitlement(membership)
+  // Never clamp consumption down on a membership downgrade: otherwise a user
+  // could downgrade/upgrade to restore an already-spent protection.
+  const safeUsed = Math.max(0, Math.min(2, previousProtectionsUsed || 0))
 
   if (previousPlayedDate === today) {
     return {
-      cycleDay: safeDay, bestStreak: previousBest, shields: safeShields,
+      cycleDay: safeDay, bestStreak: previousBest, shields: Math.max(0, entitlement - safeUsed), protectionsUsed: safeUsed,
       tokenReward: 0, xpReward: 0, shieldUsed: false,
       badgeUnlocked: hadSevenDayBadge, rewarded: false,
     }
@@ -87,28 +103,40 @@ export function computeDailyPlayStreak(
     ? Math.round((parseDate(today) - parseDate(previousPlayedDate)) / dayMs)
     : Number.POSITIVE_INFINITY
   const consecutive = elapsedDays === 1
-  // หลังจบ Day 7 รอบใหม่เริ่ม Day 1 อยู่แล้ว จึงไม่เผา Shield โดยไม่จำเป็น
-  const useShield = elapsedDays === 2 && safeShields > 0 && safeDay < cfg.cycleDays
-  const cycleDay = consecutive || useShield
-    ? (safeDay >= cfg.cycleDays ? 1 : safeDay + 1)
-    : 1
-  const reward = cfg.rewards[cycleDay - 1]
-  const reachedDay7 = cycleDay === cfg.cycleDays
-  const shieldsAfterUse = safeShields - (useShield ? 1 : 0)
-  const shields = reachedDay7
-    ? Math.min(cfg.maxShields, shieldsAfterUse + cfg.day7ShieldBonus)
-    : shieldsAfterUse
+  const missedDays = Number.isFinite(elapsedDays) ? Math.max(0, elapsedDays - 1) : 0
+  const available = entitlement - safeUsed
+  // A completed Day 8 is reset by the successful claim. If the player did not
+  // claim it, a later completed game starts safely at Day 1 instead.
+  const canContinue = consecutive || (safeDay > 0 && safeDay < cfg.cycleDays && missedDays > 0 && missedDays <= available)
+  const cycleDay = canContinue ? (safeDay >= cfg.cycleDays ? 1 : safeDay + 1) : 1
+  const protectionsUsed = cycleDay === 1 ? 0 : safeUsed + (consecutive ? 0 : missedDays)
+  const shields = Math.max(0, entitlement - protectionsUsed)
+  const reachedDay8 = cycleDay === cfg.cycleDays
 
   return {
     cycleDay,
     bestStreak: Math.max(previousBest || 0, cycleDay),
     shields,
-    tokenReward: reward.token,
-    xpReward: reward.xp,
-    shieldUsed: useShield,
-    badgeUnlocked: hadSevenDayBadge || reachedDay7,
+    protectionsUsed,
+    tokenReward: 0,
+    xpReward: 0,
+    shieldUsed: protectionsUsed > safeUsed,
+    badgeUnlocked: hadSevenDayBadge || reachedDay8,
     rewarded: true,
   }
+}
+
+// Legacy helpers remain exported while the UI migrates to Daily Streak claims.
+// เฉพาะวันที่ 3/5/7 ของ cycle เดียวกับ computeDailyPlayStreak ด้านบน (วันที่ 1 ไม่มีรางวัล) — ต้องกด
+// Claim เองที่หน้า /streak เท่านั้น (routes/profile.ts's POST /profile/claim-streak-reward) ไม่ใช่แจก
+// อัตโนมัติเหมือน tokenReward ด้านบน — ฟังก์ชันนี้เป็น pure function ใช้ทั้งสองฝั่ง (recordMatchStats
+// เอาไว้เช็คว่าต้อง reset streak_claimed_milestone ไหม, claim endpoint เอาไว้เช็คสิทธิ์การ claim จริง)
+export const STREAK_MILESTONES = [3, 5, 7] as const
+
+/** milestone สูงสุดที่ถึงแล้วแต่ยังไม่เคย claim ใน cycle ปัจจุบัน — null ถ้าไม่มีอะไรให้ claim */
+export function getClaimableStreakMilestone(streakCount: number, claimedMilestone: number): number | null {
+  const eligible = STREAK_MILESTONES.filter(day => streakCount >= day && day > claimedMilestone)
+  return eligible.length > 0 ? Math.max(...eligible) : null
 }
 
 // ─── Helper: Debt Recovery — คืน token_balance สุดท้าย + debt_amount ที่ต้องตั้ง ───
@@ -154,8 +182,10 @@ interface CurrentUserRow {
   streak_count: number
   last_played_date: string | null
   streak_shields: number
+  streak_protections_used: number
   best_streak_count: number
   streak_7days_badge: boolean
+  streak_claimed_milestone: number
 }
 
 // บันทึกผลจบเกมของผู้เล่น human ทุกคนในแมตช์นี้ — เรียกจากจุด match_end ปกติเท่านั้น (จบครบ totalRounds)
@@ -175,7 +205,7 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
   try {
     const { data, error: readErr } = await supabaseAdmin
       .from('users')
-      .select('user_id, token_balance, vip_status, games_played, games_won, xp, best_hands, debt_amount, streak_count, last_played_date, streak_shields, best_streak_count, streak_7days_badge')
+      .select('user_id, token_balance, vip_status, games_played, games_won, xp, best_hands, debt_amount, streak_count, last_played_date, streak_shields, streak_protections_used, best_streak_count, streak_7days_badge, streak_claimed_milestone')
       .in('user_id', userIds)
     if (readErr) {
       console.error('[MATCH_STATS] Read failed:', readErr, '| userIds:', userIds)
@@ -193,8 +223,10 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
         streak_count:     row.streak_count ?? 0,
         last_played_date: row.last_played_date ?? null,
         streak_shields:   row.streak_shields ?? 0,
+        streak_protections_used: row.streak_protections_used ?? 0,
         best_streak_count: row.best_streak_count ?? 0,
         streak_7days_badge: row.streak_7days_badge ?? false,
+        streak_claimed_milestone: row.streak_claimed_milestone ?? 0,
       }
     }
   } catch (err) {
@@ -209,13 +241,13 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
   const rows = valid.map(p => {
     const prev = current[p.userId] ?? {
       token_balance: 0, vip_status: 'none', games_played: 0, games_won: 0, xp: 0,
-      best_hands: {}, debt_amount: 0, streak_count: 0, last_played_date: null, streak_shields: 0,
-      best_streak_count: 0, streak_7days_badge: false,
+      best_hands: {}, debt_amount: 0, streak_count: 0, last_played_date: null, streak_shields: 0, streak_protections_used: 0,
+      best_streak_count: 0, streak_7days_badge: false, streak_claimed_milestone: 0,
     }
 
     // 1-2) Escrow settle เขียน token_balance ไปแล้วก่อนหน้านี้ (settleEscrow) — ที่นี่แค่ตรวจ Debt Recovery
     const isVip = prev.vip_status !== 'none'
-    const { tokenBalance: newTokenBalance, debtAmount: newDebtAmount } =
+    const { debtAmount: newDebtAmount } =
       computeDebtRecovery(p.tier, isVip, prev.token_balance)
 
     // 3) games_played / games_won
@@ -224,18 +256,21 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
 
     // 4) XP + D1 Hook
     let newXp = prev.xp + computeBaseXp(p.tier, p.won, p.isTripleSweep)
-    let streakShieldsBeforeReward = prev.streak_shields
     if (newGamesPlayed === 1) {
       newXp += gameConfig.xpRewards.d1Hook.xpBonus
-      streakShieldsBeforeReward += gameConfig.xpRewards.d1Hook.streakShieldBonus
     }
 
     // 5) Daily Play Streak — reward ครั้งเดียวเมื่อจบแมตช์แรกของวัน
     const streak = computeDailyPlayStreak(
       prev.streak_count, prev.best_streak_count, prev.last_played_date,
-      streakShieldsBeforeReward, prev.streak_7days_badge, todayStr,
+      prev.streak_protections_used, prev.streak_7days_badge, todayStr, membershipFromVipStatus(prev.vip_status),
     )
     newXp += streak.xpReward
+    // streak.tokenReward เดิมเคย mint อัตโนมัติตรงนี้ (ดู git history) — แทนที่ด้วยระบบ Milestone
+    // Claim ใหม่ (มติลุงเยาะ 2026-08-14) ผ่านหน้า /streak เท่านั้นแล้ว ไม่แจกอัตโนมัติในนี้อีกต่อไป
+    // reset streak_claimed_milestone กลับ 0 ทุกครั้งที่ cycle ใหม่เริ่ม (cycleDay===1) กัน milestone
+    // เดิมจาก cycle ก่อนหน้าค้างกันไม่ให้ claim รอบใหม่ได้
+    const newStreakClaimedMilestone = streak.cycleDay === 1 ? 0 : prev.streak_claimed_milestone
 
     // 6) best_hands (jsonb, key = tier) — replace เฉพาะ key ของ tier นี้ถ้า score สูงกว่าเดิม
     let newBestHands = prev.best_hands ?? {}
@@ -260,7 +295,8 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
 
     return {
       user_id: p.userId,
-      token_balance: newTokenBalance + streak.tokenReward,
+      // ห้ามเขียน token_balance ซ้ำจาก snapshot ที่อ่านก่อนหน้า: settlement/reward อื่นอาจเข้า
+      // ระหว่าง read→update แล้วถูกค่าเก่าทับหายได้ Balance mutation เป็นหน้าที่ Central Ledger เท่านั้น
       debt_amount: newDebtAmount,
       games_played: newGamesPlayed,
       games_won: newGamesWon,
@@ -269,8 +305,10 @@ export async function recordMatchStats(inputs: MatchStatsPlayerInput[]): Promise
       streak_count: streak.cycleDay,
       last_played_date: todayStr,
       streak_shields: streak.shields,
+      streak_protections_used: streak.protectionsUsed,
       best_streak_count: streak.bestStreak,
       streak_7days_badge: streak.badgeUnlocked,
+      streak_claimed_milestone: newStreakClaimedMilestone,
     }
   })
 

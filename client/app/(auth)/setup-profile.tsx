@@ -6,11 +6,10 @@
 import React, { useState, useEffect } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity, Image,
-  StyleSheet, Platform, StatusBar, ScrollView, ActivityIndicator, Dimensions,
+  StyleSheet, Platform, StatusBar, ScrollView, ActivityIndicator, Dimensions, Alert,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
-import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '../../src/services/supabaseService'
 import { useAuthStore } from '../../src/store/authStore'
 import AvatarPicker, { AvatarConfig, AvatarDisplay, PRESET_AVATARS, VipStatus } from '../../src/components/profile/AvatarPicker'
@@ -19,6 +18,24 @@ const triplePokerLogo = require('../../assets/images/triple_poker_icon.png')
 
 // ต้องตรงกับ server/src/constants/avatarPresets.ts DEFAULT_AVATAR_KEY
 const DEFAULT_AVATAR_KEY = 'wolf'
+const SERVER_REQUEST_TIMEOUT_MS = 15_000
+
+// A development phone can lose its route to the local API (especially when Metro
+// runs through WSL/LAN). Never leave the profile CTA in a permanent spinner.
+async function serverFetch(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), SERVER_REQUEST_TIMEOUT_MS)
+  try {
+    return await fetch(url, { ...init, signal: controller.signal })
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error('Could not reach the game server. Check that it is running, then try again.')
+    }
+    throw error
+  } finally {
+    clearTimeout(timeout)
+  }
+}
 
 // ─── ธีมสีหลักของแอป ──────────────────────────────────────
 const C = {
@@ -59,21 +76,33 @@ export default function SetupProfileScreen() {
   })
   const [vipStatus, setVipStatus] = useState<VipStatus>('none')
   const [isSaving, setIsSaving] = useState(false)
-  // Patch 2026-07-18: สมาชิกเก่า = มี display_name ใน DB อยู่แล้วตอนเปิดหน้า — ใช้ตัดสินข้าม Onboarding
-  const [isExistingMember, setIsExistingMember] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Guest Play (มติลุงเยาะ 2026-08-14) — guest (Anonymous Sign-In) ที่มาตั้งชื่อจากหน้านี้ ยังไม่มี
+  // email/password ผูกกับบัญชีเลย session.user.is_anonymous จะยังเป็น true ต่อไปแม้ตั้งชื่อแล้ว —
+  // เพิ่มช่อง Email/Password เป็น "ตัวเลือก" เฉพาะ guest เท่านั้น ถ้ากรอกจะแปลง anonymous -> บัญชี
+  // ถาวรจริงผ่าน supabase.auth.updateUser() ถ้าเว้นว่างไว้ก็ข้ามได้ (ข้อมูลอยู่แค่เครื่องนี้เครื่องเดียว)
+  const [isAnonymous, setIsAnonymous] = useState(false)
+  const [guestEmail, setGuestEmail] = useState('')
+  const [guestPassword, setGuestPassword] = useState('')
 
   // โหลดค่าเดิม (ถ้าเคยตั้งแล้วกลับมาแก้)
   useEffect(() => {
     (async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) return
+      if (session.user.is_anonymous === true) {
+        await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+        router.replace('/(auth)/login')
+        return
+      }
+      setIsAnonymous(false)
       const { data } = await supabase
         .from('users')
         .select('display_name, avatar_url, vip_status')
         .eq('user_id', session.user.id)
         .maybeSingle()
-      if (data?.display_name) { setDisplayName(data.display_name); setIsExistingMember(true) }
+      if (data?.display_name) setDisplayName(data.display_name)
       if (data?.vip_status) setVipStatus(data.vip_status as VipStatus)
       // avatar_url เก่าบางบัญชีเป็น emoji ดิบ (ก่อนระบบ preset) ไม่ตรง key ไหนเลย — เช็คก่อน
       // ไม่งั้น fall back ไป default preset เฉยๆ (กัน crash ไม่ต้องพยายาม render emoji เก่า)
@@ -90,10 +119,38 @@ export default function SetupProfileScreen() {
     const patternErr = validateNamePattern(displayName)
     if (patternErr) { setError(patternErr); return }
 
+    // 1b) Guest email/password — ตัวเลือก แต่ถ้าเริ่มกรอกอันใดอันหนึ่งต้องกรอกให้ครบทั้งคู่
+    const wantsAccountLink = guestEmail.trim().length > 0 || guestPassword.length > 0
+    if (isAnonymous && wantsAccountLink) {
+      if (!guestEmail.trim() || !/^\S+@\S+\.\S+$/.test(guestEmail.trim())) {
+        setError('Please enter a valid email address')
+        return
+      }
+      if (guestPassword.length < 6) {
+        setError('Password must be at least 6 characters')
+        return
+      }
+    }
+
     setIsSaving(true)
     try {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { setError('Session expired. Please sign in again.'); return }
+      if (session.user.is_anonymous === true) {
+        await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+        router.replace('/(auth)/login')
+        return
+      }
+
+      // 1c) ผูก email/password เข้าบัญชี anonymous ให้เป็นบัญชีถาวรจริง — ทำก่อนขั้นตอนอื่นเสมอ กัน
+      // ครึ่งๆ กลางๆ (ตั้งชื่อสำเร็จแต่ link บัญชีไม่สำเร็จ) ทำให้ผู้เล่นเข้าใจผิดว่าบัญชีปลอดภัยแล้ว
+      if (isAnonymous && wantsAccountLink) {
+        const { error: linkErr } = await supabase.auth.updateUser({
+          email: guestEmail.trim(),
+          password: guestPassword,
+        })
+        if (linkErr) { setError(linkErr.message); return }
+      }
 
       // 2) เช็คชื่อซ้ำใน DB (case-insensitive, ยกเว้นชื่อเดิมของตัวเอง) — คนละเรื่องกับ 3-layer
       // name protection ด้านล่าง (bosses/graveyard/reserved_names ไม่เช็ค uniqueness กับผู้เล่นทั่วไป)
@@ -109,7 +166,7 @@ export default function SetupProfileScreen() {
       // server จริง — เดิมหน้านี้เขียน display_name ลง Supabase ตรงๆ ไม่เคยเรียก nameValidator.ts
       // เลยสักครั้ง (dead code จากมุมผู้เล่นจริง) ต้องผ่าน endpoint นี้ก่อนถึงจะบันทึกชื่อได้
       const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
-      const registerRes = await fetch(`${SERVER_URL}/auth/register`, {
+      const registerRes = await serverFetch(`${SERVER_URL}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({ displayName: displayName.trim() }),
@@ -122,7 +179,7 @@ export default function SetupProfileScreen() {
 
       // 4) บันทึก avatar preset แยก ผ่าน POST /profile/avatar เท่านั้น (endpoint /auth/register
       // ข้างบนจัดการแค่ display_name) — server validate VIP/VIP PRO tier อีกชั้น กัน bypass client-side lock
-      const avatarRes = await fetch(`${SERVER_URL}/profile/avatar`, {
+      const avatarRes = await serverFetch(`${SERVER_URL}/profile/avatar`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({ avatarKey: avatarConfig.presetKey ?? DEFAULT_AVATAR_KEY }),
@@ -139,14 +196,22 @@ export default function SetupProfileScreen() {
       await refreshProfile()
       console.log('[setup-profile] profile after refresh:', useAuthStore.getState().profile)
 
-      // ผู้เล่นใหม่ (ยังไม่เคยดู Onboarding) -- ไปหน้า Onboarding ก่อน แล้วค่อยเข้าหน้าหลัก
-      // Patch 2026-07-18: สมาชิกเก่า (มีชื่อใน DB อยู่แล้ว) ข้าม Onboarding เสมอ — flag ฝั่งเครื่อง
-      // เชื่อถือไม่ได้ (clear cache/ลงแอปใหม่/เปลี่ยนเครื่องแล้วหาย) + เซ็ต flag คืนให้ด้วยกันหลุดซ้ำ
-      const onboardingSeen = await AsyncStorage.getItem('onboarding_seen')
-      if (isExistingMember && onboardingSeen !== '1') {
-        await AsyncStorage.setItem('onboarding_seen', '1')
+      // Guest Play — บอกผู้เล่นให้ไปกดยืนยันอีเมล (Supabase ส่ง confirmation link ให้แล้วตอน
+      // updateUser ด้านบน — บัญชียังนับเป็น anonymous จนกว่าจะกดยืนยัน แต่ progress ที่ทำไว้
+      // ไม่หายเพราะผูกกับ user_id เดิม ไม่ใช่บัญชีใหม่)
+      if (isAnonymous && wantsAccountLink) {
+        await new Promise<void>(resolve => {
+          Alert.alert(
+            'Check your email',
+            `We sent a confirmation link to ${guestEmail.trim()}. Tap it to finish securing your account.`,
+            [{ text: 'OK', onPress: () => resolve() }],
+          )
+        })
       }
-      router.replace((isExistingMember || onboardingSeen === '1') ? '/(home)/profile' : '/(auth)/onboarding')
+
+      // Solo Levels now teach the first moves in context.  The slideshow remains
+      // available from the entrance door as an optional guide, never a gate.
+      router.replace('/game/tier-d/entry')
 
     } catch (e: any) {
       setError(e?.message ?? 'Unexpected error')
@@ -163,7 +228,7 @@ export default function SetupProfileScreen() {
 
         {/* Header */}
         <Image source={triplePokerLogo} style={styles.logo} resizeMode="contain" />
-        <Text style={styles.brandTitle}>TRIPLEPOKER</Text>
+        <Text style={styles.brandTitle}>TRIPLEPOKER : RISE</Text>
         <Text style={styles.brandSub}>Create your identity</Text>
 
         {/* ─── Display Name + Preview (row) ─── */}
@@ -197,6 +262,36 @@ export default function SetupProfileScreen() {
           <Text style={styles.ruleText}>• Letters, numbers, Thai, _ and -</Text>
           <Text style={styles.ruleText}>• No offensive or reserved names</Text>
         </View>
+
+        {/* ─── Guest Play — Save Account (optional, guest เท่านั้น) ─── */}
+        {isAnonymous && (
+          <>
+            <Text style={styles.sectionLabel}>SAVE YOUR ACCOUNT (OPTIONAL)</Text>
+            <Text style={styles.guestHint}>
+              Add an email &amp; password so you can log back in on any device — skip this to keep
+              playing as a guest on this device only.
+            </Text>
+            <TextInput
+              style={styles.guestInput}
+              placeholder="Email"
+              placeholderTextColor={C.textDim}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="email-address"
+              value={guestEmail}
+              onChangeText={(t) => { setGuestEmail(t); setError(null) }}
+            />
+            <TextInput
+              style={styles.guestInput}
+              placeholder="Password (min 6 characters)"
+              placeholderTextColor={C.textDim}
+              autoCapitalize="none"
+              secureTextEntry
+              value={guestPassword}
+              onChangeText={(t) => { setGuestPassword(t); setError(null) }}
+            />
+          </>
+        )}
 
         {error && (
           <View style={styles.errorBox}>
@@ -318,6 +413,26 @@ const styles = StyleSheet.create({
     gap:             3,
   },
   ruleText: { color: C.textSec, fontSize: 11 },
+
+  // Guest Play — Save Account (optional)
+  guestHint: {
+    color:        C.textSec,
+    fontSize:     11,
+    lineHeight:   16,
+    marginBottom: 10,
+  },
+  guestInput: {
+    backgroundColor:   C.card,
+    borderRadius:      10,
+    borderWidth:       1.5,
+    borderColor:       C.border,
+    paddingHorizontal: 14,
+    paddingVertical:   12,
+    color:             C.textPrimary,
+    fontSize:          14,
+    marginBottom:      10,
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } as any : {}),
+  },
 
   // Preview
   previewLabel: {

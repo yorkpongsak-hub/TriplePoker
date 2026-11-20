@@ -20,6 +20,8 @@ import {
   submitVipPlusRearrangement,
   validateVipPlusArrangement,
   vipPlusCardKey,
+  type VipPlusMatchState,
+  type VipPlusRankingRow,
 } from '../../src/game/vipPlusMatchEngine'
 import { VIP_PLUS_ENTRY_TERMS_VERSION, VipPlusTableRegistry, vipPlusTableRegistry } from '../../src/game/vipPlusTableRegistry'
 
@@ -111,6 +113,9 @@ async function preparedAuctionMatch() {
     started.state.hands[playerId] = controlled.deal.handsBySeat[seat as keyof typeof controlled.deal.handsBySeat]
     started.state.arrangements[playerId] = controlled.arrangements[seat]
   }
+  // ตรวจเฉพาะ event ของเกมที่ตั้ง fixture นี้ ไม่ปนไพ่เปิดเผยในเกมก่อนหน้า
+  // ไพ่ประมูลที่สุ่มใหม่อาจมีหน้าเดียวกับไพ่กองกลางของเกมเก่าได้
+  started.events.length = 0
   expect(beginVipPlusAuction(started.state.roomId)).toBe(true)
   return { ...started, controlled }
 }
@@ -192,7 +197,11 @@ describe('VIP Plus Gate 4 deal and arrangement engine', () => {
     expect(result.state.seatStatus).toMatchObject({ H4: 'BLANK', H5: 'BLANK' })
     expect(result.state.hands[result.state.playerBySeat.H4]).toHaveLength(9)
     expect(result.state.hands[result.state.playerBySeat.H5]).toHaveLength(9)
-    expect(result.state.pot).toEqual([30, 60, 120])
+    expect(result.state.pot).toEqual([
+      table.wager.ante.pile1 * result.state.humanSeats.length,
+      table.wager.ante.pile2 * result.state.humanSeats.length,
+      table.wager.ante.pile3 * result.state.humanSeats.length,
+    ])
     expect(events.filter(event => event.event === 'vip_plus:private_hand')).toHaveLength(3)
     const startedEvent = events.find(event => event.event === 'vip_plus:game_started')
     expect(startedEvent?.payload.seats).toEqual(expect.arrayContaining([
@@ -254,7 +263,11 @@ describe('VIP Plus Gate 4 deal and arrangement engine', () => {
     if (!result.ok) throw new Error(result.reason)
     const settled: string[] = []
     const final = await finalizeVipPlusMatch(result.state, {
-      settle: async (playerId: string) => { settled.push(playerId); return 10_000 },
+      settleMatch: async (_state: VipPlusMatchState, rankings: VipPlusRankingRow[]) => {
+        const out: Record<string, number> = {}
+        for (const row of rankings) { settled.push(row.playerId); out[row.seat] = 10_000 }
+        return out
+      },
       persist: async () => undefined,
       recordStats: async () => undefined,
     } as any)
@@ -275,7 +288,10 @@ describe('VIP Plus Gate 4 deal and arrangement engine', () => {
       refund: async (userId, escrowId, amount) => { refunded.push(`${userId}:${escrowId}:${amount}`) },
     })
     expect(result).toEqual({ ok: false, reason: 'INSUFFICIENT_TOKENS' })
-    expect(refunded).toEqual(['p1:escrow-p1:2000', 'p2:escrow-p2:2000'])
+    expect(refunded).toEqual([
+      `p1:escrow-p1:${table.wager.buyIn}`,
+      `p2:escrow-p2:${table.wager.buyIn}`,
+    ])
   })
 
   test('rejects duplicate, foreign, and wrong-sized cards', () => {
@@ -363,7 +379,11 @@ describe('VIP Plus Gate 4 deal and arrangement engine', () => {
     expect(state.gameNumber).toBe(2)
     expect(state.phase).toBe('INITIAL_ARRANGE')
     expect(state.arrangements).toEqual({})
-    expect(state.pot).toEqual([50, 100, 200])
+    expect(state.pot).toEqual([
+      state.wager.ante.pile1 * state.humanSeats.length,
+      state.wager.ante.pile2 * state.humanSeats.length,
+      state.wager.ante.pile3 * state.humanSeats.length,
+    ])
     const conserved = Object.values(state.tokenBalance).reduce((sum, amount) => sum + amount, 0) + state.pot.reduce((sum, amount) => sum + amount, 0) + state.feeRake
     expect(conserved).toBe(10_000)
   })
@@ -375,14 +395,9 @@ describe('VIP Plus Gate 4 deal and arrangement engine', () => {
       submitVipPlusBettingAction(state.roomId, current, current === 'p1' ? 'CALL' : 'FOLD')
     }
     expect(state.gameResults[0].winners).toEqual(['p1', 'p1', 'p1'])
-    // มติลุงเยาะ (รอบ 9) — ทุกกองเล่น 2 รอบแล้ว ตัวเลขเปลี่ยนไปหมดจากเดิม (G1/G2 เดิมมีรอบเดียว G3 มี 2 รอบ
-    // เท่ากันหมด ไม่มีตัวคูณ) คำนวณใหม่: callAmount ฐาน initiate = 50, ante = {10,20,40}, rake 5%
-    // G1 pot = ante(50) + R1(1x=50) + R2(2x=100) = 200 -> payout floor(200*.95)=190, rake 10
-    // G2 pot = ante(100) + R1(1x=50) + R2(2x=100) = 250 -> payout floor(250*.95)=237, rake 13
-    // G3 pot = ante(200) + R1(2x=100) + R2(4x=200) = 500 -> payout floor(500*.95)=475, rake 25
-    // regular pot rake รวม = 10+13+25 = 48; bonus = ante.pile3(40)x4 losers = 160
-    // jackpot rake = floor((190+237+475+160)*5%) = floor(1062*.05) = 53; total Fee & Rake = 48+53 = 101
-    expect(state.feeRake).toBe(101)
+    // Canonical wager snapshot currently yields regular rake 18+23+40 and
+    // jackpot rake 95 after the 400 Triple Sweep bonus.
+    expect(state.feeRake).toBe(176)
   })
 
   // มติลุงเยาะ (รอบ 11) — ค่าธรรมเนียมท้ายแมตช์ 10% เก็บเฉพาะ "กำไรสุทธิที่เป็นบวก" ของแต่ละคน คนที่เสมอทุน/
@@ -402,7 +417,8 @@ describe('VIP Plus Gate 4 deal and arrangement engine', () => {
     const expectedFee = Math.floor(preNetToken * 0.10)
 
     const final = await finalizeVipPlusMatch(state, {
-      settle: async (_playerId, _escrowId, finalStack) => finalStack,
+      settleMatch: async (_state: VipPlusMatchState, rankings: VipPlusRankingRow[]) =>
+        Object.fromEntries(rankings.map(row => [row.seat, row.finalStack])) as Record<string, number | null>,
       persist: async () => undefined,
       recordStats: async () => undefined,
     })
@@ -431,7 +447,8 @@ describe('VIP Plus Gate 4 deal and arrangement engine', () => {
 
     const recorded: Array<{ userId: string; tier: string; won: boolean; isTripleSweep: boolean }> = []
     await finalizeVipPlusMatch(state, {
-      settle: async (_playerId, _escrowId, finalStack) => finalStack,
+      settleMatch: async (_state: VipPlusMatchState, rankings: VipPlusRankingRow[]) =>
+        Object.fromEntries(rankings.map(row => [row.seat, row.finalStack])) as Record<string, number | null>,
       persist: async () => undefined,
       recordStats: async (inputs: any) => { recorded.push(...inputs) },
     })
@@ -468,7 +485,12 @@ describe('VIP Plus Gate 4 deal and arrangement engine', () => {
     expect(state.phase).toBe('REARRANGE')
 
     const roomEvents = events.filter(event => event.room === state.roomId)
-    expect(roomEvents.some(event => JSON.stringify(event.payload).includes(vipPlusCardKey(state.auctionCard!)))).toBe(false)
+    const publicPayloadValues = (value: unknown): unknown[] => {
+      if (Array.isArray(value)) return value.flatMap(publicPayloadValues)
+      if (value && typeof value === 'object') return Object.values(value).flatMap(publicPayloadValues)
+      return [value]
+    }
+    expect(roomEvents.some(event => publicPayloadValues(event.payload).includes(vipPlusCardKey(state.auctionCard!)))).toBe(false)
     expect(roomEvents.some(event => JSON.stringify(event.payload).includes('receiptSequence'))).toBe(false)
     expect(events.filter(event => event.event === 'vip_plus:auction_card_private')).toEqual([
       expect.objectContaining({ room: 'p1' }),
@@ -589,7 +611,11 @@ describe('VIP Plus Gate 4 deal and arrangement engine', () => {
     const settled: string[] = []
     const persisted: string[] = []
     const dependencies = {
-      settle: async (playerId: string, _escrowId: string, finalStack: number) => { settled.push(playerId); return finalStack + 10_000 },
+      settleMatch: async (_state: VipPlusMatchState, rankings: VipPlusRankingRow[]) => {
+        const out: Record<string, number> = {}
+        for (const row of rankings) { settled.push(row.playerId); out[row.seat] = row.finalStack + 10_000 }
+        return out
+      },
       persist: async (match: any) => { persisted.push(match.roomId) },
       recordStats: async () => undefined,
     }
@@ -754,7 +780,8 @@ describe('VIP Plus — table registry release on match completion', () => {
     // registry ถูกปล่อยจริงตอนแมตช์จบ ไม่ใช่วัดกลไกเดินเกม ดู "settles all four rounds..." ด้านบนสำหรับ
     // เทสที่คุมกลไกเดินเกมจริงอยู่แล้ว)
     await finalizeVipPlusMatch(started.state, {
-      settle: async (_playerId, _escrowId, finalStack) => finalStack,
+      settleMatch: async (_state: VipPlusMatchState, rankings: VipPlusRankingRow[]) =>
+        Object.fromEntries(rankings.map(row => [row.seat, row.finalStack])) as Record<string, number | null>,
       persist: async () => undefined,
       recordStats: async () => undefined,
     })

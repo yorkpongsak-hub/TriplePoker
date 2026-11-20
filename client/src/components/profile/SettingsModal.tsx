@@ -4,13 +4,15 @@
 // Toggle แรก: Reduce Motion (Faster Deal Animation) — per-player local เท่านั้น (AsyncStorage)
 // The Sage Unicorn Studio Co., Ltd.
 
-import React, { useEffect, useState } from 'react'
-import { Image, Modal, ScrollView, View, Text, TouchableOpacity, StyleSheet } from 'react-native'
+import React, { useEffect, useRef, useState } from 'react'
+import { Image, Modal, PanResponder, ScrollView, View, Text, TouchableOpacity, StyleSheet } from 'react-native'
 import { getReduceMotion, setReduceMotion } from '../../utils/reduceMotion'
 import { TABLE_SKINS, TABLE_SKIN_META } from '../../config/tableSkins'
 import { useTableSkins } from '../../hooks/useTableSkins'
 import { useAuthStore } from '../../store/authStore'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { audio, AudioCategory } from '../../audio'
+import { AudioSettings, DEFAULT_AUDIO_SETTINGS } from '../../audio/audioSettings'
 
 const C = {
   bg:      '#0F2418',
@@ -32,6 +34,7 @@ export default function SettingsModal({ visible, onClose }: Props) {
   const [characterDialogue, setCharacterDialogue] = useState(true)
   const [selectingSkin, setSelectingSkin] = useState<number | null>(null)
   const [skinError, setSkinError] = useState<string | null>(null)
+  const [audioSettings, setAudioSettings] = useState<AudioSettings>(DEFAULT_AUDIO_SETTINGS)
   const isVip = useAuthStore(s => (s.profile?.vip_status ?? 'none') !== 'none')
   const { unlockedSkins, activeSkin, loading: skinsLoading, selectSkin } = useTableSkins()
 
@@ -40,7 +43,10 @@ export default function SettingsModal({ visible, onClose }: Props) {
     if (!visible) return
     getReduceMotion().then(setReduceMotionState)
     AsyncStorage.getItem('settings.characterDialogue').then(value => setCharacterDialogue(value !== 'false'))
+    setAudioSettings(audio.getSettings())
   }, [visible])
+
+  useEffect(() => audio.subscribe(setAudioSettings), [])
 
   const handleToggle = () => {
     const next = !reduceMotion
@@ -89,6 +95,21 @@ export default function SettingsModal({ visible, onClose }: Props) {
             </View>
           </TouchableOpacity>
 
+          <View style={styles.audioSection}>
+            <Text style={styles.sectionTitle}>Audio</Text>
+            <TouchableOpacity style={styles.row} onPress={() => audio.setMuted(!audioSettings.muted)} activeOpacity={0.8}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowLabel}>Master Sound</Text>
+                <Text style={styles.rowSub}>{audioSettings.muted ? 'Off' : 'On'}</Text>
+              </View>
+              <View style={[styles.toggleTrack, !audioSettings.muted && styles.toggleTrackOn]}>
+                <View style={[styles.toggleThumb, !audioSettings.muted && styles.toggleThumbOn]} />
+              </View>
+            </TouchableOpacity>
+            <VolumeControl label="Music" value={audioSettings.categories[AudioCategory.BGM]} onChange={value => audio.setCategoryVolume(AudioCategory.BGM, value)} />
+            <VolumeControl label="Sound Effects" value={audioSettings.categories[AudioCategory.GAMEPLAY]} onChange={value => audio.setSfxVolume(value)} />
+          </View>
+
           <View style={styles.skinSection}>
             <Text style={styles.sectionTitle}>Table Skin</Text>
             <Text style={styles.sectionSub}>
@@ -130,6 +151,48 @@ export default function SettingsModal({ visible, onClose }: Props) {
   )
 }
 
+function VolumeControl({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  // ต้องลากจริง (dx เกิน threshold และแนวนอนมากกว่าแนวตั้ง) ค่าถึงจะขยับ กัน
+  // แตะพลาด/สกอลผ่าน ScrollView ของ modal นี้แล้ว volume ถูกเซ็ตค่าทันทีโดยไม่ตั้งใจ
+  // (ของเดิมใช้ onPress ครั้งเดียว + หาร locationX ด้วยเลข 280 คงที่ ทั้งที่ track ยืดตามความกว้างจอจริง)
+  const trackWidthRef = useRef(0)
+  const valueRef = useRef(value)
+  const startValueRef = useRef(value)
+  valueRef.current = value
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_evt, gestureState) =>
+        Math.abs(gestureState.dx) > 4 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy),
+      onPanResponderGrant: () => { startValueRef.current = valueRef.current },
+      onPanResponderMove: (_evt, gestureState) => {
+        if (trackWidthRef.current <= 0) return
+        onChange(Math.max(0, Math.min(1, startValueRef.current + gestureState.dx / trackWidthRef.current)))
+      },
+    }),
+  ).current
+
+  return (
+    <View style={styles.volumeRow}>
+      <View style={styles.volumeHeader}><Text style={styles.rowLabel}>{label}</Text><Text style={styles.volumeValue}>{Math.round(value * 100)}%</Text></View>
+      <View
+        accessible
+        accessibilityRole="adjustable"
+        accessibilityLabel={`${label} volume`}
+        accessibilityValue={{ min: 0, max: 100, now: Math.round(value * 100) }}
+        accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
+        onAccessibilityAction={event => onChange(Math.max(0, Math.min(1, value + (event.nativeEvent.actionName === 'increment' ? .1 : -.1))))}
+        onLayout={event => { trackWidthRef.current = event.nativeEvent.layout.width }}
+        style={styles.volumeTrack}
+        {...panResponder.panHandlers}
+      >
+        <View style={[styles.volumeFill, { width: `${value * 100}%` }]} />
+      </View>
+    </View>
+  )
+}
+
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
@@ -167,6 +230,12 @@ const styles = StyleSheet.create({
   },
   rowLabel: { color: C.text, fontSize: 14, fontWeight: '800' },
   rowSub: { color: C.textSec, fontSize: 11, marginTop: 2 },
+  audioSection: { marginTop: 18, gap: 9 },
+  volumeRow: { backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 14 },
+  volumeHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 9 },
+  volumeValue: { color: C.green, fontSize: 11, fontWeight: '800' },
+  volumeTrack: { height: 14, borderRadius: 7, backgroundColor: C.border, overflow: 'hidden' },
+  volumeFill: { height: '100%', borderRadius: 7, backgroundColor: C.green },
   toggleTrack: {
     width: 46,
     height: 26,
@@ -190,7 +259,7 @@ const styles = StyleSheet.create({
   skinCardActive: { borderColor: C.green, borderWidth: 2 },
   skinCardLocked: { opacity: 0.48 },
   skinImage: { width: '100%', height: 112 },
-  skinLock: { ...StyleSheet.absoluteFillObject, bottom: 37, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.48)' },
+  skinLock: { ...StyleSheet.absoluteFill, bottom: 37, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.48)' },
   skinLockText: { fontSize: 23 },
   activeBadge: { position: 'absolute', top: 5, right: 5, color: '#081C12', backgroundColor: C.green, borderRadius: 5, paddingHorizontal: 5, paddingVertical: 2, fontSize: 8, fontWeight: '900' },
   skinName: { color: C.text, fontSize: 10, fontWeight: '800', paddingHorizontal: 7, marginTop: 5 },

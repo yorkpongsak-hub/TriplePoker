@@ -11,6 +11,7 @@ jest.mock('../../src/game/aiEngine', () => ({
 const mockEvaluateHand = jest.fn()
 jest.mock('../../src/game/handEvaluator', () => ({
   evaluateHand: (...args: any[]) => mockEvaluateHand(...args),
+  evaluateBestFive: (...args: any[]) => mockEvaluateHand(...args),
 }))
 
 jest.mock('../../src/config/gameConfig', () => ({

@@ -8,9 +8,11 @@ import { create } from 'zustand'
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase, onAuthStateChange } from '../services/supabaseService'
 import { useUserStore } from './userStore'
+import { saveCountry } from '../country/api'
 
 interface UserProfile {
   profile_image_url?: string | null; // รูปโปรไฟล์จริง (VIP) — แยกจาก avatar_url (emoji)
+  profile_image_signed_url?: string | null; // URL ชั่วคราวสำหรับจุดแสดงผลในเกม/ลอบบี้
   user_id: string
   display_name: string | null
   vip_status: 'none' | 'vip' | 'vip_pro'
@@ -29,11 +31,17 @@ interface UserProfile {
   best_streak_count: number | null
   streak_shields: number | null
   streak_7days_badge: boolean | null
+  streak_claimed_milestone: number | null  // Streak Milestone Bonus (มติลุงเยาะ 2026-08-14) — milestone สูงสุด (0/3/5/7) ที่ claim ไปแล้วใน cycle ปัจจุบัน
   games_played: number | null         // matchStatsService.ts — นับทุกแมตช์ที่จบครบ totalRounds
   games_won: number | null            // เกณฑ์: finalWinner === humanPlayerId (อันดับ 1 ของโต๊ะ)
   best_hands: Record<string, any> | null   // jsonb — hand ที่ดีที่สุดแยกตาม rank
   tier_unlocked_max: string | null    // Ceiling model — Tier สูงสุดที่เคยปลด (token ลดไม่ล็อคกลับ)
   iap_token_total: number | null      // Token สะสมจาก IAP — ไม่นับเป็นเกณฑ์ปลดล็อค Tier (กัน pay-to-unlock)
+  equipped_badge_key: string | null   // Badge Shop — badge key ที่ equip อยู่ตอนนี้ (NULL = ไม่มี), โชว์หลัง Hero Avatar
+  tier_d_solo_level?: number | null
+  tier_d_best_win_streak?: number | null
+  tier_d_best_match_time_ms?: number | null
+  tier_d_best_match_score?: number | null
 }
 
 interface AuthState {
@@ -102,6 +110,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   setSession: async (session) => {
     set({ session, user: session?.user ?? null })
     if (session?.user) {
+      if (!session.user.is_anonymous) void saveCountry(session.access_token).catch(() => {})
       await get().refreshProfile()
     } else {
       set({ profile: null })
@@ -118,14 +127,29 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       return
     }
     try {
-      const { data, error } = await supabase
+      const profileColumns = 'user_id, display_name, vip_status, avatar_url, profile_image_url, tier, token_balance, crown_balance, xp, last_login, performance_score, ps_season, monarch_victories, tier_unlock_celebrated, beyond_path, streak_count, best_streak_count, streak_shields, streak_7days_badge, streak_claimed_milestone, games_played, games_won, best_hands, tier_unlocked_max, iap_token_total, equipped_badge_key, tier_d_solo_level, tier_d_best_win_streak'
+      let { data, error } = await supabase
         .from('users')
-        .select('user_id, display_name, vip_status, avatar_url, tier, token_balance, crown_balance, xp, last_login, performance_score, ps_season, monarch_victories, tier_unlock_celebrated, beyond_path, streak_count, best_streak_count, streak_shields, streak_7days_badge, games_played, games_won, best_hands, tier_unlocked_max, iap_token_total')
+        .select(`${profileColumns}, tier_d_best_match_time_ms, tier_d_best_match_score`)
         .eq('user_id', user.id)
         .maybeSingle()
+      // Migration 054 adds the personal best field. Until an existing live
+      // database applies it, profile setup must still be able to complete.
+      if (error && /tier_d_best_match_time_ms|tier_d_best_match_score/i.test(error.message ?? '')) {
+        const fallback = await supabase.from('users').select(profileColumns).eq('user_id', user.id).maybeSingle()
+        data = fallback.data as any
+        error = fallback.error
+      }
       console.log('[authStore] refreshProfile query result:', { data, error, queriedUserId: user.id })
       if (get().user?.id !== user.id) return // session เปลี่ยนระหว่าง query — ห้าม profile บัญชีเก่าทับบัญชีใหม่
-      set({ profile: data as UserProfile | null })
+      let profile = data as UserProfile | null
+      // Keep the storage path separate for uploads, but provide every in-app
+      // surface a renderable URL so the player's own seat matches remote seats.
+      if (profile?.vip_status !== 'none' && profile?.profile_image_url) {
+        const { data: signed } = await supabase.storage.from('avatars').createSignedUrl(profile.profile_image_url, 3600)
+        if (signed?.signedUrl) profile = { ...profile, profile_image_signed_url: signed.signedUrl }
+      }
+      set({ profile })
     } catch (e) {
       console.error('[authStore] refreshProfile failed:', e)
       set({ profile: null })
@@ -134,7 +158,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   signOut: async () => {
     // Patch: signOut บน session ที่เสียแล้วจะ throw "Invalid Refresh Token" ซ้ำ -> ห่อไว้ให้ logout สำเร็จเสมอ
-    try { await supabase.auth.signOut() } catch (e) { console.warn('[authStore] signOut error (ignored):', e) }
+    // Patch 2026-08-13: ลุงเยาะรายงานว่ากดปุ่ม Logout แล้วไม่มีอะไรเกิดขึ้น — supabase.auth.signOut() เป็น
+    // network call ที่ไม่มี timeout ในตัว ถ้าค้าง (ไม่ resolve/reject) โค้ดจะหยุดอยู่ตรง await นี้ตลอดไป
+    // ทำให้ set({session:null,...}) ด้านล่างไม่เคยรัน — Logout ต้องเคลียร์ session ในเครื่องได้เสมอไม่ว่า
+    // เครือข่ายจะเป็นยังไง จึงใส่เพดานเวลา 5 วิ แล้วเดินหน้าเคลียร์ local state ต่อโดยไม่รอ network call ค้าง
+    try {
+      await Promise.race([
+        supabase.auth.signOut(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('SIGN_OUT_TIMEOUT')), 5000)),
+      ])
+    } catch (e) { console.warn('[authStore] signOut error/timeout (ignored):', e) }
     set({ session: null, user: null, profile: null })
     useUserStore.getState().logout()
   },

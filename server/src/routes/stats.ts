@@ -8,6 +8,10 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { supabaseAdmin } from '../config/supabase'
 import { redis } from '../config/redis'
+import type { MatchWinTier } from '../game/matchWinsService'
+import { selectPlayerTitle } from '../game/playerTitleService'
+import { withCountries } from './country'
+import { resolveProfileAvatars } from '../game/profileAvatarService'
 
 type BaseLeaderboardType = 'token' | 'ps' | 'winrate' | 'xp' | 'boss_defeats'
 type LeaderboardType = BaseLeaderboardType | 'all_matrix'
@@ -25,6 +29,25 @@ interface LeaderboardEntry {
     rank: number
     value: number
   }>>
+}
+
+// Public boards must use the same resolved avatar as a live table.  A custom
+// photo is stored as a private Storage path, so only the server may turn it
+// into a short-lived URL.  Looking it up in one batch also keeps the legacy
+// leaderboard queries independent of profile-image schema details.
+async function withResolvedAvatars<T extends { user_id: string; avatar_url: string | null }>(entries: T[]): Promise<T[]> {
+  if (entries.length === 0) return entries
+  const ids = [...new Set(entries.map(entry => entry.user_id))]
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .select('user_id, avatar_url, profile_image_url, vip_status')
+    .in('user_id', ids)
+  if (error) {
+    console.warn('[STATS] Could not resolve custom profile avatars:', error.message)
+    return entries
+  }
+  const resolved = await resolveProfileAvatars(data ?? [])
+  return entries.map(entry => ({ ...entry, avatar_url: resolved.get(entry.user_id) ?? entry.avatar_url }))
 }
 
 function cacheKeyFor(type: LeaderboardType): string {
@@ -146,7 +169,7 @@ async function getCachedBaseLeaderboard(type: BaseLeaderboardType): Promise<Lead
     console.error(`[STATS] Redis read error for ${type}:`, err)
   }
 
-  const entries = await queryBaseLeaderboard(type)
+  const entries = await withResolvedAvatars(await queryBaseLeaderboard(type))
   try {
     await redis.set(cacheKey, entries, { ex: CACHE_TTL_SECONDS })
   } catch (err) {
@@ -167,6 +190,69 @@ function matrixPoints(max: number, rank: number): number {
   if (rank <= 4) return max - (rank - 1)
   if (rank === 5) return Math.ceil(max / 2)
   return Math.max(0, Math.ceil(max / 2) - 2)
+}
+
+// ─── Top10 (per-Tier match win, มติลุงเยาะ 2026-08-13) ──────────────────────
+// ต่างจาก leaderboard ด้านบนตรงที่ query จาก match_wins (per-match history) ไม่ใช่ users
+// column สะสม — Top10 คือ "ใครทำสถิติโทเคนชนะแมตช์เดียวสูงสุด" ต่อ Tier ไม่ใช่ยอดรวมปัจจุบัน
+const TOP10_TIERS: MatchWinTier[] = ['initiate', 'adept', 'mastermind', 'highNoble']
+const TOP10_CACHE_TTL_SECONDS = 300
+
+interface Top10Entry {
+  rank: number
+  user_id: string
+  display_name: string
+  avatar_url: string | null
+  tokens_won: number
+  won_at: string
+  is_triple_sweep: boolean
+  rank_before: number | null
+  rank_after: number | null
+}
+
+function top10CacheKeyFor(tier: MatchWinTier): string {
+  return `top10:matchwin:${tier}`
+}
+
+async function queryTop10(tier: MatchWinTier): Promise<Top10Entry[]> {
+  const { data, error } = await supabaseAdmin
+    .from('match_wins')
+    .select('user_id, tokens_won, won_at, is_triple_sweep, rank_before, rank_after')
+    .eq('tier', tier)
+    .order('tokens_won', { ascending: false })
+  if (error) throw error
+
+  // เก็บแถวแรกที่เจอของแต่ละ user_id เท่านั้น (= personal best เพราะ sort desc แล้ว)
+  const bestRowByUser = new Map<string, NonNullable<typeof data>[number]>()
+  for (const row of data ?? []) {
+    if (!bestRowByUser.has(row.user_id)) bestRowByUser.set(row.user_id, row)
+  }
+  const top10 = [...bestRowByUser.values()].slice(0, TOP_N)
+  if (top10.length === 0) return []
+
+  const { data: users, error: usersError } = await supabaseAdmin
+    .from('users')
+    .select('user_id, display_name, avatar_url')
+    .in('user_id', top10.map(row => row.user_id))
+  if (usersError) throw usersError
+  const usersById = new Map((users ?? []).map(user => [user.user_id, user]))
+
+  return top10.flatMap((row, index) => {
+    const user = usersById.get(row.user_id)
+    return user
+      ? [{
+          rank: index + 1,
+          user_id: row.user_id,
+          display_name: user.display_name,
+          avatar_url: user.avatar_url,
+          tokens_won: row.tokens_won,
+          won_at: row.won_at,
+          is_triple_sweep: row.is_triple_sweep,
+          rank_before: row.rank_before,
+          rank_after: row.rank_after,
+        }]
+      : []
+  })
 }
 
 async function queryAllMatrix(): Promise<LeaderboardEntry[]> {
@@ -223,7 +309,7 @@ export default async function statsRoutes(fastify: FastifyInstance) {
       try {
         const cached = await redis.get<LeaderboardEntry[]>(cacheKey)
         if (cached) {
-          return reply.send({ success: true, type, entries: cached, cached: true, updatedAt: null })
+          return reply.send({ success: true, type, entries: await withCountries(await withResolvedAvatars(cached)), cached: true, updatedAt: null })
         }
       } catch (err) {
         console.error('[STATS] Redis read error:', err)
@@ -235,7 +321,7 @@ export default async function statsRoutes(fastify: FastifyInstance) {
       try {
         entries = type === 'all_matrix'
           ? await queryAllMatrix()
-          : await queryBaseLeaderboard(type)
+          : await withResolvedAvatars(await queryBaseLeaderboard(type))
       } catch (err) {
         // เผื่อ games_played/games_won ยังไม่มีคอลัมน์ (SQL migration ยังไม่ได้รันบน Supabase) — ตอบ empty list แทน 500
         console.error(`[STATS] Error querying leaderboard type=${type}:`, err)
@@ -256,7 +342,52 @@ export default async function statsRoutes(fastify: FastifyInstance) {
         console.error('[STATS] Redis write error:', err)
       }
 
-      return reply.send({ success: true, type, entries, cached: false, updatedAt: new Date().toISOString() })
+      return reply.send({ success: true, type, entries: await withCountries(entries), cached: false, updatedAt: new Date().toISOString() })
+    }
+  )
+
+  // GET /stats/top10?tier=initiate|adept|mastermind|highNoble — มติลุงเยาะ 2026-08-13
+  // Top 10 ต่อ Tier จัดจาก personal-best tokens_won ของผู้เล่นแต่ละคน — rank_before/rank_after
+  // มาจาก match_wins ตรงๆ (คำนวณครั้งเดียวตอน INSERT ใน matchWinsService.ts ไม่ใช่คำนวณสดที่นี่)
+  fastify.get<{ Querystring: { tier?: string } }>(
+    '/stats/top10',
+    async (request: FastifyRequest<{ Querystring: { tier?: string } }>, reply: FastifyReply) => {
+      const tier = request.query.tier as MatchWinTier | undefined
+      if (!tier || !TOP10_TIERS.includes(tier)) {
+        return reply.status(400).send({ error: 'INVALID_TIER', message: 'tier must be one of: initiate, adept, mastermind, highNoble' })
+      }
+
+      const cacheKey = top10CacheKeyFor(tier)
+      try {
+        const cached = await redis.get<Top10Entry[]>(cacheKey)
+        if (cached) {
+          return reply.send({ success: true, tier, entries: await withCountries(await withResolvedAvatars(cached)), cached: true })
+        }
+      } catch (err) {
+        console.error('[STATS] Redis read error for top10:', err)
+      }
+
+      let entries: Top10Entry[] = []
+      try {
+        entries = await withResolvedAvatars(await queryTop10(tier))
+      } catch (err) {
+        console.error(`[STATS] Error querying top10 tier=${tier}:`, err)
+        return reply.send({
+          success: true,
+          tier,
+          entries: [],
+          cached: false,
+          note: 'Top10 data unavailable — check that match_wins.rank_before/rank_after columns exist.',
+        })
+      }
+
+      try {
+        await redis.set(cacheKey, entries, { ex: TOP10_CACHE_TTL_SECONDS })
+      } catch (err) {
+        console.error('[STATS] Redis write error for top10:', err)
+      }
+
+      return reply.send({ success: true, tier, entries: await withCountries(entries), cached: false })
     }
   )
 
@@ -270,7 +401,7 @@ export default async function statsRoutes(fastify: FastifyInstance) {
       const { userId } = request.params
       const { data, error } = await supabaseAdmin
         .from('users')
-        .select('user_id, display_name, avatar_url, tier_unlocked_max, token_balance, performance_score, games_played, games_won')
+        .select('user_id, display_name, avatar_url, profile_image_url, vip_status, tier_unlocked_max, token_balance, performance_score, games_played, games_won, monarch_victories, streak_7days_badge, crown_balance')
         .eq('user_id', userId)
         .single()
 
@@ -281,19 +412,35 @@ export default async function statsRoutes(fastify: FastifyInstance) {
       const gamesPlayed = data.games_played ?? 0
       const gamesWon = data.games_won ?? 0
       const winRate = gamesPlayed > 0 ? Math.round((gamesWon / gamesPlayed) * 1000) / 10 : 0
+      const { data: wins, error: winsError } = await supabaseAdmin
+        .from('match_wins')
+        .select('tier, is_triple_sweep, best_hand, rank_after, tokens_won')
+        .eq('user_id', userId)
+      if (winsError) console.error('[STATS] Player title wins query failed:', winsError)
+      const title = selectPlayerTitle({
+        tierUnlockedMax: data.tier_unlocked_max,
+        monarchVictories: data.monarch_victories ?? 0,
+        streak7DaysBadge: data.streak_7days_badge ?? false,
+        crownBalance: data.crown_balance ?? 0,
+        performanceScore: data.performance_score ?? 0,
+        gamesPlayed,
+        gamesWon,
+        wins: wins ?? [],
+      })
 
       return reply.send({
         success: true,
         player: {
           user_id: data.user_id,
           display_name: data.display_name,
-          avatar_url: data.avatar_url,
+          avatar_url: (await resolveProfileAvatars([data])).get(data.user_id) ?? data.avatar_url,
           tier_unlocked_max: data.tier_unlocked_max,
           token_balance: data.token_balance ?? 0,
           performance_score: data.performance_score ?? 0,
           games_played: gamesPlayed,
           games_won: gamesWon,
           win_rate: winRate,
+          title,
         },
       })
     }

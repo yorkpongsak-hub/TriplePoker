@@ -1,29 +1,38 @@
 // ============================================================
 // gameLoop.ts — Game Loop Manager
-// 3 Rounds per Match, Showdown, Token Delta
+// Tier C/B: 3 Matches per game; Tier A/A+/S: 5 Matches per game.
 // Beginner Table: 1P vs 3 AI
 // The Sage Unicorn Studio Co., Ltd.
 // ============================================================
 
 import { Server } from 'socket.io'
+import { gameTelemetry } from '../telemetry/gameplay'
 import { dealCards } from './cardEngine'
-import { evaluateHand, compareHands, handRankLabel } from './handEvaluator'
-import { checkFoul, PlayerArrangement, CommunityCards } from './foulChecker'
-import { aiDecideArrangement, AI_CONFIGS, AIConfig, AIPersonality, FOUR_GODS, NINE_SENTINELS, greedyArrangement, pickRandomMinions } from './aiEngine'
+import { evaluateBestFive, evaluateHand, compareHands, handRankLabel } from './handEvaluator'
+import { checkFoul, checkTierCFoul, PlayerArrangement, CommunityCards } from './foulChecker'
+import { aiDecideArrangement, AI_CONFIGS, AIConfig, AIPersonality, FOUR_GODS, NINE_SENTINELS, arrangementSearchBudget, greedyArrangement, mastermindBossUsesMissions, pickRandomMinions } from './aiEngine'
 import { Card } from './deck'
 import { gameConfig, getAutoSortFee } from '../config/gameConfig'
 import { supabaseAdmin } from '../config/supabase'
 import { recordMatchStats, BestHandCandidate, StatsTier } from './matchStatsService'
 import { checkTierUnlock } from './tierUnlockService'
 import { getAscendantStatus } from './crownVaultService'
+import { awardSoloEndlessLevel } from './soloEndlessLevel'
 // Token Flow Panel (Spec v1.1) — ใช้ใน Initiate / Adept / Mastermind (ดู usesTokenFlow())
 // High Noble / Last Boss ยังใช้ calcDeltas() เดิม
 import {
-  collectAntes, settleRound, checkConservation, chargeAutoSortFee,
+  collectAntes, settleRound, checkConservation,
   chargeAuctionBid, chargeGrandFinaleCall, settleMastermindRound,
 } from './tokenFlow'
 import { getRoom } from './roomRegistry'
 import { recordMatchWin } from './matchWinsService'
+import { economyService } from '../economy/economyService'
+import { resolveNpcPoolKey, type ResolveNpcPoolContext } from '../economy/npcPoolResolver'
+import type { AccountRef } from '../economy/economyTypes'
+import { calculateGameProfitAndRake, generateTierCPlusMissions, getMissionDifficulty, getTierMatchCount, getTierMissionAward, missionStreakBonus, scoreTierCPlusRound, TIER_C_PLUS_RULES, type TierCPlusScore, type TierCPlusTier } from './tierCPlusScoring'
+import { missionResult, type Mission } from './leagueGameplay'
+import { issueProfitableAiInterstitialTicket } from './profitableAiInterstitial'
+import { broadcastHumanRoyalFlush } from './royalFlushBroadcast'
 
 // ── Types ────────────────────────────────────────────────────
 export interface RoundResult {
@@ -45,7 +54,7 @@ export interface MatchState {
   // (ก่อนหน้านี้ MatchState ไม่เก็บชื่อเลย มีแค่ userId) ใช้ตอน broadcast "win" event เท่านั้น
   humanName: string
   roundNumber: number       // 1-3
-  totalRounds: number       // 3
+  totalRounds: number       // 3 for C/B; 5 for A/A+/S
   humanWinStreak: number
   tokenBalance: Record<string, number>
   results: RoundResult[]
@@ -65,6 +74,11 @@ export interface MatchState {
   extraPaid: Record<string, number>
   /** กด Auto Sort ไปแล้วในรอบนี้หรือยัง (single human ต่อโต๊ะ) — reset ทุกต้นรอบ กันเรียกเก็บซ้ำ */
   autoSortUsed: boolean
+  missions?: Mission[]
+  /** Mastermind is determined by the selected Sentinel: bosses 1-5 off, 6-9 on. */
+  missionsEnabled?: boolean
+  roundScores?: Record<string,TierCPlusScore>
+  missionStreak?:number
   // Patch Mastermind: เก็บผล Pile1+2 ไว้รอ Auction/Discard/GrandFinale (patch ถัดไป)
   _pendingPile12?: {
     pile1Winner: string
@@ -79,6 +93,8 @@ export interface MatchState {
   // ครบ (Mastermind/Last Boss ใช้ Sequential Showdown) เพราะ derive ย้อนหลังจาก state.results ไม่ได้
   bestHandThisMatch?: BestHandCandidate
   tripleSweepThisMatch?: boolean
+  disconnectedAt?: number
+  disconnectGraceTimer?: ReturnType<typeof setTimeout>
 }
 
 // เก็บ MatchState ใน memory (production ใช้ Redis)
@@ -105,7 +121,8 @@ function resolvePile(
   pileNum: 1 | 2 | 3,
   arrangements: Record<string, PlayerArrangement>,
   community: CommunityCards,
-  fouled: Record<string, boolean>
+  fouled: Record<string, boolean>,
+  tierCBestFive = false,
 ): string {
   const row = pileNum === 1 ? community.row1 : pileNum === 2 ? community.row2 : community.row3
   let bestScore = -Infinity
@@ -113,8 +130,9 @@ function resolvePile(
 
   for (const [pid, arr] of Object.entries(arrangements)) {
     if (fouled[pid]) continue
-    const pileCards = pileNum === 1 ? arr.pile1 : pileNum === 2 ? arr.pile2 : arr.pile3.slice(0, 3)
-    const hand = evaluateHand([...pileCards, ...row])
+    const pileCards = pileNum === 1 ? arr.pile1 : pileNum === 2 ? arr.pile2 : arr.pile3
+    const eligible = [...pileCards, ...row]
+    const hand = pileNum === 1 ? evaluateHand(eligible) : evaluateBestFive(eligible)
     if (hand.score > bestScore) {
       bestScore = hand.score
       winnerId = pid
@@ -136,7 +154,7 @@ function trackBestHandLive(
 // ── Helper: End-of-Match Stats — derive best hand + triple sweep ของ userId จาก state.results ย้อนหลัง
 // ใช้ได้เฉพาะ Tier ที่ RoundResult เก็บ arrangements/community ครบ (Initiate/Adept — Simultaneous Showdown)
 function deriveBestHandFromResults(
-  results: RoundResult[], userId: string,
+  results: RoundResult[], userId: string, tierCBestFive = false,
 ): { bestHand: BestHandCandidate | null; tripleSweep: boolean } {
   let bestHand: BestHandCandidate | null = null
   let tripleSweep = false
@@ -149,10 +167,11 @@ function deriveBestHandFromResults(
     const piles: Array<{ cards: Card[]; row: Card[]; num: 1 | 2 | 3; won: boolean }> = [
       { cards: arr.pile1, row: r.community.row1, num: 1, won: r.pile1Winner === userId },
       { cards: arr.pile2, row: r.community.row2, num: 2, won: r.pile2Winner === userId },
-      { cards: arr.pile3.slice(0, 3), row: r.community.row3, num: 3, won: r.pile3Winner === userId },
+      { cards: arr.pile3, row: r.community.row3, num: 3, won: r.pile3Winner === userId },
     ]
     for (const p of piles) {
-      const hand = evaluateHand([...p.cards, ...p.row])
+      const eligible=[...p.cards,...p.row]
+      const hand = p.num === 1 ? evaluateHand(eligible) : evaluateBestFive(eligible)
       if (!bestHand || hand.score > bestHand.hand.score) {
         bestHand = { hand, cards: [...p.cards, ...p.row].map(c => cardKey(c).toUpperCase()), pile: p.num, won: p.won }
       }
@@ -268,10 +287,11 @@ type EscrowResult =
 // ไม่ต้อง rollback อะไร — ตัด class of bug ที่ rollback เองก็ล้มตาม (connection เดียวกันที่พังไปแล้ว)
 // ทำให้ token หายลอยโดยไม่มี escrow record อ้างอิงเลย
 export async function escrowBuyIn(
-  userId: string, roomId: string, tier: string,
+  userId: string, roomId: string, tier: string, amountOverride?: number,
 ): Promise<EscrowResult> {
   const validTier = toEscrowTier(tier)
-  const buyInAmount = gameConfig.buyIn[validTier]
+  const buyInAmount = amountOverride ?? gameConfig.buyIn[validTier]
+  if (!Number.isInteger(buyInAmount) || buyInAmount <= 0) return { ok: false, reason: 'SERVER_ERROR' }
   try {
     // กู้คืน escrow เก่าที่ค้างเกิน 60 นาทีก่อนเสมอ — กันเคส escrow ค้างจาก session ก่อนหน้าบัง single-active-escrow ด้านล่างอยู่ทั้งที่จริงๆ จบไปนานแล้ว
     await recoverStaleEscrow(userId)
@@ -304,8 +324,18 @@ export async function escrowBuyIn(
 // finalStack = stack ปัจจุบันตอน settle (จบแมตช์ปกติ, หลุด, หรือกด Lobby กลางเกม — Spec §4 ทั้งหมดใช้ path นี้)
 // คืนยอด token_balance ใหม่หลัง write สำเร็จ (null ถ้า error) — ให้ผู้เรียกแนบไปกับ event ที่ส่งผลแมตช์
 // ให้ client แทน ห้าม client คำนวณเองจาก buyin/stack (bug: Profile ค้างยอดเก่าเพราะ client ไม่เคยรู้ยอดจริงหลัง settle)
-export async function settleEscrow(userId: string, escrowId: string, finalStack: number): Promise<number | null> {
+export async function settleEscrow(
+  userId: string, escrowId: string, finalStack: number,
+  // Central Economy Ledger Phase 7 — ให้เฉพาะ Tier ที่ usesLedgerSettlement() คืน true (Initiate ตอนนี้)
+  // caller คำนวณ net ของ human/AI ทุกตัวมาให้พร้อมแล้ว ไม่ต้องคำนวณซ้ำในนี้ — undefined = ทุก Tier อื่น
+  // เดินพาธเดิมทุกประการ ไม่มีการเปลี่ยนแปลงพฤติกรรมเลย
+  ledger?: { tier: string; burnAmount: number; npcNets: Array<{ npcId: string; amount: number; npcContext?: ResolveNpcPoolContext }> },
+): Promise<number | null> {
   try {
+    if (ledger && usesLedgerSettlement(ledger.tier)) {
+      return await settleEscrowViaLedger(userId, escrowId, finalStack, ledger)
+    }
+
     // P0: mark escrow + credit wallet ใน transaction เดียว ปิดเคส escrow settled แต่ wallet ไม่ได้เงิน
     const { data, error } = await supabaseAdmin.rpc('settle_match_escrow', {
       p_user_id: userId,
@@ -345,6 +375,81 @@ export async function settleEscrow(userId: string, escrowId: string, finalStack:
   }
 }
 
+// Central Economy Ledger Phase 7 — เส้นทางใหม่สำหรับ Tier ที่ usesLedgerSettlement() คืน true เท่านั้น
+// แทนที่ settle_match_escrow RPC (ที่หัก/ให้เงินตรงๆ ไม่ผ่าน Ledger เลย) ด้วย:
+//   1) economyService.settleMatchResult() — human + NPC pool ทุกตัวใน transaction เดียว (type BURN)
+//   2) UPDATE match_escrow ตรงๆ (ไม่ผ่าน RPC เดิม) แค่ mark 'settled' — ไม่แตะ token_balance อีกทาง
+//      เพราะ (1) จัดการให้แล้ว กัน human โดนหัก/ได้เงินซ้ำสองทาง (Ledger + RPC เดิม)
+// ⚠️ entry ของ human ต้องเป็น finalStack เต็มจำนวน ไม่ใช่ net (finalStack - buyIn) — buy-in ถูกหักไป
+// แล้วครั้งหนึ่งจาก begin_match_escrow (RPC เดิมที่ไม่แตะ) ถ้าใช้ net จะเท่ากับหักซ้ำ (บั๊กที่เจอจาก
+// เทสจริง 2026-08-12 — human ได้เงินคืนน้อยกว่าที่ควรพอดี 1 buy-in) burnAmount (state.feeRake) ต้องส่ง
+// แยกมาตรงๆ เพราะ entries ไม่ได้ sum เป็น -totalRake อีกต่อไปเมื่อ human ใช้ finalStack เต็ม
+async function settleEscrowViaLedger(
+  userId: string, escrowId: string, finalStack: number,
+  ledger: { tier: string; burnAmount: number; npcNets: Array<{ npcId: string; amount: number; npcContext?: ResolveNpcPoolContext }> },
+): Promise<number | null> {
+  const entries: Array<{ account: AccountRef; netAmount: number }> = [
+    { account: { accountType: 'PLAYER' as const, accountId: userId }, netAmount: finalStack },
+    ...ledger.npcNets
+      .filter(n => n.amount !== 0)
+      .map(n => ({
+        account: { accountType: 'NPC_POOL' as const, accountId: resolveNpcPoolKey(n.npcId, n.npcContext) },
+        netAmount: n.amount,
+      })),
+  ].filter(e => e.netAmount !== 0)
+
+  if (entries.length > 0) {
+    try {
+      await economyService.settleMatchResult({
+        idempotencyKey: `MATCH_SETTLEMENT:${escrowId}`,
+        currency: 'TOKEN',
+        entries,
+        burnAmount: ledger.burnAmount,
+        reason: 'MATCH_SETTLEMENT',
+        context: { matchId: escrowId, playerId: userId, tier: ledger.tier },
+      })
+    } catch (err) {
+      console.error('[ESCROW]', Date.now(), 'Ledger settleMatchResult failed for', escrowId, err)
+      return null
+    }
+  }
+
+  const { error: updateError } = await supabaseAdmin
+    .from('match_escrow')
+    .update({ status: 'settled', final_stack: finalStack, settled_at: new Date().toISOString() })
+    .eq('escrow_id', escrowId)
+    .eq('status', 'in_match')
+  if (updateError) {
+    console.error('[ESCROW]', Date.now(), 'Ledger settle: match_escrow update failed for', escrowId, updateError)
+    return null
+  }
+
+  const { data: userRow, error: readError } = await supabaseAdmin
+    .from('users')
+    .select('token_balance')
+    .eq('user_id', userId)
+    .single()
+  if (readError || !userRow) {
+    console.error('[ESCROW]', Date.now(), 'Ledger settle: failed to re-read token_balance for', userId, readError)
+    return null
+  }
+  const newBalance = Number(userRow.token_balance)
+  console.log('[ESCROW]', Date.now(), 'Settled via ledger', userId, '| finalStack', finalStack, '| New balance:', newBalance)
+
+  try {
+    await checkTierUnlock(userId, newBalance)
+  } catch (err) {
+    console.error('[TIER_UNLOCK] Unexpected error calling checkTierUnlock:', err, '| userId:', userId)
+  }
+  try {
+    await getAscendantStatus(userId)
+  } catch (err) {
+    console.error('[CROWN-VAULT] Unexpected error calling getAscendantStatus:', err, '| userId:', userId)
+  }
+
+  return newBalance
+}
+
 // Refund เต็มจำนวน — ใช้เฉพาะตอน escrow บาง seat ในกลุ่ม join พร้อมกันล้มเหลว (rollback seat ที่หักไปแล้วก่อนหน้า)
 export async function refundEscrow(userId: string, escrowId: string, buyInAmount: number): Promise<void> {
   try {
@@ -378,7 +483,7 @@ export async function startMatch(
   bossId?: string,    // Patch Mastermind Conquest: Sentinel ที่ผู้เล่นเลือกเองจาก select.tsx/story.tsx (บังคับสำหรับ tier mastermind)
 ): Promise<void> {
 
-  const totalRounds = 5
+  const totalRounds = getTierMatchCount(tier as any)
 
   // ── Escrow Buy-in: หัก DB ครั้งเดียว, AI ได้ virtual stack เท่ากัน (Buy-in Spec §2) ──
   const escrow = await escrowBuyIn(humanPlayerId, roomId, tier)
@@ -417,6 +522,7 @@ export async function startMatch(
     const chosenSentinel = NINE_SENTINELS.find(s => s.bossId === bossId) ?? NINE_SENTINELS[0]
     ;(state as any)._bossOverride = chosenSentinel
     ;(state as any)._bossId = chosenSentinel.bossId // เก็บไว้ใช้ตอน match_end เขียน conquered_sentinels
+    state.missionsEnabled = mastermindBossUsesMissions(chosenSentinel.bossId)
 
     // LobbyMatchmaking_Spec_v1_0 §5: P2/P4 = Minion สุ่ม 2 ใน 25 (แทน Sage/Reckless/Ghost เดิม) —
     // สุ่มครั้งเดียวตอนเริ่มแมตช์ ไม่สุ่มใหม่ทุก Round, personality สุ่ม 1 ใน 3 แบบ Tier C (ไม่ผูกกับชื่อ)
@@ -433,6 +539,7 @@ export async function startMatch(
     ;(state as any)._minionOverrides = minionOverrides
   }
   matchStates.set(roomId, state)
+  gameTelemetry.startSolo(state)
 
   await startRound(io, roomId)
 }
@@ -453,6 +560,18 @@ function getEffectiveAIConfig(state: MatchState, ai: AIConfig): AIConfig {
   return ai
 }
 
+// Central Economy Ledger Phase 7 Round 3 — คืน npcId/context ที่ถูกต้องสำหรับ resolveNpcPoolKey()
+// ต่อที่นั่ง AI หนึ่งตัว ใช้ getEffectiveAIConfig() ตัวเดียวกับ display เพื่อไม่ให้ logic สอง (แสดงผล vs
+// pool routing) หลุด sync กัน — ที่นั่ง Boss ของ Mastermind ได้ id ของ Sentinel จริง (เข้า
+// NINE_SENTINELS_POOL), ที่นั่ง Minion (P2/P4) ได้ isMinionDisplay:true (เข้า MINION_POOL), ส่วน
+// Initiate (ไม่มี _bossOverride/_minionOverrides เลย) ได้ผลลัพธ์เดิมทุกประการ (ai.id, ไม่มี context)
+export function resolveMatchStateNpcRouting(state: MatchState, ai: AIConfig): { npcId: string; npcContext?: ResolveNpcPoolContext } {
+  const npcId = getEffectiveAIConfig(state, ai).id
+  const minionOverrides = (state as any)._minionOverrides as Record<string, unknown> | undefined
+  const isMinion = state.tier === 'mastermind' && !!minionOverrides?.[ai.id]
+  return { npcId, npcContext: isMinion ? { isMinionDisplay: true } : undefined }
+}
+
 // ============================================================
 // startRound — เริ่ม Round ใหม่
 // ============================================================
@@ -461,9 +580,72 @@ function getEffectiveAIConfig(state: MatchState, ai: AIConfig): AIConfig {
 // mastermind: Fog of War -> Auction -> Discard -> Grand Finale (finalizeGrandFinale)
 // Adept อยู่ใน MultiMatchState คนละ state ไม่เกี่ยวกับ gate ตัวนี้
 // ⚠️ highNoble/lastBoss ยังใช้ calcDeltas() เดิม ห้ามใส่เพิ่มจนกว่าจะย้ายทั้งเส้น
-type TokenFlowTier = 'initiate' | 'mastermind'
+type TokenFlowTier = 'initiate' | 'mastermind' | 'highNoble' | 'lastBoss'
 function usesTokenFlow(tier: string): tier is TokenFlowTier {
-  return tier === 'initiate' || tier === 'mastermind'
+  return tier === 'initiate' || tier === 'mastermind' || tier === 'highNoble' || tier === 'lastBoss'
+}
+
+// Central Economy Ledger Phase 7 — เฉพาะ Tier ที่ผ่าน settleEscrow()/matchStates (single-player)
+// เท่านั้น ขยายทีละ Tier ตามรอบถัดไป (Round 1: Initiate, Round 3: Mastermind) — Adept ไม่ผ่าน gate
+// นี้เลยเพราะอยู่คนละ engine (MultiMatchState, ดู settleAdeptMatchViaLedger) ห้ามใส่ highNoble/lastBoss
+// เพิ่มจนกว่าจะทำรอบของมันเอง (ดู plan — finalizeGrandFinale()'s settle call ใช้ร่วมกับ 2 tier นี้ด้วย)
+type LedgerSettlementTier = 'initiate' | 'mastermind' | 'highNoble' | 'lastBoss' | 'tier_d_duel'
+export function usesLedgerSettlement(tier: string): tier is LedgerSettlementTier {
+  return tier === 'initiate' || tier === 'mastermind' || tier === 'highNoble' || tier === 'lastBoss' || tier === 'tier_d_duel'
+}
+
+function tierCPlusScores(playerIds:string[],winners:[string,string,string],arrangements:Record<string,PlayerArrangement>,community:CommunityCards,fouled:Record<string,boolean>,missions:Mission[],tier?:TierCPlusTier){
+  const hands=Object.fromEntries(playerIds.map(id=>[id,([
+    evaluateHand([...arrangements[id].pile1,...community.row1]).rank,
+    evaluateBestFive([...arrangements[id].pile2,...community.row2]).rank,
+    evaluateBestFive([...arrangements[id].pile3,...community.row3]).rank,
+  ] as unknown) as readonly [string,string,string]]))
+  return scoreTierCPlusRound({playerIds,winners,hands,missions,fouled,tier})
+}
+
+function revealMissionMeta(pile:1|2,playerIds:string[],arrangements:Record<string,PlayerArrangement>,community:CommunityCards,fouled:Record<string,boolean>,missions:Mission[],tier?:TierCPlusTier){
+  const mission=missions.find(item=>item.pile===pile)
+  const missionScores=Object.fromEntries(playerIds.map(id=>{if(!mission||fouled[id])return[id,0];const rank=pile===1?evaluateHand([...arrangements[id].pile1,...community.row1]).rank:evaluateBestFive([...arrangements[id].pile2,...community.row2]).rank;return[id,getTierMissionAward(tier??'initiate',pile,mission,rank).score]}))
+  const comboPlayers:Record<string,number>={}
+  if(pile===2){for(const id of playerIds){if(fouled[id])continue;const completed=([1,2] as const).every(n=>{const item=missions.find(m=>m.pile===n);if(!item)return false;const rank=n===1?evaluateHand([...arrangements[id].pile1,...community.row1]).rank:evaluateBestFive([...arrangements[id].pile2,...community.row2]).rank;return getTierMissionAward(tier??'initiate',n,item,rank).complete});if(completed)comboPlayers[id]=TIER_C_PLUS_RULES.comboScore.COMBO}}
+  return{missionScores,comboPlayers}
+}
+
+function addPlayerMissionStreak(score:TierCPlusScore,id:string,arrangement:PlayerArrangement,community:CommunityCards,missions:Mission[],starting=0,tier?:TierCPlusTier){
+  const ranks=[evaluateHand([...arrangement.pile1,...community.row1]).rank,evaluateBestFive([...arrangement.pile2,...community.row2]).rank,evaluateBestFive([...arrangement.pile3,...community.row3]).rank]
+  const streak=missionStreakBonus(missions.map(m=>getTierMissionAward(tier??'initiate',m.pile,m,ranks[m.pile-1]).complete),starting)
+  score.streakBonus=streak.bonus;score.total+=streak.bonus;return streak.streak
+}
+
+/** Apply the single canonical rake event after Match 3, never during a pile. */
+function applyTierCPlusEndGameRake(state:{tokenBalance:Record<string,number>;buyInAmount:number;feeRake:number},playerIds:readonly string[]):Record<string,ReturnType<typeof calculateGameProfitAndRake>>{
+  const summaries:Record<string,ReturnType<typeof calculateGameProfitAndRake>>={}
+  for(const id of playerIds){const summary=calculateGameProfitAndRake(Math.max(0,Math.floor(state.tokenBalance[id]??0)),state.buyInAmount);summaries[id]=summary;state.tokenBalance[id]=summary.finalReturn;state.feeRake+=summary.rake}
+  return summaries
+}
+
+// Central Economy Ledger — สร้าง ledger param ให้ settleEscrow() ตัวเดียวใช้ร่วมกันทุกจุดที่จบแมตช์
+// solo (finalizeGrandFinale, settleAndEndSoloMatch, player_leave ใน gameSocket.ts) กัน pattern
+// AI_CONFIGS.map(...) หลุดตกหล่นไปจุดใดจุดหนึ่ง (เจอมาแล้วจริง 2026-08-13 — usesLedgerSettlement เอง
+// เคยแก้แค่ type ไม่ได้แก้ runtime logic ทำให้ Mastermind หลุด path เดิมอยู่พักหนึ่งกว่าจะจับได้จาก
+// economy_reconciliation() diff สด — มีจุดเดียวให้แก้ ลดความเสี่ยงเกิดซ้ำ)
+// ⚠️ ต้องบวก state.pot เข้า burnAmount ด้วยเสมอ (เจอบั๊กจริง 2026-08-13 อีกตัว — ออกกลางรอบตอน Ante
+// เก็บเข้า pot ไปแล้วแต่รอบยังไม่ resolve เงินก้อนนั้นไม่อยู่ใน tokenBalance ของใครเลย ถ้าไม่ burn
+// จะหายจาก actual_supply เงียบๆ ไม่ถูกนับที่ไหน) ตอนจบเกมปกติ pot การันตีเป็น [0,0,0] เสมอ (settleRound/
+// settleMastermindRound reset ทุกครั้งหลัง settle — tokenFlow.ts:40) บวก 0 เข้าไปเลยไม่กระทบพาธปกติ
+export function buildSoloLedgerArg(state: MatchState): {
+  tier: string; burnAmount: number; npcNets: Array<{ npcId: string; amount: number; npcContext?: ResolveNpcPoolContext }>
+} | undefined {
+  if (!usesLedgerSettlement(state.tier)) return undefined
+  const residualPot = state.pot[0] + state.pot[1] + state.pot[2]
+  return {
+    tier: state.tier,
+    burnAmount: state.feeRake + residualPot,
+    npcNets: AI_CONFIGS.map(ai => ({
+      ...resolveMatchStateNpcRouting(state, ai),
+      amount: (state.tokenBalance[ai.id] ?? state.buyInAmount) - state.buyInAmount,
+    })),
+  }
 }
 
 export async function startRound(io: Server, roomId: string): Promise<void> {
@@ -472,6 +654,7 @@ export async function startRound(io: Server, roomId: string): Promise<void> {
 
   state.phase = 'arrangement'
   state.humanArrangement = undefined
+  state.missions=state.missionsEnabled === false ? [] : generateTierCPlusMissions(state.tier as any)
 
   // สับและแจกไพ่
   const dealt = dealCards()
@@ -511,7 +694,7 @@ export async function startRound(io: Server, roomId: string): Promise<void> {
   AI_CONFIGS.forEach((ai, i) => {
     const effectiveAI = getEffectiveAIConfig(state, ai)
     aiArrangements[ai.id] = (state.tier === 'mastermind' && minionOverrides?.[ai.id])
-      ? greedyArrangement(cardsMap[ai.id], community)
+      ? greedyArrangement(cardsMap[ai.id], community, state.missions, undefined, arrangementSearchBudget(state.tier, 'support'))
       : aiDecideArrangement(
           effectiveAI,
           cardsMap[ai.id],
@@ -519,6 +702,8 @@ export async function startRound(io: Server, roomId: string): Promise<void> {
           state.roundNumber,
           state.tier,
           state.humanWinStreak,
+          state.missions,
+          i === 0 ? 'boss' : 'support',
         )
   })
 
@@ -539,12 +724,13 @@ export async function startRound(io: Server, roomId: string): Promise<void> {
     communityCards: {
       pile1: community.row1.map(cardKey),
       pile2: community.row2.map(cardKey),
-      pile3: community.row3.map(cardKey),
+      pile3: state.tier === 'mastermind' ? [] : community.row3.map(cardKey),
     },
     blindAuction: dealt.blindAuction.map(cardKey),
     aiNames: AI_CONFIGS.map(a => { const eff = getEffectiveAIConfig(state, a); return { id: a.id, name: eff.name, emoji: eff.emoji } }),
     tokenBalance: state.tokenBalance,
     timer: (gameConfig.arrangementTimer as Record<string, number>)[state.tier] ?? gameConfig.arrangementTimer.initiate,
+    missions:state.missions,
     ...(state.roundNumber === 1 ? { buyInAmount: state.buyInAmount } : {}),
     // Token Flow Panel — เฉพาะ Tier ที่ย้ายมาใช้ bucket แล้ว (Tier อื่นไม่ได้รับฟิลด์ชุดนี้เลย ไม่มีผลกระทบ)
     // `buyIn` เป็นฟิลด์แยกจาก `buyInAmount` เพราะตัวหลัง trigger popup Lock-up ที่ต้องเด้งรอบเดียว
@@ -570,6 +756,18 @@ export async function submitArrangement(
   const state = matchStates.get(roomId)
   if (!state || state.phase !== 'arrangement') return
 
+  if (state.tier === 'initiate') {
+    const dealt: Card[] = ((state as any)._cardsMap as Record<string, Card[]> | undefined)?.[state.humanPlayerId] ?? []
+    const submitted = [...arrangement.pile1, ...arrangement.pile2, ...arrangement.pile3]
+    const dealtKeys = dealt.map(cardKey).sort()
+    const submittedKeys = submitted.map(cardKey).sort()
+    const hasCanonicalShape = arrangement.pile1.length === 3 && arrangement.pile2.length === 3 && arrangement.pile3.length === 5
+    if (!hasCanonicalShape || dealtKeys.length !== 11 || submittedKeys.length !== 11 || dealtKeys.some((key, index) => key !== submittedKeys[index])) {
+      io.to(roomId).emit('arrangement_rejected', { roomId, reason: 'Tier C Ready must lock all 11 dealt cards in a 3-3-5 arrangement.' })
+      return
+    }
+  }
+
   state.humanArrangement = arrangement
   state.phase = 'showdown'
 
@@ -579,11 +777,11 @@ export async function submitArrangement(
   // ตรวจ Foul ทุกคน
   const fouled: Record<string, boolean> = {}
   const foulReasons: Record<string, string> = {}
-  const humanFoul = checkFoul(arrangement, community)
+  const humanFoul = checkTierCFoul(arrangement, community)
   fouled[state.humanPlayerId] = humanFoul.isFoul
   if (humanFoul.isFoul && humanFoul.reason) foulReasons[state.humanPlayerId] = humanFoul.reason
   AI_CONFIGS.forEach(ai => {
-    const aiFoul = checkFoul(aiArrangements[ai.id], community)
+    const aiFoul = checkTierCFoul(aiArrangements[ai.id], community)
     fouled[ai.id] = aiFoul.isFoul
     if (aiFoul.isFoul && aiFoul.reason) foulReasons[ai.id] = aiFoul.reason
   })
@@ -594,16 +792,15 @@ export async function submitArrangement(
   }
   const playerIds = [state.humanPlayerId, ...AI_CONFIGS.map(a => a.id)]
 
-  // Patch High Noble: ประมูลตอนไพ่ครบ 11 ใบ — ข้าม Foul-check/Reveal รอบนี้ ไปประมูลก่อน
-  // (Foul-check จริงจะทำหลัง Arrangement รอบ2 ใน submitArrangementRound2)
-  if (state.tier === 'highNoble') {
+  // Tier A/A+: auction before reveal, then every seat arranges again. Foul and
+  // reveal must use that final post-Auction arrangement.
+  if (state.tier === 'highNoble' || state.tier === 'mastermind') {
     state.phase = 'blind_auction'
     startBlindAuction(io, roomId, state)
     return
   }
-  // Patch Mastermind/Last Boss: Tier >= Mastermind ใช้ Sequential Reveal + Fog of War
-  // (ยังไม่ครบ Auction/Discard/GrandFinale — รอ patch ถัดไป จบแค่ Fog of War ก่อน)
-  if (['mastermind', 'lastBoss'].includes(state.tier)) {
+  // Last Boss retains the sequential G1 -> Auction -> G2 path.
+  if (state.tier === 'lastBoss') {
     await resolveMastermindPile12(io, roomId, state, allArrangements, community, fouled, foulReasons, playerIds)
     return
   }
@@ -613,12 +810,24 @@ export async function submitArrangement(
   await delay(3500)
 
   // ── Resolve ทุก Pile พร้อมกัน ────────────────────────────
-  const p1Winner = resolvePile(1, allArrangements, community, fouled)
-  const p2Winner = resolvePile(2, allArrangements, community, fouled)
-  const p3Winner = resolvePile(3, allArrangements, community, fouled)
+  const tierCBestFive = state.tier === 'initiate'
+  const p1Winner = resolvePile(1, allArrangements, community, fouled, tierCBestFive)
+  const p2Winner = resolvePile(2, allArrangements, community, fouled, tierCBestFive)
+  const p3Winner = resolvePile(3, allArrangements, community, fouled, tierCBestFive)
   const hand1W = p1Winner ? evaluateHand([...allArrangements[p1Winner].pile1, ...community.row1]) : null
-  const hand2W = p2Winner ? evaluateHand([...allArrangements[p2Winner].pile2, ...community.row2]) : null
-  const hand3W = p3Winner ? evaluateHand([...allArrangements[p3Winner].pile3.slice(0,3), ...community.row3]) : null
+  const hand2W = p2Winner ? evaluateBestFive([...allArrangements[p2Winner].pile2, ...community.row2]) : null
+  const hand3W = p3Winner ? evaluateBestFive([...allArrangements[p3Winner].pile3, ...community.row3]) : null
+  const authoritativeHands = [
+    { pile: 1, winner: p1Winner, hand: hand1W, cards: p1Winner ? [...allArrangements[p1Winner].pile1, ...community.row1] : [] },
+    { pile: 2, winner: p2Winner, hand: hand2W, cards: p2Winner ? [...allArrangements[p2Winner].pile2, ...community.row2] : [] },
+    { pile: 3, winner: p3Winner, hand: hand3W, cards: p3Winner ? [...allArrangements[p3Winner].pile3, ...community.row3] : [] },
+  ]
+  for (const royal of authoritativeHands) if (royal.winner === state.humanPlayerId && royal.hand?.rank === 'royal_flush') {
+    broadcastHumanRoyalFlush(io, { eventId: `${roomId}:${state.roundNumber}:g${royal.pile}`, playerId: state.humanPlayerId, playerName: state.humanName, cards: royal.cards })
+  }
+  const scoring=tierCPlusScores(playerIds,[p1Winner,p2Winner,p3Winner],allArrangements,community,fouled,state.missions??generateTierCPlusMissions(state.tier as any),state.tier as TierCPlusTier)
+  state.missionStreak=fouled[state.humanPlayerId]?0:addPlayerMissionStreak(scoring[state.humanPlayerId],state.humanPlayerId,allArrangements[state.humanPlayerId],community,state.missions??[],state.missionStreak)
+  state.roundScores=scoring
 
   // ── Settle token ก่อน emit ────────────────────────────────
   // ย้ายขึ้นมาก่อน emit เพราะ Tier C ต้องส่ง pot/feeRake/tokenDeltas ไปกับ showdown_result
@@ -628,6 +837,7 @@ export async function submitArrangement(
   let jackpotWinnerId: string | null = null
   let jackpotBonus = 0
   let jackpotRake = 0
+  let pileTokenRewards: [Record<string,number>,Record<string,number>,Record<string,number>] = [{},{},{}]
 
   if (state.tier === 'initiate') {
     const settled = settleRound({
@@ -638,6 +848,7 @@ export async function submitArrangement(
       winners: [p1Winner, p2Winner, p3Winner],
       stakes: gameConfig.tokenPot.tiers.initiate,
       rake: gameConfig.tokenPot.rake,
+      pileScoreWeights:([0,1,2] as const).map(k=>Object.fromEntries(playerIds.map(id=>[id,scoring[id].piles[k].finalPileScore]))) as [Record<string,number>,Record<string,number>,Record<string,number>],
     })
     state.tokenBalance = settled.stacks
     state.pot         = settled.pot
@@ -646,6 +857,7 @@ export async function submitArrangement(
     jackpotWinnerId   = settled.jackpotWinner
     jackpotBonus      = settled.jackpotBonus
     jackpotRake       = settled.jackpotRake
+    pileTokenRewards  = settled.pileRewards
     checkConservation(
       state.tokenBalance, playerIds, state.pot, state.feeRake, state.buyInAmount,
       `settle r${state.roundNumber}`,
@@ -662,10 +874,11 @@ export async function submitArrangement(
     roomId,
     foulReasons,
     pileResults: [
-      { pileNumber: 1, arrangements: revealArrangements(allArrangements, 1), winner: p1Winner, winnerHandRank: hand1W ? handRankLabel(hand1W) : '', fouled },
-      { pileNumber: 2, arrangements: revealArrangements(allArrangements, 2), winner: p2Winner, winnerHandRank: hand2W ? handRankLabel(hand2W) : '', fouled },
-      { pileNumber: 3, arrangements: revealArrangements(allArrangements, 3), winner: p3Winner, winnerHandRank: hand3W ? handRankLabel(hand3W) : '', fouled },
+      { pileNumber: 1, arrangements: revealArrangements(allArrangements, 1), winner: p1Winner, winnerHandRank: hand1W ? handRankLabel(hand1W) : '', winnerBestFive: p1Winner ? [...allArrangements[p1Winner].pile1, ...community.row1].map(cardKey) : [], communityCards: community.row1.map(cardKey), fouled },
+      { pileNumber: 2, arrangements: revealArrangements(allArrangements, 2), winner: p2Winner, winnerHandRank: hand2W ? handRankLabel(hand2W) : '', winnerBestFive: hand2W?.bestFive.map(cardKey) ?? [], communityCards: community.row2.map(cardKey), fouled },
+      { pileNumber: 3, arrangements: revealArrangements(allArrangements, 3), winner: p3Winner, winnerHandRank: hand3W ? handRankLabel(hand3W) : '', winnerBestFive: hand3W?.bestFive.map(cardKey) ?? [], communityCards: community.row3.map(cardKey), fouled },
     ],
+    missions:state.missions,scoring,pileTokenRewards,
     // Token Flow Panel — เฉพาะ Tier C (Adept ไม่ได้รับฟิลด์ชุดนี้ พฤติกรรมเดิมทุกประการ)
     ...(state.tier === 'initiate' ? {
       tokenDeltas:   deltas,
@@ -697,6 +910,13 @@ export async function submitArrangement(
   }
   state.results.push(result)
 
+  const profitableAdTicket = issueProfitableAiInterstitialTicket({
+    tier: state.tier,
+    gameId: state.escrowId ?? state.roomId,
+    userId: state.humanPlayerId,
+    tokenDelta: deltas[state.humanPlayerId] ?? 0,
+  })
+
   // ── Emit round result ────────────────────────────────────
   io.to(roomId).emit('round_result', {
     roomId,
@@ -707,6 +927,7 @@ export async function submitArrangement(
     tokenDeltas: deltas,
     tokenBalance: state.tokenBalance,
     hasFoul: fouled,
+    profitableAdTicket,
     ...(state.tier === 'initiate'
       ? { pot: state.pot, feeRake: state.feeRake, buyIn: state.buyInAmount }
       : {}),
@@ -717,18 +938,26 @@ export async function submitArrangement(
   // ── ต่อ Round หรือจบ Match ───────────────────────────────
   if (state.roundNumber >= state.totalRounds) {
     state.phase = 'match_end'
+    const economySummary=applyTierCPlusEndGameRake(state,playerIds)
     const finalWinner = playerIds.reduce((a, b) =>
       (state.tokenBalance[a] ?? 0) > (state.tokenBalance[b] ?? 0) ? a : b
     )
     // ── Settle Escrow ครั้งเดียว (Buy-in Spec §4 — จบแมตช์ปกติ) ──
     let newTokenBalance: number | null = null
     if (state.escrowId) {
-      newTokenBalance = await settleEscrow(state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount)
+      newTokenBalance = await settleEscrow(
+        state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount,
+        usesLedgerSettlement(state.tier) ? {
+          tier: state.tier,
+          burnAmount: state.feeRake,
+          npcNets: AI_CONFIGS.map(ai => ({ npcId: ai.id, amount: (state.tokenBalance[ai.id] ?? state.buyInAmount) - state.buyInAmount })),
+        } : undefined,
+      )
     }
     // End-of-Match Stats Recording (games_played/won, xp, streak, best_hands, debt recovery)
     // แทนที่ recordGameResults() เดิม — Initiate ใช้ Simultaneous Showdown, derive จาก state.results ได้ตรงๆ
     const { bestHand: initiateBestHand, tripleSweep: initiateTripleSweep } =
-      deriveBestHandFromResults(state.results, state.humanPlayerId)
+      deriveBestHandFromResults(state.results, state.humanPlayerId, true)
     await recordMatchStats([{
       userId: state.humanPlayerId,
       tier: 'initiate',
@@ -753,10 +982,14 @@ export async function submitArrangement(
     // ── Token Flow Panel §5: จบเกม -> Fee & Rake burn จริง (ออกจากระบบ) ──
     // Tier C เท่านั้น — ไม่มี DB write เพราะเงินก้อนนี้ไม่เคยเข้า users.token_balance ของใคร
     // (escrow settle ใช้ stack ของ human ซึ่งหัก rake ไปแล้วตั้งแต่ตอน settleRound)
+    let soloEndlessLevel: { previous: number; current: number } | null = null
     if (state.tier === 'initiate') {
       console.log('[TOKENFLOW]', Date.now(), 'Burn Fee & Rake', state.feeRake, '| room', roomId)
+      // Solo Mode Endless Level (2026-09-01) — ตัวเลขสะสมตลอดชีพ ไม่มีผลกับเกมจริง
+      soloEndlessLevel = await awardSoloEndlessLevel(state.humanPlayerId, finalWinner === state.humanPlayerId)
     }
 
+    gameTelemetry.endSolo(state,finalWinner)
     io.to(roomId).emit('match_end', {
       roomId,
       finalWinner,
@@ -765,7 +998,12 @@ export async function submitArrangement(
       totalRounds: state.totalRounds,
       buyInAmount: state.buyInAmount,
       newTokenBalance,
+      bestHandThisMatch: initiateBestHand
+        ? { label: handRankLabel(initiateBestHand.hand), pile: initiateBestHand.pile, won: initiateBestHand.won }
+        : null,
+      economySummary,
       ...(state.tier === 'initiate' ? { feeRakeBurned: state.feeRake } : {}),
+      ...(soloEndlessLevel ? { soloEndlessLevel } : {}),
     })
     // Server Activity feed: broadcast ให้ทุก client เห็น ไม่ใช่แค่คนในห้องนี้
     io.emit('server_activity', {
@@ -804,14 +1042,18 @@ async function resolveMastermindPile12(
   // ── Pile 1 ──────────────────────────────────────────────
   const pile1Winner = resolvePile(1, allArrangements, community, fouled)
   const hand1 = pile1Winner ? evaluateHand([...allArrangements[pile1Winner].pile1, ...community.row1]) : null
+  const pile1MissionMeta=revealMissionMeta(1,playerIds,allArrangements,community,fouled,state.missions??[],state.tier as TierCPlusTier)
   io.to(roomId).emit('pile_reveal', {
     roomId,
     pileNumber: 1,
     winner: pile1Winner,
     winnerHandRank: hand1 ? handRankLabel(hand1) : '',
+    winnerBestFive: pile1Winner ? [...allArrangements[pile1Winner].pile1, ...community.row1].map(cardKey) : [],
+    communityCards: community.row1.map(cardKey),
     arrangements: revealWinnerOnly(allArrangements, 1, pile1Winner),
     fouled,
     foulReasons,
+    ...pile1MissionMeta,
   })
   // End-of-Match Stats: เก็บ hand ของ human เอง (ไม่ใช่แค่ผู้ชนะ) ไว้เทียบ best_hands ตอน settle
   if (!fouled[state.humanPlayerId]) {
@@ -820,32 +1062,16 @@ async function resolveMastermindPile12(
   }
   await delay(revealTime)
 
-  // ── Pile 2 ──────────────────────────────────────────────
-  const pile2Winner = resolvePile(2, allArrangements, community, fouled)
-  const hand2 = pile2Winner ? evaluateHand([...allArrangements[pile2Winner].pile2, ...community.row2]) : null
-  io.to(roomId).emit('pile_reveal', {
-    roomId,
-    pileNumber: 2,
-    winner: pile2Winner,
-    winnerHandRank: hand2 ? handRankLabel(hand2) : '',
-    arrangements: revealWinnerOnly(allArrangements, 2, pile2Winner),
-    fouled,
-    foulReasons,
-  })
-  if (!fouled[state.humanPlayerId]) {
-    const humanPile2 = [...allArrangements[state.humanPlayerId].pile2, ...community.row2]
-    trackBestHandLive(state, evaluateHand(humanPile2), humanPile2, 2, pile2Winner === state.humanPlayerId)
-  }
-  await delay(revealTime)
-
   // ── Fog of War ───────────────────────────────────────────
-  // เก็บผลไว้รอ Auction/Discard/GrandFinale (ยังไม่ implement — patch ถัดไป)
+  // G2 deliberately remains unresolved until after Auction. The winner's
+  // Auction card becomes the fourth private G2 card, producing Best 5/6 with
+  // the two community cards.
   state.phase = 'fog_of_war'
-  state._pendingPile12 = { pile1Winner, pile2Winner, allArrangements, community, fouled, playerIds }
+  state._pendingPile12 = { pile1Winner, pile2Winner: '', allArrangements, community, fouled, playerIds }
 
   io.to(roomId).emit('fog_of_war', {
     roomId,
-    message: 'Pile 1 & 2 ถูกซ่อนแล้ว — เหลือ Pile 3 ในมือคุณเท่านั้นที่เห็น',
+    message: 'Pile 1 ถูกซ่อนแล้ว — ประมูลไพ่เสริม G2 ก่อนตัดสิน Best 5/6',
   })
 
   // Patch Blind Auction: หน่วง 5 วิ ให้เห็นจอ Fog of War + อีก 3 วิ ให้ Client เฟดไพ่ Pile1+2 ออกก่อนเข้าประมูล
@@ -951,6 +1177,11 @@ function startBlindAuction(io: Server, roomId: string, state: MatchState): void 
   setTimeout(() => resolveBlindAuctionTimeout(io, roomId), decisionMs)
 }
 
+export function getPostAuctionArrangementTimer(tier: string): number {
+  const baseTimer = (gameConfig.arrangementTimer as Record<string, number>)[tier] ?? gameConfig.arrangementTimer.initiate
+  return tier === 'mastermind' ? Math.max(1, Math.ceil(baseTimer / 2)) : baseTimer
+}
+
 // Human submit bid — เรียกจาก socket handler ใน gameSocket.ts
 export function submitAuctionBid(
   roomId: string,
@@ -1044,24 +1275,26 @@ async function resolveBlindAuctionTimeout(io: Server, roomId: string): Promise<v
   // Patch Discard Phase: หน่วง 3 วิ ให้เห็นผล Auction ก่อน ค่อยเริ่ม Discard
   await delay(3000)
 
-  // Patch High Noble: เปิด Arrangement รอบ 2 — ผู้เล่นจัดไพ่ใหม่รวมไพ่ที่ประมูลได้ (สูงสุด 12 ใบ)
+  // Tier A/A+: open Arrangement 2 with the won Auction card (up to 12 cards).
   // ไพ่ประมูลจัดลง pile ไหนก็ได้ ไม่บังคับลง pile3 แบบ Mastermind
-  if (state.tier === 'highNoble') {
+  if (state.tier === 'highNoble' || state.tier === 'mastermind') {
     const community: CommunityCards = (state as any)._community
     const aiArrangements: Record<string, PlayerArrangement> = (state as any)._aiArrangements
     const cardsMap: Record<string, Card[]> = (state as any)._cardsMap
 
-    // AI ที่ชนะประมูล — จัดไพ่ใหม่ด้วยมือ 12 ใบ (เหมือนผู้เล่นจริง ไม่บังคับลง pile3)
+    // Tier A re-arranges every AI seat so the post-Auction reveal is based on a
+    // fresh decision. Tier A+ preserves its existing winner-only behaviour.
     // Patch High Noble: Boss ใช้ personality จตุรเทพที่เลือกไว้ (ถ้ามี) ตอนจัดไพ่รอบ2 ด้วย
     // LobbyMatchmaking_Spec_v1_0 §5: Mastermind Minion ใช้ greedyArrangement รอบ 2 เหมือนกัน
     const minionOverridesR2 = (state as any)._minionOverrides as Record<string, unknown> | undefined
-    AI_CONFIGS.forEach(ai => {
-      if (auctionWonCards[ai.id]) {
+    AI_CONFIGS.forEach((ai, i) => {
+      if (state.tier === 'mastermind' || auctionWonCards[ai.id]) {
         const effectiveAI = getEffectiveAIConfig(state, ai)
-        const fullHand = [...cardsMap[ai.id], auctionWonCards[ai.id]]
-        aiArrangements[ai.id] = (state.tier === 'mastermind' && minionOverridesR2?.[ai.id])
-          ? greedyArrangement(fullHand, community)
-          : aiDecideArrangement(effectiveAI, fullHand, community, state.roundNumber, state.tier, state.humanWinStreak)
+        const fullHand = [...cardsMap[ai.id], ...(auctionWonCards[ai.id] ? [auctionWonCards[ai.id]] : [])]
+        const proposed = (state.tier === 'mastermind' && minionOverridesR2?.[ai.id])
+          ? greedyArrangement(fullHand, community, state.missions, undefined, arrangementSearchBudget(state.tier, 'support'))
+          : aiDecideArrangement(effectiveAI, fullHand, community, state.roundNumber, state.tier, state.humanWinStreak, state.missions, i === 0 ? 'boss' : 'support')
+        aiArrangements[ai.id] = { pile1: proposed.pile1, pile2: [...proposed.pile2, ...proposed.pile3.slice(5)], pile3: proposed.pile3.slice(0, 5) }
       }
     })
     ;(state as any)._aiArrangements = aiArrangements
@@ -1075,7 +1308,7 @@ async function resolveBlindAuctionTimeout(io: Server, roomId: string): Promise<v
     if (auctionWonCards[state.humanPlayerId]) humanHand.push(auctionWonCards[state.humanPlayerId])
 
     // Patch: อ่าน timer จาก gameConfig.arrangementTimer (single source of truth — ครั้งหน้าแก้ที่ config ที่เดียว)
-    const r2Timer = (gameConfig.arrangementTimer as Record<string, number>)[state.tier] ?? gameConfig.arrangementTimer.initiate
+    const r2Timer = getPostAuctionArrangementTimer(state.tier)
     io.to(roomId).emit('arrangement_2_start', {
       roomId,
       cards: humanHand.map(cardKey),
@@ -1085,7 +1318,52 @@ async function resolveBlindAuctionTimeout(io: Server, roomId: string): Promise<v
     return
   }
 
-  startDiscardPhase(io, roomId, state)
+  await resolvePostAuctionPile2(io, roomId, state, auctionWonCards)
+}
+
+/** Attach at most one won Auction card to each winner's private G2 cards. */
+export function applyAuctionCardsToPile2(
+  arrangements: Record<string, PlayerArrangement>,
+  auctionWonCards: Record<string, Card>,
+): Record<string, PlayerArrangement> {
+  return Object.fromEntries(Object.entries(arrangements).map(([playerId, arrangement]) => {
+    const won = auctionWonCards[playerId]
+    if (!won) return [playerId, { pile1:[...arrangement.pile1], pile2:[...arrangement.pile2], pile3:[...arrangement.pile3] }]
+    const wonKey=cardKey(won)
+    const alreadyHeld=[...arrangement.pile1,...arrangement.pile2,...arrangement.pile3].some(card=>cardKey(card)===wonKey)
+    return [playerId, { pile1:[...arrangement.pile1], pile2:alreadyHeld?[...arrangement.pile2]:[...arrangement.pile2,won], pile3:[...arrangement.pile3] }]
+  }))
+}
+
+async function resolvePostAuctionPile2(
+  io:Server,roomId:string,state:MatchState,auctionWonCards:Record<string,Card>,
+):Promise<void>{
+  const pending=state._pendingPile12
+  if(!pending)return
+  const allArrangements=applyAuctionCardsToPile2(pending.allArrangements,auctionWonCards)
+  pending.allArrangements=allArrangements
+  state.humanArrangement=allArrangements[state.humanPlayerId]
+  ;(state as any)._aiArrangements=Object.fromEntries(AI_CONFIGS.map(ai=>[ai.id,allArrangements[ai.id]]))
+
+  const community=pending.community
+  const fouled=pending.fouled
+  const pile2Winner=resolvePile(2,allArrangements,community,fouled)
+  pending.pile2Winner=pile2Winner
+  const hand2=pile2Winner?evaluateBestFive([...allArrangements[pile2Winner].pile2,...community.row2]):null
+  const pile2MissionMeta=revealMissionMeta(2,pending.playerIds,allArrangements,community,fouled,state.missions??[],state.tier as TierCPlusTier)
+  io.to(roomId).emit('pile_reveal',{
+    roomId,pileNumber:2,winner:pile2Winner,winnerHandRank:hand2?handRankLabel(hand2):'',
+    winnerBestFive:hand2?.bestFive.map(cardKey)??[],communityCards:community.row2.map(cardKey),
+    arrangements:revealWinnerOnly(allArrangements,2,pile2Winner),fouled,
+    foulReasons:(state as any)._foulReasons??{},auctionApplied:true,
+    ...pile2MissionMeta,
+  })
+  if(!fouled[state.humanPlayerId]){
+    const humanPile2=[...allArrangements[state.humanPlayerId].pile2,...community.row2]
+    trackBestHandLive(state,evaluateBestFive(humanPile2),humanPile2,2,pile2Winner===state.humanPlayerId)
+  }
+  await delay(4000)
+  startDiscardPhase(io,roomId,state)
 }
 
 // ============================================================
@@ -1099,6 +1377,15 @@ export async function submitArrangementRound2(
 ): Promise<void> {
   const state = matchStates.get(roomId)
   if (!state || state.phase !== 'arrangement_2') return
+  const cardsMap: Record<string, Card[]> = (state as any)._cardsMap ?? {}
+  const won: Record<string, Card> = (state as any)._auctionWonCards ?? {}
+  const held=[...(cardsMap[state.humanPlayerId] ?? []), ...(won[state.humanPlayerId] ? [won[state.humanPlayerId]] : [])]
+  const submitted=[...arrangement.pile1,...arrangement.pile2,...arrangement.pile3]
+  const expectedPile2=held.length-8
+  if (arrangement.pile1.length!==3 || arrangement.pile2.length!==expectedPile2 || arrangement.pile3.length!==5 || submitted.length!==held.length || submitted.map(cardKey).sort().some((key,index)=>key!==held.map(cardKey).sort()[index])) {
+    io.to(roomId).emit('arrangement_rejected',{roomId,reason:'POST_AUCTION_ARRANGEMENT_INVALID'})
+    return
+  }
   await resolveArrangementRound2(io, roomId, state, arrangement)
 }
 
@@ -1121,14 +1408,12 @@ async function resolveArrangementRound2(
 async function resolveArrangementRound2Timeout(io: Server, roomId: string): Promise<void> {
   const state = matchStates.get(roomId)
   if (!state || state.phase !== 'arrangement_2') return
-  // Fallback: Human ไม่ submit ทันเวลา — ใช้ arrangement รอบ1 เดิม + บวกไพ่ประมูล (ถ้ามี) ลง pile3
+  // Fallback: keep the 3 / remaining Pile 2 / 5 final-arrangement rule.
   const auctionWon: Record<string, Card> = (state as any)._auctionWonCards ?? {}
   const fallback: PlayerArrangement = {
     pile1: state.humanArrangement!.pile1,
-    pile2: state.humanArrangement!.pile2,
-    pile3: auctionWon[state.humanPlayerId]
-      ? [...state.humanArrangement!.pile3, auctionWon[state.humanPlayerId]]
-      : state.humanArrangement!.pile3,
+    pile2: auctionWon[state.humanPlayerId] ? [...state.humanArrangement!.pile2, auctionWon[state.humanPlayerId]] : state.humanArrangement!.pile2,
+    pile3: state.humanArrangement!.pile3,
   }
   await resolveArrangementRound2(io, roomId, state, fallback)
 }
@@ -1167,68 +1452,27 @@ function bestThreeFromHand(hand: Card[], community3: Card[]): { keep: Card[]; di
 }
 
 function startDiscardPhase(io: Server, roomId: string, state: MatchState): void {
+  // Tier C+ no longer asks players to discard after Auction. The second
+  // arrangement is final: Auction cards belong in Pile 2, which is scored as
+  // Best 5 from its actual private-card count plus the two community cards.
+  // Keep this entry point as a compatibility bridge for old socket clients,
+  // but advance it immediately rather than emitting a discard decision.
   state.phase = 'discard'
   const community: CommunityCards = (state as any)._community
-  const community3: Card[] = community.row3
-  const isHighNoble = state.tier === 'highNoble'
-  const auctionWon: Record<string, Card> = (state as any)._auctionWonCards ?? {}
   const aiArrangements: Record<string, PlayerArrangement> = (state as any)._aiArrangements
   const finalPile3: Record<string, Card[]> = {}
-  // Patch v1.2 (2026-07-24): ย้ายจาก literal 20000 hardcode มา gameConfig.discardTimer — ค่าเท่าเดิม (20s)
-  const discardTimeoutMs = ((gameConfig.discardTimer as Record<string, number>)[state.tier] ?? 20) * 1000
-
-  if (isHighNoble) {
-    const fouled: Record<string, boolean> = (state as any)._foulMap ?? {}
-    const foulReasons: Record<string, string> = (state as any)._foulReasons ?? {}
-    AI_CONFIGS.forEach(ai => {
-      const hand = [...aiArrangements[ai.id].pile3]
-      const { keep } = bestThreeFromHand(hand, community3)
-      finalPile3[ai.id] = keep
-      const aiFoul = checkFoul({ pile1: aiArrangements[ai.id].pile1, pile2: aiArrangements[ai.id].pile2, pile3: keep }, community)
-      fouled[ai.id] = aiFoul.isFoul
-      if (aiFoul.isFoul && aiFoul.reason) foulReasons[ai.id] = aiFoul.reason
-    })
-    ;(state as any)._finalPile3 = finalPile3
-    ;(state as any)._foulMap = fouled
-    ;(state as any)._foulReasons = foulReasons
-
-    const arr = state.humanArrangement!
-    io.to(roomId).emit('discard_phase_start_highnoble', {
-      roomId,
-      pile1: arr.pile1.map(cardKey),
-      pile2: arr.pile2.map(cardKey),
-      pile3: arr.pile3.map(cardKey),
-      needDiscard: {
-        pile1: Math.max(0, arr.pile1.length - 3),
-        pile2: Math.max(0, arr.pile2.length - 3),
-        pile3: Math.max(0, arr.pile3.length - 3),
-      },
-      decisionTimeMs: discardTimeoutMs,
-    })
-    setTimeout(() => resolveDiscardTimeout(io, roomId), discardTimeoutMs)
-    return
-  }
-
   AI_CONFIGS.forEach(ai => {
-    const hand = [...aiArrangements[ai.id].pile3]
-    if (auctionWon[ai.id]) hand.push(auctionWon[ai.id])
-    const { keep } = bestThreeFromHand(hand, community3)
-    finalPile3[ai.id] = keep
+    finalPile3[ai.id] = [...aiArrangements[ai.id].pile3]
   })
   ;(state as any)._finalPile3 = finalPile3
-
-  const humanHand = [...state.humanArrangement!.pile3]
-  if (auctionWon[state.humanPlayerId]) humanHand.push(auctionWon[state.humanPlayerId])
-  const { keep: suggestedKeep } = bestThreeFromHand(humanHand, community3)
-
-  io.to(roomId).emit('discard_phase_start', {
-    roomId,
-    hand: humanHand.map(cardKey),
-    suggestedKeep: suggestedKeep.map(cardKey),
-    decisionTimeMs: discardTimeoutMs,
-  })
-
-  setTimeout(() => resolveDiscardTimeout(io, roomId), discardTimeoutMs)
+  const fouled: Record<string, boolean> = (state as any)._foulMap ?? {}
+  const foulReasons: Record<string, string> = (state as any)._foulReasons ?? {}
+  AI_CONFIGS.forEach(ai => { const result=checkTierCFoul(aiArrangements[ai.id],community);fouled[ai.id]=result.isFoul;if(result.reason)foulReasons[ai.id]=result.reason;else delete foulReasons[ai.id] })
+  const result=checkTierCFoul(state.humanArrangement!,community);fouled[state.humanPlayerId]=result.isFoul;if(result.reason)foulReasons[state.humanPlayerId]=result.reason;else delete foulReasons[state.humanPlayerId]
+  ;(state as any)._foulMap=fouled;(state as any)._foulReasons=foulReasons
+  finalPile3[state.humanPlayerId]=[...state.humanArrangement!.pile3]
+  ;(state as any)._humanDiscardSubmitted=true
+  void resolveDiscardTimeout(io, roomId)
 }
 
 // Human submit — เรียกจาก socket handler ใน gameSocket.ts
@@ -1236,93 +1480,31 @@ export function submitDiscard(io: Server, roomId: string, playerId: string, keep
   const state = matchStates.get(roomId)
   if (!state || state.phase !== 'discard') return { ok: false, reason: 'not_in_discard' }
 
-  if (state.tier === 'highNoble') {
-    if (keepKeys.length !== 9) return { ok: false, reason: 'must_keep_exactly_9' }
-    const arr = state.humanArrangement!
-    const newPile1 = arr.pile1.filter(c => keepKeys.includes(cardKey(c)))
-    const newPile2 = arr.pile2.filter(c => keepKeys.includes(cardKey(c)))
-    const newPile3 = arr.pile3.filter(c => keepKeys.includes(cardKey(c)))
-    if (newPile1.length !== 3 || newPile2.length !== 3 || newPile3.length !== 3) {
-      return { ok: false, reason: 'invalid_pile_distribution' }
-    }
-    const finalArrangement: PlayerArrangement = { pile1: newPile1, pile2: newPile2, pile3: newPile3 }
-    state.humanArrangement = finalArrangement
-
-    const community: CommunityCards = (state as any)._community
-    const humanFoul = checkFoul(finalArrangement, community)
-    const fouled: Record<string, boolean> = (state as any)._foulMap ?? {}
-    const foulReasons: Record<string, string> = (state as any)._foulReasons ?? {}
-    fouled[playerId] = humanFoul.isFoul
-    if (humanFoul.isFoul && humanFoul.reason) foulReasons[playerId] = humanFoul.reason
-    else delete foulReasons[playerId]
-    ;(state as any)._foulMap = fouled
-    ;(state as any)._foulReasons = foulReasons
-
-    const finalPile3: Record<string, Card[]> = (state as any)._finalPile3 ?? {}
-    finalPile3[playerId] = newPile3
-    ;(state as any)._finalPile3 = finalPile3
-    ;(state as any)._humanDiscardSubmitted = true
-    resolveDiscardTimeout(io, roomId).catch(err => console.error('resolveDiscardTimeout error:', err))
-    return { ok: true }
-  }
-
-  if (keepKeys.length !== 3) return { ok: false, reason: 'must_keep_exactly_3' }
-
-  const auctionWon: Record<string, Card> = (state as any)._auctionWonCards ?? {}
-  const humanHand = [...state.humanArrangement!.pile3]
-  if (auctionWon[playerId]) humanHand.push(auctionWon[playerId])
-
-  const keepCards = keepKeys.map(k => humanHand.find(c => cardKey(c) === k)).filter(Boolean) as Card[]
-  if (keepCards.length !== 3) return { ok: false, reason: 'invalid_cards' }
-
-  const finalPile3: Record<string, Card[]> = (state as any)._finalPile3 ?? {}
-  finalPile3[playerId] = keepCards
-  ;(state as any)._finalPile3 = finalPile3
-  ;(state as any)._humanDiscardSubmitted = true
-  resolveDiscardTimeout(io, roomId).catch(err => console.error('resolveDiscardTimeout error:', err))
-
-  return { ok: true }
+  // This legacy socket action can only race the compatibility bridge above.
+  // A final arrangement must never be rewritten into a three-card discard.
+  return { ok: false, reason: 'discard_not_supported' }
 }
 
 async function resolveDiscardTimeout(io: Server, roomId: string): Promise<void> {
   const state = matchStates.get(roomId)
   if (!state || state.phase !== 'discard') return
 
-  // ถ้า Human ยังไม่ submit ภายในเวลา -> auto-discard ด้วย suggestion (best 3)
+  // A recovered legacy `discard` snapshot must also preserve the complete final
+  // arrangement. Normal matches set this flag before reaching this function.
   if (!(state as any)._humanDiscardSubmitted) {
     const community: CommunityCards = (state as any)._community
-    if (state.tier === 'highNoble') {
-      const arr = state.humanArrangement!
-      // Patch: ทิ้ง "ใบสุดท้าย" ของแต่ละกอง (ตรงกับ X ที่ frontend โชว์ไว้ให้ผู้เล่นเห็นล่วงหน้า)
-      // ไม่ใช้ bestThreeFromHand แล้ว เพื่อให้ผลลัพธ์ตรงกับที่ผู้เล่นเห็นบนจอเป๊ะ
-      const trim = (pile: Card[]) => pile.length > 3 ? pile.slice(0, 3) : pile
-      const finalP1 = trim(arr.pile1)
-      const finalP2 = trim(arr.pile2)
-      const finalP3 = trim(arr.pile3)
-      const finalArrangement: PlayerArrangement = { pile1: finalP1, pile2: finalP2, pile3: finalP3 }
-      state.humanArrangement = finalArrangement
-
-      const humanFoul = checkFoul(finalArrangement, community)
-      const fouled: Record<string, boolean> = (state as any)._foulMap ?? {}
-      const foulReasons: Record<string, string> = (state as any)._foulReasons ?? {}
-      fouled[state.humanPlayerId] = humanFoul.isFoul
-      if (humanFoul.isFoul && humanFoul.reason) foulReasons[state.humanPlayerId] = humanFoul.reason
-      ;(state as any)._foulMap = fouled
-      ;(state as any)._foulReasons = foulReasons
-
-      const finalPile3: Record<string, Card[]> = (state as any)._finalPile3 ?? {}
-      finalPile3[state.humanPlayerId] = finalP3
-      ;(state as any)._finalPile3 = finalPile3
-    } else {
-      const community3: Card[] = community.row3
-      const auctionWon: Record<string, Card> = (state as any)._auctionWonCards ?? {}
-      const humanHand = [...state.humanArrangement!.pile3]
-      if (auctionWon[state.humanPlayerId]) humanHand.push(auctionWon[state.humanPlayerId])
-      const { keep } = bestThreeFromHand(humanHand, community3)
-      const finalPile3: Record<string, Card[]> = (state as any)._finalPile3 ?? {}
-      finalPile3[state.humanPlayerId] = keep
-      ;(state as any)._finalPile3 = finalPile3
-    }
+    const arrangement = state.humanArrangement!
+    const humanFoul = checkTierCFoul(arrangement, community)
+    const fouled: Record<string, boolean> = (state as any)._foulMap ?? {}
+    const foulReasons: Record<string, string> = (state as any)._foulReasons ?? {}
+    fouled[state.humanPlayerId] = humanFoul.isFoul
+    if (humanFoul.reason) foulReasons[state.humanPlayerId] = humanFoul.reason
+    else delete foulReasons[state.humanPlayerId]
+    ;(state as any)._foulMap = fouled
+    ;(state as any)._foulReasons = foulReasons
+    const finalPile3: Record<string, Card[]> = (state as any)._finalPile3 ?? {}
+    finalPile3[state.humanPlayerId] = [...arrangement.pile3]
+    ;(state as any)._finalPile3 = finalPile3
   }
 
   state.phase = 'discard_done'
@@ -1332,13 +1514,12 @@ async function resolveDiscardTimeout(io: Server, roomId: string): Promise<void> 
   io.to(roomId).emit('discard_phase_result', {
     roomId,
     finalHandSizes: Object.fromEntries(Object.entries(finalPile3).map(([pid, cards]) => [pid, cards.length])),
-    // Patch: ส่งไพ่จริงของ Human กลับไปด้วย (3 ใบหลัง Discard) เพื่อแสดงใน Grand Finale
+    // Tier A returns all five private G3 cards for Grand Finale / Best 5 of 7.
     myFinalHand: (finalPile3[state.humanPlayerId] ?? []).map(cardKey),
   })
 
-  // Patch High Noble: ค่อย reveal Pile1+Pile2 ตรงนี้ (เพราะ arrangement สมบูรณ์แล้วหลัง Discard)
-  // ต่างจาก Mastermind/Last Boss ที่ reveal ไปแล้วก่อนหน้า Auction (resolveMastermindPile12)
-  if (state.tier === 'highNoble') {
+  // Tier A/A+: reveal G1/G2 only after the post-Auction arrangement is final.
+  if (state.tier === 'highNoble' || state.tier === 'mastermind') {
     const community: CommunityCards = (state as any)._community
     const aiArrangements: Record<string, PlayerArrangement> = (state as any)._aiArrangements
     const fouled: Record<string, boolean> = (state as any)._foulMap ?? {}
@@ -1353,24 +1534,36 @@ async function resolveDiscardTimeout(io: Server, roomId: string): Promise<void> 
     // ── Pile 1 ──────────────────────────────────────────────
     const pile1Winner = resolvePile(1, allArrangements, community, fouled)
     const hand1 = pile1Winner ? evaluateHand([...allArrangements[pile1Winner].pile1, ...community.row1]) : null
+    if (pile1Winner === state.humanPlayerId && hand1?.rank === 'royal_flush') broadcastHumanRoyalFlush(io, { eventId: `${roomId}:${state.roundNumber}:g1`, playerId: state.humanPlayerId, playerName: state.humanName, cards: [...allArrangements[pile1Winner].pile1, ...community.row1] })
+    const pile1MissionMeta=revealMissionMeta(1,playerIds,allArrangements,community,fouled,state.missions??[],state.tier as TierCPlusTier)
     io.to(roomId).emit('pile_reveal', {
       roomId, pileNumber: 1, winner: pile1Winner,
       winnerHandRank: hand1 ? handRankLabel(hand1) : '',
+      winnerBestFive: pile1Winner ? [...allArrangements[pile1Winner].pile1, ...community.row1].map(cardKey) : [], communityCards: community.row1.map(cardKey),
       arrangements: revealWinnerOnly(allArrangements, 1, pile1Winner),
-      fouled, foulReasons,
+      fouled, foulReasons, ...pile1MissionMeta,
     })
-    await delay(revealTime)
+    // Tier A follows the Tier D commit flow: G2 remains server-hidden until
+    // the local player explicitly commits the visible G1 result.
+    if(state.tier==='mastermind') await waitForContinue(roomId,null)
+    else await delay(revealTime)
 
     // ── Pile 2 ──────────────────────────────────────────────
     const pile2Winner = resolvePile(2, allArrangements, community, fouled)
-    const hand2 = pile2Winner ? evaluateHand([...allArrangements[pile2Winner].pile2, ...community.row2]) : null
+    const hand2 = pile2Winner ? evaluateBestFive([...allArrangements[pile2Winner].pile2, ...community.row2]) : null
+    if (pile2Winner === state.humanPlayerId && hand2?.rank === 'royal_flush') broadcastHumanRoyalFlush(io, { eventId: `${roomId}:${state.roundNumber}:g2`, playerId: state.humanPlayerId, playerName: state.humanName, cards: hand2.bestFive })
+    const pile2MissionMeta=revealMissionMeta(2,playerIds,allArrangements,community,fouled,state.missions??[],state.tier as TierCPlusTier)
     io.to(roomId).emit('pile_reveal', {
       roomId, pileNumber: 2, winner: pile2Winner,
       winnerHandRank: hand2 ? handRankLabel(hand2) : '',
+      winnerBestFive: hand2?.bestFive.map(cardKey) ?? [], communityCards: community.row2.map(cardKey),
       arrangements: revealWinnerOnly(allArrangements, 2, pile2Winner),
-      fouled, foulReasons,
+      fouled, foulReasons, ...pile2MissionMeta,
     })
-    await delay(revealTime)
+    // Tier A waits for the client-side G2 flip plus its ~3 second readable
+    // hold before advancing to Fog of War. Other tiers keep their timed flow.
+    if(state.tier==='mastermind') await waitForContinue(roomId,null)
+    else await delay(revealTime)
 
     // Patch (บั๊กแก้): เก็บผล Pile1/2 ลง _pendingPile12 ให้ finalizeGrandFinale อ่านไปจ่ายเงินได้
     // (เดิมลืมเก็บ ทำให้ Pile1/2 ไม่ได้จ่าย/หักเงินเลยถึงแม้ popup โชว์ผู้ชนะถูกต้อง)
@@ -1418,7 +1611,11 @@ interface GrandFinaleState {
   decisionTimerId?: any
   // Patch High Noble: เก็บไพ่ที่ผู้เล่นแต่ละคน "Call" หงายไปแล้วในรอบ1 — Boss จตุรเทพใช้ประเมิน winrate ตอน Call/Fold
   revealedCards: Record<string, Card[]>
+  betOpened: boolean
+  checkedBeforeBet: string[]
 }
+
+type GrandFinaleAction = 'check'|'bet'|'call'|'fold'
 
 function startGrandFinale(io: Server, roomId: string): void {
   const state = matchStates.get(roomId)
@@ -1471,6 +1668,8 @@ function startGrandFinale(io: Server, roomId: string): void {
     pile3Pot,
     pendingAction: null,
     revealedCards: {}, // Patch: เก็บไพ่ที่หงายแล้วของผู้เล่นที่ Call ในรอบ1
+    betOpened: false,
+    checkedBeforeBet: [],
   }
   ;(state as any)._grandFinale = gfState
 
@@ -1480,6 +1679,9 @@ function startGrandFinale(io: Server, roomId: string): void {
     turnOrder,
     foulPlayers,
     pile3Pot,
+    communityRevealed: 1,
+    revealedCommunityCard: cardKey(((state as any)._community as CommunityCards).row3[0]),
+    communityCards: ((state as any)._community as CommunityCards).row3.slice(0,1).map(cardKey),
   })
 
   startNextTurn(io, roomId)
@@ -1491,6 +1693,8 @@ function startNextTurn(io: Server, roomId: string): void {
   if (!state) return
   const gf = (state as any)._grandFinale as GrandFinaleState
   if (!gf) return
+  gf.betOpened??=false
+  gf.checkedBeforeBet??=[]
 
   // จบ Round → ไป Round 2 หรือจบเกม
   if (gf.currentTurnIdx >= gf.turnOrder.length) {
@@ -1508,7 +1712,9 @@ function startNextTurn(io: Server, roomId: string): void {
       gf.roundNumber = 2
       gf.turnOrder = counterclockwise.filter(pid => stillIn.includes(pid))
       gf.currentTurnIdx = 0
-      io.to(roomId).emit('grand_finale_round_start', { roomId, roundNumber: 2, turnOrder: gf.turnOrder, pile3Pot: gf.pile3Pot })
+      gf.betOpened=false
+      gf.checkedBeforeBet=[]
+      io.to(roomId).emit('grand_finale_round_start', { roomId, roundNumber: 2, turnOrder: gf.turnOrder, pile3Pot: gf.pile3Pot, communityRevealed:2, revealedCommunityCard:cardKey(((state as any)._community as CommunityCards).row3[1]), communityCards:((state as any)._community as CommunityCards).row3.map(cardKey) })
       startNextTurn(io, roomId)
       return
     } else {
@@ -1534,11 +1740,22 @@ function startNextTurn(io: Server, roomId: string): void {
   const isHuman = currentPid === state.humanPlayerId
   const callAmount = (gameConfig.grandFinale.callAmount as Record<string, number | null>)[state.tier] ?? 0
 
+  const legalActions:GrandFinaleAction[]=gf.betOpened?['call','fold']:['check','bet']
+
+  // No all-in/credit Call exists. An unaffordable turn is an authoritative
+  // Fold before the client or AI is allowed to choose, so stacks never go below zero.
+  if (gf.betOpened && (state.tokenBalance[currentPid] ?? 0) < callAmount) {
+    applyGrandFinaleAction(io, roomId, currentPid, 'fold')
+    return
+  }
+
   io.to(roomId).emit('grand_finale_turn', {
     roomId,
     playerId: currentPid,
     roundNumber: gf.roundNumber,
     callAmount,
+    currentBet:gf.betOpened?callAmount:0,
+    legalActions,
     timeLimitMs: ((gameConfig.grandFinale.betTimer as Record<string, number | null>)[state.tier] ?? 10) * 1000,
   })
 
@@ -1549,7 +1766,7 @@ function startNextTurn(io: Server, roomId: string): void {
     // ผู้เล่นจะ Fold ได้ผ่าน swipe down เท่านั้น (เป็น opt-in action ไม่ใช่ default)
     gf.decisionTimerId = setTimeout(() => {
       // Patch: หมดเวลา = Auto-Call ใบ default (Mastermind+ ใช้ UX แบบ click+swipe ไม่มีปุ่ม CALL)
-      const action = (state.tier === 'highNoble' || state.tier === 'mastermind') ? 'call' : 'fold'
+      const action:GrandFinaleAction = gf.betOpened ? 'call' : 'check'
       applyGrandFinaleAction(io, roomId, currentPid, action)
     }, ((gameConfig.grandFinale.betTimer as Record<string, number | null>)[state.tier] ?? 10) * 1000)
   } else {
@@ -1557,7 +1774,8 @@ function startNextTurn(io: Server, roomId: string): void {
     // สุ่ม delay 3500-4500ms ให้ดูเหมือนคิดจริง
     const aiThinkMs = 7000 + Math.floor(Math.random() * 3000) // สุ่ม 7000-10000ms ให้ดูเหมือนคิดนาน
     setTimeout(() => {
-      const action = decideAIGrandFinaleAction(state, currentPid)
+      const decision = decideAIGrandFinaleAction(state, currentPid)
+      const action:GrandFinaleAction = gf.betOpened ? decision : (decision==='call'?'bet':'check')
       applyGrandFinaleAction(io, roomId, currentPid, action)
     }, aiThinkMs)
   }
@@ -1579,8 +1797,8 @@ function estimateBossWinrate(state: MatchState, bossId: string): number {
   if (!gf) return 0.5
 
   const myHand = finalPile3[bossId] ?? []
-  if (myHand.length !== 3) return 0
-  const myResult = evaluateHand([...myHand, ...community.row3])
+  if (myHand.length !== 5) return 0
+  const myResult = evaluateBestFive([...myHand, ...community.row3])
 
   // รวบรวมไพ่ที่เปิดเผยแล้วทั้งหมด → หาไพ่ที่ยังไม่เห็น (unseen)
   const cardId = (c: Card) => `${c.rank}_${c.suit}`
@@ -1618,14 +1836,13 @@ function estimateBossWinrate(state: MatchState, bossId: string): number {
   let opponentsBeatMe = 0
   for (const oppId of opponents) {
     const revealed = gf.revealedCards[oppId] ?? []
-    // สมมติคู่ต่อสู้มี 3 ใบ: ที่เห็นแล้ว N ใบ + ที่ไม่เห็น (3-N) ใบ
-    // ลองแทน (3-N) ใบที่ดีที่สุดที่เป็นไปได้ จาก unseen pool
-    const need = 3 - revealed.length
+    // Pile 3 keeps five private cards: supplement only its unrevealed cards.
+    const need = 5 - revealed.length
     // หา "ไพ่ที่อันตรายที่สุด" ใน unseen — สมมติคู่ต่อสู้ได้ใบที่ค่ามากสุด (rank สูงสุด) มา
     const dangerCards = [...unseen].sort((a, b) => b.value - a.value).slice(0, need)
     const bestOppHand = [...revealed, ...dangerCards]
-    if (bestOppHand.length !== 3) continue
-    const oppResult = evaluateHand([...bestOppHand, ...community.row3])
+    if (bestOppHand.length !== 5) continue
+    const oppResult = evaluateBestFive([...bestOppHand, ...community.row3])
     if (compareHands(oppResult, myResult) > 0) opponentsBeatMe++
   }
 
@@ -1637,11 +1854,12 @@ function estimateBossWinrate(state: MatchState, bossId: string): number {
 // AI ตัดสินใจ Call/Fold ตามความแข็งของไพ่ (Mastermind)
 // ใช้ rankIndex จาก handEvaluator: 3=three_of_a_kind, 2=two_pair, 1=one_pair, 0=high_card
 function decideAIGrandFinaleAction(state: MatchState, aiId: string): 'call' | 'fold' {
-  const community3: Card[] = ((state as any)._community as CommunityCards).row3
+  const gf=(state as any)._grandFinale as GrandFinaleState|undefined
+  const community3: Card[] = ((state as any)._community as CommunityCards).row3.slice(0,gf?.roundNumber===1?1:2)
   const finalPile3: Record<string, Card[]> = (state as any)._finalPile3 ?? {}
   const hand3 = finalPile3[aiId] ?? []
-  if (hand3.length !== 3) return 'fold'
-  const result = evaluateHand([...hand3, ...community3])
+  if (hand3.length !== 5) return 'fold'
+  const result = evaluateBestFive([...hand3, ...community3])
   // Threshold ตามลำดับความแข็งของไพ่
   let callProb: number
   if (result.rankIndex >= 3) callProb = 0.99       // Three of a Kind+: เกือบ Call แน่
@@ -1727,7 +1945,7 @@ function pickRevealCard(state: MatchState, playerId: string, hand: Card[], alrea
   return remaining.reduce((min, c) => c.value < min.value ? c : min, remaining[0])
 }
 
-function applyGrandFinaleAction(io: Server, roomId: string, playerId: string, action: 'call' | 'fold', revealedCardKey?: string): void {
+function applyGrandFinaleAction(io: Server, roomId: string, playerId: string, action: GrandFinaleAction, revealedCardKey?: string): void {
   const state = matchStates.get(roomId)
   if (!state) return
   const gf = (state as any)._grandFinale as GrandFinaleState
@@ -1738,9 +1956,21 @@ function applyGrandFinaleAction(io: Server, roomId: string, playerId: string, ac
 
   const callAmount = (gameConfig.grandFinale.callAmount as Record<string, number | null>)[state.tier] ?? 0
 
-  if (action === 'fold') {
+  if(action==='check'){
+    if(gf.betOpened)return
+    gf.checkedBeforeBet.push(playerId)
+  } else if (action === 'fold') {
     gf.foldedPlayers.push(playerId)
-  } else if (usesTokenFlow(state.tier)) {
+  } else {
+    if(action==='bet'){
+      if(gf.betOpened)return
+      gf.betOpened=true
+      // Players who checked before the opening bet must receive one response
+      // turn at the end of this street, exactly once.
+      gf.turnOrder.push(...gf.checkedBeforeBet.filter(id=>id!==playerId&&!gf.foldedPlayers.includes(id)))
+      gf.checkedBeforeBet=[]
+    } else if(!gf.betOpened) return
+  if (usesTokenFlow(state.tier)) {
     // Mastermind: เงิน Call ไหลเข้า Pot 3 ของ Panel จริง (มติลุงเยาะ 2026-07-25)
     // gf.pile3Pot ยังอัปเดตตามไปด้วยเพราะ UI เดิม/AI winrate อ่านค่านี้ — แต่ตัวที่จ่ายเงินจริงตอน
     // settle คือ state.pot[2] เท่านั้น ห้ามใช้ทั้งสองค่าจ่ายซ้ำ
@@ -1760,6 +1990,7 @@ function applyGrandFinaleAction(io: Server, roomId: string, playerId: string, ac
     state.tokenBalance[playerId] = (state.tokenBalance[playerId] ?? 0) - callAmount
     gf.pile3Pot += callAmount
   }
+  }
 
   // Patch High Noble: หงายไพ่ทั้ง Round 1 และ Round 2 (เดิมรอบ 2 ห้ามหงาย)
   // - ถ้า Human ส่ง revealedCardKey มา → ใช้ใบนั้น
@@ -1768,7 +1999,7 @@ function applyGrandFinaleAction(io: Server, roomId: string, playerId: string, ac
   const handForReveal = finalPile3[playerId] ?? []
   const alreadyRevealed = gf.revealedCards[playerId] ?? []
   let revealedCard: Card | undefined
-  if (action === 'call') {
+  if (action === 'call' || action === 'bet') {
     if (revealedCardKey) {
       revealedCard = handForReveal.find(c => cardKey(c) === revealedCardKey
         && !alreadyRevealed.some(r => r.rank === c.rank && r.suit === c.suit))
@@ -1813,7 +2044,7 @@ function resolveGrandFinaleShowdown(io: Server, roomId: string, stillIn: string[
   for (const pid of stillIn) {
     const hand = finalPile3[pid] ?? []
     reveals[pid] = hand.map(cardKey)
-    const result = evaluateHand([...hand, ...community3])
+    const result = evaluateBestFive([...hand, ...community3])
     if (result.score > bestScore) {
       bestScore = result.score
       winnerId = pid
@@ -1824,17 +2055,20 @@ function resolveGrandFinaleShowdown(io: Server, roomId: string, stillIn: string[
     roomId,
     reveals,
     winnerId,
+    communityCards: community3.map(cardKey),
   })
   return winnerId
 }
 
 // Human submit Call/Fold (เรียกจาก socket handler) — รับ io ตรงๆเลย
 // Patch High Noble: รับ revealedCardKey เพิ่ม — ใบที่ Human เลือกหงายเอง (ทั้งรอบ 1 และรอบ 2)
-export function submitGrandFinaleAction(io: Server, roomId: string, playerId: string, action: 'call' | 'fold', revealedCardKey?: string): { ok: boolean; reason?: string } {
+export function submitGrandFinaleAction(io: Server, roomId: string, playerId: string, action: GrandFinaleAction, revealedCardKey?: string): { ok: boolean; reason?: string } {
   const state = matchStates.get(roomId)
   if (!state || state.phase !== 'grand_finale') return { ok: false, reason: 'not_in_grand_finale' }
   const gf = (state as any)._grandFinale as GrandFinaleState
   if (!gf || gf.turnOrder[gf.currentTurnIdx] !== playerId) return { ok: false, reason: 'not_your_turn' }
+  const legal=gf.betOpened?action==='call'||action==='fold':action==='check'||action==='bet'
+  if(!legal)return{ok:false,reason:'illegal_betting_action'}
   applyGrandFinaleAction(io, roomId, playerId, action, revealedCardKey)
   return { ok: true }
 }
@@ -1862,26 +2096,39 @@ function finalizeGrandFinale(
   let deltas: Record<string, number> = {}
   allPlayerIds.forEach(id => deltas[id] = 0)
   const rake = gameConfig.tokenPot.rake
+  const finalWinners:[string,string,string]=[pile1Winner??'',pile2Winner??'',(winnerId&&!burned)?winnerId:'']
+  const pendingArrangements=(state as any)._pendingPile12?.allArrangements as Record<string,PlayerArrangement>|undefined
+  const scoreFouls={..._foulMap,...Object.fromEntries(foulPlayers.map(id=>[id,true]))}
+  const roundScoring=pendingArrangements?tierCPlusScores(allPlayerIds,finalWinners,pendingArrangements,(state as any)._community,scoreFouls,state.missions??generateTierCPlusMissions(state.tier as any),state.tier as TierCPlusTier):undefined
+  if(roundScoring&&pendingArrangements)state.missionStreak=scoreFouls[state.humanPlayerId]?0:addPlayerMissionStreak(roundScoring[state.humanPlayerId],state.humanPlayerId,pendingArrangements[state.humanPlayerId],(state as any)._community,state.missions??[],state.missionStreak,state.tier as TierCPlusTier)
+  state.roundScores=roundScoring
 
   // ── Jackpot flag ใช้ร่วมกันทั้ง 2 เส้นทาง ──
   const jackpotWinnerFlag = (pile1Winner && pile1Winner === pile2Winner && pile2Winner === winnerId) ? winnerId : null
   let jackpotBonus = 0
   let jackpotRake = 0
+  let pileTokenRewards: [Record<string,number>,Record<string,number>,Record<string,number>] = [{},{},{}]
 
   if (usesTokenFlow(state.tier)) {
     // ── Mastermind: Pot bucket จริง (tokenFlow engine) ──────────────────
     // Ante ถูกหักเข้า Pot ตั้งแต่ต้นรอบ และ Call ถูกย้ายเข้า pot[2] ไปแล้วตอนกด
     // ห้ามหักอะไรซ้ำที่นี่ — หน้าที่เดียวคือจ่าย Pot ออกไปหาผู้ชนะ + เก็บ rake
+    const basePile3Pot=stakes.pile3*allPlayerIds.length
+    const callPot=Math.max(0,pile3Pot-basePile3Pot)
+    const scoringPot:[number,number,number]=[state.pot[0],state.pot[1],Math.max(0,state.pot[2]-callPot)]
     const settled = settleMastermindRound({
       stacks:    state.tokenBalance,
-      pot:       state.pot,
+      // Mission/Combo score sharing applies to the ante-funded pile pot only.
+      // Call money is winner-take-all below.
+      pot:       scoringPot,
       feeRake:   state.feeRake,
       playerIds: allPlayerIds,
       // burned (ทุกคน fold/foul) = ไม่มีผู้ชนะกอง 3 -> Pot ก้อนนั้นเข้า Fee & Rake เอง
-      winners:   [pile1Winner ?? '', pile2Winner ?? '', (winnerId && !burned) ? winnerId : ''],
+      winners:   finalWinners,
       stakes,
       rake,
       extraPaid: state.extraPaid,
+      pileScoreWeights:roundScoring?([0,1,2] as const).map(k=>Object.fromEntries(allPlayerIds.map(id=>[id,roundScoring[id].piles[k].finalPileScore]))) as [Record<string,number>,Record<string,number>,Record<string,number>]:undefined,
     })
     state.tokenBalance = settled.stacks
     state.pot          = settled.pot
@@ -1889,6 +2136,16 @@ function finalizeGrandFinale(
     deltas             = settled.displayDeltas
     jackpotBonus       = settled.jackpotBonus
     jackpotRake        = settled.jackpotRake
+    pileTokenRewards   = settled.pileRewards
+
+    // Call/Fold side pot: exactly one G3 winner receives it. Apply the same
+    // table rake once; if G3 burns, the complete Call pot is burned.
+    if(callPot>0){
+      const callReward=winnerId&&!burned?Math.floor(callPot*(1-rake)):0
+      const callRake=callPot-callReward
+      if(winnerId&&!burned){state.tokenBalance[winnerId]=(state.tokenBalance[winnerId]??0)+callReward;deltas[winnerId]=(deltas[winnerId]??0)+callReward;pileTokenRewards[2][winnerId]=(pileTokenRewards[2][winnerId]??0)+callReward}
+      state.feeRake+=callRake
+    }
 
     checkConservation(
       state.tokenBalance, allPlayerIds, state.pot, state.feeRake, state.buyInAmount,
@@ -1928,9 +2185,10 @@ function finalizeGrandFinale(
     const community3: Card[] = ((state as any)._community as CommunityCards).row3
     const finalPile3: Record<string, Card[]> = (state as any)._finalPile3 ?? {}
     const winnerHand = finalPile3[winnerId] ?? []
-    if (winnerHand.length === 3) {
-      const result = evaluateHand([...winnerHand, ...community3])
+    if (winnerHand.length === 5) {
+      const result = evaluateBestFive([...winnerHand, ...community3])
       winnerRank = result.rank // e.g. "one_pair", "two_pair", "three_of_a_kind"
+      if (winnerId === state.humanPlayerId && result.rank === 'royal_flush') broadcastHumanRoyalFlush(io, { eventId: `${roomId}:${state.roundNumber}:g3`, playerId: state.humanPlayerId, playerName: state.humanName, cards: result.bestFive })
     }
   }
   // Jackpot: ใครก็ตามที่ชนะทั้ง 3 กอง (คำนวณไว้ข้างบนแล้ว ใช้ตัวเดียวกันทั้ง 2 เส้นทาง)
@@ -1941,9 +2199,9 @@ function finalizeGrandFinale(
     const community3ForStats: Card[] = ((state as any)._community as CommunityCards).row3
     const finalPile3ForStats: Record<string, Card[]> = (state as any)._finalPile3 ?? {}
     const humanPile3 = finalPile3ForStats[state.humanPlayerId]
-    if (humanPile3 && humanPile3.length === 3) {
+    if (humanPile3 && humanPile3.length === 5) {
       const humanHand3Cards = [...humanPile3, ...community3ForStats]
-      trackBestHandLive(state, evaluateHand(humanHand3Cards), humanHand3Cards, 3, winnerId === state.humanPlayerId)
+      trackBestHandLive(state, evaluateBestFive(humanHand3Cards), humanHand3Cards, 3, winnerId === state.humanPlayerId)
     }
     if (jackpotWinner === state.humanPlayerId) state.tripleSweepThisMatch = true
   }
@@ -1988,6 +2246,7 @@ function finalizeGrandFinale(
     jackpotBonus, // Patch: bonus ที่ winner ได้รับเพิ่ม (สำหรับแสดง UI)
     jackpotRake,  // Patch: rake 5% ที่ burn (สำหรับแสดง UI)
     tokenDeltas: deltas,
+    missions:state.missions,scoring:state.roundScores,pileTokenRewards,
     tokenBalance: state.tokenBalance,
     // Token Flow Panel: Pot กลับเป็น [0,0,0] และ Fee & Rake โตขึ้นตาม rake ของรอบนี้
     ...(usesTokenFlow(state.tier)
@@ -2014,16 +2273,26 @@ function finalizeGrandFinale(
   }
   state.results.push(result)
 
-  setTimeout(async () => {
+  // Tier A keeps Round Summary on screen until the player explicitly continues.
+  // The first five seconds remain reserved for the Grand Finale result stage.
+  void (async () => {
+    await delay(5000)
+    await waitForContinue(roomId, null)
     if (state.roundNumber >= state.totalRounds) {
       state.phase = 'match_end'
+      const economySummary=applyTierCPlusEndGameRake(state,allPlayerIds)
       const finalWinner = allPlayerIds.reduce((a, b) =>
         (state.tokenBalance[a] ?? 0) > (state.tokenBalance[b] ?? 0) ? a : b
       )
-      // ── Settle Escrow ครั้งเดียว (Buy-in Spec §4 — จบแมตช์ปกติ) ──
+      // ── Settle Escrow ครั้งเดียว (Buy-in Spec §4 — จบแมตช์ปกติ) — Central Economy Ledger Phase 7
+      // Round 3 — จุดนี้ใช้ร่วมกับ highNoble/lastBoss ด้วย (ผ่าน startGrandFinale()) usesLedgerSettlement
+      // คืน true เฉพาะ mastermind เท่านั้นตอนนี้ 2 tier นั้นเลยเดินพาธเดิมทุกประการไม่มีอะไรเปลี่ยน ──
       let newTokenBalance: number | null = null
       if (state.escrowId) {
-        newTokenBalance = await settleEscrow(state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount)
+        newTokenBalance = await settleEscrow(
+          state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount,
+          buildSoloLedgerArg(state),
+        )
       }
       // End-of-Match Stats Recording — แทนที่ recordGameResults() เดิม — Mastermind ใช้ Sequential Showdown
       // (Fog of War/Auction/Grand Finale) ดังนั้น bestHandThisMatch/tripleSweepThisMatch ต้องมาจาก live
@@ -2093,6 +2362,14 @@ function finalizeGrandFinale(
         console.log('[TOKENFLOW]', Date.now(), 'Burn Fee & Rake', state.feeRake, '| room', roomId)
       }
 
+      // Solo Mode Endless Level (2026-09-01) — Mastermind เท่านั้น (ฟังก์ชันนี้ใช้ร่วมกับ highNoble/
+      // lastBoss ด้วย ห้าม gate ด้วย usesTokenFlow เพราะครอบคลุม Adept ซึ่งไม่ใช่ solo mode)
+      let soloEndlessLevel: { previous: number; current: number } | null = null
+      if (state.tier === 'mastermind') {
+        soloEndlessLevel = await awardSoloEndlessLevel(state.humanPlayerId, finalWinner === state.humanPlayerId)
+      }
+
+      gameTelemetry.endSolo(state,finalWinner)
       io.to(roomId).emit('match_end', {
         roomId,
         finalWinner,
@@ -2102,8 +2379,12 @@ function finalizeGrandFinale(
         sentinelConquered,
         allSentinelsConquered,
         buyInAmount: state.buyInAmount,
-        newTokenBalance,
+        newTokenBalance,economySummary,
+        bestHandThisMatch: state.bestHandThisMatch
+          ? { label: handRankLabel(state.bestHandThisMatch.hand), pile: state.bestHandThisMatch.pile, won: state.bestHandThisMatch.won }
+          : null,
         ...(usesTokenFlow(state.tier) ? { feeRakeBurned: state.feeRake } : {}),
+        ...(soloEndlessLevel ? { soloEndlessLevel } : {}),
       })
       // Server Activity feed: เฉพาะ Mastermind (ห้ามปนกับ lastBoss — Last Boss อยู่แอปแยก The Arena)
       if (state.tier === 'mastermind') {
@@ -2118,7 +2399,7 @@ function finalizeGrandFinale(
       await delay(2000)
       await startRound(io, roomId)
     }
-  }, 10000) // ให้เห็นผล Grand Finale 5s + Round Summary 5s ก่อนต่อ Round ใหม่
+  })()
 }
 
 // ── Helper: เปิดเผยไพ่เฉพาะคนที่ชนะ Pile นั้น (คนอื่นเห็นแค่หลังไพ่ = ไม่ส่งค่าไพ่มา) ──
@@ -2168,14 +2449,14 @@ export function resolveContinue(roomId: string): void {
   if (resolve) { resolve(); continueResolvers.delete(roomId) }
 }
 
-function waitForContinue(roomId: string): Promise<void> {
+function waitForContinue(roomId: string, timeoutMs: number | null = 10000): Promise<void> {
   return new Promise(resolve => {
-    const timer = setTimeout(() => {
+    const timer = timeoutMs === null ? null : setTimeout(() => {
       continueResolvers.delete(roomId)
       resolve()
-    }, 10000)
+    }, timeoutMs)
     continueResolvers.set(roomId, () => {
-      clearTimeout(timer)
+      if (timer) clearTimeout(timer)
       resolve()
     })
   })
@@ -2207,7 +2488,7 @@ interface AFKInfo {
   graceTimer: NodeJS.Timeout
 }
 
-interface MultiMatchState {
+export interface MultiMatchState {
   roomId: string
   tier: 'adept'
   humanPlayerIds: string[]
@@ -2229,6 +2510,10 @@ interface MultiMatchState {
   cardsMap?: Record<string, Card[]>
   seatOrder: MultiSeatInfo[]      // snapshot ตอน startMultiplayerMatch — คงที่ตลอดแมตช์
   afkPlayers: Record<string, AFKInfo>
+  missions?: Mission[]
+  missionsEnabled?: boolean
+  roundScores?: Record<string,TierCPlusScore>
+  missionStreaks?:Record<string,number>
 }
 
 const multiMatchStates = new Map<string, MultiMatchState>()
@@ -2244,8 +2529,9 @@ function isPlayerAFK(state: MultiMatchState, userId: string): boolean {
 function autoSubmitArrangementForAFKPlayer(state: MultiMatchState, userId: string): void {
   if (!state.community || !state.cardsMap || state.submittedArrangements[userId]) return
   const decisionConfig = AI_CONFIGS[state.humanPlayerIds.indexOf(userId) % AI_CONFIGS.length] ?? AI_CONFIGS[0]
+  const searchRole = state.seatOrder.find(seat => seat.userId === userId)?.seat === 2 ? 'boss' : 'support'
   state.submittedArrangements[userId] = aiDecideArrangement(
-    decisionConfig, state.cardsMap[userId], state.community, state.roundNumber, state.tier, 0,
+    decisionConfig, state.cardsMap[userId], state.community, state.roundNumber, state.tier, 0, state.missions, searchRole,
   )
 }
 
@@ -2260,6 +2546,7 @@ export async function startMultiplayerMatch(
   roomId: string,
   seats: Array<{ type: 'human' | 'ai' | 'empty'; userId?: string; name: string; aiConfigId?: string; avatarUrl?: string }>,
   tier: 'adept',
+  missionsEnabled = true,
 ): Promise<StartMultiplayerMatchResult> {
   const humanSeats = seats.filter(s => s.type === 'human' && s.userId)
   const aiSeatsFromRoom = seats.filter(s => s.type === 'ai')
@@ -2269,7 +2556,7 @@ export async function startMultiplayerMatch(
   // + สุ่ม Ghost/Reckless ตอน Human คนที่ 2) แทน index 0,1 แบบเดิมซึ่งได้ Sage+Reckless คงที่ทุกเกม ไม่เคยสุ่มได้ Ghost
   const aiPlayerIds = aiSeatsFromRoom.map((s, i) => s.aiConfigId ?? AI_CONFIGS[i % AI_CONFIGS.length].id)
 
-  const totalRounds = 5
+  const totalRounds = 3
   const buyInAmount = gameConfig.buyIn[tier]
   const tokenBalance: Record<string, number> = {}
   const escrowIds: Record<string, string> = {}
@@ -2319,9 +2606,10 @@ export async function startMultiplayerMatch(
     submittedArrangements: {},
     seatOrder,
     afkPlayers: {},
-    pot: [0, 0, 0], feeRake: 0, autoSortUsed: {},
+    pot: [0, 0, 0], feeRake: 0, autoSortUsed: {}, missionsEnabled,
   }
   multiMatchStates.set(roomId, state)
+  gameTelemetry.startMulti(state)
 
   await startMultiRound(io, roomId)
   return { ok: true }
@@ -2333,6 +2621,7 @@ async function startMultiRound(io: Server, roomId: string): Promise<void> {
 
   state.phase = 'arrangement'
   state.submittedArrangements = {}
+  state.missions=state.missionsEnabled !== false ? generateTierCPlusMissions('adept') : []
 
   const dealt = dealCards()
   const playerIds = [...state.humanPlayerIds, ...state.aiPlayerIds]
@@ -2361,7 +2650,8 @@ async function startMultiRound(io: Server, roomId: string): Promise<void> {
   const aiArrangements: Record<string, PlayerArrangement> = {}
   state.aiPlayerIds.forEach((aiId) => {
     const aiConfig = AI_CONFIGS.find(a => a.id === aiId) ?? AI_CONFIGS[0]
-    aiArrangements[aiId] = aiDecideArrangement(aiConfig, cardsMap[aiId], community, state.roundNumber, state.tier, 0)
+    const searchRole = state.seatOrder.find(seat => seat.userId === aiId)?.seat === 2 ? 'boss' : 'support'
+    aiArrangements[aiId] = aiDecideArrangement(aiConfig, cardsMap[aiId], community, state.roundNumber, state.tier, 0, state.missions, searchRole)
   })
   state.submittedArrangements = { ...aiArrangements }
 
@@ -2393,6 +2683,7 @@ async function startMultiRound(io: Server, roomId: string): Promise<void> {
       feeRake: state.feeRake,
       buyIn: state.buyInAmount,
       autoSortFee: getAutoSortFee(state.tier),
+      missions:state.missions,
     })
   })
 
@@ -2402,89 +2693,11 @@ async function startMultiRound(io: Server, roomId: string): Promise<void> {
   if (allAlreadySubmitted) await resolveMultiShowdown(io, roomId)
 }
 
-/**
- * Auto Sort — หัก fee จาก stack ผู้กดเข้า Fee & Rake แล้ว broadcast ให้ทั้งโต๊ะเห็น Panel ขยับ
- *
- * Server-authoritative เต็มตัว: client ได้แค่ "ขอ" ส่วนการอนุญาต/หักเงิน/กันกดซ้ำ ตัดสินที่นี่ทั้งหมด
- * (ห้ามให้ client เป็นคนบอกว่าตัวเองจ่ายแล้วหรือยัง — `autoSortUsed` เก็บใน state ฝั่ง server)
- *
- * รองรับทั้ง 2 โครงสร้างโต๊ะ: multiplayer (Adept) และ single-player (Mastermind)
- * ค่าธรรมเนียมอ่านจาก config ตาม tier จริงเสมอ ห้าม hardcode
- *
- * มติลุงเยาะ 2026-07-25: ไม่มี free rounds แล้ว เสีย fee ทุกครั้งที่กด — อ่านจาก gameConfig.autoSortFee
- * (getAutoSortFee()) เสมอ ห้าม hardcode ตัวเลขในนี้อีก
- */
+/** Manual Auto Sort is disabled above Initiate. Initiate Round 1 is a local tutorial aid only. */
 export function requestAutoSort(
-  io: Server, roomId: string, userId: string,
+  _io: Server, _roomId: string, _userId: string,
 ): { ok: boolean; reason?: string } {
-  const multi = multiMatchStates.get(roomId)
-  if (multi) {
-    if (multi.phase !== 'arrangement') return { ok: false, reason: 'WRONG_PHASE' }
-    if (!multi.humanPlayerIds.includes(userId)) return { ok: false, reason: 'NOT_IN_MATCH' }
-    if (multi.autoSortUsed[userId]) return { ok: false, reason: 'ALREADY_USED' }
-
-    const fee = getAutoSortFee(multi.tier)
-    const charged = chargeAutoSortFee(multi.tokenBalance, multi.feeRake, userId, fee)
-    if (!charged.ok) return { ok: false, reason: 'INSUFFICIENT_TOKENS' }
-
-    multi.tokenBalance = charged.stacks
-    multi.feeRake = charged.feeRake
-    multi.autoSortUsed[userId] = true
-
-    const playerIds = [...multi.humanPlayerIds, ...multi.aiPlayerIds]
-    checkConservation(
-      multi.tokenBalance, playerIds, multi.pot, multi.feeRake, multi.buyInAmount,
-      `autoSort r${multi.roundNumber}`,
-    )
-
-    io.to(roomId).emit('token_flow_update', {
-      roomId,
-      tokenBalance: multi.tokenBalance,
-      pot: multi.pot,
-      feeRake: multi.feeRake,
-      buyIn: multi.buyInAmount,
-      autoSortBy: userId,
-      charged: charged.charged,
-    })
-    return { ok: true }
-  }
-
-  // ── Single-player (Mastermind) ─────────────────────────────
-  const solo = matchStates.get(roomId)
-  if (!solo) return { ok: false, reason: 'NO_MATCH' }
-
-  const tier = solo.tier
-  if (!usesTokenFlow(tier)) return { ok: false, reason: 'TIER_NOT_SUPPORTED' }
-  // arrangement_2 (จัดไพ่ใหม่หลัง Auction) รับด้วย เผื่อ Tier ที่มี phase นี้ย้ายมาใช้ tokenFlow ทีหลัง
-  // ปัจจุบัน Mastermind ไม่ผ่าน phase นี้ (arrangement_2 เป็นของ High Noble ซึ่ง gate ตัด tier ไปแล้ว)
-  if (solo.phase !== 'arrangement' && solo.phase !== 'arrangement_2') return { ok: false, reason: 'WRONG_PHASE' }
-  if (solo.humanPlayerId !== userId) return { ok: false, reason: 'NOT_IN_MATCH' }
-  if (solo.autoSortUsed) return { ok: false, reason: 'ALREADY_USED' }
-
-  const fee = getAutoSortFee(tier)
-  const charged = chargeAutoSortFee(solo.tokenBalance, solo.feeRake, userId, fee)
-  if (!charged.ok) return { ok: false, reason: 'INSUFFICIENT_TOKENS' }
-
-  solo.tokenBalance = charged.stacks
-  solo.feeRake = charged.feeRake
-  solo.autoSortUsed = true
-
-  const soloPlayerIds = [solo.humanPlayerId, ...AI_CONFIGS.map(a => a.id)]
-  checkConservation(
-    solo.tokenBalance, soloPlayerIds, solo.pot, solo.feeRake, solo.buyInAmount,
-    `autoSort r${solo.roundNumber}`,
-  )
-
-  io.to(roomId).emit('token_flow_update', {
-    roomId,
-    tokenBalance: solo.tokenBalance,
-    pot: solo.pot,
-    feeRake: solo.feeRake,
-    buyIn: solo.buyInAmount,
-    autoSortBy: userId,
-    charged: charged.charged,
-  })
-  return { ok: true }
+  return { ok: false, reason: 'AUTO_SORT_DISABLED' }
 }
 
 export async function submitMultiArrangement(
@@ -2506,6 +2719,97 @@ export async function submitMultiArrangement(
   await resolveMultiShowdown(io, roomId)
 }
 
+// Central Economy Ledger Phase 7 Round 2 — Adept normal match-end only (2 Human + 2 AI settle
+// together, ไม่ใช่ทีละคนแบบ settleEscrow เดิม). เหตุผลที่ต้องรวมเป็น transaction เดียว ไม่ใช่เรียก
+// settleEscrowViaLedger ซ้ำต่อ human: (1) ถ้าแนบ AI net เข้าไปกับ human แต่ละคนแยกกัน AI pool จะโดน
+// เครดิตซ้ำสองรอบ (2) ถ้าตัด AI net ออกให้ human settle คนเดียวโดดๆ เงินที่ human แพ้ไปจะถูกนับเป็น burn
+// (ทำลายทิ้ง) แทนที่จะเข้า NPC pool จริงๆ ที่ควรได้ — settleMatchResult() เป็น type BURN เดี่ยว
+// เดินตาม entries ทั้งหมด ต้องมี human+AI ครบในรอบเดียวถึงจะ attribute ถูกที่
+// AI seat ของ Adept แสดงชื่อ Minion เสมอ (roomRegistry.ts's sageSeat()/secondAdeptBotSeat()) จึงส่ง
+// isMinionDisplay:true ให้ resolveNpcPoolKey เข้า MINION_POOL ไม่ใช่ BOT_POOL
+// Scope: เฉพาะจบแมตช์ปกติ (ทุกคนอยู่ครบ) — AFK-finalize/player_leave กลางเกมยังไม่แตะ (ดู plan)
+// ⚠️ entry ของ human ต้องเป็น finalStack เต็มจำนวน ไม่ใช่ net — เหตุผลเดียวกับ settleEscrowViaLedger
+// (buy-in ถูกหักไปแล้วครั้งหนึ่งจาก begin_match_escrow ที่ไม่แตะ ใช้ net จะเท่ากับหักซ้ำ) burnAmount
+// (state.feeRake) ต้องส่งแยกมาตรงๆ เพราะ entries ไม่ได้ sum เป็น -totalRake อีกต่อไป
+export async function settleAdeptMatchViaLedger(state: MultiMatchState): Promise<Record<string, number | null>> {
+  const humanEntries = state.humanPlayerIds.map(uid => ({
+    account: { accountType: 'PLAYER' as const, accountId: uid },
+    netAmount: state.tokenBalance[uid] ?? state.buyInAmount,
+  }))
+  const npcEntries = state.aiPlayerIds
+    .map(aiId => ({ npcId: aiId, amount: (state.tokenBalance[aiId] ?? state.buyInAmount) - state.buyInAmount }))
+    .filter(n => n.amount !== 0)
+    .map(n => ({
+      account: { accountType: 'NPC_POOL' as const, accountId: resolveNpcPoolKey(n.npcId, { isMinionDisplay: true }) },
+      netAmount: n.amount,
+    }))
+  const entries = [...humanEntries, ...npcEntries].filter(e => e.netAmount !== 0)
+
+  if (entries.length > 0) {
+    const idempotencyKey = `MATCH_SETTLEMENT:${Object.values(state.escrowIds).sort().join(':')}`
+    try {
+      await economyService.settleMatchResult({
+        idempotencyKey,
+        currency: 'TOKEN',
+        entries,
+        burnAmount: state.feeRake,
+        reason: 'MATCH_SETTLEMENT',
+        context: { matchId: state.roomId, tier: 'adept' },
+      })
+    } catch (err) {
+      console.error('[ESCROW]', Date.now(), 'Adept ledger settleMatchResult failed for room', state.roomId, err)
+      const failed: Record<string, number | null> = {}
+      state.humanPlayerIds.forEach(uid => { failed[uid] = null })
+      return failed
+    }
+  }
+
+  const results: Record<string, number | null> = {}
+  await Promise.all(state.humanPlayerIds.map(async uid => {
+    const escrowId = state.escrowIds[uid]
+    const finalStack = state.tokenBalance[uid] ?? state.buyInAmount
+    if (!escrowId) { results[uid] = null; return }
+
+    const { error: updateError } = await supabaseAdmin
+      .from('match_escrow')
+      .update({ status: 'settled', final_stack: finalStack, settled_at: new Date().toISOString() })
+      .eq('escrow_id', escrowId)
+      .eq('status', 'in_match')
+    if (updateError) {
+      console.error('[ESCROW]', Date.now(), 'Adept ledger settle: match_escrow update failed for', escrowId, updateError)
+      results[uid] = null
+      return
+    }
+
+    const { data: userRow, error: readError } = await supabaseAdmin
+      .from('users')
+      .select('token_balance')
+      .eq('user_id', uid)
+      .single()
+    if (readError || !userRow) {
+      console.error('[ESCROW]', Date.now(), 'Adept ledger settle: failed to re-read token_balance for', uid, readError)
+      results[uid] = null
+      return
+    }
+    const newBalance = Number(userRow.token_balance)
+    console.log('[ESCROW]', Date.now(), 'Settled via ledger (Adept)', uid, '| finalStack', finalStack, '| New balance:', newBalance)
+    results[uid] = newBalance
+
+    try {
+      await checkTierUnlock(uid, newBalance)
+    } catch (err) {
+      console.error('[TIER_UNLOCK] Unexpected error calling checkTierUnlock:', err, '| userId:', uid)
+    }
+    try {
+      await getAscendantStatus(uid)
+    } catch (err) {
+      console.error('[CROWN-VAULT] Unexpected error calling getAscendantStatus:', err, '| userId:', uid)
+    }
+  }))
+
+  return results
+}
+
 async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
   const state = multiMatchStates.get(roomId)
   if (!state || !state.community) return
@@ -2518,7 +2822,7 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
   const fouled: Record<string, boolean> = {}
   const foulReasons: Record<string, string> = {}
   playerIds.forEach(pid => {
-    const f = checkFoul(allArrangements[pid], community)
+    const f = checkTierCFoul(allArrangements[pid], community)
     fouled[pid] = f.isFoul
     if (f.isFoul && f.reason) foulReasons[pid] = f.reason
   })
@@ -2530,8 +2834,21 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
   const p2Winner = resolvePile(2, allArrangements, community, fouled)
   const p3Winner = resolvePile(3, allArrangements, community, fouled)
   const hand1W = p1Winner ? evaluateHand([...allArrangements[p1Winner].pile1, ...community.row1]) : null
-  const hand2W = p2Winner ? evaluateHand([...allArrangements[p2Winner].pile2, ...community.row2]) : null
-  const hand3W = p3Winner ? evaluateHand([...allArrangements[p3Winner].pile3.slice(0,3), ...community.row3]) : null
+  const hand2W = p2Winner ? evaluateBestFive([...allArrangements[p2Winner].pile2, ...community.row2]) : null
+  const hand3W = p3Winner ? evaluateBestFive([...allArrangements[p3Winner].pile3, ...community.row3]) : null
+  const humanIds = new Set(state.humanPlayerIds)
+  const authoritativeHands = [
+    { pile: 1, winner: p1Winner, hand: hand1W, cards: p1Winner ? [...allArrangements[p1Winner].pile1, ...community.row1] : [] },
+    { pile: 2, winner: p2Winner, hand: hand2W, cards: p2Winner ? [...allArrangements[p2Winner].pile2, ...community.row2] : [] },
+    { pile: 3, winner: p3Winner, hand: hand3W, cards: p3Winner ? [...allArrangements[p3Winner].pile3, ...community.row3] : [] },
+  ]
+  for (const royal of authoritativeHands) if (royal.winner && humanIds.has(royal.winner) && royal.hand?.rank === 'royal_flush') {
+    broadcastHumanRoyalFlush(io, { eventId: `${roomId}:${state.roundNumber}:g${royal.pile}`, playerId: royal.winner, playerName: state.seatOrder.find(seat => seat.userId === royal.winner)?.displayName ?? royal.winner, cards: royal.cards })
+  }
+  const scoring=tierCPlusScores(playerIds,[p1Winner,p2Winner,p3Winner],allArrangements,community,fouled,state.missions??generateTierCPlusMissions('adept'),'adept')
+  state.missionStreaks??={}
+  state.humanPlayerIds.forEach(id=>{state.missionStreaks![id]=fouled[id]?0:addPlayerMissionStreak(scoring[id],id,allArrangements[id],community,state.missions??[],state.missionStreaks![id])})
+  state.roundScores=scoring
 
   // ── Settle ก่อน emit (ต้องส่ง pot/feeRake/tokenDeltas ไปกับ showdown_result) ──
   // Adept ย้ายมาใช้ tokenFlow engine เต็มตัวแล้ว (Pot bucket จริง — ante หักตั้งแต่ต้นรอบ ห้ามหักซ้ำ)
@@ -2544,6 +2861,7 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
     winners: [p1Winner, p2Winner, p3Winner],
     stakes: gameConfig.tokenPot.tiers.adept,
     rake: gameConfig.tokenPot.rake,
+    pileScoreWeights:([0,1,2] as const).map(k=>Object.fromEntries(playerIds.map(id=>[id,scoring[id].piles[k].finalPileScore]))) as [Record<string,number>,Record<string,number>,Record<string,number>],
   })
   state.tokenBalance = settled.stacks
   state.pot          = settled.pot
@@ -2558,9 +2876,9 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
     roomId,
     foulReasons,
     pileResults: [
-      { pileNumber: 1, arrangements: revealArrangements(allArrangements, 1), winner: p1Winner, winnerHandRank: hand1W ? handRankLabel(hand1W) : '', fouled },
-      { pileNumber: 2, arrangements: revealArrangements(allArrangements, 2), winner: p2Winner, winnerHandRank: hand2W ? handRankLabel(hand2W) : '', fouled },
-      { pileNumber: 3, arrangements: revealArrangements(allArrangements, 3), winner: p3Winner, winnerHandRank: hand3W ? handRankLabel(hand3W) : '', fouled },
+      { pileNumber: 1, arrangements: revealArrangements(allArrangements, 1), winner: p1Winner, winnerHandRank: hand1W ? handRankLabel(hand1W) : '', winnerBestFive: p1Winner ? [...allArrangements[p1Winner].pile1, ...community.row1].map(cardKey) : [], communityCards: community.row1.map(cardKey), fouled },
+      { pileNumber: 2, arrangements: revealArrangements(allArrangements, 2), winner: p2Winner, winnerHandRank: hand2W ? handRankLabel(hand2W) : '', winnerBestFive: hand2W?.bestFive.map(cardKey) ?? [], communityCards: community.row2.map(cardKey), fouled },
+      { pileNumber: 3, arrangements: revealArrangements(allArrangements, 3), winner: p3Winner, winnerHandRank: hand3W ? handRankLabel(hand3W) : '', winnerBestFive: hand3W?.bestFive.map(cardKey) ?? [], communityCards: community.row3.map(cardKey), fouled },
     ],
     tokenDeltas:   deltas,
     tokenBalance:  state.tokenBalance,
@@ -2570,6 +2888,7 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
     jackpotWinner: settled.jackpotWinner,
     jackpotBonus:  settled.jackpotBonus,
     jackpotRake:   settled.jackpotRake,
+    missions:state.missions,scoring,pileTokenRewards:settled.pileRewards,
   })
 
   const result: RoundResult = {
@@ -2590,13 +2909,13 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
 
   if (state.roundNumber >= state.totalRounds) {
     state.phase = 'match_end'
+    const economySummary=applyTierCPlusEndGameRake(state,playerIds)
     const finalWinner = playerIds.reduce((a, b) => (state.tokenBalance[a] ?? 0) > (state.tokenBalance[b] ?? 0) ? a : b)
 
-    // ── Settle Escrow ครั้งเดียวต่อคน (Buy-in Spec §4 — จบแมตช์ปกติ) ──
-    const newTokenBalances: Record<string, number | null> = {}
-    await Promise.all(state.humanPlayerIds.map(async uid => {
-      newTokenBalances[uid] = await settleEscrow(uid, state.escrowIds[uid], state.tokenBalance[uid] ?? state.buyInAmount)
-    }))
+    // ── Settle Escrow (Buy-in Spec §4 — จบแมตช์ปกติ) — Central Economy Ledger Phase 7 Round 2 ──
+    // human ทุกคน + AI ทุกตัว settle รวม transaction เดียว (ดู settleAdeptMatchViaLedger's comment
+    // ว่าทำไมเรียก settleEscrow ทีละคนแบบเดิมไม่ได้อีกต่อไปสำหรับเส้นทางนี้)
+    const newTokenBalances = await settleAdeptMatchViaLedger(state)
     // End-of-Match Stats Recording — แทนที่ recordGameResults() เดิม — Adept ใช้ Simultaneous Showdown
     // เหมือน Initiate, derive best_hands/triple sweep จาก state.results ได้ตรงๆ ต่อ human ทุกคน
     await recordMatchStats(state.humanPlayerIds.map(uid => {
@@ -2611,9 +2930,11 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
     }))
 
     // Match Win History (มติลุงเยาะ 2026-07-26) — finalWinner อาจเป็น AI ก็ได้ (playerIds รวม AI 2 ตัว) เช็ค isHuman ก่อนเสมอ
+    // bestHand ของผู้ชนะคำนวณแบบ unconditional (ไม่ผูกกับ isHuman) เพราะ match_end ด้านล่างต้องใช้ส่งให้
+    // Post-Match Victory Screen เห็นไพ่ชุดที่ดีที่สุดของผู้ชนะเสมอ ไม่ใช่แค่ตอนบันทึก match_wins
     const winnerSeatInfo = state.seatOrder.find(s => s.userId === finalWinner)
+    const { bestHand: winnerBestHand, tripleSweep: winnerTripleSweep } = deriveBestHandFromResults(state.results, finalWinner)
     if (winnerSeatInfo?.isHuman) {
-      const { bestHand: winnerBestHand, tripleSweep: winnerTripleSweep } = deriveBestHandFromResults(state.results, finalWinner)
       await recordMatchWin({
         userId: finalWinner,
         tier: 'adept',
@@ -2631,12 +2952,16 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
     // token_balance ของใคร เพราะ escrow settle ใช้ stack ที่หัก rake ไปแล้วตั้งแต่ settleRound)
     console.log('[TOKENFLOW]', Date.now(), 'Burn Fee & Rake', state.feeRake, '| room', roomId)
 
+    gameTelemetry.endMulti(state,finalWinner)
     io.to(roomId).emit('match_end', {
       roomId, finalWinner, tokenBalance: state.tokenBalance,
-      results: state.results, totalRounds: state.totalRounds,
+      results: state.results, totalRounds: state.totalRounds,economySummary,
       buyInAmount: state.buyInAmount,
       newTokenBalances,
       feeRakeBurned: state.feeRake,
+      bestHandThisMatch: winnerBestHand
+        ? { label: handRankLabel(winnerBestHand.hand), pile: winnerBestHand.pile, won: winnerBestHand.won }
+        : null,
     })
     // Server Activity feed: seatOrder เก็บ displayName ของทุกที่นั่งไว้อยู่แล้ว (snapshot ตอนเริ่มแมตช์)
     io.emit('server_activity', {
@@ -2784,13 +3109,112 @@ export function getMatchState(roomId: string): MatchState | undefined {
   return matchStates.get(roomId)
 }
 
+export function clearSoloDisconnectGrace(roomId: string, userId: string): boolean {
+  const state = matchStates.get(roomId)
+  if (!state || state.humanPlayerId !== userId) return false
+  if (state.disconnectGraceTimer) clearTimeout(state.disconnectGraceTimer)
+  state.disconnectGraceTimer = undefined
+  state.disconnectedAt = undefined
+  return true
+}
+
+export function markSoloPlayerDisconnected(roomId: string, userId: string, graceMs = 60_000): boolean {
+  const state = matchStates.get(roomId)
+  if (!state || state.humanPlayerId !== userId || state.phase === 'match_end') return false
+  if (state.disconnectGraceTimer) clearTimeout(state.disconnectGraceTimer)
+  state.disconnectedAt = Date.now()
+  state.disconnectGraceTimer = setTimeout(() => {
+    const current = matchStates.get(roomId)
+    if (!current || current.disconnectedAt !== state.disconnectedAt) return
+    void settleAndEndSoloMatch(roomId)
+  }, graceMs)
+  state.disconnectGraceTimer.unref?.()
+  return true
+}
+
+export function resendSoloStateToPlayer(io: Server, roomId: string, userId: string): boolean {
+  const state = matchStates.get(roomId)
+  if (!state || state.humanPlayerId !== userId || state.phase === 'match_end') return false
+  const community = (state as any)._community as CommunityCards | undefined
+  const cardsMap = (state as any)._cardsMap as Record<string, Card[]> | undefined
+  if (!community || !cardsMap?.[userId]) return false
+
+  // The arrangement event is deliberately authoritative. Replaying it resets
+  // transient animations while preserving the current server-owned round.
+  io.to(userId).emit('round_start', {
+    roomId,
+    roundNumber: state.roundNumber,
+    totalRounds: state.totalRounds,
+    cards: { [userId]: cardsMap[userId].map(cardKey) },
+    communityCards: {
+      pile1: community.row1.map(cardKey), pile2: community.row2.map(cardKey), pile3: state.tier === 'mastermind' ? [] : community.row3.map(cardKey),
+    },
+    blindAuction: (((state as any)._blindAuction as Card[] | undefined) ?? []).map(cardKey),
+    aiNames: AI_CONFIGS.map(ai => { const effective = getEffectiveAIConfig(state, ai); return { id: ai.id, name: effective.name, emoji: effective.emoji } }),
+    tokenBalance: state.tokenBalance,
+    timer: (gameConfig.arrangementTimer as Record<string, number>)[state.tier] ?? gameConfig.arrangementTimer.initiate,
+    ...(state.roundNumber === 1 ? { buyInAmount: state.buyInAmount } : {}),
+    ...(usesTokenFlow(state.tier) ? { pot: state.pot, feeRake: state.feeRake, buyIn: state.buyInAmount, autoSortFee: getAutoSortFee(state.tier) } : {}),
+    resumed: true,
+  })
+
+  if (state.phase === 'blind_auction') {
+    const bidLevelsMap = gameConfig.blindAuction.bidLevels as unknown as Record<string, number[]>
+    io.to(userId).emit('blind_auction_start', {
+      roomId,
+      bidLevels: bidLevelsMap[state.tier] ?? bidLevelsMap.mastermind,
+      decisionTimeMs: gameConfig.blindAuction.decisionTimeMs,
+      resumed: true,
+    })
+  }
+  if (state.phase === 'arrangement_2' && state.humanArrangement) {
+    const won = (state as any)._auctionWonCards as Record<string, Card> | undefined
+    const hand = [...state.humanArrangement.pile1, ...state.humanArrangement.pile2, ...state.humanArrangement.pile3, ...(won?.[userId] ? [won[userId]] : [])]
+    io.to(userId).emit('arrangement_2_start', {
+      roomId, cards: hand.map(cardKey), auctionCard: won?.[userId] ? cardKey(won[userId]) : null,
+      timer: getPostAuctionArrangementTimer(state.tier), resumed: true,
+    })
+  }
+  if (state.phase === 'discard' && state.humanArrangement) {
+    const won = (state as any)._auctionWonCards as Record<string, Card> | undefined
+    const hand = [...state.humanArrangement.pile3, ...(won?.[userId] ? [won[userId]] : [])]
+    const { keep } = bestThreeFromHand(hand, community.row3)
+    io.to(userId).emit('discard_phase_start', { roomId, hand: hand.map(cardKey), suggestedKeep: keep.map(cardKey), decisionTimeMs: 10_000, resumed: true })
+  }
+  if (state.phase === 'grand_finale') {
+    const gf = (state as any)._grandFinale as GrandFinaleState | undefined
+    if (gf) {
+      io.to(userId).emit('grand_finale_start', {
+        roomId, roundNumber: gf.roundNumber, turnOrder: gf.turnOrder,
+        foulPlayers: gf.foulPlayers, pile3Pot: gf.pile3Pot, communityRevealed:gf.roundNumber===1?1:2,
+        revealedCommunityCard:cardKey(community.row3[gf.roundNumber===1?0:1]), resumed: true,
+        communityCards:community.row3.slice(0,gf.roundNumber===1?1:2).map(cardKey),
+      })
+      const currentPlayerId = gf.turnOrder[gf.currentTurnIdx]
+      if (currentPlayerId) io.to(userId).emit('grand_finale_turn', {
+        roomId, playerId: currentPlayerId, roundNumber: gf.roundNumber,
+        callAmount: (gameConfig.grandFinale.callAmount as Record<string, number | null>)[state.tier] ?? 0,
+        currentBet:gf.betOpened?((gameConfig.grandFinale.callAmount as Record<string, number | null>)[state.tier] ?? 0):0,
+        legalActions:gf.betOpened?['call','fold']:['check','bet'],
+        timeLimitMs: ((gameConfig.grandFinale.betTimer as Record<string, number | null>)[state.tier] ?? 10) * 1000,
+        resumed: true,
+      })
+    }
+  }
+  return true
+}
+
 // Disconnect/กด Lobby กลางเกม — single-player (Initiate/Mastermind, ไม่มี tier อื่นให้ AI-replace เพราะ
 // เป็น 1 Human + AI อยู่แล้ว) — Buy-in Spec §4: settle ทันทีด้วย stack ปัจจุบัน แล้วปิดแมตช์
 export async function settleAndEndSoloMatch(roomId: string): Promise<void> {
   const state = matchStates.get(roomId)
   if (!state) return
+  if (state.disconnectGraceTimer) clearTimeout(state.disconnectGraceTimer)
   if (state.escrowId) {
-    await settleEscrow(state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount)
+    await settleEscrow(
+      state.humanPlayerId, state.escrowId, state.tokenBalance[state.humanPlayerId] ?? state.buyInAmount,
+      buildSoloLedgerArg(state),
+    )
   }
   matchStates.delete(roomId)
 }

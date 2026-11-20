@@ -1,0 +1,41 @@
+import React, { useEffect, useRef } from 'react'
+import { Animated, StyleSheet, Text, View } from 'react-native'
+import { AnimatedCardFlip } from './AnimatedCardFlip'
+import { handRankKey, t } from '../../i18n'
+import { useI18n } from '../../i18n/store'
+
+export type WinnerHandShowcaseProps = { pile: 1 | 2 | 3; centerCards: string[]; winnerCards: string[]; handRanking: string; winnerName?: string; winnerOrigin: 'bottom' | 'top'; isCombo?: boolean; isSuperCombo?: boolean; completionHoldMs?: number; onComplete: () => void }
+
+/** Presentation-only. All cards, winner identity and hand label are canonical inputs. */
+export function WinnerHandShowcase({ pile, centerCards, winnerCards, handRanking, winnerName, winnerOrigin, isCombo, isSuperCombo, completionHoldMs = 3200, onComplete }: WinnerHandShowcaseProps) {
+  const locale = useI18n(state => state.locale)
+  const label = useRef(new Animated.Value(0)).current
+  const rankLeadMs = 200
+  // Parent renders while the authoritative timer is paused. Keep the completion
+  // callback current without restarting this one-shot presentation sequence.
+  const onCompleteRef = useRef(onComplete)
+  onCompleteRef.current = onComplete
+  useEffect(() => {
+    const centerDuration = rankLeadMs + 550 + Math.max(0, centerCards.length - 1) * 130
+    const winnerDuration = 550 + Math.max(0, winnerCards.length - 1) * 130
+    Animated.timing(label, { toValue: 1, duration: 160, useNativeDriver: true }).start()
+    // Keep the assembled canonical hand on the felt long enough to read before
+    // the existing all-player showdown panel takes over.
+    const complete = setTimeout(() => onCompleteRef.current(), centerDuration + winnerDuration + completionHoldMs)
+    return () => { clearTimeout(complete); label.stopAnimation() }
+  }, [centerCards.length, completionHoldMs, winnerCards.length, label])
+  const winnerDelay = rankLeadMs + 550 + Math.max(0, centerCards.length - 1) * 130
+  const originY = winnerOrigin === 'bottom' ? 210 : -210
+  // The finished hand always occupies the G1 showcase slot.  G2/G3 therefore
+  // travel left from their real table slots before the winning cards join them.
+  const centerSourceX = (pile - 1) * 88
+  return <View pointerEvents="none" style={s.overlay} accessibilityLiveRegion="polite">
+    <Animated.View style={[s.rank, winnerOrigin === 'bottom' && s.rankWinner, { opacity: label, transform: [{ translateY: -40 }, { scale: label.interpolate({ inputRange: [0, 1], outputRange: [.92, 1] }) }] }]}>
+      {winnerName ? <Text style={s.winnerName}>G{pile} WINNER · {winnerName}</Text> : null}
+      <Text style={s.rankText}>{t(handRankKey(handRanking), {}, locale)}</Text>
+      {isSuperCombo ? <Text style={s.vfx}>{t('game.superCombo', {}, locale)}</Text> : isCombo ? <Text style={s.vfx}>{t('game.combo', {}, locale)}</Text> : null}
+    </Animated.View>
+    <View style={s.hand}>{centerCards.map((card, index) => <AnimatedCardFlip key={`center-${card}-${index}`} cardKey={card} delay={rankLeadMs + index * 130} startOffset={{x:centerSourceX+(index-.5)*16,y:0}} />)}{centerCards.length&&winnerCards.length?<View style={s.divider}/>:null}{winnerCards.map((card, index) => <AnimatedCardFlip key={`winner-${card}-${index}`} cardKey={card} delay={winnerDelay + index * 130} startOffset={{x:(index-(winnerCards.length-1)/2)*48,y:originY}} />)}</View>
+  </View>
+}
+const s = StyleSheet.create({ overlay: { ...StyleSheet.absoluteFill, zIndex: 70, elevation: 70, alignItems: 'center', justifyContent: 'center' }, hand: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', minHeight: 84, transform:[{translateY:-92}], paddingHorizontal:4 }, divider: { width: 1, height: 48, backgroundColor: 'rgba(255,215,106,.75)', marginHorizontal: 7 }, rank: { position:'absolute', top:'29%', alignItems: 'center', paddingHorizontal:16, paddingVertical:5 }, rankWinner: { borderTopWidth:1, borderBottomWidth:1, borderColor:'rgba(255,215,106,.8)', backgroundColor:'rgba(7,36,20,.72)' }, winnerName: { color:'#FFD76A', fontSize:12, fontWeight:'900', letterSpacing:1.2, marginBottom:3 }, rankText: { color: '#FFFFFF', fontSize: 22, fontWeight: '700', letterSpacing: .5 }, vfx: { color: '#8dffb5', fontSize: 15, fontWeight: '900', marginTop: 6 } })

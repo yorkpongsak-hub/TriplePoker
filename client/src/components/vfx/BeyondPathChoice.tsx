@@ -56,11 +56,11 @@ export default function BeyondPathChoice({ onChoose }: { onChoose: (path: Beyond
 }
 
 const s = StyleSheet.create({
-  overlay: { ...StyleSheet.absoluteFillObject, zIndex: 20000, backgroundColor: '#07110ccc', alignItems: 'center', justifyContent: 'center', paddingVertical: 28 },
+  overlay: { ...StyleSheet.absoluteFill, zIndex: 20000, backgroundColor: '#07110ccc', alignItems: 'center', justifyContent: 'center', paddingVertical: 28 },
   eyebrow: { color: '#8DFFB5', fontSize: 10, fontWeight: '900', letterSpacing: 2 }, title: { color: '#FFD76A', fontSize: 24, fontWeight: '900', letterSpacing: 2, marginTop: 5 },
   intro: { color: '#C8C4B0', maxWidth: 660, paddingHorizontal: 24, textAlign: 'center', fontSize: 11, lineHeight: 17, marginVertical: 14 },
   row: { gap: 12, paddingHorizontal: 18, alignItems: 'stretch' }, card: { width: 210, borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: '#2A4A34', backgroundColor: '#163A25', paddingBottom: 12 },
-  cardSelected: { borderColor: '#FFD76A', borderWidth: 2, transform: [{ translateY: -4 }] }, imageWrap: { height: 190 }, image: { width: '100%', height: '100%' }, veil: { ...StyleSheet.absoluteFillObject, backgroundColor: '#02070477' },
+  cardSelected: { borderColor: '#FFD76A', borderWidth: 2, transform: [{ translateY: -4 }] }, imageWrap: { height: 190 }, image: { width: '100%', height: '100%' }, veil: { ...StyleSheet.absoluteFill, backgroundColor: '#02070477' },
   boss: { position: 'absolute', bottom: 10, alignSelf: 'center', color: '#F5F2E8', fontSize: 17, fontWeight: '900', letterSpacing: 2, textShadowColor: '#000', textShadowRadius: 8 },
   pathTitle: { color: '#FFD76A', fontSize: 12, fontWeight: '900', letterSpacing: 1, textAlign: 'center', marginTop: 10 }, copy: { color: '#C8C4B0', fontSize: 10, lineHeight: 15, paddingHorizontal: 12, marginTop: 6, textAlign: 'center' },
   confirm: { minWidth: 260, height: 44, marginTop: 16, borderRadius: 10, backgroundColor: '#FFD76A', alignItems: 'center', justifyContent: 'center' }, disabled: { opacity: 0.4 }, confirmText: { color: '#0F2418', fontSize: 12, fontWeight: '900', letterSpacing: 1 }, error: { color: '#FF6B6B', fontSize: 10, marginTop: 10 },

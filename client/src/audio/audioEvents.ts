@@ -1,0 +1,86 @@
+export enum AudioCategory {
+  BGM = 'BGM',
+  UI = 'UI',
+  CARD = 'CARD',
+  GAMEPLAY = 'GAMEPLAY',
+  TIMER = 'TIMER',
+  RESULT = 'RESULT',
+  BOSS = 'BOSS',
+  STORY = 'STORY',
+}
+
+export enum AudioPriority {
+  LOW = 1,
+  NORMAL = 2,
+  HIGH = 3,
+  VERY_HIGH = 4,
+  CRITICAL = 5,
+}
+
+export enum AudioEvent {
+  BUTTON_CONFIRM = 'BUTTON_CONFIRM',
+  CALL = 'CALL',
+  ACTION_CONFIRM = 'ACTION_CONFIRM',
+  CARD_SELECT = 'CARD_SELECT',
+  CARD_DESELECT = 'CARD_DESELECT',
+  CARD_MOVE = 'CARD_MOVE',
+  PILE_SELECT = 'PILE_SELECT',
+  RAISE = 'RAISE',
+  AUCTION_BID = 'AUCTION_BID',
+  TOKEN_COMMIT = 'TOKEN_COMMIT',
+  TOKEN_REWARD = 'TOKEN_REWARD',
+  RANK_TICK = 'RANK_TICK',
+  RANK_COMPLETE = 'RANK_COMPLETE',
+  ANTE = 'ANTE',
+  AUTO_SORT = 'AUTO_SORT',
+  CARD_SHUFFLE = 'CARD_SHUFFLE',
+  READY_CONFIRM = 'READY_CONFIRM',
+  ARRANGE_COMPLETE = 'ARRANGE_COMPLETE',
+  AUCTION_ACCEPTED = 'AUCTION_ACCEPTED',
+  ACTION_COMPLETED = 'ACTION_COMPLETED',
+  ARRANGE_VALID = 'ARRANGE_VALID',
+  VALIDATION_SUCCESS = 'VALIDATION_SUCCESS',
+  CARD_REVEAL = 'CARD_REVEAL',
+  /** Tier D: player wins an individual revealed pile. */
+  PILE_WIN = 'PILE_WIN',
+  MEMORY_PAGE_CHANGE = 'MEMORY_PAGE_CHANGE',
+  PLAYER_TURN = 'PLAYER_TURN',
+  TIMER_WARNING = 'TIMER_WARNING',
+  TIMER_CRITICAL = 'TIMER_CRITICAL',
+  TIMER_PRESSURE = 'TIMER_PRESSURE',
+  TIMER_LONG = 'TIMER_LONG',
+  MATCH_WIN = 'MATCH_WIN',
+  TRIPLE_SWEEP_CELEBRATION = 'TRIPLE_SWEEP_CELEBRATION',
+  /** Short impact synchronized with the lightning peak in the local Triple Sweep VFX. */
+  TRIPLE_SWEEP_THUNDER = 'TRIPLE_SWEEP_THUNDER',
+  TIER_UNLOCK = 'TIER_UNLOCK',
+  BOSS_REVEAL = 'BOSS_REVEAL',
+  MONARCH_REVEAL = 'MONARCH_REVEAL',
+  SOREN_REVEAL = 'SOREN_REVEAL',
+  CAELUM_REVEAL = 'CAELUM_REVEAL',
+  BOSS_AMBIENCE = 'BOSS_AMBIENCE',
+  MEMORY_FRAGMENT = 'MEMORY_FRAGMENT',
+  STORY_SAD = 'STORY_SAD',
+  STORY_VICTORY = 'STORY_VICTORY',
+  PERFECT_VICTORY_BGM = 'PERFECT_VICTORY_BGM',
+  PLAY_STREAK_BGM = 'PLAY_STREAK_BGM',
+  LOBBY_BGM = 'LOBBY_BGM',
+  WAITING_BGM = 'WAITING_BGM',
+  PROFILE_BGM = 'PROFILE_BGM',
+  ELITES_BGM = 'ELITES_BGM',
+  SHOP_BGM = 'SHOP_BGM',
+  RARE_REACTION = 'RARE_REACTION',
+  ROYAL_BRAVO = 'ROYAL_BRAVO',
+  GAME_OVER_TRY_AGAIN = 'GAME_OVER_TRY_AGAIN',
+}
+
+export type AudioPlayContext = {
+  /** Stable server identity, e.g. matchId:event:roundId:sequence. */
+  dedupeKey?: string
+  /** PLAYER_TURN and private timers are ignored unless this is true. */
+  isLocalPlayer?: boolean
+  /** Private notifications are never emitted from a spectator client. */
+  spectator?: boolean
+  /** Called after a one-shot finishes (or its native completion fallback expires). */
+  onComplete?: () => void
+}

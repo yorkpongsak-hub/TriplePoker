@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react'
 import { Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native'
-import { useRouter } from 'expo-router'
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated'
 import { ArenaClientIntent, ArenaClientSnapshot } from '../../../src/game/grandmaster/arenaClientTypes'
 import { CARD_BACK_IMG, CARD_IMG } from '../../../src/components/game/cardAssets'
+import { playAuctionBidTick } from '../../../src/services/gameSfxService'
+import { leaveAfterClassicSettlement } from '../../../src/ads/postSettlementExit'
+import { useAuthStore } from '../../../src/store/authStore'
 
 interface Props {
   snapshot: ArenaClientSnapshot
@@ -153,7 +155,7 @@ function DualBossLoreBubble({ lore }: { lore: NonNullable<ArenaClientSnapshot['d
 }
 
 export default function ArenaOverlays({ snapshot, onIntent, selectedGFCardIds = [], requiredGFSelection = 0 }: Props) {
-  const router = useRouter()
+  const accessToken = useAuthStore(state => state.session?.access_token)
   const local = snapshot.seats.find(seat => seat.isLocal)
   const connection = local?.connection ?? 'CONNECTED'
   const reconnecting = connection !== 'CONNECTED'
@@ -203,6 +205,7 @@ export default function ArenaOverlays({ snapshot, onIntent, selectedGFCardIds = 
                     if (selectedBid !== null || snapshot.auction?.locked) return
                     setSelectedBlindCard(cardIndex)
                     setSelectedBid(amount)
+                    playAuctionBidTick()
                     onIntent({ type: 'AUCTION_BID', round: 'BLIND', cardIndex, amountCrest: amount as 0 | 3 | 6 | 9 | 12 })
                   }}
                 />)}
@@ -220,6 +223,7 @@ export default function ArenaOverlays({ snapshot, onIntent, selectedGFCardIds = 
                 onPress={() => {
                   if (selectedBid !== null || snapshot.auction?.locked) return
                   setSelectedBid(amount)
+                  playAuctionBidTick()
                   onIntent({ type: 'AUCTION_BID', round: 'FACE_UP', cardIndex: 0, amountCrest: amount as 0 | 3 | 6 | 9 | 12 })
                 }}
               />
@@ -281,7 +285,7 @@ export default function ArenaOverlays({ snapshot, onIntent, selectedGFCardIds = 
               <Text style={styles.netValue}>+{snapshot.result?.psGained}</Text>
             </View>
             <Pressable
-              onPress={() => router.replace('/(home)/lobby')}
+              onPress={() => void leaveAfterClassicSettlement({ accessToken, tier: 'S', outcome: snapshot.result && snapshot.result.netCrest >= 0 ? 'WIN' : 'LOSS', exitReason: 'BACK_TO_LOBBY' })}
               hitSlop={8}
               style={({ pressed }) => [styles.lobbyButton, pressed && styles.pressed]}
             >

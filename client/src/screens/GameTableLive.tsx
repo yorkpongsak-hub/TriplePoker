@@ -10,7 +10,6 @@ import {
   Text, TouchableOpacity, View,
 } from 'react-native'
 import { io, Socket } from 'socket.io-client'
-import { autoSort, CommunityCards } from '../utils/autoSort'
 
 // ── Assets
 const cardBackImg = require('../../assets/images/card_back_default.png')
@@ -105,7 +104,6 @@ const GameTableLive: React.FC = () => {
   // ไพ่ผู้เล่น
   const [piles, setPiles]       = useState<[CardData[], CardData[], CardData[]]>([[], [], []])
   const [selected, setSelected] = useState<{ pi: number; ci: number } | null>(null)
-  const [sortDone, setSortDone] = useState(false)
   const [isReady, setIsReady]   = useState(false)
 
   // Community + Blind
@@ -147,7 +145,6 @@ const GameTableLive: React.FC = () => {
       setPhase('arrangement')
       setRoundNumber(data.roundNumber)
       setIsReady(false)
-      setSortDone(false)
       setSelected(null)
       setRevealedPiles({})
       setPileWinners({})
@@ -236,22 +233,7 @@ const GameTableLive: React.FC = () => {
     np[pi][ci] = tmp
     setPiles(np)
     setSelected(null)
-    setSortDone(false)
   }, [isReady, phase, selected, piles])
-
-  // ── Auto Sort
-  const handleAutoSort = () => {
-    const comm: CommunityCards = {
-      pile1: [community.pile1[0], community.pile1[1]] as [string, string],
-      pile2: [community.pile2[0], community.pile2[1]] as [string, string],
-      pile3: [community.pile3[0], community.pile3[1]] as [string, string],
-    }
-    const all = [...piles[0], ...piles[1], ...piles[2]]
-    const sorted = autoSort(all, comm)
-    setPiles(sorted)
-    setSelected(null)
-    setSortDone(true)
-  }
 
   // ── Ready
   const handleReady = () => {
@@ -490,13 +472,6 @@ const GameTableLive: React.FC = () => {
       {/* ── ACTION BAR ── */}
       {phase === 'arrangement' && (
         <View style={s.actionBar}>
-          <TouchableOpacity
-            style={[s.btnSort, sortDone && s.btnSortDone]}
-            disabled={sortDone}
-            onPress={handleAutoSort}
-          >
-            <Text style={s.btnSortTxt}>{sortDone ? 'Sorted ✓' : 'Auto Sort'}</Text>
-          </TouchableOpacity>
           <TouchableOpacity
             style={[s.btnReady, isReady && s.btnReadyDone]}
             onPress={handleReady}

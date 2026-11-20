@@ -11,6 +11,7 @@ import { useTimer } from '../../hooks/useTimer';
 import { emitDiscard } from '../../services/socketService';
 import { COLORS, VALUE_LABELS, SUIT_SYMBOLS, SUIT_COLORS } from '../../constants/gameConstants';
 import type { Card } from '../../types/game.types';
+import { playCardArrange1, playReadyButton } from '../../services/gameSfxService';
 
 interface DiscardPhaseProps {
   pile3Cards: Card[];       // ไพ่ 5 ใบ
@@ -38,6 +39,7 @@ export default function DiscardPhase({
 
   const toggleCard = (card: Card) => {
     if (submitted) return;
+    playCardArrange1();
     setSelected(prev => {
       const next = new Set(prev);
       if (next.has(card.id)) {
@@ -63,6 +65,7 @@ export default function DiscardPhase({
     if (submitted) return;
     const kept = keptCards ?? pile3Cards.filter(c => selected.has(c.id));
     if (kept.length !== 3) return;
+    playReadyButton();
     const discarded = pile3Cards.filter(c => !kept.find(k => k.id === c.id));
     setSubmitted(true);
     emitDiscard({ keptCards: kept, discardedCards: discarded });

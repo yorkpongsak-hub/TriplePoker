@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, BackHandler, Image, ImageBackground, Platform, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View, ViewStyle } from 'react-native'
+import { Alert, Image, ImageBackground, Platform, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View, ViewStyle } from 'react-native'
 import Animated, { Easing, SharedValue, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated'
 import { router } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { io, Socket } from 'socket.io-client'
+import { requestGameResume } from '../../../src/services/gameResumeProtocol'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useAuthStore } from '../../../src/store/authStore'
 import Card, { Suit, Value } from '../../../src/components/game/Card'
@@ -12,10 +13,14 @@ import VipPlusAuctionOverlay from '../../../src/components/game/VipPlusAuctionOv
 import MatchEndOverlay from '../../../src/components/game/MatchEndOverlay'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
 import { useTableSkins } from '../../../src/hooks/useTableSkins'
+import { useConfirmTableExit } from '../../../src/hooks/useConfirmTableExit'
 import { TABLE_SKINS } from '../../../src/config/tableSkins'
 import BossVictoryVFX from '../../../src/components/vfx/BossVictoryVFX'
+import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
+import NegativeStackGameOverVFX from '../../../src/components/vfx/NegativeStackGameOverVFX'
 import FlyingCoins, { FlyingCoinsHandle, Point } from '../../../src/components/game/FlyingCoins'
 import { AvatarDisplay, PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
+import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 const TABLE_IMAGE = require('../../../assets/images/table_default.png')
@@ -65,7 +70,7 @@ interface WaitingTable {
   wager: Wager
   // Batch 1 (VIP-05 fix, C4/C5) — host โอนได้แล้ว ไม่ใช่ H1 เสมอไปอีกต่อไป
   hostSeat: Seat
-  seats: Array<{ seat: Seat; displayName: string; avatarUrl?: string | null; confirmed: boolean; connected: boolean }>
+  seats: Array<{ seat: Seat; displayName: string; avatarUrl?: string | null; isVip?: boolean; confirmed: boolean; connected: boolean }>
   requiredPlayers: 5
   minimumPlayers: 3
   canHostStart: boolean
@@ -80,7 +85,7 @@ interface GameView {
   phase: 'INITIAL_ARRANGE' | 'BETTING' | 'BLIND_AUCTION' | 'REARRANGE'
   deadlineAt: number
   center: { g1: string[]; g2: string[]; g3: string[] }
-  seats: Array<{ seat: Seat; displayName: string; avatarUrl?: string | null; status?: 'CONNECTED' | 'DISCONNECTED' | 'FORFEITED' | 'BLANK'; isBlank?: boolean }>
+  seats: Array<{ seat: Seat; displayName: string; avatarUrl?: string | null; isVip?: boolean; status?: 'CONNECTED' | 'DISCONNECTED' | 'FORFEITED' | 'BLANK'; isBlank?: boolean }>
   wager: Wager | null
   hand: string[]
   arrangement: Arrangement
@@ -122,7 +127,8 @@ function groupPileSize(group: number, ruleset: CenterRuleset): number {
 // Batch 2 (VIP-07/08) — ขยายขนาดไพ่กองกลาง + ไพ่คู่ต่อสู้ตอน BETTING ตามตัวเลขที่ลุงเยาะคำนวณมาแล้ว
 const CENTER_CW = 49, CENTER_CH = 71
 const OPP_CW = 44, OPP_CH = 64
-const OWN_BET_CW = 50, OWN_BET_CH = 72
+// Match the 20% larger P1 hand presentation used by the standard tables.
+const OWN_BET_CW = 60, OWN_BET_CH = 86
 
 // Batch 4 (VIP-09) — พิกัดโดยประมาณสำหรับ Coin Flying VFX เทียบจากจุดกึ่งกลางจอ (x:0,y:0) ตาม pattern
 // เดียวกับ SEAT_TARGETS ของ Mastermind (mastermind/index.tsx) ⚠️ เป็นค่าประมาณจาก layout (remoteSeatPosition
@@ -200,7 +206,12 @@ export default function VipPlusTableScreen() {
   const [showPrivateAuctionCard, setShowPrivateAuctionCard] = useState(false)
   const [matchResult, setMatchResult] = useState<MatchResult | null>(null)
   const [showVictoryVfx, setShowVictoryVfx] = useState(false)
+  const [royalFlushPlayer, setRoyalFlushPlayer] = useState<string | null>(null)
+  const [negativeStackGameOver, setNegativeStackGameOver] = useState(false)
   const [hostToast, setHostToast] = useState(false)
+  useEffect(() => {
+    if (!negativeStackGameOver && selfSeat && typeof game.balances[selfSeat] === 'number' && game.balances[selfSeat]! < 0) setNegativeStackGameOver(true)
+  }, [game.balances, selfSeat, negativeStackGameOver])
   // ใบที่ P1 เลือกไว้ว่าจะหงายตอนกด CALL รอบเดิมพันปัจจุบัน — reset ทุกครั้งที่ถึงตาใหม่/CALL สำเร็จ
   // เป็น array เพราะ G3 รอบแรก (groupRound 1) ต้องหงายมากกว่า 1 ใบ (ดู requiredRevealCount)
   const [bettingRevealKeys, setBettingRevealKeys] = useState<string[]>([])
@@ -224,14 +235,20 @@ export default function VipPlusTableScreen() {
       Alert.alert('VIP Pro Required', 'This table is available to active VIP Pro members only.', [{ text: 'Back', onPress: () => router.back() }])
       return
     }
-    const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: true })
+    const socket = io(SERVER_URL, { auth: { accessToken }, transports: ['websocket'], reconnection: true })
     socketRef.current = socket
     socket.on('connect', async () => {
       socket.emit('vip_plus:list_tables', authPayload())
       const storedTableId = activeTableIdRef.current ?? await AsyncStorage.getItem(ACTIVE_MATCH_KEY)
       if (storedTableId) {
         activeTableIdRef.current = storedTableId
-        socket.emit('vip_plus:resume_match', { ...authPayload(), tableId: storedTableId })
+        const auth = authPayload()
+        requestGameResume(socket, {
+          roomId: storedTableId,
+          userId: auth.userId,
+          accessToken: auth.accessToken,
+          matchType: 'VIP_PLUS',
+        })
       }
     })
     socket.on('vip_plus:tables', (next: WaitingTable[]) => setTables(next))
@@ -328,7 +345,7 @@ export default function VipPlusTableScreen() {
     })
     socket.on('vip_plus:group_settled', (data: {
       gameNumber: number; group: number; winnerSeat: Seat | null; winnerHandName: string | null
-      winningCards: string[]; highlightedCards?: string[]; payout: number; tokenBalance: Partial<Record<Seat, number>>
+      winnerDisplayName?: string | null; winningCards: string[]; highlightedCards?: string[]; payout: number; tokenBalance: Partial<Record<Seat, number>>
     }) => {
       setGame(prev => ({ ...prev, balances: data.tokenBalance }))
       // Feedback ลุงเยาะ (เทสมือถือรอบ 1, ปรับรอบ 3: 10วิ->6วิ) — server หน่วงจริง resultDisplayMs (6 วิ)
@@ -490,21 +507,23 @@ export default function VipPlusTableScreen() {
     setTable(null); setSelfSeat(null); setScreen('BROWSER')
   }
 
-  // Batch 1 (VIP-05 fix, C1) — hardware back / gesture back ระหว่าง Waiting Chamber ต้องปล่อยที่นั่งเสมอ
-  // (BROWSER ยังไม่มีที่นั่งให้ปล่อย ปล่อยให้ default back ทำงานตามปกติ, GAME อยู่นอกขอบเขต Batch นี้
-  // ต้องใช้ FORFEIT เท่านั้นตามระบบเดิม)
-  useEffect(() => {
-    if (Platform.OS !== 'android') return
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (screen === 'WAITING' && table) {
+  // Hardware Back is protected only after the player has taken a seat.
+  // Waiting releases the seat; an active game uses the existing forfeit protocol.
+  useConfirmTableExit({
+    enabled: screen !== 'BROWSER' && !!table,
+    onConfirm: () => {
+      if (!table) return
+      if (screen === 'WAITING') {
         leave()
-        router.back()
-        return true
+      } else {
+        hasLeftRef.current = true
+        socketRef.current?.emit('vip_plus:forfeit', { ...authPayload(), tableId: table.tableId })
+        activeTableIdRef.current = null
+        AsyncStorage.removeItem(ACTIVE_MATCH_KEY).catch(() => {})
       }
-      return false
-    })
-    return () => subscription.remove()
-  }, [screen, table])
+      router.replace('/(home)/lobby' as any)
+    },
+  })
 
   const forfeit = () => {
     if (!table) return
@@ -631,7 +650,7 @@ export default function VipPlusTableScreen() {
       <View style={s.waitingSeats}>
         {SEATS.map(seat => {
           const player = table.seats.find(candidate => candidate.seat === seat)
-          return <SeatTile key={seat} seat={seat} name={player?.displayName} avatarUrl={player?.avatarUrl} confirmed={player?.confirmed} isSelf={seat === selfSeat} connected={player?.connected} />
+          return <SeatTile key={seat} seat={seat} name={player?.displayName} avatarUrl={player?.avatarUrl} isVip={player?.isVip} confirmed={player?.confirmed} isSelf={seat === selfSeat} connected={player?.connected} />
         })}
       </View>
       <View style={s.terms}>
@@ -650,6 +669,7 @@ export default function VipPlusTableScreen() {
   const isMyTurn = game.actingSeat === selfSeat
   return (
     <ImageBackground source={selectedTableImage} style={s.gameRoot} resizeMode="cover">
+      <GameServerStatusLight socketRef={socketRef} />
       <GameTopBar
         tierName="VIP PLUS" tierStars={4} round={game.gameNumber} totalRounds={3}
         isWeb={Platform.OS === 'web'} insetsTop={insets.top} opacity={1}
@@ -741,7 +761,7 @@ export default function VipPlusTableScreen() {
           const hiddenCount = Math.max(0, groupPileSize(game.group, game.centerRuleset) - revealedForGroup.length)
           return (
             <View key={seat} style={[s.remoteSeat, remoteSeatPosition(index, game.phase === 'BETTING')]}>
-              <SeatBubble seat={seat} name={game.seats.find(p => p.seat === seat)?.displayName} avatarUrl={game.seats.find(p => p.seat === seat)?.avatarUrl} status={game.seats.find(p => p.seat === seat)?.status} isBlank={game.seats.find(p => p.seat === seat)?.isBlank} active={game.actingSeat === seat} folded={game.folded[seat] === game.group} balance={game.balances[seat]} centerRuleset={game.centerRuleset} />
+              <SeatBubble seat={seat} name={game.seats.find(p => p.seat === seat)?.displayName} avatarUrl={game.seats.find(p => p.seat === seat)?.avatarUrl} isVip={game.seats.find(p => p.seat === seat)?.isVip} status={game.seats.find(p => p.seat === seat)?.status} isBlank={game.seats.find(p => p.seat === seat)?.isBlank} active={game.actingSeat === seat} folded={game.folded[seat] === game.group} balance={game.balances[seat]} centerRuleset={game.centerRuleset} />
               {game.phase === 'BETTING' && !game.seats.find(p => p.seat === seat)?.isBlank && (
                 // Feedback ลุงเยาะ (เทสมือถือ) — ที่นั่ง P4 (บนขวา, remoteSeatPosition index 1) ไพ่หงาย
                 // ขยับขวาอีกครึ่งความกว้างไพ่ (OPP_CW/2) กันไปทับกับ container ไพ่กองกลาง
@@ -773,7 +793,7 @@ export default function VipPlusTableScreen() {
         </View>
       </View>
       <View style={s.localZone}>
-        <SeatBubble seat={selfSeat ?? 'H1'} name="YOU" avatarUrl={selfSeat ? game.seats.find(p => p.seat === selfSeat)?.avatarUrl : undefined} status={selfSeat ? game.seats.find(p => p.seat === selfSeat)?.status : undefined} active={isMyTurn} folded={selfSeat ? game.folded[selfSeat] === game.group : false} balance={selfSeat ? game.balances[selfSeat] : undefined} centerRuleset={game.centerRuleset} />
+        <SeatBubble seat={selfSeat ?? 'H1'} name="YOU" avatarUrl={selfSeat ? game.seats.find(p => p.seat === selfSeat)?.avatarUrl : undefined} isVip={selfSeat ? game.seats.find(p => p.seat === selfSeat)?.isVip : undefined} status={selfSeat ? game.seats.find(p => p.seat === selfSeat)?.status : undefined} active={isMyTurn} folded={selfSeat ? game.folded[selfSeat] === game.group : false} balance={selfSeat ? game.balances[selfSeat] : undefined} centerRuleset={game.centerRuleset} />
         {(game.phase === 'INITIAL_ARRANGE' || game.phase === 'REARRANGE') && (
           <>
             <ArrangementEditor hand={game.hand} arrangement={game.arrangement} disabled={game.locked} centerRuleset={game.centerRuleset} revealedBoardCount={game.center.g3.length} onChange={arrangement => setGame(prev => ({ ...prev, arrangement }))} />
@@ -860,6 +880,15 @@ export default function VipPlusTableScreen() {
           <BossVictoryVFX tier="sentinel" titleOverride="MATCH VICTORY" onFinish={() => setShowVictoryVfx(false)} />
         </View>
       )}
+      {royalFlushPlayer && <RoyalStraightFlushVFX playerName={royalFlushPlayer} onClose={() => setRoyalFlushPlayer(null)} />}
+      {negativeStackGameOver && <NegativeStackGameOverVFX eventKey={`${activeTableIdRef.current ?? 'vip-plus'}:${game.gameNumber}`} onFinish={() => {
+        const tableId = activeTableIdRef.current
+        hasLeftRef.current = true
+        if (tableId) socketRef.current?.emit('vip_plus:forfeit', { ...authPayload(), tableId })
+        activeTableIdRef.current = null
+        AsyncStorage.removeItem(ACTIVE_MATCH_KEY).catch(() => {})
+        router.replace('/(home)/lobby' as any)
+      }} />}
     </ImageBackground>
   )
 }
@@ -869,7 +898,7 @@ function WagerOption({ option, disabled, onPress }: { option: OptionId; disabled
   return <TouchableOpacity style={[s.option, disabled && s.disabled]} disabled={disabled} onPress={onPress}><Text style={s.optionTier}>{label}</Text><Text style={s.optionMeta}>Lower-tier wager</Text><Text style={s.optionAction}>SELECT</Text></TouchableOpacity>
 }
 
-function SeatTile({ seat, name, avatarUrl, confirmed, isSelf, connected }: { seat: Seat; name?: string; avatarUrl?: string | null; confirmed?: boolean; isSelf?: boolean; connected?: boolean }) {
+function SeatTile({ seat, name, avatarUrl, isVip, confirmed, isSelf, connected }: { seat: Seat; name?: string; avatarUrl?: string | null; isVip?: boolean; confirmed?: boolean; isSelf?: boolean; connected?: boolean }) {
   // Batch 1 (VIP-05 fix, C2/C3) — offline เฉพาะที่นั่งมีคนแล้วแต่หลุดสัญญาณ ยังไม่หมด grace
   const offline = !!name && connected === false
   // Batch 2 (VIP-04) — จุดวิ่งเฉพาะที่นั่งว่างจริงๆ (ไม่มีชื่อเลย) ที่นั่ง NOT CONFIRMED/OFFLINE คงเดิม
@@ -877,7 +906,7 @@ function SeatTile({ seat, name, avatarUrl, confirmed, isSelf, connected }: { sea
   return (
     <View style={[s.seatTile, isSelf && s.selfSeat, s.seatTileRow]}>
       {/* มติลุงเยาะ — Avatar หน้าชื่อผู้เล่นทุกที่นั่ง (ที่นั่งว่างไม่โชว์ ไม่มีใครให้แสดง) */}
-      {!isEmpty && <VipPlusPlayerAvatar value={avatarUrl} size={36} />}
+      {!isEmpty && <VipPlusPlayerAvatar value={avatarUrl} size={36} isVip={isVip} />}
       <View style={s.seatTileInfo}>
         <Text style={s.seatId}>{seat}{isSelf ? ' / YOU' : ''}</Text>
         <Text style={s.seatName}>{name ?? 'OPEN SEAT'}</Text>
@@ -893,16 +922,17 @@ function SeatTile({ seat, name, avatarUrl, confirmed, isSelf, connected }: { sea
 // มติลุงเยาะ — Avatar หน้าชื่อผู้เล่นพร้อมกรอบ (mirror pattern เดียวกับ monarch/index.tsx's
 // MonarchPlayerAvatar เป๊ะ) value = preset key (resolve ผ่าน PRESET_AVATARS + AvatarDisplay ที่มีกรอบ
 // ในตัวอยู่แล้ว) หรือ http(s)/data URL จริง หรือ emoji ดิบ — null/undefined fallback เป็นอิโมจิ default
-function VipPlusPlayerAvatar({ value, size }: { value?: string | null; size: number }) {
+function VipPlusPlayerAvatar({ value, size, isVip = false }: { value?: string | null; size: number; isVip?: boolean }) {
   const preset = value ? PRESET_AVATARS.find(item => item.key === value) : undefined
   if (preset) {
-    return <AvatarDisplay config={{ type: 'preset', presetKey: preset.key, frameKey: 'default' }} size={size} showFrame />
+    return <AvatarDisplay config={{ type: 'preset', presetKey: preset.key, frameKey: isVip ? 'gold' : 'default' }} size={size} showFrame={isVip} />
   }
+  const borderColor = isVip ? '#c9a84c' : '#2A4A34'
   if (value && /^(https?:|data:)/i.test(value)) {
-    return <Image source={{ uri: value }} style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 1.5, borderColor: '#c9a84c' }} resizeMode="cover" />
+    return <Image source={{ uri: value }} style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 1.5, borderColor }} resizeMode="cover" />
   }
   return (
-    <View style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 1.5, borderColor: '#c9a84c', backgroundColor: '#132019', alignItems: 'center', justifyContent: 'center' }}>
+    <View style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 1.5, borderColor, backgroundColor: '#132019', alignItems: 'center', justifyContent: 'center' }}>
       <Text style={{ fontSize: Math.round(size * 0.52) }}>{value || '🧑'}</Text>
     </View>
   )
@@ -957,13 +987,13 @@ function FloatingDeltaText({ amount, point }: { amount: number; point: Point }) 
   )
 }
 
-function SeatBubble({ seat, name, avatarUrl, status, isBlank, active, folded, balance, centerRuleset }: { seat: Seat; name?: string; avatarUrl?: string | null; status?: 'CONNECTED' | 'DISCONNECTED' | 'FORFEITED' | 'BLANK'; isBlank?: boolean; active: boolean; folded: boolean; balance?: number; centerRuleset: CenterRuleset }) {
+function SeatBubble({ seat, name, avatarUrl, isVip, status, isBlank, active, folded, balance, centerRuleset }: { seat: Seat; name?: string; avatarUrl?: string | null; isVip?: boolean; status?: 'CONNECTED' | 'DISCONNECTED' | 'FORFEITED' | 'BLANK'; isBlank?: boolean; active: boolean; folded: boolean; balance?: number; centerRuleset: CenterRuleset }) {
   const blank = isBlank || status === 'BLANK'
   return <View style={[s.bubble, active && s.bubbleActive, (folded || status === 'FORFEITED' || blank) && s.bubbleFolded]}>
     <Text style={s.bubbleSeat}>{seat}</Text>
     {/* มติลุงเยาะ — Avatar หน้าชื่อผู้เล่นในเกม (ที่นั่ง Blank ไม่มีคนจริง ไม่ต้องโชว์) */}
     <View style={s.bubbleNameRow}>
-      {!blank && <VipPlusPlayerAvatar value={avatarUrl} size={16} />}
+      {!blank && <VipPlusPlayerAvatar value={avatarUrl} size={16} isVip={isVip} />}
       <Text style={s.bubbleName} numberOfLines={1}>{blank ? 'BLANK' : name ?? 'PLAYER'}</Text>
     </View>
     {blank ? <BlankHand centerRuleset={centerRuleset} /> : balance !== undefined && <Text style={s.bubbleStack}>{balance.toLocaleString('en-US')} T</Text>}
@@ -1059,8 +1089,8 @@ function ArrangementEditor({ hand, arrangement, disabled, centerRuleset, reveale
     setSelected(null)
     onChange(next)
   }
-  const cardWidth = 56
-  const cardHeight = 80
+  const cardWidth = 67
+  const cardHeight = 96
   // Feedback ลุงเยาะ — ไพ่ในกองเดียวกันซ้อนเกยกัน ~20% ของความกว้างไพ่ (step = 80% ของ cardWidth) ส่วนกอง
   // G1 ต้องห่างจากกอง G2 เพิ่มอีกครึ่งใบ (groupGapExtra = cardWidth/2) ที่จุด groupSplitAt ในแถวบนเท่านั้น
   const normalStep = cardWidth * 0.8

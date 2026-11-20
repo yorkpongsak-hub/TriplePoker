@@ -10,6 +10,7 @@
 // ============================================================
 
 import { gameConfig } from '../config/gameConfig'
+import { economyService } from '../economy/economyService'
 import { FOUR_GODS, AIConfig } from './aiEngine'
 import { supabaseAdmin } from '../config/supabase'
 
@@ -115,7 +116,7 @@ export interface MonarchRelicResult {
 // พลาด (ห้าม fallback เป็น [] แล้วเขียนทับ — จะทำ relic ที่สะสมไว้หายหมด) เหมือน conquered_sentinels
 // ที่ gameLoop.ts:2044-2062 เป๊ะ — ต่างจาก recordMonarchVictory/recordMonarchEncounter ด้านบนที่เป็น
 // counter เดี่ยวๆ ไม่มีความเสี่ยงเดียวกัน (fallback 0 ไม่ทำข้อมูลหาย)
-export async function rollAndRecordMonarchRelic(userId: string): Promise<MonarchRelicResult | null> {
+export async function rollAndRecordMonarchRelic(userId: string, matchId: string): Promise<MonarchRelicResult | null> {
   try {
     const { data, error } = await supabaseAdmin
       .from('users')
@@ -132,24 +133,12 @@ export async function rollAndRecordMonarchRelic(userId: string): Promise<Monarch
     // token_balance (ไม่ append relic ใหม่ — เป็น recurring bonus ทุกครั้งที่ชนะหลังจากนี้ ไม่ใช่ one-time)
     if (current.length >= MONARCH_RELICS.length) {
       const bonus = gameConfig.monarchConfig.relicCompleteBonus
-      const { data: balData, error: balErr } = await supabaseAdmin
-        .from('users')
-        .select('token_balance')
-        .eq('user_id', userId)
-        .single()
-      if (balErr) {
-        console.error('[MONARCH_RELIC] Balance read failed, skip token bonus:', balErr, '| userId:', userId)
-        throw new Error('relic_balance_read_failed')
-      }
-      const newBalance = (balData?.token_balance ?? 0) + bonus
-      const { error: writeErr } = await supabaseAdmin
-        .from('users')
-        .update({ token_balance: newBalance })
-        .eq('user_id', userId)
-      if (writeErr) {
-        console.error('[MONARCH_RELIC] Token bonus write failed:', writeErr, '| userId:', userId)
-        throw new Error('relic_bonus_write_failed')
-      }
+      await economyService.mint({
+        idempotencyKey: `MONARCH_RELIC_COMPLETE:${userId}:${matchId}`,
+        to: { accountType: 'PLAYER', accountId: userId },
+        currency: 'TOKEN', amount: bonus, reason: 'ACHIEVEMENT',
+        actor: 'monarch_relic_system', context: { playerId: userId, matchId },
+      })
       return { isNew: false, collectionComplete: true, tokenBonus: bonus }
     }
 

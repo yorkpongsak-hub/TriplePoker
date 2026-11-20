@@ -6,8 +6,10 @@
 // ============================================================
 
 import { Card } from './deck'
-import { evaluateHand, compareHands, HandResult } from './handEvaluator'
-import { checkFoul, PlayerArrangement, CommunityCards } from './foulChecker'
+import { evaluateBestFive, evaluateHand, compareHands } from './handEvaluator'
+import { checkTierCFoul, PlayerArrangement, CommunityCards } from './foulChecker'
+import { comboKind, missionResult, type Mission } from './leagueGameplay'
+import { getMissionDifficulty, TIER_C_PLUS_RULES } from './tierCPlusScoring'
 
 // ── Types ────────────────────────────────────────────────────
 export type AIPersonality =
@@ -19,6 +21,14 @@ export interface AIConfig {
   name: string
   emoji: string
   personality: AIPersonality
+}
+
+export type AISearchRole = 'boss' | 'support'
+
+/** Only P3/Boss receives the tier budget; every other AI is capped at 10%. */
+export function arrangementSearchBudget(tier: string, role: AISearchRole): number {
+  const bossBudget = tier === 'highNoble' ? 640 : tier === 'mastermind' ? 400 : tier === 'adept' ? 240 : 20
+  return role === 'boss' ? bossBudget : Math.max(1, Math.floor(bossBudget * 0.10))
 }
 
 // AI 3 ตัวในโต๊ะ (Mastermind/Last Boss ใช้ทั้ง P2/Boss/P4)
@@ -52,6 +62,12 @@ export const NINE_SENTINELS: (AIConfig & { bossId: string })[] = [
   { id: 'AI_BLACK_MAGIC', bossId: 'black_magic', name: 'Black Magic', emoji: '🪄', personality: 'black_magic' },
 ]
 
+/** Mastermind progression rule: Sentinels 1-5 have no Missions; 6-9 require them. */
+export function mastermindBossUsesMissions(bossId: string): boolean {
+  const index = NINE_SENTINELS.findIndex(sentinel => sentinel.bossId === bossId)
+  return index >= 5
+}
+
 // LobbyMatchmaking_Spec_v1_0 §5: Minion Avatars 25 ตัว (bot_minion_[nn]_[name].png ที่ client/assets/minions/ —
 // เดิม bot_adept_ เปลี่ยนชื่อแล้ว 2026-07-17 เพราะ reuse ข้าม Adept/Mastermind/High Noble ไม่ใช่ Adept อย่างเดียว)
 // ใช้เป็น P2/P4 filler ของ Mastermind — ชื่อต้องตรงกับ suffix ไฟล์เป๊ะ (ตัวพิมพ์เล็ก) ห้ามลบชื่อกลุ่ม pride flag
@@ -77,8 +93,7 @@ export function pickRandomMinions(count: number, excludeNames: string[] = []): s
 
 // ── Helper: First-Valid Arrangement (สำหรับ Initiate) ─────────
 // สุ่มจัดไพ่จนผ่าน Foul → ใช้เลย (ไม่ optimize) — AI อ่อนมาก เหมาะกับผู้เล่นใหม่
-export function firstValidArrangement(cards: Card[], community: CommunityCards): PlayerArrangement {
-  const maxAttempts = 100
+export function firstValidArrangement(cards: Card[], community: CommunityCards, maxAttempts = 20): PlayerArrangement {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const shuffled = [...cards].sort(() => Math.random() - 0.5)
     const arr: PlayerArrangement = {
@@ -86,153 +101,96 @@ export function firstValidArrangement(cards: Card[], community: CommunityCards):
       pile2: shuffled.slice(3, 6),
       pile3: shuffled.slice(6),
     }
-    const foul = checkFoul(arr, community)
+    const foul = checkTierCFoul(arr, community)
     if (!foul.isFoul) return arr
   }
   // fallback ถ้าสุ่ม 100 ครั้งไม่ผ่าน → ใช้ bestArrangement
-  return bestArrangement(cards, community)
+  return greedyArrangement(cards, community, [], { w1: 1, w2: 2, w3: 4 }, 20)
 }
 
 // ── Helper: Greedy Arrangement (สำหรับ Adept + Mastermind Minions) ─────────────
 // เลือกทีละกอง: กอง 3 ดีสุดก่อน → กอง 2 จากที่เหลือ → กอง 1 ที่เหลือทั้งหมด
 // ดีกว่า First-Valid แต่พลาดกรณีที่ต้อง swap ข้ามกอง
-export function greedyArrangement(cards: Card[], community: CommunityCards): PlayerArrangement {
-  const n = cards.length
-  let bestP3Score = -Infinity
-  let bestP3: Card[] = cards.slice(n - 5) // fallback
-  let bestP3Rest: Card[] = cards.slice(0, n - 5)
-
-  // เลือก 3 ใบที่ทำกอง 3 ดีที่สุด (ประเมินกับ community.row3)
-  for (let i = 0; i < n - 2; i++) {
-    for (let j = i + 1; j < n - 1; j++) {
-      for (let k = j + 1; k < n; k++) {
-        const p3 = [cards[i], cards[j], cards[k]]
-        const rest = cards.filter((_, idx) => idx !== i && idx !== j && idx !== k)
-        const h3 = evaluateHand([...p3, ...community.row3])
-        if (h3.score > bestP3Score) {
-          bestP3Score = h3.score
-          bestP3 = p3
-          bestP3Rest = rest
-        }
-      }
+export function greedyArrangement(cards: Card[], community: CommunityCards, missions: readonly Mission[] = [],weights:{w1:number;w2:number;w3:number}={w1:2,w2:3,w3:5},maxEvaluations=640): PlayerArrangement {
+  if(cards.length<11)throw new Error(`greedyArrangement requires at least 11 cards; received ${cards.length}`)
+  const pile3Candidates=cardCombinations(cards,5).map(pile3=>{
+    const hand=evaluateBestFive([...pile3,...community.row3])
+    const mission=missions.find(item=>item.pile===3);const outcome=mission?missionResult(mission,hand.rank):undefined
+    const objective=hand.rankIndex*25+(outcome?.complete?TIER_C_PLUS_RULES.missionScore[3][getMissionDifficulty(mission!)]:0)+(outcome?.penalty??0)
+    return{pile3,objective,raw:hand.score}
+  })
+  // Bounded search: retain the strongest G3 candidates plus raw-strength
+  // alternatives, then score every remaining G1/G2 split with the full
+  // canonical objective (Missions, Combo, Super Combo and sweep EV).
+  const splitsPerPile3=cards.length===11?20:35
+  const pile3Limit=Math.max(1,Math.ceil(maxEvaluations/splitsPerPile3))
+  const rawLimit=Math.max(1,Math.floor(pile3Limit/4))
+  const byObjective=[...pile3Candidates].sort((a,b)=>b.objective-a.objective||b.raw-a.raw).slice(0,Math.max(1,pile3Limit-rawLimit))
+  const byRaw=[...pile3Candidates].sort((a,b)=>b.raw-a.raw).slice(0,rawLimit)
+  const candidateMap=new Map<string,(typeof pile3Candidates)[number]>()
+  for(const candidate of [...byObjective,...byRaw])candidateMap.set(candidate.pile3.map(card=>`${card.value}:${card.suit}`).sort().join('|'),candidate)
+  let best:PlayerArrangement|undefined,bestScore=-Infinity,evaluated=0
+  for(const pile3Candidate of candidateMap.values()){
+    const remaining=withoutCards(cards,pile3Candidate.pile3)
+    for(const pile1 of cardCombinations(remaining,3)){
+      if(evaluated>=maxEvaluations)break
+      evaluated++
+      const pile2=withoutCards(remaining,pile1);const candidate={pile1,pile2,pile3:pile3Candidate.pile3}
+      if(checkTierCFoul(candidate,community).isFoul)continue
+      const score=missions.length
+        ? canonicalArrangementObjective(candidate,community,missions,weights)
+        : evaluateHand([...pile1,...community.row1]).score*weights.w1
+          +evaluateBestFive([...pile2,...community.row2]).score*weights.w2
+          +pile3Candidate.raw*weights.w3
+      if(score>bestScore){best=candidate;bestScore=score}
     }
   }
-
-  // จากที่เหลือ เลือก 3 ใบที่ทำกอง 2 ดีที่สุด (ประเมินกับ community.row2)
-  let bestP2Score = -Infinity
-  let bestP2: Card[] = bestP3Rest.slice(0, 3)
-  let bestP1: Card[] = bestP3Rest.slice(3)
-
-  for (let a = 0; a < bestP3Rest.length - 2; a++) {
-    for (let b = a + 1; b < bestP3Rest.length - 1; b++) {
-      for (let c = b + 1; c < bestP3Rest.length; c++) {
-        const p2 = [bestP3Rest[a], bestP3Rest[b], bestP3Rest[c]]
-        const p1 = bestP3Rest.filter((_, idx) => idx !== a && idx !== b && idx !== c)
-        const h2 = evaluateHand([...p2, ...community.row2])
-        if (h2.score > bestP2Score) {
-          bestP2Score = h2.score
-          bestP2 = p2
-          bestP1 = p1
-        }
-      }
-    }
-  }
-
-  const arr: PlayerArrangement = { pile1: bestP1, pile2: bestP2, pile3: bestP3 }
-  const foul = checkFoul(arr, community)
-  // ถ้า Greedy foul (h1 > h2 หรือ h2 > h3) → fallback เป็น bestArrangement
-  return foul.isFoul ? bestArrangement(cards, community) : arr
+  if(best)return best
+  const sorted=[...cards].sort((a,b)=>a.value-b.value)
+  return {pile1:sorted.slice(0,3),pile2:sorted.slice(3,6),pile3:sorted.slice(6)}
 }
 
-// ── Helper: หา best 3 ใบจาก N ใบ ของ pile3 ───────────────────
-// เลือก 3 ใบจาก N ใบที่ evaluate กับ community.row3 (2 ใบ) แล้วได้ score สูงสุด
-// resolvePile ตัดสินจาก pile3.slice(0,3) — AI ต้องเรียง 3 ใบดีสุดไว้ index 0-2
-function bestThreeFromN(
-  cards: Card[],
-  communityRow3: Card[]
-): { bestThree: Card[]; leftover: Card[]; result: HandResult } {
-  const n = cards.length
-  // ถ้ามีแค่ 3 ใบพอดี ใช้ตรงๆ ไม่ต้องลอง combination
-  if (n <= 3) {
-    const result = evaluateHand([...cards, ...communityRow3])
-    return { bestThree: cards, leftover: [], result }
-  }
-  let bestScore = -Infinity
-  let bestThree: Card[] = cards.slice(0, 3)
-  let leftover: Card[] = cards.slice(3)
-  let bestResult: HandResult = evaluateHand([...bestThree, ...communityRow3])
-  // ลองทุก combination C(N,3)
-  for (let i = 0; i < n - 2; i++) {
-    for (let j = i + 1; j < n - 1; j++) {
-      for (let k = j + 1; k < n; k++) {
-        const three = [cards[i], cards[j], cards[k]]
-        const rest = cards.filter((_, idx) => idx !== i && idx !== j && idx !== k)
-        const result = evaluateHand([...three, ...communityRow3])
-        if (result.score > bestScore) {
-          bestScore = result.score
-          bestThree = three
-          leftover = rest
-          bestResult = result
-        }
-      }
-    }
-  }
-  return { bestThree, leftover, result: bestResult }
-}
+function cardCombinations(cards:readonly Card[],size:number):Card[][]{const result:Card[][]=[];const visit=(start:number,chosen:Card[])=>{if(chosen.length===size){result.push([...chosen]);return}for(let index=start;index<=cards.length-(size-chosen.length);index++){chosen.push(cards[index]);visit(index+1,chosen);chosen.pop()}};visit(0,[]);return result}
+function withoutCards(cards:readonly Card[],removed:readonly Card[]):Card[]{const keys=new Set(removed.map(card=>`${card.value}:${card.suit}`));return cards.filter(card=>!keys.has(`${card.value}:${card.suit}`))}
 
-// ── Helper: สร้าง arrangement ที่ดีที่สุด (brute force C(11,3)xC(8,3)) ─
+// ── Helper: bounded best arrangement ─────────────────────────
 function bestArrangement(
   cards: Card[],
   community: CommunityCards,
-  weights: { w1: number; w2: number; w3: number } = { w1: 1, w2: 2, w3: 4 }
+  weights: { w1: number; w2: number; w3: number } = { w1: 1, w2: 2, w3: 4 },
+  requireBestG3Category = false,
+  missions: readonly Mission[] = [],
+  maxEvaluations = 640,
 ): PlayerArrangement {
-  let bestScore = -Infinity
-  let bestArr: PlayerArrangement = {
-    pile1: cards.slice(0, 3),
-    pile2: cards.slice(3, 6),
-    pile3: cards.slice(6),
-  }
+  // Strength-only and mission games now share one capped path. The G3-first
+  // shortlist retains the old boss preference without a 9,240-way search.
+  void requireBestG3Category
+  return greedyArrangement(cards,community,missions,weights,maxEvaluations)
+}
 
-  const n = cards.length
-  for (let i = 0; i < n - 2; i++) {
-    for (let j = i + 1; j < n - 1; j++) {
-      for (let k = j + 1; k < n; k++) {
-        const p1 = [cards[i], cards[j], cards[k]]
-        const rest = cards.filter((_, idx) => idx !== i && idx !== j && idx !== k)
-        for (let a = 0; a < rest.length - 2; a++) {
-          for (let b = a + 1; b < rest.length - 1; b++) {
-            for (let c = b + 1; c < rest.length; c++) {
-              const p2 = [rest[a], rest[b], rest[c]]
-              const p3 = rest.filter((_, idx) => idx !== a && idx !== b && idx !== c)
-              // Patch (บั๊กแก้ครั้ง 2): สำหรับ pile3 ที่อาจมี > 3 ใบ (กรณี AI ประมูลได้ไพ่ใน High Noble หรือ Mastermind ก่อน Discard)
-              // ใช้ bestThreeFromN เพื่อหา best 3 จาก p3 — เพราะ evaluateHand รับ N ใบจะคำนวณ flush/straight ผิด
-              // resolvePile ตัดสินจาก pile3.slice(0,3) → ต้อง sort best 3 ใบไว้ index 0-2 เพื่อให้ sync กัน
-              const h1 = evaluateHand([...p1, ...community.row1])
-              const h2 = evaluateHand([...p2, ...community.row2])
-              const { bestThree: p3Best, leftover: p3Rest, result: h3 } = bestThreeFromN(p3, community.row3)
-              if (compareHands(h1, h2) > 0 || compareHands(h2, h3) > 0) continue
-              const total = h1.score * weights.w1 + h2.score * weights.w2 + h3.score * weights.w3
-              if (total > bestScore) {
-                bestScore = total
-                // sort p3 ใหม่: best 3 อยู่ index 0-2, ที่เหลือต่อท้าย
-                bestArr = { pile1: p1, pile2: p2, pile3: [...p3Best, ...p3Rest] }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-  return bestArr
+/** Expected canonical score used while opponents' hidden arrangements are unknown. */
+export function canonicalArrangementObjective(arrangement:PlayerArrangement,community:CommunityCards,missions:readonly Mission[],weights:{w1:number;w2:number;w3:number}={w1:2,w2:3,w3:5}):number{
+  if(checkTierCFoul(arrangement,community).isFoul)return-Infinity
+  const hands=[evaluateHand([...arrangement.pile1,...community.row1]),evaluateBestFive([...arrangement.pile2,...community.row2]),evaluateBestFive([...arrangement.pile3,...community.row3])]
+  const personality=[weights.w1,weights.w2,weights.w3];const average=(weights.w1+weights.w2+weights.w3)/3
+  const winProbabilities=hands.map(hand=>Math.min(.95,.12+hand.rankIndex*.09))
+  const expectedWins=hands.reduce((sum,_hand,index)=>sum+TIER_C_PLUS_RULES.winScore[(index+1) as 1|2|3]*winProbabilities[index]*(personality[index]/average),0)
+  const outcomes=missions.map(mission=>missionResult(mission,hands[mission.pile-1].rank))
+  const missionPoints=missions.reduce((sum,mission,index)=>sum+(outcomes[index].complete?TIER_C_PLUS_RULES.missionScore[mission.pile][getMissionDifficulty(mission)]:0)+outcomes[index].penalty,0)
+  const combo=TIER_C_PLUS_RULES.comboScore[comboKind(outcomes.map(outcome=>outcome.complete))??'NONE']
+  const expectedSweep=TIER_C_PLUS_RULES.tripleSweepScore*winProbabilities.reduce((product,value)=>product*value,1)
+  const tieBreak=hands.reduce((sum,hand,index)=>sum+hand.score*personality[index],0)/1e12
+  return expectedWins+missionPoints+combo+expectedSweep+tieBreak
 }
 
 // ── Helper: arrangement ดีรองลงมา (สำหรับ Beginner's Luck) ──
 function subOptimalArrangement(
   cards: Card[],
-  community: CommunityCards
+  community: CommunityCards,
+  maxEvaluations = 20,
 ): PlayerArrangement {
   // สุ่มสลับไพ่ใน pile3 บางใบกับ pile1/pile2 เพื่อให้แย่ลงเล็กน้อย
-  const best = bestArrangement(cards, community)
+  const best = bestArrangement(cards, community, undefined, false, [], maxEvaluations)
   // swap ไพ่แรกของ pile3 กับไพ่สุดท้ายของ pile1
   const p1 = [...best.pile1]
   const p3 = [...best.pile3]
@@ -241,7 +199,7 @@ function subOptimalArrangement(
   p3[0] = tmp
   const arr = { pile1: p1, pile2: best.pile2, pile3: p3 }
   // ถ้า foul → คืน best แทน
-  const foul = checkFoul(arr, community)
+    const foul = checkTierCFoul(arr, community)
   return foul.isFoul ? best : arr
 }
 
@@ -249,7 +207,9 @@ function subOptimalArrangement(
 function arrangeByPersonality(
   personality: AIPersonality,
   cards: Card[],
-  community: CommunityCards
+  community: CommunityCards,
+  missions: readonly Mission[] = [],
+  maxEvaluations = 640,
 ): PlayerArrangement {
   switch (personality) {
 
@@ -260,22 +220,22 @@ function arrangeByPersonality(
       const p2 = sorted.slice(3, 6)
       const p3 = sorted.slice(6)
       const arr = { pile1: p1, pile2: p2, pile3: p3 }
-      const foul = checkFoul(arr, community)
-      return foul.isFoul ? bestArrangement(cards, community) : arr
+  const foul = checkTierCFoul(arr, community)
+      return foul.isFoul ? bestArrangement(cards, community,undefined,false,missions,maxEvaluations) : (missions.length?bestArrangement(cards,community,{w1:4,w2:4,w3:2},false,missions,maxEvaluations):arr)
     }
 
     case 'reckless': {
       // Aggressive: โยน hand ดีสุดลง Pile 3 เสมอ → best arrangement แล้ว boost pile3
-      return bestArrangement(cards, community)
+      return bestArrangement(cards, community,undefined,false,missions,maxEvaluations)
     }
 
     case 'ghost': {
       // Unpredictable: 50% best, 50% สุ่มกอง
-      if (Math.random() < 0.5) return bestArrangement(cards, community)
+      if (Math.random() < 0.5) return bestArrangement(cards, community,undefined,false,missions,maxEvaluations)
       const shuffled = [...cards].sort(() => Math.random() - 0.5)
       const arr = { pile1: shuffled.slice(0, 3), pile2: shuffled.slice(3, 6), pile3: shuffled.slice(6) }
-      const foul = checkFoul(arr, community)
-      return foul.isFoul ? bestArrangement(cards, community) : arr
+      const foul = checkTierCFoul(arr, community)
+      return foul.isFoul||missions.length ? bestArrangement(cards, community,{w1:2,w2:3,w3:5},false,missions,maxEvaluations) : arr
     }
 
     // ── จตุรเทพ (High Noble Boss เท่านั้น) ──────────────────────
@@ -283,40 +243,40 @@ function arrangeByPersonality(
     // ใน Grand Finale (ดู decideAIGrandFinaleAction + AI bid logic ใน gameLoop.ts) ไม่ใช่ตอนจัดไพ่
     // Patch: กระจาย weight ให้ครอบคลุม 3 สไตล์ — Reaper เน้นกอง 3, Cortex สมดุล, Crag เน้นกอง 1-2
     case 'reaper': { // นักเก็บเกี่ยว — เน้นกอง 3 (เพื่อ Pot สูง + ดุตอน Call/Fold)
-      return bestArrangement(cards, community, { w1: 1, w2: 2, w3: 4 })
+      return bestArrangement(cards, community, { w1: 1, w2: 2, w3: 4 }, true,missions,maxEvaluations)
     }
 
     case 'cortex': { // สมองกล — คำนวณ EV สมดุล (ตรงตาม token pot ratio + Call value)
-      return bestArrangement(cards, community, { w1: 2, w2: 3, w3: 4 })
+      return bestArrangement(cards, community, { w1: 2, w2: 3, w3: 4 }, true,missions,maxEvaluations)
     }
 
     case 'crag': {   // หินผา — เน้นกอง 1-2 (ป้องกันแน่น ลด w2 จาก 6 เป็น 5 ให้อยู่ในช่วงเดียวกับ Cipher)
-      return bestArrangement(cards, community, { w1: 5, w2: 5, w3: 4 })
+      return bestArrangement(cards, community, { w1: 5, w2: 5, w3: 4 }, true,missions,maxEvaluations)
     }
 
     case 'cipher': { // รหัสลับ — สุ่มตัวคูณ 1-5 (เดิม 1-10) บางครั้งออกตรงสไตล์จตุรเทพคนอื่นได้
       const w1 = Math.floor(Math.random() * 5) + 1
       const w2 = Math.floor(Math.random() * 5) + 1
       const w3 = Math.floor(Math.random() * 5) + 1
-      return bestArrangement(cards, community, { w1, w2, w3 })
+      return bestArrangement(cards, community, { w1, w2, w3 }, true,missions,maxEvaluations)
     }
 
     // ── The Nine Sentinels (Mastermind Conquest Boss เท่านั้น) ──────
     // Weight canon จาก MasterPlan v1.1 — ห้ามแก้ค่า (ยกเว้น Jester ที่สุ่มใหม่ทุกครั้งตามสเปค)
-    case 'iron_wall':   return bestArrangement(cards, community, { w1: 4, w2: 4, w3: 2 })
-    case 'chivalry':    return bestArrangement(cards, community, { w1: 2, w2: 3, w3: 5 })
-    case 'war_lord':    return bestArrangement(cards, community, { w1: 1, w2: 2, w3: 7 })
-    case 'phantom':     return bestArrangement(cards, community, { w1: 2, w2: 3, w3: 5 })
-    case 'dark_shark':  return bestArrangement(cards, community, { w1: 2, w2: 4, w3: 4 })
-    case 'oracle':      return bestArrangement(cards, community, { w1: 2, w2: 3, w3: 5 })
-    case 'phoenix':     return bestArrangement(cards, community, { w1: 2, w2: 3, w3: 5 })
-    case 'black_magic': return bestArrangement(cards, community, { w1: 3, w2: 3, w3: 4 })
+    case 'iron_wall':   return bestArrangement(cards, community, { w1: 4, w2: 4, w3: 2 },false,missions,maxEvaluations)
+    case 'chivalry':    return bestArrangement(cards, community, { w1: 2, w2: 3, w3: 5 },false,missions,maxEvaluations)
+    case 'war_lord':    return bestArrangement(cards, community, { w1: 1, w2: 2, w3: 7 },false,missions,maxEvaluations)
+    case 'phantom':     return bestArrangement(cards, community, { w1: 2, w2: 3, w3: 5 },false,missions,maxEvaluations)
+    case 'dark_shark':  return bestArrangement(cards, community, { w1: 2, w2: 4, w3: 4 },false,missions,maxEvaluations)
+    case 'oracle':      return bestArrangement(cards, community, { w1: 2, w2: 3, w3: 5 },false,missions,maxEvaluations)
+    case 'phoenix':     return bestArrangement(cards, community, { w1: 2, w2: 3,w3: 5 },false,missions,maxEvaluations)
+    case 'black_magic': return bestArrangement(cards, community, { w1: 3, w2: 3, w3: 4 },false,missions,maxEvaluations)
 
     case 'jester': { // ตัวตลก — สุ่ม weight 1-10 ใหม่ทุกเกม (pattern เดียวกับ Cipher แต่ range กว้างกว่า)
       const w1 = Math.floor(Math.random() * 10) + 1
       const w2 = Math.floor(Math.random() * 10) + 1
       const w3 = Math.floor(Math.random() * 10) + 1
-      return bestArrangement(cards, community, { w1, w2, w3 })
+      return bestArrangement(cards, community, { w1, w2, w3 },false,missions,maxEvaluations)
     }
   }
 }
@@ -329,7 +289,11 @@ export function aiDecideArrangement(
   roundNumber: number,       // เริ่มจาก 1
   tier: string,
   humanWinStreak: number,    // จำนวนตาที่ human ชนะต่อกัน
+  missions: readonly Mission[] = [],
+  searchRole: AISearchRole = 'boss',
 ): PlayerArrangement {
+
+  const maxEvaluations = arrangementSearchBudget(tier, searchRole)
 
   const isBeginnerTable = tier === 'initiate'
 
@@ -338,7 +302,7 @@ export function aiDecideArrangement(
 
     // ตา 1-2: AI จงใจอ่อนฝีมือ
     if (roundNumber <= 2) {
-      return subOptimalArrangement(cards, community)
+      return subOptimalArrangement(cards, community, maxEvaluations)
     }
 
     // ตา 3: AI เล่นปกติแต่ ghost มีโอกาส foul 30%
@@ -349,23 +313,35 @@ export function aiDecideArrangement(
         return { pile1: shuffled.slice(0, 3), pile2: shuffled.slice(3, 6), pile3: shuffled.slice(6) }
       }
       // Patch: Initiate ใช้ First-Valid (ไม่ใช่ bestArrangement) — AI อ่อนกว่า Tier สูง
-      return firstValidArrangement(cards, community)
+      return firstValidArrangement(cards, community, maxEvaluations)
     }
 
     // ตา 4+: สุ่ม 50% อ่อนฝีมือ / 50% First-Valid
     if (roundNumber >= 4) {
       if (Math.random() < 0.5) {
-        return subOptimalArrangement(cards, community)
+        return subOptimalArrangement(cards, community, maxEvaluations)
       }
-      return firstValidArrangement(cards, community)
+      return firstValidArrangement(cards, community, maxEvaluations)
     }
   }
 
   // ── Adept table: ใช้ Greedy (ดีกว่า First-Valid แต่ยังไม่ optimal) ────
   if (tier === 'adept') {
-    return greedyArrangement(cards, community)
+    return greedyArrangement(cards, community,missions,undefined,maxEvaluations)
+  }
+
+  // ── ไพ่เกิน 11 ใบ (Boss/AI ชนะ Blind Auction มา — High Noble Round 2, "สูงสุด 12 ใบ") ──
+  // Full exhaustive arrangement grows sharply above 11 cards. Keep the
+  // canonical Best-Five evaluator but use the bounded greedy selector after Auction.
+  // บนเครื่องที่ไม่แรงมาก (วัดจริงตอนไล่หาสาเหตุ hnGracePeriod.test.ts timeout, 2026-08-31) บล็อก event
+  // loop ทั้งเซิร์ฟเวอร์ทุกโต๊ะพร้อมกัน — ใช้ greedyArrangement แทน (pattern เดียวกับที่ Minion ที่ชนะ
+  // ประมูลใน Mastermind ใช้อยู่แล้วจริงที่ gameLoop.ts, และเดียวกับที่ Arena เลือกใช้แทน brute-force
+  // เต็มรูปแบบด้วยเหตุผลเดียวกันทุกประการ — ดู bestArenaArrangement) ยอมเสียความละเอียดของ personality
+  // ตอนจัดไพ่เฉพาะเคสนี้ (บอทอาจ foul เองได้บ้าง เสียแค่กองนั้น ไม่ crash) แลกกับความเสถียรของเซิร์ฟเวอร์
+  if (cards.length > 11) {
+    return greedyArrangement(cards, community,missions,undefined,maxEvaluations)
   }
 
   // ── Mastermind+ table: เต็มฝีมือตาม personality ────────────────
-  return arrangeByPersonality(config.personality, cards, community)
+  return arrangeByPersonality(config.personality, cards, community,missions,maxEvaluations)
 }

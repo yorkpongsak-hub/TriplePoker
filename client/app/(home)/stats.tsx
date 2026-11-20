@@ -4,12 +4,15 @@
 // The Sage Unicorn Studio Co., Ltd.
 
 import React, { useCallback, useEffect, useState } from 'react'
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, RefreshControl, ActivityIndicator } from 'react-native'
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, RefreshControl, ActivityIndicator, Image } from 'react-native'
 import { router } from 'expo-router'
 import { ThemedBackground } from '../../src/components/ui/ThemedBackground'
 import { glassPanel, glassPanelDense, textOnGlass } from '../../src/ui/glassStyles'
 import { useAuthStore } from '../../src/store/authStore'
+import { CountryBadge } from '../../src/country/CountryBadge'
+import { CountryPicker } from '../../src/country/CountryPicker'
 import { AvatarDisplay, PRESET_AVATARS, AvatarConfig } from '../../src/components/profile/AvatarPicker'
+import { MonetizedBannerSlot } from '../../src/components/ads/MonetizedBannerSlot'
 
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 
@@ -35,6 +38,7 @@ const C = {
 type LeaderboardType = 'token' | 'ps' | 'winrate' | 'xp' | 'boss_defeats' | 'all_matrix'
 
 interface LeaderboardEntry {
+  country_code?: string | null
   rank: number
   user_id: string
   display_name: string
@@ -97,6 +101,9 @@ function RowAvatar({ avatarUrl }: { avatarUrl: string | null }) {
       </View>
     )
   }
+  if (avatarUrl && /^(https?:|data:)/i.test(avatarUrl)) {
+    return <Image source={{ uri: avatarUrl }} style={s.rowAvatarImage} resizeMode="cover" />
+  }
   // นับ code point ไม่ใช่ .length เพราะ emoji 1 ตัวกิน 2 UTF-16 units (บางตัวมี ZWJ ยาวกว่านั้น)
   const isEmojiLike = !!avatarUrl && [...avatarUrl].length <= 3
   return <Text style={s.rowAvatarEmoji}>{isEmojiLike ? avatarUrl : '🐉'}</Text>
@@ -110,7 +117,7 @@ function Row({ entry, type }: { entry: LeaderboardEntry; type: LeaderboardType }
     <TouchableOpacity onPress={handlePress} activeOpacity={0.75} style={s.row}>
       <RankBadge rank={entry.rank} />
       <RowAvatar avatarUrl={entry.avatar_url} />
-      <Text style={s.rowName} numberOfLines={1}>{entry.display_name}</Text>
+      <View style={{flex:1}}><Text style={s.rowName} numberOfLines={1}>{entry.display_name}</Text><CountryBadge code={entry.country_code}/></View>
       <Text style={[s.rowValue, { color: valueColor(type) }]} numberOfLines={1}>
         {formatValue(type, entry.value)}
       </Text>
@@ -217,6 +224,8 @@ export default function StatsScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={C.gold} colors={[C.gold]} />
           }
         >
+          <MonetizedBannerSlot placement="rank" />
+          <CountryPicker onChange={handleRefresh}/>
           <View style={s.tableCard}>
             {/* Table header */}
             <View style={s.tableHeadRow}>
@@ -324,6 +333,7 @@ const s = StyleSheet.create({
   rankShieldNum: { fontSize: 10, fontWeight: '900', marginLeft: -2 },
 
   rowAvatarWrap: { width: 26, height: 26, alignItems: 'center', justifyContent: 'center' },
+  rowAvatarImage: { width: 26, height: 26, borderRadius: 13 },
   rowAvatarEmoji: { fontSize: 20, width: 26, textAlign: 'center' },
   rowName: { flex: 1, color: C.textPrimary, fontSize: 13, fontWeight: '700' },
   rowValue: {

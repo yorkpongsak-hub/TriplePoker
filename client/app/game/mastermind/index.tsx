@@ -6,7 +6,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Alert, Animated, Image, ImageBackground, Platform, ScrollView, StatusBar, StyleSheet,
+  Alert, Animated, BackHandler, Image, ImageBackground, Platform, ScrollView, StatusBar, StyleSheet,
   Text, TouchableOpacity, View,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -14,25 +14,39 @@ import { io, Socket } from 'socket.io-client'
 import { router, useLocalSearchParams } from 'expo-router'
 import * as Haptics from 'expo-haptics'
 import { useAuthStore } from '../../../src/store/authStore'
+import { GAME_RESUME_RESULT_EVENT, requestGameResume } from '../../../src/services/gameResumeProtocol'
 // Patch 2026-07-18: resolve avatar preset key → emoji/รูปภาพ (แก้ VIP preset ไม่โชว์ที่โต๊ะ)
 import { PRESET_AVATARS } from '../../../src/components/profile/AvatarPicker'
 import { useTableSkins } from '../../../src/hooks/useTableSkins'
 import { TABLE_SKINS } from '../../../src/config/tableSkins'
 import BossVictoryVFX, { VictoryTier } from '../../../src/components/vfx/BossVictoryVFX'
 import LegendaryCardVFX from '../../../src/components/vfx/LegendaryCardVFX'
+import RoyalStraightFlushVFX from '../../../src/components/vfx/RoyalStraightFlushVFX'
+import NegativeStackGameOverVFX from '../../../src/components/vfx/NegativeStackGameOverVFX'
+import { TierCPlusPileReveal, type TierCPlusReveal } from '../../../src/components/game/TierCPlusPileReveal'
+import ComboCardBurst from '../../../src/components/vfx/ComboCardBurst'
+import { RoundScoreSummary } from '../../../src/components/game/RoundScoreSummary'
 import { isLocalTripleSweep } from '../../../src/components/vfx/vfxPolicy'
+import {
+  playCountdownWarning, playCardArrange1, playCardArrange2, playAuctionBidTick, playJackpotFanfare, playBossPileWinThunder,
+  playCardShuffle, playCardReveal, playPokerChip, playAnte, playAutoSortButton, playReadyButton, playRevealCountdownTick, playMatchWin,
+} from '../../../src/services/gameSfxService'
 import { useUserStore } from '../../../src/store/userStore'
 import { autoSort } from '../../../src/utils/autoSort'
 import { getReduceMotion } from '../../../src/utils/reduceMotion'
 import { clearPendingMatch, markPendingMatch } from '../../../src/utils/pendingMatch'
 import PreGameCountdown from '../../../src/components/PreGameCountdown'
 import MonarchConquestBanner from '../../../src/components/game/MonarchConquestBanner'
+import { leaveAfterClassicSettlement, leaveTierCPlusTable } from '../../../src/ads/postSettlementExit'
+import { showProfitableAiInterstitial } from '../../../src/ads/profitableAiInterstitial'
 import { MINION_AVATAR } from '../../../src/constants/minionAvatars'
 import { ActionButton } from '../../../src/components/ui/ActionButton'
 import { glassPanelDense } from '../../../src/ui/glassStyles'
 import { CARD_IMG, CARD_BACK_IMG } from '../../../src/components/game/cardAssets'
+import { TierWelcomeCharacter } from '../../../src/components/game/TierWelcomeCharacter'
 import PlayerHandView from '../../../src/components/game/PlayerHandView'
 import CharacterBarkBubble, { useCharacterBarks } from '../../../src/components/game/CharacterBarkBubble'
+import GameServerStatusLight from '../../../src/components/game/GameServerStatusLight'
 import GFHandView from '../../../src/components/game/GFHandView'
 import BossHandRow from '../../../src/components/game/BossHandRow'
 import GameTopBar from '../../../src/components/game/GameTopBar'
@@ -66,21 +80,26 @@ const studioLogo  = require('../../../assets/images/sage_unicorn_logo_transparen
 // Patch Mastermind Conquest: ไม่มี Boss Intro Popup ในเกม — เรื่องราว/motto แสดงที่หน้า story.tsx ก่อนเข้าห้องแล้ว
 // รูป Avatar Nine Sentinels (square crop หน้าชิด ใช้กับ AvatarBubble ของ P3 เท่านั้น) — key ตรงกับ aiNames[0].name จาก server
 const BOSS_AVATAR: Record<string, any> = {
-  'Iron Wall':   require('../../../assets/sentinels/boss_iron_wall.png'),
-  'Chivalry':    require('../../../assets/sentinels/boss_chivalry.png'),
-  'War Lord':    require('../../../assets/sentinels/boss_war_lord.png'),
-  'Phantom':     require('../../../assets/sentinels/boss_phantom.png'),
-  'Dark Shark':  require('../../../assets/sentinels/boss_dark_shark.png'),
-  'Oracle':      require('../../../assets/sentinels/boss_oracle.png'),
-  'Jester':      require('../../../assets/sentinels/boss_jester.png'),
-  'Phoenix':     require('../../../assets/sentinels/boss_phoenix.png'),
-  'Black Magic': require('../../../assets/sentinels/boss_black_magic.png'),
+  'Iron Wall':   require('../../../assets/sentinels/boss_iron_wall_avatar.png'),
+  'Chivalry':    require('../../../assets/sentinels/boss_chivalry_avatar.png'),
+  'War Lord':    require('../../../assets/sentinels/boss_war_lord_avatar.png'),
+  'Phantom':     require('../../../assets/sentinels/boss_phantom_avatar.png'),
+  'Dark Shark':  require('../../../assets/sentinels/boss_dark_shark_avatar.png'),
+  'Oracle':      require('../../../assets/sentinels/boss_oracle_avatar.png'),
+  'Jester':      require('../../../assets/sentinels/boss_jester_avatar.png'),
+  'Phoenix':     require('../../../assets/sentinels/boss_phoenix_avatar.png'),
+  'Black Magic': require('../../../assets/sentinels/boss_black_magic_avatar.png'),
 }
 const cardBackImg = CARD_BACK_IMG // ใช้หลังไพ่จากไฟล์กลาง cardAssets.ts (คง alias เดิมกันแก้ทุกจุดที่อ้างถึง)
 const tableImg    = require('../../../assets/images/table_default.png')
 const tripleSpade = require('../../../assets/images/triple_poker_icon.png')
 
 const CW = 62; const CH = 90; const OVERLAP = -38
+// Keep Tier A's local P1 presentation identical to Tier C without changing
+// the shared PlayerHandView or any opponent/table geometry.
+const MASTERMIND_P1_HAND_SCALE = 1.00
+const MASTERMIND_P1_HAND_DROP = 48
+const MASTERMIND_SIDE_HAND_RAISE = 36 // Match Tier C P2/P4 25×36px side-card geometry.
 const SIDE_COL_W = 72
 const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
 // Escrow ผูกกับ user_id จริงใน DB — ห้าม fallback เงียบเป็น literal เด็ดขาด (บั๊กเดิม: 'Human1' ทำ escrow
@@ -90,6 +109,13 @@ const DEV_FAKE_USER_ID = __DEV__ ? process.env.EXPO_PUBLIC_DEV_FAKE_USER_ID : un
 
 interface CardData { id: string; key: string }
 interface AIInfo   { id: string; name: string; emoji: string }
+interface TierAMission {
+  pile: 1 | 2 | 3
+  rank: string
+  negative?: boolean
+  penalty?: number
+  superComboChallenge?: boolean
+}
 
 // =================================================================
 // TIMER DISPLAY — แยก component ไม่ให้ main re-render
@@ -236,7 +262,6 @@ const ServerLog = React.memo(({ socket, onMonarchWin }: { socket: Socket | null;
       Animated.timing(dotAnim, { toValue: 1,    duration: 900, useNativeDriver: true }),
     ]))
     p.start()
-    console.log('[ANIM-DEBUG] START dotAnim (ServerLog, always-mounted)') // ANIM-DEBUG: ลบออกหลังปิดเคส
     return () => { clearTimeout(t); p.stop() }
   }, [addLog])
 
@@ -273,25 +298,27 @@ const GameTableLive: React.FC = () => {
   const insets = useSafeAreaInsets()
   const isWeb  = Platform.OS === 'web'
   const socketRef = useRef<Socket | null>(null)
+  const matchStartRef = useRef(Date.now())
   const authUserId = useUserStore(s => s.userId)
   const usingDevFakeId = !authUserId && !!DEV_FAKE_USER_ID
   const PLAYER_ID = authUserId || DEV_FAKE_USER_ID || ''
+  const accessToken = useAuthStore(s => s.session?.access_token ?? null)
   // roomId ต้อง unique ต่อผู้เล่น — เดิม hardcode 'Beginner1' ชนกันเหมือน Initiate ถ้ามี 2 Human เข้าพร้อมกัน
   // (บั๊กเดียวกัน กันปะทุล่วงหน้า — ดู auth guard ที่ block ก่อน emit ใดๆ ถ้า PLAYER_ID ว่าง)
   const ROOM_ID = `mastermind-${PLAYER_ID}`
   // Feedback C2 — ไฟล์นี้ไม่เคยผูก authStore เลย ทำให้ P1 โชว์ '👤'/'You' hardcode ตลอด — เพิ่มเหมือน initiate/adept
   // Patch 2026-07-18: avatar_url เก็บเป็น preset key — resolve ผ่าน PRESET_AVATARS ก่อน render (pattern Initiate)
-  const myAvatarRaw = useAuthStore(s => s.profile?.avatar_url) || '👤'
+  const myAvatarRaw = useAuthStore(s => s.profile?.profile_image_signed_url || s.profile?.avatar_url) || '👤'
   const myPreset = PRESET_AVATARS.find(p => p.key === myAvatarRaw)
   const myAvatarEmoji = myPreset?.emoji ?? (myPreset?.image ? '' : myAvatarRaw)
-  const myAvatarImage = myPreset?.image
+  const myAvatarImage = myPreset?.image ?? (/^(https?:|data:)/i.test(myAvatarRaw) ? { uri: myAvatarRaw } : undefined)
   const myDisplayName = useAuthStore(s => s.profile?.display_name) || 'You'
   const isVip = useAuthStore(s => (s.profile?.vip_status ?? 'none') !== 'none') // Feedback C5 — ใช้ vip_status เดิม ไม่สร้าง state ใหม่
   const { activeSkin } = useTableSkins()
   const selectedTableImg = TABLE_SKINS[activeSkin] ?? tableImg
 
   // ── Timer ref (ไม่ trigger re-render)
-  const timerValRef = useRef({ val: 90, max: 90 })
+  const timerValRef = useRef({ val: 135, max: 135 })
   const continueValRef = useRef(0)
   const aiListRef = useRef<AIInfo[]>([])
   const flyingCoinsRef = useRef<FlyingCoinsHandle>(null)
@@ -308,6 +335,10 @@ const GameTableLive: React.FC = () => {
 
   // ── Game state
   const [phase, setPhase]             = useState<'dealing'|'arrangement'|'arrangement_2'|'countdown'|'showdown'|'fog_of_war'|'blind_auction'|'auction_done'|'discard'|'discard_done'|'grand_finale'|'grand_finale_done'|'result'|'end'>('dealing')
+  // Connection status — pattern เดียวกับ highNoble/index.tsx:345-350 (adept มี pattern เดียวกันแต่วาง
+  // ตำแหน่ง overlay แย่กว่า ใช้ highNoble เป็นต้นแบบ)
+  const [isReconnecting, setIsReconnecting] = useState(false)
+  const [connectionError, setConnectionError] = useState<string | null>(null)
   const [dealDone, setDealDone]         = useState(false)
   const [dealCount, setDealCount]       = useState(0)
   const [roundNumber, setRoundNumber] = useState(1)
@@ -344,6 +375,7 @@ const GameTableLive: React.FC = () => {
   // ── Community + Blind
   const [comm, setComm]   = useState({ p1: ['',''], p2: ['',''], p3: ['',''] })
   const [blind, setBlind] = useState<string[]>([])
+  const [missions, setMissions] = useState<TierAMission[]>([])
 
   // ── AI
   const [aiList, setAiList]     = useState<AIInfo[]>([])
@@ -352,6 +384,9 @@ const GameTableLive: React.FC = () => {
   // ── Showdown — เก็บไพ่ทุกคนหลัง reveal ครบ
   const [allCards, setAllCards]       = useState<Record<string, Record<number, string[]>>>({})
   const [pileWinners, setPileWinners] = useState<Record<number, string>>({})
+  const [pileRevealShowcases, setPileRevealShowcases] = useState<TierCPlusReveal[]>([])
+  const [awaitingG1Commit, setAwaitingG1Commit] = useState(false)
+  const [tierDComboBurst, setTierDComboBurst] = useState<{ key: string; kind: 'COMBO'|'SUPER_COMBO'; bonus: number } | null>(null)
   const [showLegendarySweep, setShowLegendarySweep] = useState(false)
   const [legendarySweepComplete, setLegendarySweepComplete] = useState(false)
   const [hasFoul, setHasFoul]         = useState<Record<string, boolean>>({})
@@ -362,6 +397,7 @@ const GameTableLive: React.FC = () => {
   const [foulReasons, setFoulReasons]   = useState<Record<string, string>>({})
   const [showResult, setShowResult]   = useState(false)
   const [handRanks, setHandRanks]       = useState<Record<number, string>>({})
+  const [royalFlushWinner, setRoyalFlushWinner] = useState<string | null>(null)
   const [showRankTable, setShowRankTable] = useState(false)
   const [activeShowdownTab, setActiveShowdownTab] = useState<1|2|3>(1)
   const [revealPile, setRevealPile] = useState<0|1|2|3>(0) // 0=ไม่แสดง 1/2/3=Pile นั้น
@@ -373,9 +409,14 @@ const GameTableLive: React.FC = () => {
 
   // ── Result
   const [tokenBalance, setTokenBalance] = useState<Record<string, number>>({})
+  const [negativeStackGameOver, setNegativeStackGameOver] = useState(false)
+  useEffect(() => {
+    if (!negativeStackGameOver && typeof tokenBalance[PLAYER_ID] === 'number' && tokenBalance[PLAYER_ID] < 0) setNegativeStackGameOver(true)
+  }, [tokenBalance[PLAYER_ID], negativeStackGameOver, PLAYER_ID])
   // Patch 2026-07-18: format ยอดโทเคนเต็มมี comma (มติลุงเยาะ: แบบเต็ม ไม่ย่อ K/M) — pattern Initiate
   const fmtToken = (v: number | undefined) => (v ?? buyInAmount).toLocaleString('en-US')
   const [tokenDeltas, setTokenDeltas]   = useState<Record<string, number>>({})
+  const profitableAdTicketRef = useRef<string | undefined>(undefined)
   // Patch 2026-07-18: Boss Victory VFX — null = ไม่แสดง (mount/unmount ทั้ง component ปลอดภัย)
   const [victoryVfx, setVictoryVfx] = useState<VictoryTier | null>(null)
   const [matchResult, setMatchResult]   = useState<any>(null)
@@ -425,14 +466,17 @@ const GameTableLive: React.FC = () => {
   // Patch Grand Finale: state ทั้งหมด
   const [gfTurnPlayerId, setGfTurnPlayerId]   = useState<string | null>(null)
   const [gfRoundNumber, setGfRoundNumber]     = useState<1 | 2>(1)
+  const [gfCommunityRevealed, setGfCommunityRevealed] = useState<1|2>(1)
+  const [gfLegalActions, setGfLegalActions] = useState<Array<'check'|'bet'|'call'|'fold'>>(['check','bet'])
   const [gfPile3Pot, setGfPile3Pot]           = useState(0)
   const [gfTimeLeft, setGfTimeLeft]           = useState(10)
   const [gfFoulPlayers, setGfFoulPlayers]     = useState<string[]>([])
   const [gfFoldedPlayers, setGfFoldedPlayers] = useState<string[]>([])
   const [gfRevealedCards, setGfRevealedCards] = useState<Record<string, string[]>>({}) // pid -> ไพ่ที่หงายแล้ว (รอบ 1 และรอบ 2)
-  const [gfFinalReveals, setGfFinalReveals]   = useState<Record<string, string[]>>({}) // pid -> ไพ่ครบ 3 ใบ (Round 2 จบ)
+  const [gfFinalReveals, setGfFinalReveals]   = useState<Record<string, string[]>>({}) // pid -> ไพ่ส่วนตัวครบ 5 ใบตอน Showdown
   const [gfFinalResult, setGfFinalResult]     = useState<any>(null)
   const [gfResultStage, setGfResultStage]     = useState<1 | 2>(1) // 1: Grand Finale, 2: Round Summary
+  const roundSummaryContinuedRef = useRef(false)
   // Patch High Noble: ใบที่ Human เลือกหงายในตา Call ปัจจุบัน (default = ใบอ่อนสุดที่ยังไม่หงาย)
   const [gfSelectedCardKey, setGfSelectedCardKey] = useState<string | null>(null)
   const gfTimerRef = useRef<any>(null)
@@ -474,44 +518,6 @@ const GameTableLive: React.FC = () => {
   const confettiActiveRef = useRef(false)
   const confettiCompositesRef = useRef<Animated.CompositeAnimation[]>([])
 
-  // ANIM-DEBUG: ลบออกหลังปิดเคส — log mount/unmount ของทุก conditional-mount block ที่มี
-  // Animated.View/Animated.Text ข้างใน (native driver ตัวไหนยังผูกอยู่ ดู START log คู่กัน)
-  useEffect(() => {
-    const active = phase === 'countdown'
-    if (active) console.log('[ANIM-DEBUG] MOUNT countdown-overlay (countAnim), phase=', phase)
-    return () => { if (active) console.log('[ANIM-DEBUG] UNMOUNT countdown-overlay (countAnim), phase=', phase) }
-  }, [phase === 'countdown']) // ANIM-DEBUG: ลบออกหลังปิดเคส
-
-  useEffect(() => {
-    const active = phase === 'fog_of_war'
-    if (active) console.log('[ANIM-DEBUG] MOUNT fog-of-war-memory-cards (pileFadeAnim), phase=', phase)
-    return () => { if (active) console.log('[ANIM-DEBUG] UNMOUNT fog-of-war-memory-cards (pileFadeAnim), phase=', phase) }
-  }, [phase === 'fog_of_war']) // ANIM-DEBUG: ลบออกหลังปิดเคส
-
-  useEffect(() => {
-    const active = phase === 'fog_of_war'
-    if (active) console.log('[ANIM-DEBUG] MOUNT fog-of-war-big-text (fogBlinkAnim), phase=', phase)
-    return () => { if (active) console.log('[ANIM-DEBUG] UNMOUNT fog-of-war-big-text (fogBlinkAnim), phase=', phase) }
-  }, [phase === 'fog_of_war']) // ANIM-DEBUG: ลบออกหลังปิดเคส
-
-  useEffect(() => {
-    const active = phase === 'grand_finale' && !!gfTurnPlayerId
-    if (active) console.log('[ANIM-DEBUG] MOUNT grand-finale-big-text (gfBlinkAnim), phase=', phase)
-    return () => { if (active) console.log('[ANIM-DEBUG] UNMOUNT grand-finale-big-text (gfBlinkAnim), phase=', phase) }
-  }, [phase === 'grand_finale' && !!gfTurnPlayerId]) // ANIM-DEBUG: ลบออกหลังปิดเคส
-
-  useEffect(() => {
-    const active = showDiscard && !isHNDiscard
-    if (active) console.log('[ANIM-DEBUG] MOUNT discard-modal-simple (confirmBlinkAnim), phase=', phase)
-    return () => { if (active) console.log('[ANIM-DEBUG] UNMOUNT discard-modal-simple (confirmBlinkAnim), phase=', phase) }
-  }, [showDiscard && !isHNDiscard]) // ANIM-DEBUG: ลบออกหลังปิดเคส
-
-  useEffect(() => {
-    const active = showDiscard && isHNDiscard
-    if (active) console.log('[ANIM-DEBUG] MOUNT discard-modal-hn (confirmBlinkAnim), phase=', phase)
-    return () => { if (active) console.log('[ANIM-DEBUG] UNMOUNT discard-modal-hn (confirmBlinkAnim), phase=', phase) }
-  }, [showDiscard && isHNDiscard]) // ANIM-DEBUG: ลบออกหลังปิดเคส
-
   // showdown_result มาถึง → แสดง ShowdownResult popup ทันที countdown 33 วิ
   const startContinueCountdown = () => {
     // ไม่เรียก setContinueCountdown ที่นี่แล้ว — ContinueTimer อ่านจาก continueValRef เองทุก 500ms
@@ -529,6 +535,7 @@ const GameTableLive: React.FC = () => {
   }
 
   useEffect(() => {
+    if (awaitingG1Commit) return
     const hasFoulAll = Object.keys(hasFoul).length > 0
     const winnersReady = pileWinners[1] && pileWinners[2] && pileWinners[3]
     if (!winnersReady && !hasFoulAll) return
@@ -541,10 +548,14 @@ const GameTableLive: React.FC = () => {
     setShowResult(true)
     startContinueCountdown()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(pileWinners), JSON.stringify(hasFoul), legendarySweepComplete, PLAYER_ID])
+  }, [JSON.stringify(pileWinners), JSON.stringify(hasFoul), legendarySweepComplete, PLAYER_ID, awaitingG1Commit])
 
   // ── Connect Socket (ครั้งเดียว)
   useEffect(() => {
+    // Persisted auth rehydrates asynchronously after a fresh install/rebuild.
+    // Do not create the one-shot socket with an empty token: the server rejects
+    // it as UNAUTHORIZED and the old [] effect never recovered when auth arrived.
+    if (!accessToken) return
     // Auth guard: userId ว่างแปลว่าหลุด auth guard มาได้ (authStore ยังไม่ sync) — ห้ามเข้าโต๊ะต่อ
     // เพราะ escrow จะผูก token จริงเข้ากับ id ที่ไม่มีอยู่จริง คืนไม่ได้ — fail loud แทน fail silent
     if (!PLAYER_ID) {
@@ -560,18 +571,49 @@ const GameTableLive: React.FC = () => {
       console.warn('[game] Using DEV_FAKE_USER_ID for PLAYER_ID:', PLAYER_ID)
     }
 
-    const socket = io(SERVER_URL, { transports: ['websocket'], reconnection: false })
+    // Connection status: reconnection:true (เดิม false) ให้ disconnect/connect_error หมุน retry จริง
+    // pattern เดียวกับ highNoble/adept (ดู isReconnecting/connectionError ด้านบน)
+    const socket = io(SERVER_URL, { auth: { accessToken }, transports: ['polling', 'websocket'], reconnection: true, reconnectionAttempts: 5, reconnectionDelay: 1000 })
     socketRef.current = socket
 
-    let matchStarted = false
+    let startRequested = false
+    let resumeWatchdog: ReturnType<typeof setTimeout> | null = null
+    const requestFreshMatch = () => {
+      if (startRequested) return
+      startRequested = true
+      if (resumeWatchdog) { clearTimeout(resumeWatchdog); resumeWatchdog = null }
+      socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'mastermind', bossId })
+    }
     socket.on('connect', () => {
-      if (matchStarted) return
-      matchStarted = true
+      startRequested = false
+      setIsReconnecting(false)
+      setConnectionError(null)
+      if (!accessToken) {
+        requestFreshMatch()
+        return
+      }
+      requestGameResume(socket, { roomId: ROOM_ID, userId: PLAYER_ID, accessToken, matchType: 'MASTERMIND' })
+      if (resumeWatchdog) clearTimeout(resumeWatchdog)
+      resumeWatchdog = setTimeout(requestFreshMatch, 6_000)
       // token ไม่ส่งจาก client (server-authoritative — escrowBuyIn คิดจาก users.token_balance สดเท่านั้น)
       // (player_join_room ถูกตัดออก — dead path เดิม: client ไม่เคย listen 'player_joined'/'arrangement_start'
       // ที่มันคืนมา แถมยังสร้างตาราง tableRegistry ซ้ำด้วย roomId เดิมอีกชั้น start_match ด้านล่างทำ
       // socket.join(roomId) ให้อยู่แล้วเหมือนกัน — pattern เดียวกับ initiate Phase 2.2)
-      socket.emit('start_match', { roomId: ROOM_ID, playerId: PLAYER_ID, tier: 'mastermind', bossId })
+    })
+    socket.on(GAME_RESUME_RESULT_EVENT, (result: { ok: boolean; status: string; matchType: string }) => {
+      if (result.matchType !== 'MASTERMIND') return
+      if (resumeWatchdog) { clearTimeout(resumeWatchdog); resumeWatchdog = null }
+      if (!result.ok && (result.status === 'MATCH_NOT_FOUND' || result.status === 'RESUME_TIMEOUT')) requestFreshMatch()
+    })
+
+    // Connection status: pattern เดียวกับ highNoble/index.tsx:649-673
+    socket.on('connect_error', (err: any) => {
+      console.warn('[mastermind] socket connect_error', err?.message)
+      setConnectionError(err?.message || 'Cannot reach the game server.')
+    })
+    socket.on('disconnect', (reason: string) => {
+      if (reason === 'io client disconnect') return
+      setIsReconnecting(true)
     })
 
     // Buy-in Spec §4 safety net — server ปฏิเสธเข้าโต๊ะเพราะ token ไม่พอ (ปกติ Lobby เช็คไว้ก่อนแล้ว)
@@ -581,7 +623,7 @@ const GameTableLive: React.FC = () => {
         data.message === 'INSUFFICIENT_TOKENS' ? 'You do not have enough tokens for this table\'s buy-in.'
           : data.message === 'ACTIVE_MATCH_EXISTS' ? 'You have an unfinished match.'
           : 'Something went wrong. Please try again.',
-        [{ text: 'OK', onPress: () => router.replace('/(home)/lobby') }]
+        [{ text: 'OK', onPress: () => router.replace('/(home)/classic-lobby') }]
       )
     })
 
@@ -594,6 +636,8 @@ const GameTableLive: React.FC = () => {
     }
 
     const processRoundStart = (data: any) => {
+      if (resumeWatchdog) { clearTimeout(resumeWatchdog); resumeWatchdog = null }
+      setPileRevealShowcases([])
       setPhase('arrangement')
       setRoundNumber(data.roundNumber)
       setIsReady(false); setSortDone(false); setSelected(null)
@@ -629,6 +673,7 @@ const GameTableLive: React.FC = () => {
       ;[SEAT_TARGETS.boss, SEAT_TARGETS.p4, SEAT_TARGETS.user, SEAT_TARGETS.p2].forEach(from => {
         flyingCoinsRef.current?.fire('ante', from, SEAT_TARGETS.center)
       })
+      playAnte() // SFX: หัก Ante ต้นรอบ — ครั้งเดียวต่อรอบ ไม่ใช่ต่อที่นั่ง
 
       setComm({
         p1: data.communityCards.pile1,
@@ -636,6 +681,7 @@ const GameTableLive: React.FC = () => {
         p3: data.communityCards.pile3,
       })
       setBlind(data.blindAuction ?? [])
+      setMissions(Array.isArray(data.missions) ? data.missions : [])
 
       // Buy-in (Escrow) — แสดง popup เฉพาะ Round 1
       if (data.buyInAmount && data.roundNumber === 1) {
@@ -662,12 +708,13 @@ const GameTableLive: React.FC = () => {
       setPiles([cardObjs.slice(0, 3), cardObjs.slice(3, 6), cardObjs.slice(6, 11)])
 
       // Patch: timer Arrangement R1 อ่านจาก gameConfig.arrangementTimer (Backend ส่งมาทาง data.timer)
-      const t = data.timer ?? 35
+      const t = data.timer ?? 135
       timerValRef.current = { val: t, max: t }
       if (timerRef.current) clearInterval(timerRef.current)
       timerRef.current = setInterval(() => {
         const next = Math.max(0, timerValRef.current.val - 1)
         timerValRef.current = { ...timerValRef.current, val: next }
+        if (next === 3) playCountdownWarning() // เตือนครั้งเดียวตอนข้าม 3 วิ (ไม่ใช่ทุก tick ที่ <=3)
         if (next <= 0) {
           clearInterval(timerRef.current)
           setPiles(cur => {
@@ -676,7 +723,7 @@ const GameTableLive: React.FC = () => {
               arrangement: {
                 pile1: cur[0].map((c: CardData) => c.key),
                 pile2: cur[1].map((c: CardData) => c.key),
-                pile3: cur[2].map((c: CardData) => c.key), // Patch Mastermind: ส่ง 5 ใบเต็ม Discard Phase จะตัดทีหลัง (ไม่ใช่ slice เหลือ 3 แบบ Initiate)
+                pile3: cur[2].map((c: CardData) => c.key), // Tier A: lock all five private G3 cards for Best 5/7.
               },
             })
             return cur
@@ -707,6 +754,7 @@ const GameTableLive: React.FC = () => {
       let c = data.seconds ?? 3
       const tick = () => {
         setCountdown(c)
+        if (c > 0) playRevealCountdownTick()
         Animated.sequence([
           // Patch 2026-07-18: useNativeDriver false ตาม Adept (adept:520-521) — countdown overlay
           // ค้าง mount ตลอดเวลาแล้ว (ไม่ conditional-mount อีกต่อไป) แต่ยังคง false ไว้กันความเสี่ยง
@@ -714,52 +762,28 @@ const GameTableLive: React.FC = () => {
           Animated.timing(countAnim, { toValue: 1.6, duration: 150, useNativeDriver: false }),
           Animated.timing(countAnim, { toValue: 1,   duration: 850, useNativeDriver: false }),
         ]).start()
-        console.log('[ANIM-DEBUG] START countAnim (tick c=' + c + '), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
         if (c > 0) { c--; setTimeout(tick, 1000) }
       }
       tick()
     })
 
-    // showdown_result — server ส่งผลทุก Pile พร้อมกัน → แสดง popup ทันที
-    socket.on('showdown_result', (data: any) => {
-      const results = data.pileResults ?? []
-      const newAllCards: Record<string, Record<number, string[]>> = {}
-      const newWinners: Record<number, string> = {}
-      const newHandRanks: Record<number, string> = {}
-      const newFouled: Record<string, boolean> = {}
-
-      results.forEach((pile: any) => {
-        const pNum: number = pile.pileNumber
-        // เก็บไพ่ทุกคน
-        Object.entries(pile.arrangements ?? {}).forEach(([pid, cards]) => {
-          if (!newAllCards[pid]) newAllCards[pid] = {}
-          newAllCards[pid][pNum] = cards as string[]
-        })
-        if (pile.winner) newWinners[pNum] = pile.winner
-        if (pile.winnerHandRank) newHandRanks[pNum] = pile.winnerHandRank
-        if (pile.fouled) Object.assign(newFouled, pile.fouled)
-      })
-
-      setAllCards(newAllCards)
-      setPileWinners(newWinners)
-      setHandRanks(newHandRanks)
-      setHasFoul(newFouled)
-      setFoulReasons(data.foulReasons ?? {})
-      setTokenDeltas(data.tokenDeltas ?? {})
-      setPhase('showdown')
-
-      // Coin Flying VFX — Mastermind = Sequential Showdown: showdown_result มีแค่ Pile1/2
-      // (Pile3/Grand Finale แยกไปยิงที่ grand_finale_result ด้านล่าง)
-      const pileCoinVariant = { 1: 'pile1', 2: 'pile2', 3: 'pile3' } as const
-      ;([1, 2] as const).forEach(pNum => {
-        const winnerId = newWinners[pNum]
-        if (winnerId) flyingCoinsRef.current?.fire(pileCoinVariant[pNum], SEAT_TARGETS.center, seatTargetFor(winnerId))
-      })
-    })
-
-    // pile_reveal — Pro+ sequential (ยังคงไว้สำหรับ Mastermind+)
+    // pile_reveal — event จริงที่ server ยิงสำหรับ Pile 1/2 ใน Mastermind (resolveMastermindPile12())
+    // หมายเหตุ: เดิมมี handler 'showdown_result' แยกอยู่ที่ยิง FlyingCoins/SFX แต่ server tier นี้
+    // ไม่เคยเรียก resolveMultiShowdown() ที่ emit event นั้น (ตกค้างจากการ copy highNoble/index.tsx มา)
+    // ลบ handler นั้นทิ้งแล้ว — VFX/SFX ย้ายมารวมที่นี่ ซึ่งเป็นจุดที่ผล Pile 1/2 มาถึงจริง
     socket.on('pile_reveal', (data: any) => {
       const pNum: number = data.pileNumber
+      if (pNum === 1) setAwaitingG1Commit(true)
+      if (pNum === 2) setAwaitingG1Commit(false)
+      if ((pNum === 1 || pNum === 2) && data.winner && data.winnerBestFive?.length === 5) {
+        setPileRevealShowcases(previous => [...previous, {
+          key: `${data.roomId ?? ROOM_ID}:${data.roundNumber ?? Date.now()}:g${pNum}`,
+          pile: pNum, winnerId: data.winner, winnerBestFive: data.winnerBestFive,
+          communityCards: data.communityCards ?? [], handRanking: data.winnerHandRank ?? 'WIN',
+          missionScores: data.missionScores ?? {},
+          localCombo: pNum === 2 && (data.comboPlayers?.[PLAYER_ID] ?? 0) > 0 ? { kind: 'COMBO', bonus: data.comboPlayers[PLAYER_ID] } : undefined,
+        }])
+      }
       const arrangements: Record<string, string[]> = data.arrangements ?? {}
       setAllCards(prev => {
         const next = { ...prev }
@@ -770,11 +794,25 @@ const GameTableLive: React.FC = () => {
         return next
       })
       setPileWinners(prev => ({ ...prev, [pNum]: data.winner }))
-      if (data.winnerHandRank) setHandRanks(prev => ({ ...prev, [pNum]: data.winnerHandRank }))
+      if (data.winnerHandRank) {
+        setHandRanks(prev => ({ ...prev, [pNum]: data.winnerHandRank }))
+        if (aiList.some(ai => ai.id === data.winner) && String(data.winnerHandRank).toLowerCase().replace(/[ _-]/g, '') === 'royalflush') setRoyalFlushWinner(data.winner)
+      }
       setHasFoul(data.fouled ?? {})
       if (data.foulReasons) setFoulReasons(data.foulReasons)
       // Patch: เปิด popup Showdown ทันทีที่ Pile แรกมาถึง (ไม่ต้องรอ pNum===3 ซึ่ง Mastermind ไม่ไปถึง ณ จุดนี้)
       setPhase('showdown')
+      playCardReveal() // SFX: กอง (1 หรือ 2) ถูกเปิดเผยผลลัพธ์ — event นี้ยิงทีละกองอยู่แล้ว จึงเล่นครั้งเดียวต่อกองพอดี
+      // SFX: Boss (Sentinel ที่ aiList[0]) ชนะกอง 1 หรือ 2 — Pile 3 (Grand Finale) แยกไปเช็คที่ grand_finale_result
+      if (data.winner && data.winner === aiListRef.current[0]?.id) playBossPileWinThunder()
+
+      // Coin Flying VFX — ย้ายมาจาก 'showdown_result' (dead code สำหรับ Tier นี้) เพราะ pile_reveal
+      // คือ event จริงที่มี data.winner ของ Pile 1/2 ให้ใช้
+      const pileCoinVariant = { 1: 'pile1', 2: 'pile2', 3: 'pile3' } as const
+      if (data.winner && (pNum === 1 || pNum === 2)) {
+        flyingCoinsRef.current?.fire(pileCoinVariant[pNum], SEAT_TARGETS.center, seatTargetFor(data.winner))
+        playPokerChip()
+      }
     })
     // Patch Mastermind: Fog of War — กลับหน้าโต๊ะ เหลือ Pile 3 เท่านั้น
     socket.on('fog_of_war', (_data: any) => {
@@ -790,7 +828,6 @@ const GameTableLive: React.FC = () => {
         pileFadeTimeoutRef.current = null
         pileFadeAnim.stopAnimation()
         Animated.timing(pileFadeAnim, { toValue: 0, duration: 3000, useNativeDriver: true }).start()
-        console.log('[ANIM-DEBUG] START pileFadeAnim (fog_of_war, +5s one-shot), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
       }, 5000)
       fogBlinkLoopRef.current?.stop()
       fogBlinkAnim.setValue(1)
@@ -801,7 +838,6 @@ const GameTableLive: React.FC = () => {
         ])
       )
       fogBlinkLoopRef.current.start()
-      console.log('[ANIM-DEBUG] START fogBlinkAnim (Animated.loop, fog_of_war handler), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
     })
     // Patch Blind Auction: เริ่มประมูล
     socket.on('blind_auction_start', (data: any) => {
@@ -845,19 +881,21 @@ const GameTableLive: React.FC = () => {
       setPhase('auction_done')
       offerBark({ speaker: aiListRef.current[0]?.name ?? 'Oracle', event: 'AUCTION_WIN' })
     })
-    // Patch High Noble: Arrangement รอบ2 — จัดไพ่ใหม่รวมไพ่ที่ประมูลได้ (สูงสุด 12 ใบ)
+    // Tier A: post-Auction Arrangement 2, including the won card (up to 12 cards).
     socket.on('arrangement_2_start', (data: any) => {
       setPhase('arrangement_2')
       setIsReady(false); setSortDone(false); setSelected(null)
       const myCards: string[] = data.cards ?? []
       const cardObjs = myCards.map((k: string, i: number) => ({ id: `c2_${i}`, key: k }))
-      setPiles([cardObjs.slice(0, 3), cardObjs.slice(3, 6), cardObjs.slice(6)])
-      const t = data.timer ?? 20
+      // Final post-Auction layout is always 3 / remaining Pile 2 / 5.
+      setPiles([cardObjs.slice(0, 3), cardObjs.slice(3, Math.max(3, cardObjs.length - 5)), cardObjs.slice(-5)])
+      const t = data.timer ?? 68
       timerValRef.current = { val: t, max: t }
       if (timerRef.current) clearInterval(timerRef.current)
       timerRef.current = setInterval(() => {
         const next = Math.max(0, timerValRef.current.val - 1)
         timerValRef.current = { ...timerValRef.current, val: next }
+        if (next === 3) playCountdownWarning() // เตือนครั้งเดียวตอนข้าม 3 วิ (arrangement รอบ 2)
         if (next <= 0) {
           clearInterval(timerRef.current)
           setPiles(cur => {
@@ -903,7 +941,6 @@ const GameTableLive: React.FC = () => {
             Animated.timing(confirmBlinkAnim, { toValue: 0.3, duration: 350, useNativeDriver: true }),
             Animated.timing(confirmBlinkAnim, { toValue: 1,   duration: 350, useNativeDriver: true }),
           ]).start()
-          console.log('[ANIM-DEBUG] START confirmBlinkAnim (discard tick left=' + left + '), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
         }
         if (left <= 0) clearInterval(discardTimerRef.current)
       }, 1000)
@@ -942,7 +979,6 @@ const GameTableLive: React.FC = () => {
             Animated.timing(confirmBlinkAnim, { toValue: 0.3, duration: 350, useNativeDriver: true }),
             Animated.timing(confirmBlinkAnim, { toValue: 1,   duration: 350, useNativeDriver: true }),
           ]).start()
-          console.log('[ANIM-DEBUG] START confirmBlinkAnim (discard tick left=' + left + '), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
         }
         if (left <= 0) clearInterval(discardTimerRef.current)
       }, 1000)
@@ -969,6 +1005,10 @@ const GameTableLive: React.FC = () => {
       console.log('🟢 [DEBUG] grand_finale_start received!', data)
       setPhase('grand_finale')
       setGfRoundNumber(1)
+      setGfCommunityRevealed(data.communityRevealed === 2 ? 2 : 1)
+      if (Array.isArray(data.communityCards)) setComm(prev => ({ ...prev, p3: data.communityCards }))
+      else if (data.revealedCommunityCard) setComm(prev => ({ ...prev, p3: [data.revealedCommunityCard] }))
+      setGfLegalActions(['check','bet'])
       setGfPile3Pot(data.pile3Pot ?? 0)
       setGfFoulPlayers(data.foulPlayers ?? [])
       setGfFoldedPlayers([])
@@ -981,12 +1021,16 @@ const GameTableLive: React.FC = () => {
       // Patch High Noble: reset selected card เมื่อเข้ารอบใหม่
       setGfSelectedCardKey(null)
       setGfRoundNumber(data.roundNumber ?? 2)
+      setGfCommunityRevealed(data.communityRevealed === 2 ? 2 : 1)
+      if (Array.isArray(data.communityCards)) setComm(prev => ({ ...prev, p3: data.communityCards }))
+      else if (data.revealedCommunityCard) setComm(prev => ({ ...prev, p3: [...prev.p3, data.revealedCommunityCard] }))
       setGfPile3Pot(data.pile3Pot ?? gfPile3Pot)
     })
     // Patch Grand Finale: ตา player คนนี้
     socket.on('grand_finale_turn', (data: any) => {
       setGfTurnPlayerId(data.playerId ?? null)
       gfCallAmount.current = data.callAmount ?? 0
+      setGfLegalActions(data.legalActions ?? (data.currentBet > 0 ? ['call','fold'] : ['check','bet']))
       const totalSec = Math.ceil((data.timeLimitMs ?? 10000) / 1000)
       setGfTimeLeft(totalSec)
       if (gfTimerRef.current) clearInterval(gfTimerRef.current)
@@ -1011,7 +1055,6 @@ const GameTableLive: React.FC = () => {
           Animated.timing(gfBlinkAnim, { toValue: 1,   duration: 500, useNativeDriver: true }),
         ])
       ).start()
-      console.log('[ANIM-DEBUG] START gfBlinkAnim (Animated.loop, grand finale turn handler), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
     })
     // Patch Grand Finale: ผล action ของผู้เล่นคนหนึ่ง
     socket.on('grand_finale_action', (data: any) => {
@@ -1022,17 +1065,18 @@ const GameTableLive: React.FC = () => {
       gfBlinkAnim.stopAnimation()
       // Coin Flying VFX — Call เท่านั้น (Fold ไม่มีเงินไหล) บินจากที่นั่งผู้เล่นไป Token Flow Panel
       // มุมขวาบน (มติลุงเยาะ 2026-07-26) ใช้ variant 'ante' เพราะเป็นการจ่ายจากผู้เล่นเข้ากองแบบเดียวกัน
-      if (data.action !== 'fold') {
+      if (data.action === 'bet' || data.action === 'call') {
         flyingCoinsRef.current?.fire('ante', seatTargetFor(data.playerId), SEAT_TARGETS.tokenPanel)
       }
       if (data.action === 'fold') {
         setGfFoldedPlayers(prev => [...prev, data.playerId])
       } else if (data.revealedCard) {
-        console.log('🔴 [DEBUG] revealedCard from server:', data.revealedCard, 'playerId:', data.playerId)
-        if (data.playerId === PLAYER_ID) {
-          console.log('🔴 [DEBUG] piles[2] keys:', piles[2].map(c => c.key))
-        }
-        setGfRevealedCards(prev => ({ ...prev, [data.playerId]: [...(prev[data.playerId] ?? []), data.revealedCard] }))
+        // กันไพ่ใบเดิมถูกเพิ่มซ้ำ (เช่น event ส่งซ้ำหลัง reconnect) ทำให้นับจำนวนไพ่ที่หงายเพี้ยน
+        setGfRevealedCards(prev => {
+          const current = prev[data.playerId] ?? []
+          if (current.includes(data.revealedCard)) return prev
+          return { ...prev, [data.playerId]: [...current, data.revealedCard] }
+        })
       }
       setGfPile3Pot(data.pile3Pot ?? 0)
       setTokenBalance(data.tokenBalance ?? {})
@@ -1041,19 +1085,32 @@ const GameTableLive: React.FC = () => {
     // Patch Grand Finale: เทียบไพ่ Round 2 (หงายไพ่ครบทุกคนที่เหลือ)
     socket.on('grand_finale_reveal_all', (data: any) => {
       setGfFinalReveals(data.reveals ?? {})
+      if (Array.isArray(data.communityCards)) setComm(prev => ({ ...prev, p3: data.communityCards }))
     })
     // Patch Grand Finale: ผลสุดท้าย
     socket.on('grand_finale_result', (data: any) => {
+      roundSummaryContinuedRef.current = false
       setGfFinalResult(data)
       setTokenBalance(data.tokenBalance ?? {})
       syncTokenFlow(data)  // Pot จ่ายออกหมด -> กลับเป็น 0 ทั้ง 3 กอง / Fee & Rake โตตาม rake รอบนี้
       setPhase('grand_finale_done')
+      playCardReveal() // SFX: ผล Pile 3 (Grand Finale) ถูกเปิดเผยแล้ว — เล่นครั้งเดียวต่อรอบตรงจุดที่ผลมาถึง UI
       setGfResultStage(1)
       // หลัง 5 วิ ไป stage 2 (Round Summary)
       setTimeout(() => setGfResultStage(2), 5000)
 
       // Coin Flying VFX — Pile3 (Grand Finale) รู้ผลแยกจาก Pile1/2 (winnerId ว่างได้ถ้า all-foul)
-      if (data.winnerId) flyingCoinsRef.current?.fire('pile3', SEAT_TARGETS.center, seatTargetFor(data.winnerId))
+      if (data.winnerId) { flyingCoinsRef.current?.fire('pile3', SEAT_TARGETS.center, seatTargetFor(data.winnerId)); playPokerChip() }
+
+      // SFX: Triple Sweep congratulations is only for local P1. Use the server-authoritative winner
+      // instead of deriving from pileWinners because Pile 3 arrives through Grand Finale.
+      // จาก pileWinners[3] ฝั่ง client เพราะ Tier นี้ไม่เคย setPileWinners(3) เลย (Pile 3 มาจาก Grand Finale
+      // event นี้ ไม่ใช่ pile_reveal เหมือน Pile 1/2) — data.jackpotWinner คือ "whatever winner data is
+      // already available" ที่ตรงตามเงื่อนไขสุดพอดีอยู่แล้ว (null ถ้าไม่ sweep)
+      if (data.jackpotWinner === PLAYER_ID) playJackpotFanfare()
+      if (data.scoring?.[PLAYER_ID]?.comboKind === 'SUPER_COMBO') setTierDComboBurst({ key: `${data.roomId ?? ROOM_ID}:${Date.now()}:super`, kind: 'SUPER_COMBO', bonus: data.scoring[PLAYER_ID].combo ?? 0 })
+      // SFX: Boss ชนะกอง 3 (Grand Finale) — เว้นกรณี burned (ทุกคน fold/foul = ไม่มีผู้ชนะจริง)
+      if (!data.burned && data.winnerId && data.winnerId === aiListRef.current[0]?.id) playBossPileWinThunder()
     })
     socket.on('grand_finale_all_foul', (_data: any) => {
       offerBark({ speaker: aiListRef.current[0]?.name ?? 'Jester', event: 'FOUL' })
@@ -1067,6 +1124,7 @@ const GameTableLive: React.FC = () => {
       setPhase('result')
       setTokenBalance(data.tokenBalance ?? {})
       setTokenDeltas(data.tokenDeltas ?? {})
+      profitableAdTicketRef.current = data.profitableAdTicket
       syncTokenFlow(data)
       const speaker = aiListRef.current[0]?.name ?? 'Iron Wall'
       const winners = Object.values(data.pileWinners ?? {})
@@ -1094,6 +1152,7 @@ const GameTableLive: React.FC = () => {
         useUserStore.getState().updateTokenBalance(data.newTokenBalance)
       }
       if (data.finalWinner === PLAYER_ID) {
+        playMatchWin()
         // Patch 2026-07-18: VFX ชัยชนะ Sentinel — เด้งทันทีที่ชนะ ทับทุกอย่าง เล่นจบ unmount ตัวเอง
         if (data.sentinelConquered) setVictoryVfx('sentinel')
         // Patch 2026-07-18: หยุด loop/composite ค้างจากรอบก่อน (ถ้ามี) ก่อนเริ่มใหม่เสมอ +
@@ -1132,6 +1191,7 @@ const GameTableLive: React.FC = () => {
     })
 
     return () => {
+      if (resumeWatchdog) clearTimeout(resumeWatchdog)
       if (timerRef.current) clearInterval(timerRef.current)
       if (lockupFailSafeRef.current) clearTimeout(lockupFailSafeRef.current)
       if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop() // Patch: หยุด deal anim ตอน unmount
@@ -1148,7 +1208,37 @@ const GameTableLive: React.FC = () => {
       gfBlinkAnim.stopAnimation()
       socket.disconnect()
     }
-  }, [])
+  }, [PLAYER_ID, accessToken, bossId])
+
+  // Android hardware back — ยืนยันก่อนออกโต๊ะกลางเกม (มติลุงเยาะ 2026-08-13, pattern เดียวกับ
+  // vipPlus/index.tsx's WAITING-screen back handler แต่ครอบคลุมกลางแมตช์ด้วย — ไม่มี Tier ไหนเคยมี
+  // จริงมาก่อน ExitTableButton.tsx เดิมเป็น dead code ไม่มีไฟล์ไหนเรียกใช้) phase==='end' = แมตช์
+  // settled state must leave through MatchEndOverlay so the single post-
+  // settlement exit gateway can serialize navigation/ad policy. Do not let
+  // Android hardware back bypass that button and create an untracked exit.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (phase === 'end') return true
+      Alert.alert(
+        'Leave this table?',
+        'Leaving during an active match counts as a forfeit. Your current stack will be settled and returned.',
+        [
+          { text: 'Stay', style: 'cancel' },
+          {
+            text: 'Leave Table',
+            style: 'destructive',
+            onPress: () => {
+              socketRef.current?.emit('player_leave', { roomId: ROOM_ID, playerId: PLAYER_ID })
+              leaveTierCPlusTable()
+            },
+          },
+        ],
+      )
+      return true
+    })
+    return () => subscription.remove()
+  }, [phase, ROOM_ID, PLAYER_ID])
 
   // ── Deal Animation
   // Patch 2026-07-17: composite ref เก็บ Animated.parallel ไว้เรียก .stop() (พอร์ต pattern จาก Adept)
@@ -1159,6 +1249,7 @@ const GameTableLive: React.FC = () => {
   useEffect(() => { getReduceMotion().then(v => { reduceMotionRef.current = v }) }, [])
 
   const startDealAnimation = () => {
+    playCardShuffle() // SFX: ครั้งเดียวตอนเริ่ม deal animation ของรอบ
     // Patch: หยุด animation รอบเก่าก่อนเสมอ — กัน "Animated node is already attached to a view"
     if (dealAnimCompositeRef.current) dealAnimCompositeRef.current.stop()
     // ตำแหน่งปลายทาง: Boss=บน, P4=ขวา, User=ล่าง, P2=ซ้าย
@@ -1202,7 +1293,6 @@ const GameTableLive: React.FC = () => {
 
     const dealComposite = Animated.parallel(anims)
     dealAnimCompositeRef.current = dealComposite
-    console.log('[ANIM-DEBUG] START dealAnims composite (dealAnimCompositeRef), phase=', phase) // ANIM-DEBUG: ลบออกหลังปิดเคส
     dealComposite.start(({ finished }) => {
       dealAnimCompositeRef.current = null
       if (!finished) return // ถูก .stop() กลางทาง — ห้ามแตะ phase (กันเด้งไป arrangement ผิดจังหวะ)
@@ -1230,14 +1320,27 @@ const GameTableLive: React.FC = () => {
   // ── Card swap
   const handleCardPress = useCallback((pi: number, ci: number) => {
     if (isReady || (phase !== 'arrangement' && phase !== 'arrangement_2')) return
-    if (!selected) { setSelected({ pi, ci }); return }
+    // handler เดียวใช้ร่วมทั้ง arrangement และ arrangement_2 (ไม่มี handler แยกสองตัวแบบที่เคยเดาไว้)
+    if (!selected) { setSelected({ pi, ci }); playCardArrange1() /* SFX: แตะไพ่ใบแรก */; return }
     if (selected.pi === pi && selected.ci === ci) { setSelected(null); return }
     const np = piles.map(p => [...p]) as [CardData[], CardData[], CardData[]]
     const tmp = np[selected.pi][selected.ci]
     np[selected.pi][selected.ci] = np[pi][ci]
     np[pi][ci] = tmp
     setPiles(np); setSelected(null); setSortDone(false)
+    playCardArrange2() // SFX: แตะไพ่ใบที่สอง — สลับสำเร็จ
   }, [isReady, phase, selected, piles])
+
+  const handleCardDrop = useCallback((from: { pi: number; ci: number }, to: { pi: number; ci: number }) => {
+    if (isReady || (phase !== 'arrangement' && phase !== 'arrangement_2') || (from.pi === to.pi && from.ci === to.ci)) return
+    setPiles(current => {
+      if (!current[from.pi]?.[from.ci] || !current[to.pi]?.[to.ci]) return current
+      const next = current.map(pile => [...pile]) as [CardData[], CardData[], CardData[]]
+      ;[next[from.pi][from.ci], next[to.pi][to.ci]] = [next[to.pi][to.ci], next[from.pi][from.ci]]
+      return next
+    })
+    setSelected(null); setSortDone(false); playCardArrange2()
+  }, [isReady, phase])
 
   // Auto Sort (เสียทุกครั้งที่กด ไม่มีรอบฟรี - มติลุงเยาะ 2026-07-25) ค่า Auto Sort อ่านจาก server
   // (ดู gameConfig.autoSortFee / getAutoSortFee() — ห้าม hardcode ตัวเลขในนี้อีก)
@@ -1246,6 +1349,7 @@ const GameTableLive: React.FC = () => {
   const handleAutoSort = () => {
     if (!comm.p1[0] || sortDone) return
     if (phase !== 'arrangement' && phase !== 'arrangement_2') return
+    playAutoSortButton() // SFX: กดปุ่ม AUTO SORT — ผ่าน guard แล้ว ไม่ใช่การกดที่เป็น no-op
 
     // ใช้ updater form เพื่ออ่านไพ่ล่าสุด เผื่อผู้เล่นสลับไพ่ระหว่างรอ ack จาก server
     const applySort = () => {
@@ -1283,6 +1387,7 @@ const GameTableLive: React.FC = () => {
   // Patch Mastermind: ตัด Discard popup ออกจาก Ready — Discard Phase จริงเกิดหลัง Blind Auction (patch ถัดไป)
   const handleReady = () => {
     if (isReady || (phase !== 'arrangement' && phase !== 'arrangement_2')) return
+    playReadyButton() // SFX: กดปุ่ม READY — handler เดียวใช้ร่วมทั้ง arrangement และ arrangement_2
     setIsReady(true)
     if (timerRef.current) clearInterval(timerRef.current)
     // Patch High Noble: arrangement_2 ส่งไป submit_arrangement_2 แทน player_ready
@@ -1292,14 +1397,15 @@ const GameTableLive: React.FC = () => {
       arrangement: {
         pile1: piles[0].map(c => c.key),
         pile2: piles[1].map(c => c.key),
-        pile3: piles[2].map(c => c.key), // เต็ม 5 ใบ — Discard Phase จริงจะตัดทีหลัง
+        pile3: piles[2].map(c => c.key),
       },
     })
   }
-  // Patch Discard Phase: ยืนยันเลือกทิ้งไพ่จากมือ Server (5-6 ใบ) เหลือ 3 ใบ
+  // Legacy compatibility only: Tier A must always retain five private G3 cards.
   const handleDiscardConfirm = () => {
-    const maxDiscard = discardHandKeys.length - 3
+    const maxDiscard = Math.max(0, discardHandKeys.length - 5)
     if (discardSelected.length !== maxDiscard) return
+    playReadyButton()
     if (discardTimerRef.current) clearInterval(discardTimerRef.current)
     const keepKeys = discardHandKeys.filter((_, i) => !discardSelected.includes(i))
     socketRef.current?.emit('discard_submit', { roomId: ROOM_ID, playerId: PLAYER_ID, keepKeys })
@@ -1310,6 +1416,7 @@ const GameTableLive: React.FC = () => {
 
   // Patch (บั๊กแก้) High Noble: toggle เลือกทิ้งทีละกอง
   const toggleDiscardPile = (pile: 'pile1' | 'pile2' | 'pile3', idx: number) => {
+    playCardArrange1()
     setDiscardSelByPile(cur => {
       const list = cur[pile]
       const next = list.includes(idx) ? list.filter(i => i !== idx) : [...list, idx]
@@ -1321,6 +1428,7 @@ const GameTableLive: React.FC = () => {
     const okP2 = discardSelByPile.pile2.length === discardNeed.pile2
     const okP3 = discardSelByPile.pile3.length === discardNeed.pile3
     if (!okP1 || !okP2 || !okP3) return
+    playReadyButton()
     if (discardTimerRef.current) clearInterval(discardTimerRef.current)
     const keepFrom = (pile: 'pile1' | 'pile2' | 'pile3') =>
       discardPiles[pile].filter((_, i) => !discardSelByPile[pile].includes(i))
@@ -1332,9 +1440,11 @@ const GameTableLive: React.FC = () => {
     setIsHNDiscard(false)
   }
   const toggleDiscard = (idx: number) => {
+    playCardArrange1()
     setDiscardSelected(prev => {
       if (prev.includes(idx)) return prev.filter(i => i !== idx)
-      if (prev.length >= 2) return prev
+      const maxDiscard = Math.max(0, discardHandKeys.length - 5)
+      if (prev.length >= maxDiscard) return prev
       return [...prev, idx]
     })
   }
@@ -1342,6 +1452,7 @@ const GameTableLive: React.FC = () => {
   const handleAuctionBid = (cardIndex: 0 | 1, level: number) => {
     if (auctionMyBid) return
     setAuctionMyBid({ cardIndex, level })
+    playAuctionBidTick() // SFX: ยืนยันการส่งบิด Blind Auction จริง
     socketRef.current?.emit('auction_bid', { roomId: ROOM_ID, playerId: PLAYER_ID, cardIndex, level })
   }
 
@@ -1364,6 +1475,16 @@ const GameTableLive: React.FC = () => {
     setShowResult(false)
     // Patch Mastermind: ไม่ fade ไพ่ออกเพราะ Flow ต่อใน Round เดิม (Fog of War → Auction → Discard → Grand Finale)
     socketRef.current?.emit('player_continue', { roomId: ROOM_ID, playerId: PLAYER_ID })
+  }
+
+  const handleRoundSummaryContinue = async () => {
+    if (roundSummaryContinuedRef.current) return
+    roundSummaryContinuedRef.current = true
+    const adTicket = profitableAdTicketRef.current
+    profitableAdTicketRef.current = undefined
+    await showProfitableAiInterstitial(adTicket, accessToken)
+    socketRef.current?.emit('player_continue', { roomId: ROOM_ID, playerId: PLAYER_ID })
+    setGfFinalResult(null)
   }
 
   // auto continue ย้ายไปทำใน startContinueCountdown interval แทน (เลี่ยง re-render)
@@ -1418,13 +1539,13 @@ const GameTableLive: React.FC = () => {
       </View>
     )
   }
-  // ไพ่หงายของผู้เล่นแต่ละคนใน Grand Finale (Round 1 = 1 ใบ, Round 2 จบ = 3 ใบ)
+  // ไพ่หงายของผู้เล่นแต่ละคนใน Grand Finale; Showdown reveals all five.
   const GFCardsForPlayer: React.FC<{ playerId: string; size?: 'normal' | 'small' }> = ({ playerId, size = 'normal' }) => {
     if (phase !== 'grand_finale' && phase !== 'grand_finale_done') return null
     const w = size === 'normal' ? 50 : 25 // ขนาดเท่าหลังไพ่ในแถวเดียวกัน
     const h = size === 'normal' ? 72 : 36
     const revealedList = gfRevealedCards[playerId] ?? []   // ใบที่หงายแล้ว (รอบ 1 + รอบ 2)
-    const finalRev = gfFinalReveals[playerId] ?? [] // Round 2 จบ — 3 ใบครบ
+    const finalRev = gfFinalReveals[playerId] ?? []
     const cardsToShow = finalRev.length > 0 ? finalRev : revealedList
     if (cardsToShow.length === 0) return null
     return (
@@ -1458,13 +1579,15 @@ const GameTableLive: React.FC = () => {
     </View>
   )
 
-  // Grand Finale: แถวไพ่ 3 ใบเรียงแนวนอน (หลังไพ่หรือหงาย) — ต้อง useCallback ห่อไว้เสมอ (มติลุงเยาะ
+  // Grand Finale: แถวไพ่ส่วนตัว 5 ใบ — ต้อง useCallback ห่อไว้เสมอ (มติลุงเยาะ
   // 2026-07-26 แก้บั๊กไพ่กระพริบ) เดิม component นี้ถูกนิยามใหม่ทุก render อยู่ข้างในของ IIFE ที่รันซ้ำ
   // ทุกครั้งที่ phase เป็น grand_finale (ตัว parent re-render ถี่มากจาก timer ต่างๆ) ทำให้ React เห็นเป็น
   // component คนละตัวทุกครั้งแล้ว unmount/remount subtree ทิ้ง — GFFanCard (VIP fan, useSharedValue lift)
   // เจอปัญหานี้ตรงๆ เพราะ mount ใหม่ทุกครั้ง lift รีเซ็ตเป็น 0 แล้ว animate กลับที่เดิมซ้ำๆ ดูเหมือนกระพริบ
   // (เหตุผลเดียวกับ comment บนสุดของ AvatarFrame.tsx ที่เจอบั๊กคลาสเดียวกันมาก่อนแล้ว)
-  const GF_CW = 50, GF_CH = 72, GF_GAP = -25 // overlap 50% หลังไพ่
+  // AI card backs in Call/Fold overlap by 38/50px = 76%, keeping all five
+  // cards identifiable while fitting the three opponent seats cleanly.
+  const GF_CW = 50, GF_CH = 72, GF_GAP = -38
   const GFPile3Row = useCallback(({ playerId, isHuman = false }: { playerId: string; isHuman?: boolean }) => {
     // Patch: User ใช้ขนาดไพ่ใหญ่เท่าตอน arrangement (62×90); AI คงขนาดเล็กเดิม (50×72)
     const CW_USER_OR_AI = isHuman ? CW : GF_CW
@@ -1472,22 +1595,11 @@ const GameTableLive: React.FC = () => {
     const GAP_USER_OR_AI = isHuman ? OVERLAP : GF_GAP
     const calledKeys = gfRevealedCards[playerId] ?? []
     const finalRev = gfFinalReveals[playerId] ?? []
-    // Round 2 จบ → หงายครบ 3 ใบ
-    if (finalRev.length === 3) {
-      return (
-        <View style={{ flexDirection: 'row', gap: GAP_USER_OR_AI, alignSelf: 'center' }}>
-          {finalRev.map((k, i) => (
-            <View key={i} style={{
-              width: CW_USER_OR_AI, height: CH_USER_OR_AI, borderRadius: 4, overflow: 'hidden',
-              borderWidth: 1.5, borderColor: '#FFD76A',
-            }}>
-              {CARD_IMG[k] && <Image source={CARD_IMG[k]} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />}
-            </View>
-          ))}
-        </View>
-      )
-    }
-    // P1 (Human) เห็นไพ่ตัวเอง 3 ใบ — ใบที่ Call ย้ายไปอยู่ขวาเสมอ (รองรับหลายใบที่หงายในรอบ 1+2)
+    // P1 keeps all five private cards visible. Called cards remain in Best 5/7.
+    // Patch 2026-08-13 (มติลุงเยาะ): ตัด top-level finalRev branch ที่เคยอยู่ตรงนี้ออกสำหรับ Human —
+    // ไพ่ตัวเองเห็นหน้าอยู่แล้วตลอดผ่าน branch ด้านล่าง (CARD_IMG[c.key] โชว์ตรงๆ ไม่สนใจ called status)
+    // เดิม finalRev snap ไป layout แถวเรียบ (gap:OVERLAP) ทับ SCATTER_SLOTS ที่กำลังแสดงอยู่ ทำให้ไพ่
+    // "กระโดด" ตำแหน่งตอนจบรอบทั้งที่ไม่มีอะไรเปลี่ยนจริง — ตัดออกทั้งหมด ให้ SCATTER_SLOTS คงอยู่ยาว
     if (isHuman) {
       const rawCards = piles[2] ?? []
       // Patch: ใบที่ Call แล้วย้ายไปอยู่ขวาสุด (เรียงตามลำดับที่หงาย)
@@ -1532,11 +1644,13 @@ const GameTableLive: React.FC = () => {
       // องศา) ห่างจากใบกลาง 14px ต่อฝั่ง (เกินขั้นต่ำ 10px ที่ขอ) — ค่าคงที่ตายตัว ไม่ใช้ Math.random()
       // ระหว่าง render กันบั๊กไพ่กระพริบซ้ำ (ดู comment เรื่อง GFFanCard remount ทุก render ด้านบน)
       const SCATTER_SLOTS = [
-        { dx: -76, dy: 8, deg: -2.5 },
+        { dx: -128, dy: 10, deg: -4 },
+        { dx: -64, dy: 4, deg: -2 },
         { dx: 0, dy: 0, deg: 0 },
-        { dx: 76, dy: -6, deg: 2.5 },
+        { dx: 64, dy: 4, deg: 2 },
+        { dx: 128, dy: 10, deg: 4 },
       ]
-      const SCATTER_W = 214, SCATTER_H = 112
+      const SCATTER_W = 326, SCATTER_H = 120
       return (
         <View style={{ width: SCATTER_W, height: SCATTER_H, alignSelf: 'center' }}>
           {cards.map((c, i) => {
@@ -1580,15 +1694,35 @@ const GameTableLive: React.FC = () => {
         </View>
       )
     }
-    // AI: 3 ใบหลัง — ใบที่ Call หงายแทน (right-most อันดับสุดท้าย, รองรับหลายใบจากรอบ 1+2)
-    // ถ้า Call 1 ใบ → ใบที่ 3 หงาย, 2 ใบ → ใบที่ 2-3 หงาย
-    const numRevealed = Math.min(calledKeys.length, 3)
+    // AI retains five private cards; each Call flips one of those same cards.
+    // Patch 2026-08-13 (มติลุงเยาะ): Fold แล้ว → คว่ำไพ่ทั้ง 5 ใบ ซ้อนทับชิดกันเหลือเห็น ≤10% ของ
+    // ความกว้างไพ่ต่อใบ แยก layout ออกจากปกติทั้งหมด (ไม่สนใจ calledKeys/finalRev อีกต่อไป)
+    if (gfFoldedPlayers.includes(playerId)) {
+      const FOLD_ML = -(GF_CW * 0.9) // เหลือเห็น 10% ของความกว้างไพ่ (GF_CW=50 -> เห็น 5px/ใบ)
+      return (
+        <View style={{ flexDirection: 'row', alignSelf: 'center' }}>
+          {[0, 1, 2, 3, 4].map(i => (
+            <View key={i} style={{
+              width: GF_CW, height: GF_CH, borderRadius: 4, overflow: 'hidden',
+              borderWidth: 1, borderColor: 'rgba(201,168,76,0.4)',
+              marginLeft: i === 0 ? 0 : FOLD_ML,
+            }}>
+              <Image source={cardBackImg} style={{ width: GF_CW, height: GF_CH }} resizeMode="cover" />
+            </View>
+          ))}
+        </View>
+      )
+    }
+    // Showdown reveals all five private cards in the same layout.
+    // (ไม่ snap ไป layout แถวแยกอีกต่อไป — มติลุงเยาะ 2026-08-13: หงายตำแหน่งเดิมตอนเล่น ไม่ห่างๆ)
+    const isFinal = finalRev.length === 5
+    const revealSource = isFinal ? finalRev : calledKeys
+    const numRevealed = isFinal ? 5 : Math.min(calledKeys.length, 5)
     return (
       <View style={{ flexDirection: 'row', alignSelf: 'center' }}>
-        {[0, 1, 2].map(i => {
-          // slot i = 2 คือใบขวาสุด, i = 1 ใบกลาง (หงายลำดับ 2), i = 0 ซ้ายสุด
-          const revealIdx = i - (3 - numRevealed) // index ใน calledKeys array (เรียงจากซ้ายไปขวา)
-          const isCalledSlot = revealIdx >= 0 && revealIdx < calledKeys.length
+        {[0, 1, 2, 3, 4].map(i => {
+          const revealIdx = i - (5 - numRevealed) // reveal called cards from the rightmost slots
+          const isCalledSlot = revealIdx >= 0 && revealIdx < numRevealed
           const ml = i === 0 ? 0 : GAP_USER_OR_AI
           return (
             <View key={i} style={{
@@ -1601,8 +1735,9 @@ const GameTableLive: React.FC = () => {
               // (แยกทิศจาก P1 — กันดูสับสนว่าใบไหนเป็นของใคร ขนาด offset เท่าเดิม)
               transform: [{ translateY: isCalledSlot ? 10 : 0 }],
             }}>
-              {isCalledSlot
-                ? <Image source={CARD_IMG[calledKeys[revealIdx]]} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />
+              {/* กัน key ว่าง/ไม่มีรูป -> ตกไปโชว์หลังไพ่แทนช่องว่างเปล่า (เหมือน guard ฝั่ง P1) */}
+              {isCalledSlot && CARD_IMG[revealSource[revealIdx]]
+                ? <Image source={CARD_IMG[revealSource[revealIdx]]} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />
                 : <Image source={cardBackImg} style={{ width: CW_USER_OR_AI, height: CH_USER_OR_AI }} resizeMode="cover" />
               }
             </View>
@@ -1610,7 +1745,7 @@ const GameTableLive: React.FC = () => {
         })}
       </View>
     )
-  }, [gfRevealedCards, gfFinalReveals, piles, phase, gfTurnPlayerId, gfSelectedCardKey, isVip, setGfSelectedCardKey])
+  }, [gfRevealedCards, gfFinalReveals, gfFoldedPlayers, piles, phase, gfTurnPlayerId, gfSelectedCardKey, isVip, setGfSelectedCardKey])
 
   const renderCard = (key: string | undefined, w: number, h: number, ml: number = 0, elKey?: string) => {
     if (key && CARD_IMG[key]) {
@@ -1628,10 +1763,9 @@ const GameTableLive: React.FC = () => {
     const fog = phase === 'fog_of_war'
     const p1 = fog ? [] : (allCards[aiId]?.[1] ?? []); const p2 = fog ? [] : (allCards[aiId]?.[2] ?? []); const p3 = allCards[aiId]?.[3] ?? []
     const cards = [...p1, ...p2, ...p3]
-    // Patch Grand Finale: ตอน gf ใช้ 3 ใบ (เริ่มต้น) หรือ 2 ใบ (ถ้า Call หงายไปแล้ว 1)
+    // Tier A Grand Finale always retains five private cards.
     const gf = phase === 'grand_finale' || phase === 'grand_finale_done'
-    const gfRevealed = gf ? (gfRevealedCards[aiId]?.length ?? 0) : 0
-    const layout: number[] = fog ? [5] : (gf ? [3 - gfRevealed] : [3, 3, 5])
+    const layout: number[] = fog ? [5] : (gf ? [5] : [3, 3, 5])
     return (
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
         {layout.map((cnt, pi) => (
@@ -1639,7 +1773,7 @@ const GameTableLive: React.FC = () => {
             {pi > 0 && <View style={{ width: 4 }} />}
             <View style={{ flexDirection: 'row' }}>
               {Array.from({ length: cnt }).map((_, ci) => {
-                const idx = fog ? ci : (gf ? 6 + ci + gfRevealed : (pi === 0 ? ci : pi === 1 ? 3 + ci : 6 + ci))
+                const idx = fog ? ci : (gf ? 6 + ci : (pi === 0 ? ci : pi === 1 ? 3 + ci : 6 + ci))
                 const cardKey = cards[idx]
                 const elKey = `${aiId}-${pi}-${ci}-${cardKey ?? 'back'}`
                 return (fog || gf)
@@ -1653,32 +1787,30 @@ const GameTableLive: React.FC = () => {
     )
   }
 
-  const SideSeat: React.FC<{ rot: '270deg' | '90deg'; aiId: string }> = ({ rot, aiId }) => {
-    // Patch: ตอน Fog of War ซ่อนไพ่ Pile1+2 ที่เคยเฉลยไว้ (กลับเป็นหลังไพ่)
+  // Match Tier C: G1/G2/G3 stack vertically and cards within each pile run
+  // horizontally, without rotating the P2/P4 hands.
+  const SideSeat: React.FC<{ aiId: string; offsetX?: number; offsetY?: number }> = ({ aiId, offsetX = 0, offsetY = 0 }) => {
+    // Fog of War still hides resolved G1/G2, but preserves the same card size
+    // and horizontal row geometry for the remaining five-card G3 hand.
     const fog = phase === 'fog_of_war'
     const p1 = fog ? [] : (allCards[aiId]?.[1] ?? []); const p2 = fog ? [] : (allCards[aiId]?.[2] ?? []); const p3 = allCards[aiId]?.[3] ?? []
-    const cards = [...p1, ...p2, ...p3]
-    // Patch Grand Finale: ตอน gf ใช้ 3 ใบ หรือ 2 ใบ (ถ้า Call หงายไปแล้ว 1)
-    const gf = phase === 'grand_finale' || phase === 'grand_finale_done'
-    const gfRevealed = gf ? (gfRevealedCards[aiId]?.length ?? 0) : 0
-    const layout: number[] = fog ? [5] : (gf ? [3 - gfRevealed] : [5, 3, 3])
+    const sidePiles = fog
+      ? [{ cards: p3, count: 5 }]
+      : [{ cards: p1, count: 3 }, { cards: p2, count: 3 }, { cards: p3, count: 5 }]
     return (
-      <View style={s.sideSeatWrap}>
-        <View style={[s.sideSeatInner, { transform: [{ rotate: rot }] }]}>
-          {layout.map((cnt, pi) => (
-            <React.Fragment key={pi}>
-              {pi > 0 && <View style={{ width: 4 }} />}
-              <View style={{ flexDirection: 'row' }}>
-                {Array.from({ length: cnt }).map((_, ci) => {
-                  const idx = fog ? ci : (pi === 0 ? ci : pi === 1 ? 3 + ci : 6 + ci)
-                  const cardKey = cards[idx]
-                  const elKey = `${aiId}-${pi}-${ci}-${cardKey ?? 'back'}`
-                  return fog
-                    ? renderCard(cardKey, 50, 72, ci === 0 ? 0 : -34, elKey)   // Fog of War: ขนาดจริง (เหลือ 5 ใบ)
-                    : renderCard(cardKey, 25, 36, ci === 0 ? 0 : -18, elKey)   // Arrangement: ขนาดเล็กเดิม
-                })}
+      <View style={[s.sideSeatWrap, { transform: [{ translateX: offsetX }, { translateY: offsetY }] }]}>
+        <View style={s.sideSeatInner}>
+          {sidePiles.map((pile, pi) => (
+            <View key={pi} style={s.sidePileRow}>
+              {Array.from({ length: pile.count }).map((_, ci) => {
+                const cardKey = pile.cards[ci]
+                return (
+                  <View key={`${aiId}-${pi}-${ci}-${cardKey ?? 'back'}`} style={{ marginLeft: ci === 0 ? 0 : -15 }}>
+                    {renderCard(cardKey, 25, 36)}
+                  </View>
+                )
+              })}
               </View>
-            </React.Fragment>
           ))}
         </View>
       </View>
@@ -1704,12 +1836,33 @@ const GameTableLive: React.FC = () => {
     const rawWinner = winner ? (allCards[winner]?.[pileNum] ?? []) : []
     const winCards  = pileNum === 3 ? rawWinner.slice(0, 3) : rawWinner
     const hasWinner = winner && winCards.length > 0 && phase !== 'fog_of_war' // Patch: ซ่อนไพ่เฉลย Pile1+2 ตอน Fog of War
+    const mission = missions.find(entry => entry.pile === pileNum)
+    const missionDifficulty = mission
+      ? (mission.negative || mission.superComboChallenge
+          ? 4
+          : mission.rank === 'high_card' || mission.rank === 'one_pair'
+            ? 1
+            : mission.rank === 'two_pair' || mission.rank === 'three_of_a_kind'
+              ? 2
+              : mission.rank === 'straight' || mission.rank === 'flush' ? 3 : 4)
+      : 0
+    const missionScoreByPile: Record<number, readonly number[]> = {
+      1: [0, 2, 4, 6, 8],
+      2: [0, 3, 6, 9, 12],
+      3: [0, 5, 10, 15, 20],
+    }
+    const missionScore = mission ? missionScoreByPile[pileNum]?.[missionDifficulty] ?? 0 : 0
+    const missionRank = mission?.rank.replaceAll('_', ' ').toUpperCase() ?? ''
+    const missionText = mission
+      ? mission.negative
+        ? `MISSION · AVOID ${missionRank} −${mission.penalty ?? missionScore}`
+        : `MISSION · ${missionRank} +${missionScore}`
+      : ''
 
     return (
       <View style={{ alignItems: 'flex-start', gap: 2 }}>
         {/* Label + Winner badge */}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-          <Text style={s.pileLabel}>PILE {pileNum}</Text>
           {hasWinner && (
             <View style={[s.winBadge, { backgroundColor: isWin ? 'rgba(74,222,128,0.15)' : 'rgba(248,113,113,0.15)' }]}>
               <Text style={[s.winBadgeTxt, { color: isWin ? '#4ade80' : '#f87171' }]}>
@@ -1718,13 +1871,18 @@ const GameTableLive: React.FC = () => {
             </View>
           )}
         </View>
+        {mission && (
+          <View style={[s.missionBadge, mission.negative && s.missionBadgeNegative]}>
+            <Text numberOfLines={1} style={[s.missionBadgeText, mission.negative && s.missionBadgeTextNegative]}>{missionText}</Text>
+          </View>
+        )}
         {/* Community + ไพ่ผู้ชนะ */}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
           {/* Community cards */}
           {/* two-layer wrapper: View ชั้นนอกถือเงา (ห้ามมี overflow:hidden กันเงาโดนตัดบน iOS) / View ชั้นในคง s.commCard เดิมทุกประการ */}
-          {k1 && CARD_IMG[k1] && <View style={pileShadowStyle}><View style={s.commCard}><Image source={CARD_IMG[k1]} style={{ width: 50, height: 72 }} resizeMode="cover" /></View></View>}
+          {(pileNum === 3 || (k1 && CARD_IMG[k1])) && <View style={pileShadowStyle}><View style={s.commCard}><Image source={k1 && CARD_IMG[k1] ? CARD_IMG[k1] : cardBackImg} style={{ width: 50, height: 72 }} resizeMode="cover" /></View></View>}
           {/* Patch 2026-07-18: ไพ่กองกลางใบ 2 ซ้อนทับใบแรก 1/3 — แยก visual จากไพ่ในมือ + ประหยัดพื้นที่โต๊ะ */}
-          {k2 && CARD_IMG[k2] && <View style={[pileShadowStyle, { marginLeft: -17 }]}><View style={s.commCard}><Image source={CARD_IMG[k2]} style={{ width: 50, height: 72 }} resizeMode="cover" /></View></View>}
+          {(pileNum === 3 || (k2 && CARD_IMG[k2])) && <View style={[pileShadowStyle, { marginLeft: -17 }]}><View style={s.commCard}><Image source={k2 && CARD_IMG[k2] ? CARD_IMG[k2] : cardBackImg} style={{ width: 50, height: 72 }} resizeMode="cover" /></View></View>}
           {/* Divider */}
           {hasWinner && <View style={{ width: 1, height: 72, backgroundColor: 'rgba(201,168,76,0.3)', marginHorizontal: 2 }} />}
           {/* Winner cards */}
@@ -1920,6 +2078,8 @@ const GameTableLive: React.FC = () => {
   // =================================================================
   return (
     <View style={[s.root, isWeb && s.webOuter]}>
+      <TierWelcomeCharacter playerId={PLAYER_ID} tierId="mastermind" ready={phase === 'arrangement'} />
+      <GameServerStatusLight socketRef={socketRef} />
       <CharacterBarkBubble bark={bark} />
       <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" />
       <View style={[s.gameContainer, isWeb && s.webFrame]}>
@@ -2100,6 +2260,11 @@ const GameTableLive: React.FC = () => {
               return aiList.find(a => a.id === pid)?.name ?? 'AI'
             }
             const deltaForMe = gfFinalResult.tokenDeltas?.[PLAYER_ID] ?? 0
+            if (gfResultStage === 2) {
+              return <View style={[StyleSheet.absoluteFill as any, { alignItems:'center', justifyContent:'flex-start', paddingTop:200, zIndex:61, backgroundColor:'rgba(0,0,0,0.65)' }]}>
+                <RoundScoreSummary result={gfFinalResult} playerIds={[PLAYER_ID, ...aiList.map(ai => ai.id)]} playerName={winnerName} localPlayerId={PLAYER_ID} onContinue={handleRoundSummaryContinue} />
+              </View>
+            }
             // STAGE 1: Grand Finale Result (5 วินาที)
             if (gfResultStage === 1) {
               return (
@@ -2143,7 +2308,7 @@ const GameTableLive: React.FC = () => {
               <View style={[StyleSheet.absoluteFill as any, { alignItems: 'center', justifyContent: 'flex-start', paddingTop: 420, zIndex: 60, backgroundColor: 'rgba(0,0,0,0.65)' }]} pointerEvents="none">
                 <View style={{ backgroundColor: 'rgba(15,36,24,0.98)', padding: 20, borderRadius: 16, alignItems: 'stretch', borderWidth: 1.5, borderColor: '#FFD76A', minWidth: 300 }}>
                   <Text style={{ fontSize: 18, color: '#FFD76A', fontWeight: '900', letterSpacing: 2, textAlign: 'center', marginBottom: 14 }}>
-                    📊 ROUND SUMMARY
+                    ♠ ♥  ROUND SUMMARY  ♦ ♣
                   </Text>
                   {/* Pile 1 */}
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: 0.5, borderBottomColor: 'rgba(201,168,76,0.2)' }}>
@@ -2210,9 +2375,9 @@ const GameTableLive: React.FC = () => {
           {/* ── DISCARD OVERLAY ── */}
           {showDiscard && !isHNDiscard && (
             <View style={s.overlay}>
-              <Text style={s.discardTitle}>Choose cards to discard (keep 3)</Text>
+              <Text style={s.discardTitle}>Choose cards to discard (keep 5)</Text>
               <Text style={[s.discardSub, { color: discardTimeLeft <= 3 ? '#f87171' : '#FFD76A' }]}>
-                {discardSelected.length}/{discardHandKeys.length - 3} selected — {discardTimeLeft}s left
+                {discardSelected.length}/{Math.max(0, discardHandKeys.length - 5)} selected — {discardTimeLeft}s left
               </Text>
               {/* Patch: โชว์ Community Pile3 ประกอบการตัดสินใจ (บังคับรวมในการประเมิน Hand เสมอ) */}
               <View style={{ alignItems: 'center', marginTop: 6, marginBottom: 4 }}>
@@ -2258,10 +2423,10 @@ const GameTableLive: React.FC = () => {
                     flex: 0, alignSelf: 'center', minHeight: 48, justifyContent: 'center', paddingVertical: 14,
                     backgroundColor: discardTimeLeft <= 5
                       ? '#5e1a1a'
-                      : (discardSelected.length === (discardHandKeys.length - 3) ? '#1a5e20' : '#2a2a2a'),
+                      : (discardSelected.length === Math.max(0, discardHandKeys.length - 5) ? '#1a5e20' : '#2a2a2a'),
                     borderColor: discardTimeLeft <= 5 ? '#f87171' : 'rgba(201,168,76,0.2)',
                   }]}
-                  onPress={handleDiscardConfirm} disabled={discardSelected.length !== (discardHandKeys.length - 3)}>
+                  onPress={handleDiscardConfirm} disabled={discardSelected.length !== Math.max(0, discardHandKeys.length - 5)}>
                   <Text style={[s.discardBtnTxt, discardTimeLeft <= 5 && { color: '#f87171' }]} numberOfLines={1}>Confirm discard ✓</Text>
                 </TouchableOpacity>
               </Animated.View>
@@ -2332,7 +2497,7 @@ const GameTableLive: React.FC = () => {
           {phase === 'end' && matchResult && (
             <>
               {matchResult.finalWinner === PLAYER_ID && (
-                <View style={StyleSheet.absoluteFill} pointerEvents="none">
+                <View style={[StyleSheet.absoluteFill, { zIndex: 200 }]} pointerEvents="none">
                   {confettiAnims.map((a, i) => {
                     const colors = ['#ff6b6b','#ffd93d','#6bcb77','#4d96ff','#ff922b','#cc5de8']
                     const rotStr = a.rotate.interpolate({ inputRange: [0, 720], outputRange: ['0deg', '720deg'] })
@@ -2378,7 +2543,25 @@ const GameTableLive: React.FC = () => {
                   })}
                 /* ไม่มี Rematch (Spec §5.1 No Rematch — มติลุงเยาะ 2026-07-25: จบเกมต้องกลับ Lobby
                    ทุกครั้ง เพราะ Buy-in ล็อคตั้งแต่ต้นเกม เล่นต่อ = ต้อง escrow ก้อนใหม่จากหน้า Lobby) */
-                onBackToLobby={() => router.push('/lobby')}
+                soloLevel={matchResult.soloEndlessLevel}
+                onBackToLobby={() => {
+                  if (matchResult.finalWinner === PLAYER_ID) {
+                    const tokensWon = (tokenBalance[PLAYER_ID] ?? 0) - (matchResult.buyInAmount ?? buyInAmount)
+                    router.replace({
+                      pathname: '/(home)/victory',
+                      params: {
+                        tier: 'mastermind',
+                        tokensWon: String(tokensWon),
+                        matchDurationSec: String(Math.max(0, Math.round((Date.now() - matchStartRef.current) / 1000))),
+                        ...(matchResult.bestHandThisMatch?.label ? { bestHandLabel: matchResult.bestHandThisMatch.label } : {}),
+                        // Solo Mode Endless Level (2026-09-01) — ดู lobby.tsx's autoContinue
+                        autoContinue: 'mastermind',
+                      },
+                    } as any)
+                  } else {
+                    void leaveAfterClassicSettlement({ accessToken, tier: 'A', outcome: 'LOSS', exitReason: 'BACK_TO_LOBBY' })
+                  }
+                }}
                 insetsBottom={insets.bottom}
               />
             </>
@@ -2452,6 +2635,7 @@ const GameTableLive: React.FC = () => {
             tierName="MASTERMIND"
             tierStars={4}
             round={roundNumber}
+            totalRounds={5}
             isWeb={isWeb}
             insetsTop={insets.top}
             opacity={(phase === 'showdown' || phase === 'result') ? 0 : 1}
@@ -2485,6 +2669,19 @@ const GameTableLive: React.FC = () => {
           {burnToast && (
             <View style={s.burnToast} pointerEvents="none">
               <Text style={s.burnToastText}>{burnToast}</Text>
+            </View>
+          )}
+
+          {/* Connection status — ลอยทับทุก phase (ไม่ผูกเงื่อนไข phase ใดๆ) ตำแหน่งเดียวกับ
+              highNoble/index.tsx:2024-2040 */}
+          {connectionError && (
+            <View style={{ position: 'absolute', top: 12, alignSelf: 'center', zIndex: 999, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: 'rgba(255,107,107,0.15)', borderWidth: 1, borderColor: 'rgba(255,107,107,0.4)', borderRadius: 10 }}>
+              <Text style={{ color: '#FF6B6B', fontSize: 11, textAlign: 'center' }}>Connection failed. Please check your network and try again.</Text>
+            </View>
+          )}
+          {isReconnecting && (
+            <View style={{ position: 'absolute', top: 12, alignSelf: 'center', zIndex: 999, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: 'rgba(255,199,87,0.15)', borderWidth: 1, borderColor: 'rgba(255,199,87,0.5)', borderRadius: 10 }}>
+              <Text style={{ color: '#FFC857', fontSize: 12, fontWeight: '700', textAlign: 'center' }}>Reconnecting...</Text>
             </View>
           )}
 
@@ -2536,7 +2733,7 @@ const GameTableLive: React.FC = () => {
                 {p2AI && <GFStatusBadge playerId={p2AI.id} />}
                 {p2AI && <GFHealthBar playerId={p2AI.id} />}
               </View>
-              {p2AI && <SideSeat rot="270deg" aiId={p2AI.id} />}
+              {p2AI && <SideSeat aiId={p2AI.id} offsetY={-MASTERMIND_SIDE_HAND_RAISE} />}
               {/* Patch: ไพ่ Call หงาย — ลอยที่ bottom ของ sideCol ไม่กระทบ SideSeat */}
               {p2AI && phase === 'grand_finale' && (
                 <View style={{ position: 'absolute', bottom: -80 /* Patch 2026-07-19: กางลงล่างใต้ที่นั่ง — เดิม bottom:4 ไพ่เด้งขึ้นทับแถบเวลา */, left: 0, right: 0, alignItems: 'center' }}>
@@ -2620,12 +2817,7 @@ const GameTableLive: React.FC = () => {
                 {p4AI && <GFStatusBadge playerId={p4AI.id} />}
                 {p4AI && <GFHealthBar playerId={p4AI.id} />}
               </View>
-              {/* Patch 2026-07-17: คืน marginLeft 15 ตามโครง Adept — เดิมตกหล่นตอน copy */}
-              {p4AI && (
-                <View style={{ marginLeft: 15 }}>
-                  <SideSeat rot="90deg" aiId={p4AI.id} />
-                </View>
-              )}
+              {p4AI && <SideSeat aiId={p4AI.id} offsetY={-MASTERMIND_SIDE_HAND_RAISE} />}
               {/* Patch: ไพ่ Call หงาย — ลอยที่ bottom ของ sideCol ไม่กระทบ SideSeat */}
               {p4AI && phase === 'grand_finale' && (
                 <View style={{ position: 'absolute', bottom: -80 /* Patch 2026-07-19: กางลงล่างใต้ที่นั่ง — ตาม P2 */, left: 0, right: 0, alignItems: 'center' }}>
@@ -2671,21 +2863,16 @@ const GameTableLive: React.FC = () => {
                     </View>
                   </View>
                 )}
-                {/* โซนจัดไพ่ในมือ — PlayerHandView กลาง: visiblePiles ซ่อน Pile1/2 หลัง Fog of War
-                    (คง Pile1/2 เฉพาะ phase arrangement/arrangement_2) revealedCards แทนที่ Pile 3
-                    ด้วยไพ่ที่เหลือหลังหัก "YOUR CALL" ออกแล้วตอน Grand Finale */}
-                <View style={{ width: '100%', alignItems: 'center' }}>
+                {/* Keep all five Tier A G3 cards in hand. A Call marks/reveals a card;
+                    it never removes that card from the Best 5/7 pool. */}
+                <View style={s.p1HandScale}>
                   <PlayerHandView
                     piles={piles}
                     selected={selected}
                     onCardPress={handleCardPress}
+                    onCardDrop={!isReady && (phase === 'arrangement' || phase === 'arrangement_2') ? handleCardDrop : undefined}
                     isVip={isVip}
                     visiblePiles={(phase === 'arrangement' || phase === 'arrangement_2') ? [0, 1, 2] : [2]}
-                    revealedCards={
-                      phase === 'grand_finale' && (gfRevealedCards[PLAYER_ID]?.length ?? 0) > 0
-                        ? { 2: piles[2].filter(c => !(gfRevealedCards[PLAYER_ID] ?? []).includes(c.key)).map(c => c.key) }
-                        : undefined
-                    }
                   />
                 </View>
               </View>
@@ -2696,10 +2883,13 @@ const GameTableLive: React.FC = () => {
           {/* USER AVATAR — มุมล่างซ้าย (ซ่อนตอน Grand Finale เพราะ Overlay มี Avatar P1 แล้ว) — Feedback C2: ใช้ myAvatarEmoji/myDisplayName จริง */}
           {/* P1 HUD ย้ายลงชิดขอบล่าง — pointerEvents none เพื่อไม่บังปุ่ม actionBar */}
           <View style={{ position: 'absolute', bottom: Math.max(insets.bottom, 4), left: 10, zIndex: 3, opacity: (phase === 'showdown' || phase === 'result') ? 0 : 1 /* Patch 2026-07-19: คงตำแหน่ง P1 HUD เดิมตลอดรวม Grand Finale (มติลุงเยาะ) */, flexDirection: 'row', alignItems: 'center', gap: 6 }} pointerEvents="none">
-            {/* Gold Radiance + Active Turn Pulse - reuse gfTurnPlayerId ตัวเดียวกับ SeatHeader ไม่สร้าง state ใหม่ */}
-            <AvatarFrame size={40} active={phase === 'grand_finale' && gfTurnPlayerId === PLAYER_ID}>
-              <AvatarBubble emoji={myAvatarEmoji} image={myAvatarImage} size={40} />
-            </AvatarFrame>
+            {/* กรอบทอง VIP (isVip ? AvatarFrame : AvatarBubble เฉย ๆ — เหมือน Adept/High Noble) + Active
+                Turn Pulse - reuse gfTurnPlayerId ตัวเดียวกับ SeatHeader ไม่สร้าง state ใหม่ */}
+            {isVip
+              ? <AvatarFrame size={40} active={phase === 'grand_finale' && gfTurnPlayerId === PLAYER_ID}>
+                  <AvatarBubble emoji={myAvatarEmoji} image={myAvatarImage} size={40} />
+                </AvatarFrame>
+              : <AvatarBubble emoji={myAvatarEmoji} image={myAvatarImage} size={40} />}
             <View>
               <Text style={s.userNameTag} numberOfLines={1}>{myDisplayName}</Text>
               {/* Patch 2026-07-18: ยอดโทเคนคงเหลือใต้ชื่อ (pattern Initiate) */}
@@ -2760,14 +2950,19 @@ const GameTableLive: React.FC = () => {
                   <View style={{ alignItems: 'center', marginTop: 0, transform: [{ translateY: GF_CH }] }}>
                     <Text style={[s.pileLabel, { marginBottom: 4 }]}>PILE 3 COMMUNITY</Text>
                     <View style={{ flexDirection: 'row', gap: 4 }}>
-                      {comm.p3.map((k, i) => (
+                      {[0, 1].map(i => {
+                        const k = comm.p3[i]
+                        return (
                         <View key={i} style={{
                           width: 50, height: 72, borderRadius: 4, overflow: 'hidden',
                           borderWidth: 1.5, borderColor: '#38bdf8',
                         }}>
-                          {CARD_IMG[k] && <Image source={CARD_IMG[k]} style={{ width: 50, height: 72 }} resizeMode="cover" />}
+                          {i < gfCommunityRevealed && CARD_IMG[k]
+                            ? <Image source={CARD_IMG[k]} style={{ width: 50, height: 72 }} resizeMode="cover" />
+                            : <Image source={cardBackImg} style={{ width: 50, height: 72 }} resizeMode="cover" />}
                         </View>
-                      ))}
+                        )
+                      })}
                     </View>
                   </View>
                   {p4AI && (
@@ -2801,6 +2996,17 @@ const GameTableLive: React.FC = () => {
             <View style={s.gfActionBar}>
               <Text style={s.gfActionHint}>TAP A CARD TO CHOOSE WHICH TO REVEAL</Text>
               <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 12 }}>
+                {gfLegalActions.includes('check') && <TouchableOpacity
+                  onPress={() => socketRef.current?.emit('grand_finale_action', { roomId: ROOM_ID, playerId: PLAYER_ID, action: 'check' })}
+                  style={[s.gfActionBtn, { backgroundColor: '#173752', borderColor: '#7DD3FC' }]}>
+                  <Text style={[s.gfActionBtnTxt, { color: '#BAE6FD' }]}>CHECK</Text>
+                </TouchableOpacity>}
+                {gfLegalActions.includes('bet') && <TouchableOpacity
+                  onPress={() => socketRef.current?.emit('grand_finale_action', { roomId: ROOM_ID, playerId: PLAYER_ID, action: 'bet', ...(gfSelectedCardKey ? { revealedCardKey: gfSelectedCardKey } : {}) })}
+                  style={[s.gfActionBtn, { backgroundColor: '#4A3512', borderColor: '#FFD76A' }]}>
+                  <Text style={[s.gfActionBtnTxt, { color: '#FFF2B0' }]}>BET -{gfCallAmount.current}</Text>
+                </TouchableOpacity>}
+                {gfLegalActions.includes('call') && <>
                 <TouchableOpacity
                   onPress={() => socketRef.current?.emit('grand_finale_action', {
                     roomId: ROOM_ID, playerId: PLAYER_ID, action: 'call',
@@ -2810,26 +3016,17 @@ const GameTableLive: React.FC = () => {
                   style={[s.gfActionBtn, { backgroundColor: '#1C4830', borderColor: '#8DFFB5' }]}>
                   <Text style={[s.gfActionBtnTxt, { color: '#8DFFB5' }]}>CALL -{gfCallAmount.current}</Text>
                 </TouchableOpacity>
+                </>}
+                {gfLegalActions.includes('fold') &&
                 <TouchableOpacity
                   onPress={() => socketRef.current?.emit('grand_finale_action', { roomId: ROOM_ID, playerId: PLAYER_ID, action: 'fold' })}
                   style={[s.gfActionBtn, { backgroundColor: '#5e1a1a', borderColor: '#f87171' }]}>
                   <Text style={[s.gfActionBtnTxt, { color: '#fff' }]}>FOLD</Text>
-                </TouchableOpacity>
+                </TouchableOpacity>}
               </View>
             </View>
           )}
           {phase !== 'dealing' && phase !== 'showdown' && phase !== 'result' && phase !== 'fog_of_war' && phase !== 'grand_finale' && <View style={s.actionBar}>
-            <ActionButton
-              icon="auto_sort"
-              label={sortDone ? 'Sorted ✓' : 'Auto Sort'}
-              /* Spec ข้อ 8: token ไม่พอจ่าย fee -> ปุ่ม disabled ไปเลย ผู้เล่นต้องจัดเอง
-                 (server ก็ปฏิเสธซ้ำอีกชั้นใน requestAutoSort - ไม่เชื่อ client ฝ่ายเดียว) */
-              variant={(sortDone || (!autoSortPaid && (tokenBalance[PLAYER_ID] ?? 0) < autoSortFee)) ? 'disabled' : 'normal'}
-              disabled={sortDone || (phase !== 'arrangement' && phase !== 'arrangement_2') || (!autoSortPaid && (tokenBalance[PLAYER_ID] ?? 0) < autoSortFee)}
-              costBadge={autoSortPaid ? 'PAID' : String(autoSortFee)}
-              onPress={handleAutoSort}
-              style={s.actionBtnSize}
-            />
             <ActionButton
               icon="ready"
               label="Ready"
@@ -2842,6 +3039,12 @@ const GameTableLive: React.FC = () => {
 
         </View>
         {/* Patch 2026-07-18: Boss Victory VFX — ทับทุก layer, จบแล้วถอดตัวเอง */}
+        {phase === 'grand_finale_done' && gfFinalResult?.winnerId === PLAYER_ID && <ComboCardBurst eventKey={`${ROOM_ID}:${roundNumber}:g3-win`} kind="YOU_WIN" />}
+        {royalFlushWinner && <RoyalStraightFlushVFX playerName={royalFlushWinner === PLAYER_ID ? myDisplayName : (aiList.find(a => a.id === royalFlushWinner)?.name ?? royalFlushWinner)} onClose={() => setRoyalFlushWinner(null)} />}
+        {negativeStackGameOver && <NegativeStackGameOverVFX eventKey={`${ROOM_ID}:${roundNumber}`} onFinish={() => {
+          socketRef.current?.emit('player_leave', { roomId: ROOM_ID, playerId: PLAYER_ID })
+          void leaveAfterClassicSettlement({ accessToken, tier: 'A', outcome: 'LOSS', exitReason: 'BACK_TO_LOBBY' })
+        }} />}
         {victoryVfx && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 }} pointerEvents="none">
             <BossVictoryVFX tier={victoryVfx} onFinish={() => setVictoryVfx(null)} />
@@ -2859,13 +3062,15 @@ const GameTableLive: React.FC = () => {
           />
         )}
         {/* ── SHOWDOWN RESULT (กลางจอ) — Feedback C5: ครอบด้วยพื้นหลัง free/vip ชุดเดียวกับ Profile/Lobby ── */}
-        {showResult && (phase === 'showdown' || phase === 'result') && (
+        {showResult && pileRevealShowcases.length === 0 && (phase === 'showdown' || phase === 'result') && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: -200, zIndex: 200 }}>
             <ImageBackground source={isVip ? SHOWDOWN_BG_VIP : SHOWDOWN_BG_FREE} resizeMode="cover" style={{ flex: 1, padding: 12 }}>
               <ShowdownResult />
             </ImageBackground>
           </View>
         )}
+        <TierCPlusPileReveal reveals={pileRevealShowcases} localPlayerId={PLAYER_ID} playerIds={[PLAYER_ID, ...aiList.map(ai => ai.id)]} localPiles={piles} localIsVip={isVip} winnerName={id => id === PLAYER_ID ? myDisplayName : (aiList.find(ai => ai.id === id)?.name ?? id)} waitForG1Commit onCommitG1={() => socketRef.current?.emit('player_continue', { roomId: ROOM_ID, playerId: PLAYER_ID })} onG2Complete={() => socketRef.current?.emit('player_continue', { roomId: ROOM_ID, playerId: PLAYER_ID })} onSequenceComplete={() => setPileRevealShowcases([])} />
+        {tierDComboBurst ? <ComboCardBurst eventKey={tierDComboBurst.key} kind={tierDComboBurst.kind} bonus={tierDComboBurst.bonus} /> : null}
         <ServerLog socket={socketRef.current} onMonarchWin={setMonarchWinner} />
       </View>
     </View>
@@ -2881,7 +3086,7 @@ const s = StyleSheet.create({
   webFrame:      { width: 390, height: 920, borderRadius: 40, borderWidth: 3, borderColor: '#333', overflow: 'hidden' },
   gameContainer: { flex: 1, flexDirection: 'column' },
   gameArea:      { flex: 90, backgroundColor: '#6aaf7f', overflow: 'hidden', position: 'relative' },
-  feltOverlay:   { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.2)' },
+  feltOverlay:   { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.2)' },
   logoWatermark: { alignItems: 'center', justifyContent: 'center' },
 
   studioLogo: { width: 28, height: 28, opacity: 0.9 },
@@ -2921,17 +3126,29 @@ const s = StyleSheet.create({
   // Patch 2026-07-18: ยอดโทเคนคงเหลือใต้ชื่อทุกที่นั่ง — ทองธีมหลัก, JetBrains Mono ตามมาตรฐานตัวเลข
   seatToken:     { fontSize: 9, color: '#FFD76A', fontFamily: 'JetBrainsMono_600SemiBold', textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
   sideSeatWrap:  { flex: 1, width: SIDE_COL_W, overflow: 'visible', justifyContent: 'flex-start', alignItems: 'center' },
-  sideSeatInner: { flexDirection: 'row', alignItems: 'center' },
+  sideSeatInner: { flexDirection: 'column', alignItems: 'center', gap: 4 },
+  sidePileRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
 
   commWrap:    { flex: 1, paddingLeft: 4, paddingRight: 18, alignItems: 'flex-start', justifyContent: 'center', marginTop: 40 /* Patch 2026-07-18: เลื่อนกองกลางทั้ง 3 กองลง 40px — ใช้พื้นที่ว่างกลางจอ */, zIndex: 2 },
   auctionLbl:  { fontSize: 7, color: 'rgba(160,80,220,.55)', letterSpacing: 1, textTransform: 'uppercase' },
   auctionCard: { width: 50, height: 72, borderRadius: 4, backgroundColor: '#091808', borderWidth: 2, borderColor: '#a855f7', overflow: 'hidden', shadowColor: '#a855f7', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.9, shadowRadius: 8, elevation: 8 },
   commCard:    { width: 50, height: 72, borderRadius: 4, backgroundColor: '#fdfaf3', borderWidth: 1, borderColor: 'rgba(74,154,90,.75)', overflow: 'hidden' },
   pileLabel:   { fontSize: 7, color: '#38bdf8', letterSpacing: 0.5, textTransform: 'uppercase', fontWeight: '700' },
+  missionBadge:{ maxWidth: 118, paddingHorizontal: 4, paddingVertical: 2, borderRadius: 4, borderWidth: 1, borderColor: 'rgba(255,215,106,.65)', backgroundColor: 'rgba(38,28,8,.86)' },
+  missionBadgeNegative:{ borderColor: 'rgba(248,113,113,.7)', backgroundColor: 'rgba(70,18,18,.86)' },
+  missionBadgeText:{ color: '#FFD76A', fontSize: 6, lineHeight: 8, fontWeight: '900', letterSpacing: .2 },
+  missionBadgeTextNegative:{ color: '#fca5a5' },
   winBadge:    { borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1 },
   winBadgeTxt: { fontSize: 7, fontWeight: '800' },
 
   userArea:     { paddingHorizontal: 8, paddingTop: 4, paddingBottom: 4, borderTopWidth: 1, borderTopColor: 'rgba(201,168,76,.15)', zIndex: 2, alignItems: 'center' },
+  p1HandScale: {
+    width: '100%',
+    marginTop: 29,
+    marginBottom: 18,
+    alignItems: 'center',
+    transform: [{ translateY: MASTERMIND_P1_HAND_DROP }, { scale: MASTERMIND_P1_HAND_SCALE }],
+  },
   userLabels:   { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 3 },
   userPilesRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'flex-start' },
   userCard:     { width: CW, height: CH, borderRadius: 4, backgroundColor: '#fdfaf3', borderWidth: 1, borderColor: 'rgba(201,168,76,.65)', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },

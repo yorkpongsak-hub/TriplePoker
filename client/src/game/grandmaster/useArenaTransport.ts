@@ -15,6 +15,7 @@ export function useArenaTransport(enabled: boolean) {
   const applyServerSnapshot = useArenaTableStore(state => state.applyServerSnapshot)
   const socketRef = useRef<Socket | null>(null)
   const [status, setStatus] = useState<'OFFLINE' | 'CONNECTING' | 'QUEUED' | 'MATCHED' | 'INSUFFICIENT_CROWN' | 'ERROR'>('OFFLINE')
+  const [connected, setConnected] = useState(false)
   const [queueRoster, setQueueRoster] = useState<Array<{ seat: 1 | 2 | 4; playerId: string; displayName: string; avatar: string }>>([])
   const actionSequence = useRef(1)
 
@@ -23,7 +24,8 @@ export function useArenaTransport(enabled: boolean) {
     setStatus('CONNECTING')
     const socket = io(`${SERVER_URL}/arena`, { auth: { token }, transports: ['websocket'], reconnection: true })
     socketRef.current = socket
-    socket.on('connect', () => socket.emit('arena:queue:join'))
+    socket.on('connect', () => { setConnected(true); socket.emit('arena:queue:join') })
+    socket.on('disconnect', () => setConnected(false))
     socket.on('arena:queue:status', (result: { ok: boolean; status?: string }) => setStatus(
       result.ok && result.status === 'MATCHED' ? 'MATCHED'
         : result.ok ? 'QUEUED'
@@ -39,8 +41,8 @@ export function useArenaTransport(enabled: boolean) {
     socket.on('arena:snapshot', (wire: WireSnapshot) => {
       applyServerSnapshot(wire)
     })
-    socket.on('connect_error', () => setStatus('ERROR'))
-    return () => { socket.disconnect(); socketRef.current = null }
+    socket.on('connect_error', () => { setConnected(false); setStatus('ERROR') })
+    return () => { setConnected(false); socket.disconnect(); socketRef.current = null }
   }, [enabled, token, playerId, applyServerSnapshot])
 
   const sendIntent = useCallback((intent: ArenaClientIntent) => {
@@ -58,5 +60,5 @@ export function useArenaTransport(enabled: boolean) {
     else if (intent.type === 'FINAL_LOCK') socket.emit('arena:action', { ...common, ...intent })
   }, [playerId])
 
-  return { status, queueRoster, playerId, sendIntent }
+  return { status, connected, queueRoster, playerId, sendIntent }
 }

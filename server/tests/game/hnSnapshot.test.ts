@@ -10,6 +10,7 @@ import { Card } from '../../src/game/deck'
 import { PlayerArrangement, CommunityCards } from '../../src/game/foulChecker'
 import {
   HNSeat, HNMatchState, buildHNCardZones, buildHNSnapshotForPlayer, resendHNRoundStartToPlayer,
+  estimateHNWinrate,
 } from '../../src/game/highNobleMultiEngine'
 
 // ─── Card helper — สร้างไพ่ deterministic ล้วนๆ (เทสนี้เทส masking ไม่ใช่ hand evaluation
@@ -25,20 +26,19 @@ function mkCard(): Card {
 }
 
 describe('High Noble card-zone ledger — always 52 cards', () => {
-  test('arrangement keeps 44 hands + 6 community + 2 stock', () => {
+  test('arrangement keeps 32 hands + 9 community + 11 stock', () => {
     const zones = buildHNCardZones(makeHNState({ phase: 'arrangement', resolvedPileCount: 0 }))
-    expect(zones).toMatchObject({ stockCount: 2, communityCount: 6, auctionCount: 0, discardCount: 0, totalCards: 52 })
-    expect(Object.values(zones.handCounts).reduce((a, b) => a + b, 0)).toBe(44)
+    expect(zones).toMatchObject({ stockCount: 11, communityCount: 9, auctionCount: 0, discardCount: 0, totalCards: 52 })
+    expect(Object.values(zones.handCounts).reduce((a, b) => a + b, 0)).toBe(32)
   })
 
   test('after pile 2, played columns replace those cards without changing total', () => {
     const state = makeHNState({ phase: 'fog_of_war', resolvedPileCount: 2 })
-    Object.values(state.arrangements!).forEach(arr => { arr.pile3 = arr.pile3.slice(0, 3) })
     const zones = buildHNCardZones(state)
     expect(zones.resolvedPileCounts).toEqual({ pile1: 12, pile2: 12, pile3: 0 })
-    expect(Object.values(zones.handCounts).reduce((a, b) => a + b, 0)).toBe(12)
-    expect(zones.discardCount).toBe(10)
-    expect(zones.communityCount + zones.discardCount + 24 + 12).toBe(52)
+    expect(Object.values(zones.handCounts).reduce((a, b) => a + b, 0)).toBe(8)
+    expect(zones.discardCount).toBe(2)
+    expect(zones.stockCount + zones.communityCount + zones.discardCount + 24 + 8).toBe(52)
   })
 })
 function mkCards(n: number): Card[] {
@@ -50,6 +50,11 @@ function mkCards(n: number): Card[] {
 const SUIT_CHAR: Record<string, string> = { spades: 's', hearts: 'h', diamonds: 'd', clubs: 'c' }
 function toKey(c: Card): string {
   return c.rank.toString().toLowerCase() + SUIT_CHAR[c.suit]
+}
+
+function card(rank: Card['rank'], suit: Card['suit']): Card {
+  const values: Record<string, number> = { '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, J: 11, Q: 12, K: 13, A: 14 }
+  return { rank, suit, value: values[String(rank)] }
 }
 
 // ─── userId คงที่ตลอดไฟล์ ───
@@ -74,14 +79,14 @@ function makeSeats(): [HNSeat, HNSeat, HNSeat, HNSeat] {
 // ไม่ใช่ผ่านเพราะ "บังเอิญไม่มีข้อมูลให้หลุด" (เข้มกว่าของจริงโดยตั้งใจ) ───
 function makeHNState(overrides: Partial<HNMatchState> = {}): HNMatchState {
   const seats = makeSeats()
-  const community: CommunityCards = { row1: mkCards(2), row2: mkCards(2), row3: mkCards(2) }
+  const community: CommunityCards = { row1: mkCards(2), row2: mkCards(2), row3: mkCards(5) }
   const cardsMap: Record<string, Card[]> = {}
   const arrangements: Record<string, PlayerArrangement> = {}
   const finalPile3: Record<string, Card[]> = {}
   seats.forEach(s => {
-    cardsMap[s.id] = mkCards(11)
-    arrangements[s.id] = { pile1: mkCards(3), pile2: mkCards(3), pile3: mkCards(5) }
-    finalPile3[s.id] = mkCards(3)
+    cardsMap[s.id] = mkCards(8)
+    arrangements[s.id] = { pile1: mkCards(3), pile2: mkCards(3), pile3: mkCards(2) }
+    finalPile3[s.id] = mkCards(2)
   })
 
   const base: HNMatchState = {
@@ -132,10 +137,85 @@ function makeHNState(overrides: Partial<HNMatchState> = {}): HNMatchState {
     },
     tripleSweepThisMatch: new Set([SELF]),
     afkPlayers: {}, // Step 2B: ไม่มีใคร AFK เป็นค่าเริ่มต้น (masking ไม่เกี่ยวกับ field นี้โดยตรง)
+    autoSortUsed: {},
   }
 
   return { ...base, ...overrides }
 }
+
+describe('High Noble boss card counting — public information only', () => {
+  test('Pile 2 winner is only a public lower bound and never guarantees hidden Pile 3', () => {
+    const community: CommunityCards = {
+      row1: [card('3', 'clubs'), card('4', 'diamonds')],
+      row2: [card('9', 'spades'), card('10', 'spades')],
+      row3: [card('2', 'spades'), card('2', 'hearts')],
+    }
+    const state = makeHNState({ community, phase: 'grand_finale' })
+    state.finalPile3 = {
+      [BOSS]: [card('2', 'diamonds'), card('2', 'clubs'), card('K', 'hearts'), card('6', 'clubs'), card('7', 'diamonds')],
+      [OPP1]: [card('3', 'hearts'), card('4', 'hearts'), card('5', 'hearts'), card('6', 'hearts'), card('7', 'hearts')],
+    }
+    const arrangements = state.pendingPile12!.allArrangements
+    arrangements[OPP1].pile2 = [card('J', 'spades'), card('Q', 'spades'), card('K', 'spades')]
+    state.pendingPile12 = { ...state.pendingPile12!, pile2Winner: OPP1, community }
+    state.grandFinale = {
+      roundNumber: 1, foldedPlayers: [], foulPlayers: [], currentTurnIdx: 0,
+      turnOrder: [BOSS, OPP1], pile3Pot: 0, revealedCards: {},
+    }
+
+    expect(estimateHNWinrate(state, BOSS)).toBe(0)
+
+    // Winning Pile 2 does not expose the opponent's Pile 3. A legally possible
+    // unseen straight flush still means the boss's four-of-a-kind is not guaranteed.
+    state.pendingPile12 = { ...state.pendingPile12, pile2Winner: BOSS }
+    expect(estimateHNWinrate(state, BOSS)).toBe(0)
+  })
+
+  test('hidden opponent cards never affect the estimate', () => {
+    const community: CommunityCards = {
+      row1: [card('3', 'clubs'), card('4', 'diamonds')],
+      row2: [card('6', 'clubs'), card('7', 'diamonds')],
+      row3: [card('10', 'spades'), card('J', 'spades')],
+    }
+    const state = makeHNState({ community, phase: 'grand_finale' })
+    state.finalPile3 = {
+      [BOSS]: [card('Q', 'spades'), card('K', 'spades'), card('A', 'spades'), card('2', 'clubs'), card('5', 'diamonds')],
+      [OPP1]: [card('2', 'hearts'), card('3', 'hearts'), card('4', 'hearts'), card('5', 'hearts'), card('6', 'hearts')],
+    }
+    state.grandFinale = {
+      roundNumber: 1, foldedPlayers: [], foulPlayers: [], currentTurnIdx: 0,
+      turnOrder: [BOSS, OPP1], pile3Pot: 0, revealedCards: {},
+    }
+
+    const first = estimateHNWinrate(state, BOSS)
+    state.finalPile3[OPP1] = [card('9', 'clubs'), card('9', 'diamonds'), card('9', 'hearts'), card('9', 'spades'), card('8', 'clubs')]
+    const afterHiddenMutation = estimateHNWinrate(state, BOSS)
+
+    expect(first).toBe(0)
+    expect(afterHiddenMutation).toBe(first)
+  })
+
+  test('hole cards are never treated as publicly guaranteed before showdown', () => {
+    const community: CommunityCards = {
+      row1: [card('3', 'clubs'), card('4', 'diamonds')],
+      row2: [card('6', 'clubs'), card('7', 'diamonds')],
+      row3: [card('10', 'spades'), card('J', 'spades')],
+    }
+    const state = makeHNState({ community, phase: 'grand_finale' })
+    state.finalPile3 = {
+      [BOSS]: [card('Q', 'spades'), card('K', 'spades'), card('A', 'spades'), card('2', 'clubs'), card('5', 'diamonds')],
+      [OPP1]: [card('2', 'hearts'), card('3', 'hearts'), card('4', 'hearts'), card('5', 'hearts'), card('6', 'hearts')],
+    }
+    state.grandFinale = {
+      roundNumber: 1, foldedPlayers: [], foulPlayers: [], currentTurnIdx: 0,
+      turnOrder: [BOSS, OPP1], pile3Pot: 0,
+      // Once all five are legally revealed there is exactly one completion.
+      revealedCards: { [OPP1]: [...state.finalPile3[OPP1]] },
+    }
+
+    expect(estimateHNWinrate(state, BOSS)).toBe(0)
+  })
+})
 
 // ─── Mock Socket.IO Server (เฉพาะ T11) — เก็บ log การ emit ไว้ตรวจสอบ, pattern เดียวกับ adeptAFK.test.ts ───
 function makeIoMock() {
@@ -152,24 +232,24 @@ function makeIoMock() {
 // กลุ่ม SELF — เจ้าของเห็นของตัวเองครบ
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('buildHNSnapshotForPlayer — T1: arrangement — SELF เห็นไพ่ตัวเองครบ 11 ใบ', () => {
+describe('buildHNSnapshotForPlayer — T1: arrangement — SELF เห็นไพ่ตัวเองครบ 8 ใบ', () => {
   test('myCards ตรงกับ cardsMap[u_self] เป๊ะ', () => {
     const state = makeHNState({ phase: 'arrangement' })
     const snapshot = buildHNSnapshotForPlayer(state, SELF)
     expect(snapshot.myCards).toEqual(state.cardsMap![SELF].map(toKey))
-    expect(snapshot.myCards).toHaveLength(11)
+    expect(snapshot.myCards).toHaveLength(8)
   })
 })
 
-describe('buildHNSnapshotForPlayer — T2: arrangement_2 — ไพ่รวมใบประมูล (12 ใบ) ถ้าชนะ auction', () => {
-  test('myCards ต้องรวมใบที่ u_self ชนะประมูลด้วย (11 raw + 1 auction = 12, ตรง value+suit)', () => {
+describe('buildHNSnapshotForPlayer — T2: arrangement_2 — ไพ่รวมใบประมูล (9 ใบ) ถ้าชนะ auction', () => {
+  test('myCards ต้องรวมใบที่ u_self ชนะประมูลด้วย (8 raw + 1 auction = 9, ตรง value+suit)', () => {
     const auctionCard: Card = { suit: 'clubs', rank: 'A' as any, value: 14 }
     const state = makeHNState({
       phase: 'arrangement_2',
       auctionWonCards: { [SELF]: auctionCard },
     })
     const snapshot = buildHNSnapshotForPlayer(state, SELF)
-    expect(snapshot.myCards).toHaveLength(12)
+    expect(snapshot.myCards).toHaveLength(9)
     expect(snapshot.myCards).toEqual([...state.cardsMap![SELF].map(toKey), toKey(auctionCard)])
   })
 
@@ -180,7 +260,7 @@ describe('buildHNSnapshotForPlayer — T2: arrangement_2 — ไพ่รวม�
       auctionWonCards: { [SELF]: auctionCard },
     })
     const snapshot = buildHNSnapshotForPlayer(state, SELF)
-    expect(snapshot.myCards).toHaveLength(11)
+    expect(snapshot.myCards).toHaveLength(8)
     expect(snapshot.myCards).toEqual(state.cardsMap![SELF].map(toKey))
   })
 
@@ -190,7 +270,7 @@ describe('buildHNSnapshotForPlayer — T2: arrangement_2 — ไพ่รวม�
       auctionWonCards: { [OPP1]: mkCard() }, // มีคนอื่นชนะ แต่ไม่ใช่ u_self
     })
     const snapshot = buildHNSnapshotForPlayer(state, SELF)
-    expect(snapshot.myCards).toHaveLength(11)
+    expect(snapshot.myCards).toHaveLength(8)
     expect(snapshot.myCards).toEqual(state.cardsMap![SELF].map(toKey))
   })
 })

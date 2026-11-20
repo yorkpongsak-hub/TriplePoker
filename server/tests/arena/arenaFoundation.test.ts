@@ -28,18 +28,18 @@ class MemoryGateway implements ArenaLedgerGateway {
 }
 
 describe('Arena Gate 1 foundation', () => {
-  test('config ใช้ค่าที่ล็อกและปิด feature ไว้ก่อน', () => {
-    expect(tierSConfig.featureEnabled).toBe(false)
+  test('config ใช้ค่าที่ล็อกและเปิด feature แล้ว (มติลุงเยาะ 2026-08-13 — เปิดให้เทสจริง)', () => {
+    expect(tierSConfig.featureEnabled).toBe(true)
     expect(tierSConfig.unlockTokenExclusive).toBe(1_000_000)
     expect(tierSConfig.tableSkinKey).toBe('boss_monarch')
     expect(tierSConfig.handLayout).toBe('fan')
     expect(arenaPhaseTimeoutMs.GF_PILE_2).toBe(15_000)
     expect(arenaPhaseTimeoutMs.GF_PILE_3_ROUND_1).toBe(15_000)
     expect(arenaPhaseTimeoutMs.GF_PILE_3_ROUND_2).toBe(15_000)
-    expect(arenaPhaseTimeoutMs.ARRANGE_1).toBe(30_000)
+    expect(arenaPhaseTimeoutMs.ARRANGE_1).toBe(110_000)
     expect(arenaPhaseTimeoutMs.AUCTION_FACE_UP_RESULT).toBe(10_000)
     expect(arenaPhaseTimeoutMs.DUAL_BOSS_INTRO).toBe(30_000)
-    expect(arenaPhaseTimeoutMs.FINAL_ARRANGE).toBe(90_000)
+    expect(arenaPhaseTimeoutMs.FINAL_ARRANGE).toBe(110_000)
     expect(tierSEconomyConfig.anteCrest).toEqual({ pile1: 3, pile2: 3, pile3: 6 })
     expect(tierSEconomyConfig.entryFeeCrest).toBe(12)
     expect(tierSEconomyConfig.requiredReservationCrest).toBe(20 * 12)

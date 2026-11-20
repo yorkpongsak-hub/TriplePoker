@@ -24,10 +24,10 @@ function previewSnapshot(mode?: string): ArenaClientSnapshot {
     matchId: 'grandmaster-preview', version: 1, phase, gameNumber: 1,
     phaseEndsAt: Date.now() + 30_000,
     seats: [
-      { seat: 1, playerId: 'local', displayName: 'Grandmaster', avatar: 'wolf', controller: 'HUMAN', isLocal: true, isBoss: false, isCurrentTurn: phase.includes('GF'), connection: mode === 'reconnect' ? 'RECONNECTING' : 'CONNECTED', cards, cardCount: 11, crownCrest: 246 },
-      { seat: 2, playerId: 'p2', displayName: 'Cipher Veil', avatar: 'fox', controller: 'HUMAN', isLocal: false, isBoss: false, isCurrentTurn: false, connection: 'CONNECTED', cards: [], cardCount: 11, crownCrest: 210 },
-      { seat: 3, playerId: 'boss', displayName: 'Monarch', avatar: '♛', controller: 'AI', isLocal: false, isBoss: true, isCurrentTurn: false, connection: 'CONNECTED', cards: [], cardCount: 11, crownCrest: 300 },
-      { seat: 4, playerId: 'p4', displayName: 'Sovereign Fox', avatar: 'owl', controller: 'HUMAN', isLocal: false, isBoss: false, isCurrentTurn: false, connection: 'CONNECTED', cards: [], cardCount: 11, crownCrest: 198 },
+      { seat: 1, playerId: 'local', displayName: 'Grandmaster', avatar: 'wolf', isVip: false, controller: 'HUMAN', isLocal: true, isBoss: false, isCurrentTurn: phase.includes('GF'), connection: mode === 'reconnect' ? 'RECONNECTING' : 'CONNECTED', cards, cardCount: 11, crownCrest: 246 },
+      { seat: 2, playerId: 'p2', displayName: 'Cipher Veil', avatar: 'fox', isVip: false, controller: 'HUMAN', isLocal: false, isBoss: false, isCurrentTurn: false, connection: 'CONNECTED', cards: [], cardCount: 11, crownCrest: 210 },
+      { seat: 3, playerId: 'boss', displayName: 'Monarch', avatar: '♛', isVip: false, controller: 'AI', isLocal: false, isBoss: true, isCurrentTurn: false, connection: 'CONNECTED', cards: [], cardCount: 11, crownCrest: 300 },
+      { seat: 4, playerId: 'p4', displayName: 'Sovereign Fox', avatar: 'owl', isVip: false, controller: 'HUMAN', isLocal: false, isBoss: false, isCurrentTurn: false, connection: 'CONNECTED', cards: [], cardCount: 11, crownCrest: 198 },
     ],
     cardZones: {
       stockCount: phase === 'ARRANGE_1' ? 3 : 0,
@@ -68,13 +68,14 @@ function previewSnapshot(mode?: string): ArenaClientSnapshot {
       lines: [
         { label: 'Ante', crest: -36 }, { label: 'Joker Extra Ante', crest: -6 },
         { label: 'Auction', crest: -12 }, { label: 'Call', crest: -9 },
-        { label: 'Boss Fee', crest: -24 }, { label: 'Sweep Jackpot', crest: 42 },
+        { label: 'Sweep Jackpot', crest: 42 },
         { label: 'Win / Loss', crest: 66 },
       ],
       playNetCrest: 33,
       entryFeeCrest: 12,
       netCrest: 21,
       psGained: 4,
+      bossVictory: { tier: 'monarch', title: null },
     } : null,
     reveal: phase === 'REVEAL_PILE_2' ? {
       pile: 2, winnerSeat: 2, winnerDisplayName: 'Cipher Veil', handName: 'full_house',
@@ -144,9 +145,9 @@ export default function GrandmasterScreen() {
   }
 
   if (guideSeen === null) return <View style={styles.guideLoading}><ActivityIndicator color="#FFD76A" /></View>
-  if (!tableReady) return <ArenaWelcomeGuide onComplete={completeGuide} onExit={() => router.replace('/(home)/lobby')} />
+  if (!tableReady) return <ArenaWelcomeGuide onComplete={completeGuide} onExit={() => router.replace('/(home)/classic-lobby')} />
 
-  return <GrandmasterTableView snapshot={snapshot ?? initial} onIntent={handleIntent} transportStatus={live ? transport.status : undefined} />
+  return <GrandmasterTableView snapshot={snapshot ?? initial} onIntent={handleIntent} transportStatus={live ? transport.status : undefined} serverOnline={live ? transport.connected : true} />
 }
 
 const styles = StyleSheet.create({ guideLoading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#07100B' } })

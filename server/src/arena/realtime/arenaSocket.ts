@@ -1,4 +1,5 @@
 import { Server, Socket } from 'socket.io'
+import { GAME_RESUME_EVENT, GAME_RESUME_RESULT_EVENT, isGameResumeRequest } from '../../sockets/gameResumeProtocol'
 import { supabase, supabaseAdmin } from '../../config/supabase'
 import { awardPerformanceScore } from '../../game/psEngine'
 import { recordMatchWin } from '../../game/matchWinsService'
@@ -12,13 +13,14 @@ import { ArenaMatchAction } from '../match/arenaMatchEngine'
 import { ArenaSettlementPersistence } from '../settlement/arenaSettlementPersistence'
 import { projectArenaClientSnapshot, resolveArenaTableWinner } from './arenaProjection'
 import { ArenaRuntime, ArenaRuntimeMatch } from './arenaRuntime'
+import { resolveProfileAvatar } from '../../game/profileAvatarService'
 
-interface ArenaIdentity { playerId: string; tokenBalance: number; tierUnlockedMax: string | null; displayName: string; avatar: string }
+interface ArenaIdentity { playerId: string; tokenBalance: number; tierUnlockedMax: string | null; displayName: string; avatar: string; isVip: boolean }
 interface ArenaSocketData { identity: ArenaIdentity }
 
 const runtime = new ArenaRuntime()
 const socketsByPlayer = new Map<string, Socket>()
-const identities = new Map<string, { displayName: string; avatar: string }>()
+const identities = new Map<string, { displayName: string; avatar: string; isVip: boolean }>()
 const crestLedger = new ArenaCrestLedger()
 const settlementPersistence = new ArenaSettlementPersistence()
 const finalizedMatchIds = new Set<string>()
@@ -27,12 +29,26 @@ async function authenticate(token: unknown): Promise<ArenaIdentity> {
   if (typeof token !== 'string' || !token) throw new Error('ARENA_AUTH_REQUIRED')
   const { data: auth, error: authError } = await supabase.auth.getUser(token)
   if (authError || !auth.user) throw new Error('ARENA_AUTH_INVALID')
-  const { data, error } = await supabaseAdmin.from('users').select('token_balance, tier_unlocked_max, display_name, avatar_url').eq('user_id', auth.user.id).single()
+  const { data, error } = await supabaseAdmin.from('users').select('token_balance, tier_unlocked_max, display_name, avatar_url, profile_image_url, vip_status').eq('user_id', auth.user.id).single()
   if (error || !data) throw new Error('ARENA_PROFILE_NOT_FOUND')
-  return { playerId: auth.user.id, tokenBalance: data.token_balance ?? 0, tierUnlockedMax: data.tier_unlocked_max ?? null, displayName: data.display_name ?? 'Grandmaster', avatar: data.avatar_url ?? '' }
+  return {
+    playerId: auth.user.id, tokenBalance: data.token_balance ?? 0, tierUnlockedMax: data.tier_unlocked_max ?? null,
+    displayName: data.display_name ?? 'Grandmaster', avatar: await resolveProfileAvatar(data) ?? '',
+    isVip: (data.vip_status ?? 'none') !== 'none',
+  }
 }
 
 function roomName(matchId: string): string { return `arena:${matchId}` }
+
+// สุ่มค่าคงที่ต่อ "ตา" นั้นๆ ล้วนๆ (deterministic ต่อ input เดิม ไม่ใช่ Math.random() ที่เปลี่ยนทุก tick) ให้
+// AI ระหว่าง GF_PILE_2/3 "คิดนาน" ใกล้เคียง Mastermind's grand_finale_turn (สุ่ม 7-10s จากงบ ~10s) — สเกลตามงบ
+// 15s ของ Arena ไม่ต้องใช้ crypto hash จริง แค่ให้กระจายพอดูเป็นธรรมชาติและเสถียรตลอดตานั้น (คำนวณซ้ำทุก tick
+// จาก input เดิมต้องได้ค่าเดิมเสมอ ไม่งั้นเงื่อนไข now - turnStartedAt < thinkMs จะแกว่ง)
+function stableRangeMs(seed: string, min: number, max: number): number {
+  let hash = 0
+  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0
+  return min + (hash % (max - min))
+}
 
 // บอท/AI ที่ pending ต้องตอบสนองทันที ไม่ใช่รอ applyDefaults() จนหมดเวลา phase timeout
 // arrangement คำนวณจริงจากไพ่ที่ actor นั้นถืออยู่ ณ ขณะนั้น (ไม่ใช่ placeholder อีกต่อไป)
@@ -50,9 +66,11 @@ export function driveBots(match: ArenaRuntimeMatch, now: number): void {
     if (['GF_PILE_2', 'GF_PILE_3_ROUND_1', 'GF_PILE_3_ROUND_2'].includes(snapshot.phase)) {
       const duration = arenaPhaseTimeoutMs[snapshot.phase as 'GF_PILE_2' | 'GF_PILE_3_ROUND_1' | 'GF_PILE_3_ROUND_2']
       const turnStartedAt = (snapshot.deadlineAt ?? now + duration) - duration
-      // Expose each AI/Boss as CURRENT before it acts, like Mastermind's
-      // grand_finale_turn + thinking delay. Human turns retain the full 15s.
-      if (now - turnStartedAt < 1_500) return
+      // Expose each AI/Boss as CURRENT before it acts, like Mastermind's grand_finale_turn + thinking delay
+      // (มติลุงเยาะ: เดิม fix 1500ms สั้นเกิน ดูเหมือนบอทตอบทันที ไม่มีเวลาให้ผู้เล่นเห็น countdown เลย —
+      // ขยับให้ใกล้เคียงสัดส่วนของ Mastermind (สุ่ม 7-10s จากงบ ~10s) สเกลตามงบ 15s ของ Arena)
+      const thinkMs = stableRangeMs(`${match.engine.matchId}:${snapshot.phase}:${botActorId}:${turnStartedAt}`, 8_000, 12_000)
+      if (now - turnStartedAt < thinkMs) return
     }
     try {
       const deal = match.engine.currentDeal()
@@ -89,17 +107,12 @@ function emitProjectedSnapshots(match: ArenaRuntimeMatch, now: number): void {
   }
 }
 
-// ยิง SettlementTransaction ที่เพิ่งเกิดขึ้นจริงเข้า Supabase (ทีละรายการ, idempotent ผ่าน commandId)
-// ถ้าแมตช์จบแล้วให้ persist match log ครั้งเดียวแล้วเลิกติดตามใน runtime กัน ticker วนไปเรื่อยๆ ตลอดอายุ process
+// Central Economy Ledger Phase 7 Round 6 (มติลุงเยาะ 2026-08-13): ไม่ persist ทีละ SettlementTransaction
+// เข้า arena_apply_crest_batch (RPC เดิม) ต่อ action อีกต่อไป — ธุรกรรมเดี่ยวไม่ balance ในตัวเอง เงินไป
+// ค้าง pot ที่ Ledger ใหม่ไม่รู้จัก ยังคง drain ทิ้งกัน queue โตไม่จำกัด แค่ไม่ยิงเข้า RPC เดิมแล้ว — settle
+// จริงครั้งเดียวตอนจบแมตช์ผ่าน persistMatchSettlementViaLedger() แทน (ดูเหตุผลเต็มที่ฟังก์ชันนั้น)
 async function persistSettlement(match: ArenaRuntimeMatch): Promise<void> {
-  const transactions = match.engine.drainSettlementTransactions()
-  for (const transaction of transactions) {
-    try {
-      await settlementPersistence.persistTransaction(match.engine.matchId, transaction)
-    } catch (error) {
-      console.error('[Arena] settlement persist failed:', error)
-    }
-  }
+  match.engine.drainSettlementTransactions()
   const snapshot = match.engine.snapshot()
   if (snapshot.completed && !finalizedMatchIds.has(match.engine.matchId)) {
     finalizedMatchIds.add(match.engine.matchId)
@@ -107,6 +120,17 @@ async function persistSettlement(match: ArenaRuntimeMatch): Promise<void> {
       await settlementPersistence.persistMatchLog(match.engine.matchId, match.engine.eventLog(), { breakdown: match.engine.settlementBreakdown() })
     } catch (error) {
       console.error('[Arena] match log persist failed:', error)
+    }
+    try {
+      const aiIdByActorId: Record<string, string> = {}
+      match.composition.seats.forEach((seat, i) => {
+        if (seat.controller !== 'HUMAN') aiIdByActorId[match.engine.actorIds[i]] = seat.aiId
+      })
+      await settlementPersistence.persistMatchSettlementViaLedger(
+        match.engine.matchId, match.engine.settlementBreakdown(), match.engine.settlementTotals().crownSinkCrest, aiIdByActorId,
+      )
+    } catch (error) {
+      console.error('[Arena] ledger settlement failed:', error)
     }
     await persistMatchEndStats(match)
     runtime.completeMatch(match.engine.matchId)
@@ -257,8 +281,23 @@ export function registerArenaSocket(io: Server): void {
 
   arena.on('connection', (socket: Socket<any, any, any, ArenaSocketData>) => {
     const identity = socket.data.identity
+    socket.on(GAME_RESUME_EVENT, (request: unknown) => {
+      if (!isGameResumeRequest(request) || request.matchType !== 'ARENA') return
+      if (request.userId !== identity.playerId) {
+        socket.emit(GAME_RESUME_RESULT_EVENT, { ok: false, status: 'UNAUTHORIZED', roomId: request.roomId, matchType: request.matchType }); return
+      }
+      const match = runtime.matchForPlayer(identity.playerId)
+      if (!match || match.engine.matchId !== request.roomId) {
+        socket.emit(GAME_RESUME_RESULT_EVENT, { ok: false, status: 'MATCH_NOT_FOUND', roomId: request.roomId, matchType: request.matchType }); return
+      }
+      runtime.reconnect(identity.playerId)
+      socket.join(roomName(match.engine.matchId))
+      const snapshot = projectArenaClientSnapshot(match.engine, match.composition, match.connections, identity.playerId, Date.now(), identities)
+      socket.emit('arena:snapshot', snapshot)
+      socket.emit(GAME_RESUME_RESULT_EVENT, { ok: true, status: 'RESUMED', roomId: request.roomId, matchType: request.matchType, serverVersion: match.engine.snapshot().version })
+    })
     socketsByPlayer.set(identity.playerId, socket)
-    identities.set(identity.playerId, { displayName: identity.displayName, avatar: identity.avatar })
+    identities.set(identity.playerId, { displayName: identity.displayName, avatar: identity.avatar, isVip: identity.isVip })
 
     const existing = runtime.matchForPlayer(identity.playerId)
     if (existing) {

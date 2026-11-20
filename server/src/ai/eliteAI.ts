@@ -3,8 +3,8 @@
 // Sprint 5 | TriplePoker — The Sage Unicorn Studio Co., Ltd.
 // ============================================================
 
-import { checkFoul, PlayerArrangement, CommunityCards } from '../game/foulChecker';
-import { evaluateHand } from '../game/handEvaluator';
+import { checkTierCFoul, PlayerArrangement, CommunityCards } from '../game/foulChecker';
+import { evaluateBestFive, evaluateHand } from '../game/handEvaluator';
 import { Card } from '../game/deck';
 
 const PILE1_SIZE = 3;
@@ -53,7 +53,7 @@ function findValidArrangement(
       pile2: shuffled.slice(PILE1_SIZE, PILE1_SIZE + PILE2_SIZE),
       pile3: shuffled.slice(PILE1_SIZE + PILE2_SIZE),
     };
-    if (!checkFoul(arr, community).isFoul) return arr;
+    if (!checkTierCFoul(arr, community).isFoul) return arr;
   }
   return null;
 }
@@ -82,8 +82,8 @@ function calcTotalStrength(
   community: CommunityCards
 ): number {
   const s1 = evaluateHand([...arr.pile1, ...community.row1]).score;
-  const s2 = evaluateHand([...arr.pile2, ...community.row2]).score;
-  const s3 = evaluateHand([...arr.pile3, ...community.row3]).score;
+  const s2 = evaluateBestFive([...arr.pile2, ...community.row2]).score;
+  const s3 = evaluateBestFive([...arr.pile3, ...community.row3]).score;
   return s1 + s2 + s3;
 }
 

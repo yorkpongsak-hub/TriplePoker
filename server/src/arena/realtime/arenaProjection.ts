@@ -4,7 +4,7 @@ import { ArenaConnectionManager, ArenaConnectionView } from '../connection/arena
 import { tierSEconomyConfig } from '../config/tierSConfig'
 import { ArenaMatchPhase } from '../contracts/arenaContracts'
 import { ArenaMatchEngine } from '../match/arenaMatchEngine'
-import { ArenaMatchComposition } from '../matchmaking/arenaMatchmaking'
+import { ArenaAIId, ArenaMatchComposition, ArenaSeatAssignment } from '../matchmaking/arenaMatchmaking'
 
 export interface ArenaSeatViewWire {
   seat: 1 | 2 | 3 | 4
@@ -13,6 +13,8 @@ export interface ArenaSeatViewWire {
   // Human: preset avatar key (จาก PRESET_AVATARS ฝั่ง client, resolve ผ่าน AvatarDisplay) อาจว่างถ้ายังไม่ตั้งค่า
   // AI (Boss/Sentinel/Minion): สัญลักษณ์ตัวอักษรเดิม ('♛'/'♠') ไม่มี preset จริงให้ resolve
   avatar: string
+  // Human เท่านั้น (AI ไม่มี vip_status จริง) — ใช้โชว์กรอบทอง VIP หน้าที่นั่ง เหมือน Adept/High Noble
+  isVip: boolean
   controller: 'HUMAN' | 'AI'
   isLocal: boolean
   isBoss: boolean
@@ -56,9 +58,16 @@ export interface ArenaClientSnapshotWire {
     pile: 2 | 3; round: 1 | 2; direction: 'CLOCKWISE' | 'COUNTER_CLOCKWISE'; currentSeat: 1 | 2 | 3 | 4 | null
     players: Array<{ seat: 1 | 2 | 3 | 4; displayName: string; status: 'WAITING' | 'CURRENT' | 'CALLED' | 'FOLDED' | 'SHOWDOWN'; revealedCards: string[] }>
   }
+  callReveal: null | { id: string; seat: 1 | 2 | 3 | 4; displayName: string; pile: 2 | 3; round: 1 | 2; cards: string[] }
+  gfAction: null | { id: string; seat: 1 | 2 | 3 | 4; displayName: string; pile: 2 | 3; round: 1 | 2; decision: 'CALL' | 'FOLD'; cards: string[] }
   bossPresentation: null | { bossId: 'MONARCH' | 'SOREN' | 'DUAL'; title: string; subtitle: string; atmosphere: string; quote: string }
   dualBossLore: null | { id: string; speakerSeat: 3 | 4; speaker: 'MONARCH' | 'SOREN'; text: string }
-  result: null | { title: string; lines: Array<{ label: string; crest: number }>; playNetCrest: number; entryFeeCrest: number; netCrest: number; psGained: number }
+  result: null | {
+    title: string; lines: Array<{ label: string; crest: number }>; playNetCrest: number; entryFeeCrest: number; netCrest: number; psGained: number
+    // ผู้เล่นในเครื่องนี้เป็นผู้ชนะโต๊ะจริง (endingCrest สูงสุดทั้งโต๊ะ) — non-null เฉพาะกรณีนี้เท่านั้น
+    // (มติลุงเยาะ 2026-08-14: Boss Victory VFX โชว์ตอนเป็นผู้ชนะโต๊ะเท่านั้น ไม่ใช่แค่เอาชนะที่นั่ง Boss เฉยๆ)
+    bossVictory: null | { tier: 'sentinel' | 'god' | 'monarch'; title: string | null }
+  }
   reveal: null | {
     pile: 1 | 2 | 3
     winnerSeat: 1 | 2 | 3 | 4 | null
@@ -143,13 +152,45 @@ export function resolveArenaTableWinner(
   }
 }
 
+const FOUR_GOD_IDS = new Set(['REAPER', 'CRAG', 'CORTEX', 'CIPHER'])
+
+// Boss Victory VFX tier ต่อ aiId — ARENA_MINION คืน null เสมอ (ไม่ใช่ "บอส" มีตัวตนทางเนื้อเรื่อง ตามที่
+// CLAUDE.md บันทึกไว้ว่า "ARENA_MINION ยังโง่เหมือนเดิมตามตั้งใจ") ที่เหลือ (9 Sentinels) fallback เป็น 'sentinel'
+function bossVictoryTierForAiId(aiId: ArenaAIId): 'sentinel' | 'god' | 'monarch' | null {
+  if (aiId === 'MONARCH' || aiId === 'SOREN') return 'monarch'
+  if (FOUR_GOD_IDS.has(aiId)) return 'god'
+  if (aiId === 'ARENA_MINION') return null
+  return 'sentinel'
+}
+
+// Boss Victory VFX presentation (มติลุงเยาะ 2026-08-14) — เรียกเฉพาะกรณีผู้เล่นเป็นผู้ชนะโต๊ะเท่านั้น
+// (เช็ค isLocalWinner ไว้แล้วก่อนเรียกในจุดสร้าง result ด้านล่าง) Soren ไม่มี VictoryTier ของตัวเองใน
+// BossVictoryVFX (มีแค่ sentinel/god/monarch) เลยใช้ tier 'monarch' visual ร่วมแต่เปลี่ยนข้อความแทน —
+// DUAL_BOSS_ENCOUNTER เจอทั้ง Monarch(seat3)+Soren(seat4) เป็น role 'BOSS' พร้อมกันได้ รวมข้อความเป็นชื่อเดียว
+// null = ไม่มี AI boss ที่มีชื่อจริงให้ฉลอง (kind:'HUMAN_BOSS' คือ P3 เป็นคนจริง ไม่ใช่ AI)
+export function resolveBossVictoryPresentation(
+  composition: ArenaMatchComposition,
+): { tier: 'sentinel' | 'god' | 'monarch'; title: string | null } | null {
+  const bossSeats = composition.seats.filter(
+    (seat): seat is Extract<ArenaSeatAssignment, { controller: 'AI' }> => seat.controller === 'AI' && seat.role === 'BOSS',
+  )
+  if (!bossSeats.length) return null
+  const tiers = bossSeats.map(seat => bossVictoryTierForAiId(seat.aiId)).filter((tier): tier is 'sentinel' | 'god' | 'monarch' => tier !== null)
+  if (!tiers.length) return null
+  const tier = tiers.includes('monarch') ? 'monarch' : tiers.includes('god') ? 'god' : 'sentinel'
+  const hasMonarch = bossSeats.some(seat => seat.aiId === 'MONARCH')
+  const hasSoren = bossSeats.some(seat => seat.aiId === 'SOREN')
+  const title = hasMonarch && hasSoren ? 'MONARCH & SOREN VANQUISHED' : hasSoren ? 'SOREN VANQUISHED' : null
+  return { tier, title }
+}
+
 export function projectArenaClientSnapshot(
   engine: ArenaMatchEngine,
   composition: ArenaMatchComposition,
   connections: ArenaConnectionManager,
   viewerId: string,
   now: number,
-  identities: ReadonlyMap<string, { displayName: string; avatar: string }>,
+  identities: ReadonlyMap<string, { displayName: string; avatar: string; isVip: boolean }>,
 ): ArenaClientSnapshotWire {
   const snapshot = engine.snapshot()
   const detail = engine.snapshotDetail()
@@ -188,9 +229,10 @@ export function projectArenaClientSnapshot(
     const avatar = seatAssignment.controller === 'HUMAN'
       ? identities.get(actorId)?.avatar ?? ''
       : seatAssignment.role === 'BOSS' ? '♛' : '♠'
+    const isVip = seatAssignment.controller === 'HUMAN' && (identities.get(actorId)?.isVip ?? false)
     const connection: ArenaConnectionView = seatAssignment.controller === 'HUMAN' ? connections.view(actorId, now) : 'CONNECTED'
     return {
-      seat: seatAssignment.seat, playerId: actorId, displayName, avatar, controller: seatAssignment.controller,
+      seat: seatAssignment.seat, playerId: actorId, displayName, avatar, isVip, controller: seatAssignment.controller,
       isLocal, isBoss: seatAssignment.role === 'BOSS' || seatAssignment.role === 'HUMAN_BOSS', isCurrentTurn: snapshot.pendingActorIds.includes(actorId),
       connection, cards: isLocal ? hand.map(arenaCardKey) : [], cardCount: hand.length,
       arrangedPiles: isLocal && lockedArrangement ? {
@@ -324,6 +366,31 @@ export function projectArenaClientSnapshot(
       })()
     : null
 
+  const callReveal: ArenaClientSnapshotWire['callReveal'] = detail.lastGFCallReveal
+    ? (() => {
+        const seat = seats.find(entry => entry.playerId === detail.lastGFCallReveal!.actorId)
+        return seat ? {
+          id: detail.lastGFCallReveal!.actionId,
+          seat: seat.seat,
+          displayName: seat.displayName,
+          pile: detail.lastGFCallReveal!.pile,
+          round: detail.lastGFCallReveal!.round,
+          cards: [...detail.lastGFCallReveal!.cards],
+        } : null
+      })()
+    : null
+
+  const gfAction: ArenaClientSnapshotWire['gfAction'] = detail.lastGFAction
+    ? (() => {
+        const seat = seats.find(entry => entry.playerId === detail.lastGFAction!.actorId)
+        return seat ? {
+          id: detail.lastGFAction!.actionId, seat: seat.seat, displayName: seat.displayName,
+          pile: detail.lastGFAction!.pile, round: detail.lastGFAction!.round,
+          decision: detail.lastGFAction!.decision, cards: [...detail.lastGFAction!.cards],
+        } : null
+      })()
+    : null
+
   const bossSeat = composition.seats.find(seat => seat.seat === 3)
   const bossAiId = bossSeat?.controller === 'AI' ? bossSeat.aiId : null
   const bossPresentation: ArenaClientSnapshotWire['bossPresentation'] =
@@ -347,8 +414,9 @@ export function projectArenaClientSnapshot(
   const result: ArenaClientSnapshotWire['result'] = snapshot.phase === 'MATCH_RESULT' && localBreakdown
     ? (() => {
         const { winnerId, isRareBoss } = resolveArenaTableWinner(engine, composition)
+        const isLocalWinner = viewerId === winnerId
         const psCfg = gameConfig.psConfig
-        const psGained = viewerId === winnerId
+        const psGained = isLocalWinner
           ? psCfg.grandmaster.bossWin + (isRareBoss ? psCfg.legendaryBossBonus : 0)
           : (localBreakdown.netCrest >= 0 ? psCfg.grandmaster.nonNegative : psCfg.grandmaster.negative)
         return {
@@ -358,7 +426,6 @@ export function projectArenaClientSnapshot(
             { label: 'Joker Extra Ante', crest: -localBreakdown.jokerExtraAnte },
             { label: 'Auction', crest: -localBreakdown.auction },
             { label: 'Call', crest: -localBreakdown.call },
-            { label: 'Boss Fee', crest: -localBreakdown.bossFee },
             { label: 'Sweep Jackpot', crest: localBreakdown.sweepJackpot },
             { label: 'Win / Loss', crest: localBreakdown.winLoss },
           ],
@@ -366,6 +433,7 @@ export function projectArenaClientSnapshot(
           entryFeeCrest: localBreakdown.entryFee,
           netCrest: localBreakdown.netCrest,
           psGained,
+          bossVictory: isLocalWinner ? resolveBossVictoryPresentation(composition) : null,
         }
       })()
     : null
@@ -394,7 +462,7 @@ export function projectArenaClientSnapshot(
       localBalanceCrest: localBreakdown?.endingCrest ?? 0,
     },
     communityCards,
-    auction, auctionDisplay, auctionResult, blindAuctionResults, joker, gf, gfTable, bossPresentation, dualBossLore,
+    auction, auctionDisplay, auctionResult, blindAuctionResults, joker, gf, gfTable, callReveal, gfAction, bossPresentation, dualBossLore,
     result, reveal, pilesResolved,
   }
 }

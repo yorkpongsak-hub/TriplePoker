@@ -16,6 +16,7 @@ import { supabaseAdmin } from '../config/supabase'
 import { gameConfig } from '../config/gameConfig'
 import { TIER_ORDER, TierOrderKey, GateTier, canUnlockTier } from './progressionGate'
 import { qualifiesForGrandmasterUnlock } from './tierAuthority'
+import { tierDTableCeiling } from './tierDTableUnlock'
 
 // ลำดับ Tier จากสูงไปต่ำ สำหรับเดินหา Tier แรกที่ผ่าน Progression Gate ครบ (Token+Days+Skill)
 const DESCEND_ORDER: TierOrderKey[] = ['highNoble', 'mastermind', 'adept', 'initiate', 'D']
@@ -52,7 +53,7 @@ export async function checkTierUnlock(userId: string, newTokenBalance: number): 
     // ห้าม fallback ค่า default แล้วเขียนต่อ — ถ้าอ่านพลาด return null ทันที กัน ceiling ถูกเขียนทับให้ต่ำลง
     const { data, error } = await supabaseAdmin
       .from('users')
-      .select('tier_unlocked_max, iap_token_total, conquered_sentinels, created_at')
+      .select('tier_unlocked_max, tier_d_solo_level, iap_token_total, conquered_sentinels, created_at')
       .eq('user_id', userId)
       .single()
 
@@ -90,13 +91,17 @@ export async function checkTierUnlock(userId: string, newTokenBalance: number): 
       console.error('[TIER_UNLOCK] Unknown tier_unlocked_max, skip:', currentMaxRaw, '| userId:', userId)
       return null
     }
-    const newIdx = TIER_ORDER.indexOf(newTier)
+    // Tier D controls a new member's maximum legacy-table tier. Token and time
+    // gates still apply, but cannot skip the Solo learning path.
+    const tierDIdx = TIER_ORDER.indexOf(tierDTableCeiling(data.tier_d_solo_level ?? 1))
+    const newIdx = Math.min(TIER_ORDER.indexOf(newTier), tierDIdx)
+    const cappedTier = TIER_ORDER[newIdx]
 
     if (newIdx <= currentIdx) return null // Ceiling Model — token ลดไม่ล็อคกลับ, tier เท่าเดิมไม่เขียนซ้ำ
 
     const { error: updateError } = await supabaseAdmin
       .from('users')
-      .update({ tier_unlocked_max: newTier })
+      .update({ tier_unlocked_max: cappedTier })
       .eq('user_id', userId)
 
     if (updateError) {
@@ -104,8 +109,8 @@ export async function checkTierUnlock(userId: string, newTokenBalance: number): 
       return null
     }
 
-    console.log('[TIER_UNLOCK]', Date.now(), userId, 'unlocked', newTier, '| eligibleToken:', eligibleToken)
-    return newTier
+    console.log('[TIER_UNLOCK]', Date.now(), userId, 'unlocked', cappedTier, '| eligibleToken:', eligibleToken)
+    return cappedTier
   } catch (err) {
     console.error('[TIER_UNLOCK] Unexpected error:', err, '| userId:', userId)
     return null

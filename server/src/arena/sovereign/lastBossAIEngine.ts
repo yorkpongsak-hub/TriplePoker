@@ -136,8 +136,8 @@ export class LastBossAIEngine {
       for (const pile2 of combinations(afterPile1, 3)) {
         evaluatedPartitions++
         const pile3 = without(afterPile1, pile2)
-        // Tier S+ Pile 3 is always five private + two community cards and is
-        // therefore evaluated as Best 5 of 7 by evaluatePileBest.
+        // Tier S+ Pile 3 chooses three of five private cards and must include
+        // both community cards through evaluatePileBest.
         const hand2 = evaluate(2, pile2)
         const hand3 = evaluate(3, pile3)
         const arrangement: ArenaArrangement = {

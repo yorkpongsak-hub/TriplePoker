@@ -12,6 +12,8 @@
 import { Card } from '../../src/game/deck'
 import {
   checkFoul,
+  checkTierCFoul,
+  checkHighNobleTexasFoul,
   PlayerArrangement,
   CommunityCards,
   FoulCheckResult,
@@ -24,6 +26,62 @@ const S = 'spades'
 const H = 'hearts'
 const D = 'diamonds'
 const C = 'clubs'
+
+describe('checkHighNobleTexasFoul — Tier A+ Texas Hybrid', () => {
+  test('accepts 3 / 3 / 2 private cards with 2 / 2 / 5 community cards', () => {
+    const result = checkHighNobleTexasFoul({
+      pile1: [c(7, S), c(9, H), c(11, D)],
+      pile2: [c(3, S), c(8, H), c(12, D)],
+      pile3: [c(2, S), c(4, H)],
+    }, {
+      row1: [c(2, C), c(5, H)],
+      row2: [c(3, C), c(13, H)],
+      row3: [c(10, S), c(11, H), c(12, C), c(13, D), c(14, S)],
+    })
+    expect(result).toEqual({ isFoul: false })
+  })
+
+  test('accepts one auction card in Pile 2 but rejects a non-Texas Pile 3 size', () => {
+    const community = {
+      row1: [c(2, C), c(5, H)], row2: [c(3, C), c(13, H)],
+      row3: [c(10, S), c(11, H), c(12, C), c(13, D), c(14, S)],
+    }
+    const valid = checkHighNobleTexasFoul({
+      pile1: [c(7, S), c(9, H), c(11, D)],
+      pile2: [c(3, S), c(8, H), c(12, D), c(6, C)],
+      pile3: [c(2, S), c(4, H)],
+    }, community)
+    expect(valid.isFoul).toBe(false)
+    expect(checkHighNobleTexasFoul({
+      pile1: [c(7, S), c(9, H), c(11, D)], pile2: [c(3, S), c(8, H), c(12, D)],
+      pile3: [c(2, S), c(4, H), c(6, D)],
+    }, community)).toMatchObject({ isFoul: true, foulPile: 3 })
+  })
+})
+
+describe('checkTierCFoul — Best 5 post-Auction layout', () => {
+  test('accepts 3 / 4 / 5 and ranks Pile 2 as Best 5 from six cards', () => {
+    const result = checkTierCFoul({
+      pile1: [c(2, S), c(5, H), c(9, D)],
+      pile2: [c(3, S), c(3, H), c(6, D), c(11, C)],
+      pile3: [c(7, S), c(7, H), c(8, D), c(8, C), c(14, S)],
+    }, {
+      row1: [c(4, C), c(12, H)], row2: [c(9, C), c(13, H)], row3: [c(2, D), c(4, H)],
+    })
+    expect(result).toEqual({ isFoul: false })
+  })
+
+  test('requires Pile 3 to remain exactly five private cards', () => {
+    const result = checkTierCFoul({
+      pile1: [c(2, S), c(5, H), c(9, D)],
+      pile2: [c(3, S), c(3, H), c(6, D), c(11, C)],
+      pile3: [c(7, S), c(7, H), c(8, D), c(8, C)],
+    }, {
+      row1: [c(4, C), c(12, H)], row2: [c(9, C), c(13, H)], row3: [c(2, D), c(4, H)],
+    })
+    expect(result).toMatchObject({ isFoul: true, foulPile: 3 })
+  })
+})
 
 // ─── กลุ่ม: Card Count Validation (กฎ 3-3-5) ────────────────────────────────
 describe('checkFoul — Card Count (กฎ 3-3-5)', () => {

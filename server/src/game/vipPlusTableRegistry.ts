@@ -20,6 +20,7 @@ export interface VipPlusWaitingSeat {
   // มติลุงเยาะ — Avatar หน้าชื่อผู้เล่น (preset key/emoji/URL — resolve ฝั่ง client ตาม pattern เดียวกับ
   // Monarch's MonarchPlayerAvatar) null = ยังไม่ได้ตั้งค่า/อ่านไม่ได้ ให้ client fallback เป็น emoji default
   avatarUrl: string | null
+  isVip: boolean
   joinedAt: number
   confirmedAt: number | null
   acceptedTermsVersion: typeof VIP_PLUS_ENTRY_TERMS_VERSION | null
@@ -50,7 +51,7 @@ export interface VipPlusPublicWaitingTable {
   // Batch 1 (VIP-05 fix, C4/C5): host โอนได้แล้ว ไม่ใช่ H1 เสมอไปอีกต่อไป — ต้องคำนวณจาก hostPlayerId จริง
   hostSeat: VipPlusSeat
   wager: VipPlusWagerSnapshot
-  seats: Array<{ seat: VipPlusSeat; displayName: string; avatarUrl: string | null; confirmed: boolean; connected: boolean }>
+  seats: Array<{ seat: VipPlusSeat; displayName: string; avatarUrl: string | null; isVip: boolean; confirmed: boolean; connected: boolean }>
   requiredPlayers: 5
   minimumPlayers: 3
   canHostStart: boolean
@@ -95,7 +96,7 @@ export class VipPlusTableRegistry {
   private sequence = 0
 
   create(
-    player: { playerId: string; displayName: string; tokenBalance: number; avatarUrl?: string | null },
+    player: { playerId: string; displayName: string; tokenBalance: number; avatarUrl?: string | null; isVip?: boolean },
     optionId: VipPlusWagerOptionId,
     now = Date.now(),
     // ทดลองมติลุงเยาะ — object แยกต่างหาก (ไม่ใช่ positional param เพิ่ม) กัน call site เดิม (เทส/ที่อื่น) พัง
@@ -127,7 +128,7 @@ export class VipPlusTableRegistry {
 
   join(
     tableId: string,
-    player: { playerId: string; displayName: string; tokenBalance: number; avatarUrl?: string | null },
+    player: { playerId: string; displayName: string; tokenBalance: number; avatarUrl?: string | null; isVip?: boolean },
     now = Date.now(),
   ): VipPlusWaitingTable {
     const table = this.requireTable(tableId)
@@ -326,7 +327,7 @@ export class VipPlusTableRegistry {
       seats: VIP_PLUS_SEATS.flatMap(seat => {
         const occupant = table.seats[seat]
         return occupant
-          ? [{ seat, displayName: occupant.displayName, avatarUrl: occupant.avatarUrl, confirmed: occupant.confirmedAt !== null, connected: occupant.connected }]
+          ? [{ seat, displayName: occupant.displayName, avatarUrl: occupant.avatarUrl, isVip: occupant.isVip, confirmed: occupant.confirmedAt !== null, connected: occupant.connected }]
           : []
       }),
       requiredPlayers: 5,
@@ -368,7 +369,7 @@ export class VipPlusTableRegistry {
 
   private makeSeat(
     seat: VipPlusSeat,
-    player: { playerId: string; displayName: string; avatarUrl?: string | null },
+    player: { playerId: string; displayName: string; avatarUrl?: string | null; isVip?: boolean },
     joinedAt: number,
   ): VipPlusWaitingSeat {
     return {
@@ -376,6 +377,7 @@ export class VipPlusTableRegistry {
       playerId: player.playerId,
       displayName: player.displayName,
       avatarUrl: player.avatarUrl ?? null,
+      isVip: player.isVip ?? false,
       joinedAt,
       confirmedAt: null,
       acceptedTermsVersion: null,

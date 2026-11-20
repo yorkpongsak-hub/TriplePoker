@@ -59,3 +59,29 @@ export function getAuthoritativeDisplayTier(tokenBalance: number, tierUnlockedMa
   if (tierUnlockedMax === 'grandmaster') return 'grandmaster'
   return getTierFromToken(tokenBalance)
 }
+
+const TIER_KEY_ORDER: TierKey[] = ['initiate', 'adept', 'mastermind', 'highNoble', 'grandmaster']
+// TierKey ('highNoble' camelCase) กับ Tier/TIER_CONFIG key ('high_noble' snake_case) เป็นคนละชุด — ต้อง
+// เชื่อมเอง เพราะ getTierFromToken คืนอย่างแรก แต่ minToken lookup ต้องใช้อย่างหลัง
+const TIER_KEY_TO_CONFIG_KEY: Record<TierKey, Tier> = {
+  initiate: 'initiate', adept: 'adept', mastermind: 'mastermind', highNoble: 'high_noble', grandmaster: 'grandmaster',
+}
+
+export interface TierProgress {
+  pct: number
+  isMaxTier: boolean
+  nextTierLabel: string | null
+}
+
+// ความก้าวหน้าไปยัง Tier ถัดไป (มติลุงเยาะ 2026-08-14, สำหรับ progress bar หน้า Victory Screen) — สูตร
+// อัตราส่วนตรงตามที่ลุงเยาะเลือก: token ปัจจุบัน ÷ token สูงสุดของ Tier ถัดไปที่จะปลดล็อค (ไม่ใช่
+// range-based ที่หักลบขั้นต่ำ Tier ปัจจุบันออกก่อน) · Grandmaster เป็น Tier สูงสุดที่มีตอนนี้ (Last Boss
+// ยัง implemented:false) เลยไม่มี Tier ถัดไปให้เทียบ คืน isMaxTier:true แทนแทนที่จะซ่อนไปเลย
+export function getTierProgress(tokenBalance: number): TierProgress {
+  const currentKey = getTierFromToken(tokenBalance)
+  const nextKey = TIER_KEY_ORDER[TIER_KEY_ORDER.indexOf(currentKey) + 1]
+  if (!nextKey) return { pct: 100, isMaxTier: true, nextTierLabel: null }
+  const nextConfig = TIER_CONFIG[TIER_KEY_TO_CONFIG_KEY[nextKey]]
+  const pct = Math.max(0, Math.min(100, Math.round((tokenBalance / nextConfig.minToken) * 100)))
+  return { pct, isMaxTier: false, nextTierLabel: nextConfig.label }
+}

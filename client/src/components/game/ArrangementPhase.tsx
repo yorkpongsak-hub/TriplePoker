@@ -2,7 +2,6 @@
  * ArrangementPhase.tsx
  * UI phase จัดไพ่ก่อนเริ่มเกม (Arrangement Phase)
  * - แสดงไพ่ 11 ใบของ User แบ่งเป็น 3 กอง (3-3-5)
- * - Auto Sort — จัดไพ่อัตโนมัติตามกฎ 3-3-5
  * - กดไพ่แล้วกดตำแหน่งอื่น = swap (ไม่ใช้ drag เพื่อ performance)
  * - READY — ส่ง arrangement ไปยัง server ผ่าน Socket
  * - Pile labels แสดงชื่อ Hand rank ของแต่ละกอง
@@ -40,8 +39,6 @@ export interface ArrangementPhaseProps {
   cards: CardData[];
   // callback เมื่อ player กด READY
   onReady: (arrangement: [CardData[], CardData[], CardData[]]) => void;
-  // callback เมื่อ player กด Auto Sort
-  onAutoSort?: () => void;
   // pile labels แสดง hand rank (อัพเดทจาก handEvaluator)
   pileHandRanks?: [string, string, string];
   // disable ปุ่มถ้ายังไม่ได้รับไพ่
@@ -75,7 +72,6 @@ const OVERLAP = -10; // margin-left ของไพ่ซ้อน
 const ArrangementPhase: React.FC<ArrangementPhaseProps> = ({
   cards,
   onReady,
-  onAutoSort,
   pileHandRanks = ['', '', ''],
   disabled = false,
 }) => {
@@ -97,17 +93,6 @@ const ArrangementPhase: React.FC<ArrangementPhaseProps> = ({
     onReady(piles);
     // TODO Sprint 4: socket.emit('player_ready', { arrangement: piles })
   }, [isReady, disabled, piles, onReady]);
-
-  // ── กด Auto Sort ──────────────────────────────────────────────
-  const handleAutoSort = useCallback(() => {
-    if (isReady || disabled) return;
-    // TODO Sprint 4: เรียก handEvaluator เพื่อ sort จริง
-    // ตอนนี้ reset pile กลับเป็น 3-3-5 ตามลำดับที่ deal
-    setPiles(initPiles());
-    setSelected(null);
-    onAutoSort?.();
-    Vibration.vibrate(20);
-  }, [isReady, disabled, initPiles, onAutoSort]);
 
   // ── กดเลือก/swap ไพ่ ──────────────────────────────────────────
   const handleCardPress = useCallback((pileIndex: number, cardIndex: number) => {
@@ -198,16 +183,6 @@ const ArrangementPhase: React.FC<ArrangementPhaseProps> = ({
 
       {/* ── Action bar ─────────────────────────────────────────── */}
       <View style={styles.actionBar}>
-        {/* Auto Sort */}
-        <TouchableOpacity
-          style={[styles.btnSort, (isReady || disabled) && styles.btnDisabled]}
-          onPress={handleAutoSort}
-          disabled={isReady || disabled}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.btnSortText}>Auto Sort</Text>
-        </TouchableOpacity>
-
         {/* READY */}
         <TouchableOpacity
           style={[
