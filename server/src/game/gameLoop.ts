@@ -1419,37 +1419,9 @@ async function resolveArrangementRound2Timeout(io: Server, roomId: string): Prom
 }
 
 // ============================================================
-// Patch Discard Phase — AI auto-discard / Human เลือกเอง (มี suggestion)
-// บังคับรวม Community Pile3 (2 ใบ) เสมอ ตามสเปค
+// Discard Phase (ยกเลิกแล้ว 2026-09-27) — เหลือเป็น compatibility bridge ที่ผ่านไปทันที
+// arrangement_2 หลัง Auction คือ layout สุดท้าย ไม่มีการทิ้งไพ่อีกต่อไป
 // ============================================================
-
-// หา 3 ใบที่ดีที่สุดจากไพ่ในมือ (5-6 ใบ) โดยรวม Community Pile3 บังคับ
-function bestThreeFromHand(hand: Card[], community3: Card[]): { keep: Card[]; discard: Card[] } {
-  const n = hand.length
-  let bestScore = -Infinity
-  let bestKeepIdx: number[] = [0, 1, 2]
-
-  // ลอง combination ทุกแบบที่เลือก 3 จาก n (n=5 หรือ 6 ไม่เยอะ ลองหมดได้สบาย)
-  const combo = (start: number, chosen: number[]) => {
-    if (chosen.length === 3) {
-      const keepCards = chosen.map(i => hand[i])
-      const hand5 = evaluateHand([...keepCards, ...community3])
-      if (hand5.score > bestScore) {
-        bestScore = hand5.score
-        bestKeepIdx = [...chosen]
-      }
-      return
-    }
-    for (let i = start; i < n; i++) {
-      combo(i + 1, [...chosen, i])
-    }
-  }
-  combo(0, [])
-
-  const keep = bestKeepIdx.map(i => hand[i])
-  const discard = hand.filter((_, i) => !bestKeepIdx.includes(i))
-  return { keep, discard }
-}
 
 function startDiscardPhase(io: Server, roomId: string, state: MatchState): void {
   // Tier C+ no longer asks players to discard after Auction. The second
@@ -3175,11 +3147,10 @@ export function resendSoloStateToPlayer(io: Server, roomId: string, userId: stri
       timer: getPostAuctionArrangementTimer(state.tier), resumed: true,
     })
   }
+  // Snapshot ที่ค้างอยู่ใน phase 'discard' (เช่นกู้คืนจาก state เก่า) — ไม่ส่งหน้า Discard แบบเก่าให้ client
+  // อีกแล้ว ให้ bridge เดินต่อเอง (resolveDiscardTimeout เช็ค phase เองจึงเรียกซ้ำได้ปลอดภัย)
   if (state.phase === 'discard' && state.humanArrangement) {
-    const won = (state as any)._auctionWonCards as Record<string, Card> | undefined
-    const hand = [...state.humanArrangement.pile3, ...(won?.[userId] ? [won[userId]] : [])]
-    const { keep } = bestThreeFromHand(hand, community.row3)
-    io.to(userId).emit('discard_phase_start', { roomId, hand: hand.map(cardKey), suggestedKeep: keep.map(cardKey), decisionTimeMs: 10_000, resumed: true })
+    void resolveDiscardTimeout(io, roomId)
   }
   if (state.phase === 'grand_finale') {
     const gf = (state as any)._grandFinale as GrandFinaleState | undefined
