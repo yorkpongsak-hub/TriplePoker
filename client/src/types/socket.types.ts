@@ -36,9 +36,6 @@ export interface ServerToClientEvents {
   auction_bidding_start:     (payload: AuctionBiddingStartPayload) => void;
   auction_resolved:          (payload: BlindAuctionResult) => void;
 
-  // Discard Phase
-  discard_phase_start:  (payload: DiscardPhaseStartPayload) => void;
-
   // Grand Finale
   grand_finale_round_start: (payload: GrandFinaleRoundStartPayload) => void;
   grand_finale_action:      (payload: { playerId: string; action: GrandFinaleAction }) => void;
@@ -113,11 +110,6 @@ export interface PreAuctionScorePayload {
 export interface AuctionBiddingStartPayload {
   blindCardCount: number;
   deadlineMs: number;
-}
-
-export interface DiscardPhaseStartPayload {
-  playerIds: string[];
-  timerSec: number;
 }
 
 export interface GrandFinaleRoundStartPayload {
