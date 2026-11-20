@@ -109,8 +109,9 @@ test('server gameplay membership accepts only verified snapshots for the current
 test('all producers conform to allowlists; migration retains canonical claim behavior except private metadata',async()=>{
   const h=harness({economy_ledger_entries:[ledger()],tier_d_runtime_item_ad_claims:{item_key:'swap',claimed_at:at}});h.telemetry.ledger(3);h.telemetry.runtimeAd(user,'id');await tick()
   for(const [context,name,properties,time,eventId,membership]of h.emit.mock.calls)expect(telemetryEventSchema.safeParse({...context,event_name:name,properties,occurred_at:new Date(time).toISOString(),event_id:eventId,schema_version:1,membership}).success).toBe(true)
-  const sql=readFileSync(resolve(__dirname,'../../../supabase/migrations/090_telemetry_economy_receipts.sql'),'utf8')
-  const old=readFileSync(resolve(__dirname,'../../../supabase/migrations/070_tier_d_every_level_claimed_rewards.sql'),'utf8')
+  // ตัด \r ก่อนเทียบ — Windows checkout (core.autocrlf=true) แปลงไฟล์ .sql เป็น CRLF ทำให้ regex \n ด้านล่างไม่ match
+  const sql=readFileSync(resolve(__dirname,'../../../supabase/migrations/090_telemetry_economy_receipts.sql'),'utf8').replace(/\r/g,'')
+  const old=readFileSync(resolve(__dirname,'../../../supabase/migrations/070_tier_d_every_level_claimed_rewards.sql'),'utf8').replace(/\r/g,'')
   const body=(s:string)=>s.slice(s.indexOf('CREATE OR REPLACE FUNCTION public.claim_tier_d_level_reward'),s.indexOf('END; $$;',s.indexOf('CREATE OR REPLACE FUNCTION public.claim_tier_d_level_reward')))
   const stripped=body(sql).replace(/\n  telemetry_claimed_slots jsonb := '\[\]'::jsonb;/,'').replace(/\n      telemetry_claimed_slots := telemetry_claimed_slots \|\| jsonb_build_array\(reward.reward_slot\);/,'').replace(/,\n    '_telemetry_claimed_slots',telemetry_claimed_slots/,'')
   expect(stripped.replace(/\r/g,'')).toBe(body(old).replace(/\r/g,''))
