@@ -6,6 +6,7 @@
 // ============================================================
 
 import { Server } from 'socket.io'
+import { gameTelemetry } from '../telemetry/gameplay'
 import { dealCards } from './cardEngine'
 import { evaluateBestFive, evaluateHand, compareHands, handRankLabel } from './handEvaluator'
 import { checkFoul, checkTierCFoul, PlayerArrangement, CommunityCards } from './foulChecker'
@@ -538,6 +539,7 @@ export async function startMatch(
     ;(state as any)._minionOverrides = minionOverrides
   }
   matchStates.set(roomId, state)
+  gameTelemetry.startSolo(state)
 
   await startRound(io, roomId)
 }
@@ -987,6 +989,7 @@ export async function submitArrangement(
       soloEndlessLevel = await awardSoloEndlessLevel(state.humanPlayerId, finalWinner === state.humanPlayerId)
     }
 
+    gameTelemetry.endSolo(state,finalWinner)
     io.to(roomId).emit('match_end', {
       roomId,
       finalWinner,
@@ -2366,6 +2369,7 @@ function finalizeGrandFinale(
         soloEndlessLevel = await awardSoloEndlessLevel(state.humanPlayerId, finalWinner === state.humanPlayerId)
       }
 
+      gameTelemetry.endSolo(state,finalWinner)
       io.to(roomId).emit('match_end', {
         roomId,
         finalWinner,
@@ -2605,6 +2609,7 @@ export async function startMultiplayerMatch(
     pot: [0, 0, 0], feeRake: 0, autoSortUsed: {}, missionsEnabled,
   }
   multiMatchStates.set(roomId, state)
+  gameTelemetry.startMulti(state)
 
   await startMultiRound(io, roomId)
   return { ok: true }
@@ -2947,6 +2952,7 @@ async function resolveMultiShowdown(io: Server, roomId: string): Promise<void> {
     // token_balance ของใคร เพราะ escrow settle ใช้ stack ที่หัก rake ไปแล้วตั้งแต่ settleRound)
     console.log('[TOKENFLOW]', Date.now(), 'Burn Fee & Rake', state.feeRake, '| room', roomId)
 
+    gameTelemetry.endMulti(state,finalWinner)
     io.to(roomId).emit('match_end', {
       roomId, finalWinner, tokenBalance: state.tokenBalance,
       results: state.results, totalRounds: state.totalRounds,economySummary,

@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '../config/supabase'
+import { authorityTelemetry } from '../telemetry/authority'
 import type { TierDRewardItem } from './tierDRewards'
 
 export type TierDOfferKind = 'FREE' | 'LUCKY'
@@ -31,6 +32,7 @@ export async function dismissTierDItemOffer(userId: string, offerId: string) {
 export async function claimTierDItemOffer(userId: string, offerId: string, eventId: string) {
   const { data, error } = await supabaseAdmin.rpc('claim_tier_d_item_offer', { p_user_id: userId, p_offer_id: offerId, p_event_id: eventId })
   if (error) throw error
+  authorityTelemetry.offer(userId,offerId)
   const row = Array.isArray(data) ? data[0] : data
   return { itemKey: row.item_key as TierDRewardItem, quantity: Number(row.quantity), idempotent: Boolean(row.idempotent) }
 }

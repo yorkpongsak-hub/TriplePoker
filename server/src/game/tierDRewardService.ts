@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '../config/supabase'
+import { authorityTelemetry } from '../telemetry/authority'
 import { tierDLevelRewardPlan, tierDRewardQuantity, type TierDRewardItem, type TierDRewardMode } from './tierDRewards'
 
 /** Server invokes this only after an ad-provider completion callback; never trust a client boolean. */
@@ -7,12 +8,14 @@ export async function fulfillTierDItemReward(input: { userId: string; eventId: s
   const quantity = tierDRewardQuantity(mode, input.adCompleted)
   const { data, error } = await supabaseAdmin.rpc('fulfill_tier_d_item_reward', { p_user_id: input.userId, p_event_id: input.eventId, p_item_key: input.item, p_quantity: quantity })
   if (error) throw error
+  authorityTelemetry.legacyReward(input.userId,input.eventId,input.item,mode==='ad' && input.adCompleted && data?.idempotent===false)
   return data
 }
 
 export async function grantTierDLeagueAwards(userId: string, leagueId: string) {
   const { data, error } = await supabaseAdmin.rpc('grant_tier_d_league_awards', { p_user_id: userId, p_league_id: leagueId })
   if (error) throw error
+  authorityTelemetry.league(userId,leagueId)
   return data
 }
 
@@ -64,20 +67,27 @@ export async function grantTierDLevelRandomItem(userId: string, level: number, i
 export async function claimTierDLevelReward(userId: string, level: number) {
   const { data, error } = await supabaseAdmin.rpc('claim_tier_d_level_reward', { p_user_id: userId, p_level: level })
   if (error) throw error
-  return data as TierDLevelReward
+  authorityTelemetry.level(userId,level)
+  if(!data || typeof data!=='object')return data as TierDLevelReward
+  const { _telemetry_claimed_slots: _slots, ...reward } = data
+  return reward as TierDLevelReward
 }
 
 /** Invoke only after the production ad provider validates completion (or DEV adapter mock). */
 export async function claimTierDLevelAdBonus(userId: string, level: number) {
   const { data, error } = await supabaseAdmin.rpc('claim_tier_d_level_ad_bonus', { p_user_id: userId, p_level: level })
   if (error) throw error
-  return data as TierDLevelReward
+  authorityTelemetry.level(userId,level,data?._telemetry_claimed_slots)
+  if(!data || typeof data!=='object')return data as TierDLevelReward
+  const { _telemetry_claimed_slots: _slots, ...reward } = data
+  return reward as TierDLevelReward
 }
 
 /** Grants one selected item after a rewarded-ad provider callback. */
 export async function claimTierDRuntimeItemAd(userId: string, item: TierDRewardItem, eventId: string) {
   const { data, error } = await supabaseAdmin.rpc('claim_tier_d_runtime_item_ad', { p_user_id: userId, p_item_key: item, p_event_id: eventId })
   if (error) throw error
+  authorityTelemetry.runtimeAd(userId,eventId)
   return data as { itemKey: TierDRewardItem; quantity: 1; idempotent: boolean }
 }
 

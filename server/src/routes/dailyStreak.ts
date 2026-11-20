@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { authorityTelemetry } from '../telemetry/authority'
 import { supabase, supabaseAdmin } from '../config/supabase'
 import { DAILY_STREAK_MULTIPLIERS, membershipFromVipStatus, needsDailyStreakRewardedAd } from '../game/adPolicy'
 import { getBangkokDateString } from '../game/matchStatsService'
@@ -44,6 +45,7 @@ export async function dailyStreakRoutes(app: FastifyInstance) {
         const message = error.message.includes('REWARDED_AD_REQUIRED') ? 'REWARDED_AD_REQUIRED' : error.message.includes('NOT_ELIGIBLE') ? 'DAILY_STREAK_NOT_ELIGIBLE' : 'DAILY_STREAK_CLAIM_FAILED'
         return reply.status(409).send({ error: message })
       }
+      authorityTelemetry.daily(userId,getBangkokDateString(new Date()))
       if (membership !== 'FREE' && streakBeforeClaim?.streak_count === 8) await supabaseAdmin.rpc('grant_second_deal_for_daily_cycle',{p_user_id:userId})
       return reply.send({ ...data, secondDealAwarded: membership !== 'FREE' && streakBeforeClaim?.streak_count === 8 })
     } catch { return reply.status(500).send({ error: 'DAILY_STREAK_CLAIM_FAILED' }) }

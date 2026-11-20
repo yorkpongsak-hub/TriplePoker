@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '../config/supabase'
+import { authorityTelemetry } from '../telemetry/authority'
 import { resolveNpcPoolKey, type ResolveNpcPoolContext } from './npcPoolResolver'
 import type {
   AccountRef,
@@ -41,6 +42,7 @@ export class SupabaseEconomyGateway implements EconomyGateway {
     if (error) throw new Error(error.message)
     const row = Array.isArray(data) ? data[0] : data
     if (!row) throw new Error('ECONOMY_APPLY_TRANSACTION_EMPTY_RESULT')
+    authorityTelemetry.ledger(row.transaction_id)
     return { transactionId: Number(row.transaction_id), replayed: Boolean(row.replayed) }
   }
 

@@ -9,6 +9,7 @@ import { useLaunchStore } from '../src/launch/store';
 import { advancedUnlocked, practiceComplete, tierDUnlocked, LESSONS } from '../src/launch/progress';
 import { Button, C, PlayingCard, SoundToggle, s } from '../src/launch/ui';
 import { useAuthStore } from '../src/store/authStore';
+import { launchTelemetry } from '../src/telemetry/launch';
 
 export default function Launch() {
   const languageReady=useLanguage(state=>state.ready);
@@ -54,7 +55,7 @@ export default function Launch() {
       {soloUnlocked&&<Button title="Play Tier D Solo" secondary onPress={()=>router.push('/game/tier-d/entry')}/>}
       <Text style={s.body}>{Math.min(progress.sealWins,2)} / 2 piles won with your seal</Text>
       <Text style={s.body}>{progress.lessonsPassed?'Complete':'Next'}: pass the four-question strategy check</Text>
-      {practiceComplete(progress)&&!progress.lessonsPassed&&<Button title="Take the strategy check" secondary onPress={()=>{setLesson(0);setAnswer(null);}}/>}
+      {practiceComplete(progress)&&!progress.lessonsPassed&&<Button title="Take the strategy check" secondary onPress={()=>{void launchTelemetry.tutorialStart('strategy_check');setLesson(0);setAnswer(null);}}/>}
       {unlocked&&<><Text style={[s.body,{color:C.mint}]}>Advanced tables unlocked. Learn auctions, token entry rules and Call/Fold at your own pace.</Text><Button title="Explore advanced tables" secondary onPress={()=>router.push('/(home)/classic-lobby')}/></>}
       {!unlocked&&<Text style={[s.body,{fontSize:12}]}>Auctions, tokens and multiplayer arrive after this foundation. Your existing account and collection are kept.</Text>}
     </View>
@@ -63,7 +64,7 @@ export default function Launch() {
       <Text style={s.subtitle}>{LESSONS[lesson].question}</Text>
       {LESSONS[lesson].answers.map((a,i)=><Button key={a} title={a} secondary onPress={()=>setAnswer(i)}/>)}
       {answer!==null&&<Text accessibilityLiveRegion="polite" style={[s.body,{color:answer===LESSONS[lesson].correct?C.mint:C.red}]}>{answer===LESSONS[lesson].correct?'Correct. ':'Try again. '}{LESSONS[lesson].why}</Text>}
-      {answer===LESSONS[lesson].correct&&<Button title={lesson===LESSONS.length-1?'Unlock advanced tables':'Next question'} onPress={()=>{if(lesson===LESSONS.length-1){passLessons();setLesson(null);}else setLesson(lesson+1);setAnswer(null);}}/>}
+      {answer===LESSONS[lesson].correct&&<Button title={lesson===LESSONS.length-1?'Unlock advanced tables':'Next question'} onPress={()=>{void launchTelemetry.tutorialStep('strategy_check',lesson+1);if(lesson===LESSONS.length-1){passLessons();void launchTelemetry.tutorialComplete('strategy_check');setLesson(null);}else setLesson(lesson+1);setAnswer(null);}}/>}
     </View>}
     <SoundToggle/>
     {storageError&&<Text style={{color:C.red}}>Your device could not save progress. Keep this session open and check available storage.</Text>}

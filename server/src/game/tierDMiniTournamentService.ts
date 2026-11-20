@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '../config/supabase'
+import { authorityTelemetry } from '../telemetry/authority'
 import { economyService } from '../economy/economyService'
 import { MINI_TOURNAMENT_COHORT_SIZE, MINI_TOURNAMENT_DURATION_MS, MINI_TOURNAMENT_LEVEL_RANGE, MINI_TOURNAMENT_MIN_LEVEL, type TournamentRewardBand, advanceSyntheticEntries, miniTournamentStatus, rankMiniTournament, shouldTriggerPersonalTournament, syntheticEntries, tournamentBaseline, tournamentRewardBand, tournamentScore, tournamentTokenReward, tournamentTrophy } from './tierDMiniTournament'
 
@@ -73,6 +74,7 @@ async function settleOwnerReward(event:EventRow,rank:number){
  const band=event.reward_band??tournamentRewardBand(event.level_anchor);if(!band)return
  const tokens=tournamentTokenReward(rank,band);const trophy=tournamentTrophy(rank);const item=['auto_sort','freeze','double_pile','shuffle','undo'][Math.min(4,rank-1)]
  const {error}=await supabaseAdmin.rpc('award_tier_d_personal_tournament',{p_tournament_id:event.id,p_user_id:event.owner_user_id,p_league_id:event.league_id,p_rank:rank,p_item_key:item,p_token_reward:tokens,p_trophy_type:trophy??'',p_champion:rank===1});if(error)throw error
+ authorityTelemetry.tournament(event.owner_user_id,event.id)
  if(tokens>0)await economyService.mint({idempotencyKey:`TIER_D_PERSONAL_TOP20:${event.id}:${event.owner_user_id}`,to:{accountType:'PLAYER',accountId:event.owner_user_id},currency:'TOKEN',amount:tokens,reason:'EVENT_REWARD',actor:'tier_d_personal_top20',context:{playerId:event.owner_user_id,tier:'tier_d'},metadata:{tournamentId:event.id,rank,leagueId:event.league_id}})
 }
 

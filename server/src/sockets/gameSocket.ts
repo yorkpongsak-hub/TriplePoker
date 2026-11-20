@@ -8,6 +8,8 @@
 // ============================================================
 
 import { Server, Socket } from "socket.io";
+import { gameTelemetry } from '../telemetry/gameplay';
+import { authorityTelemetry } from '../telemetry/authority';
 import { tierDOwnerRegistrar } from "./tierDOwnerGuard";
 import { SpectatorService } from '../spectator/spectatorService';
 import { dealCards, validateDeal } from "../game/cardEngine";
@@ -308,6 +310,7 @@ export function registerGameSocket(io: Server, spectatorService?: SpectatorServi
       const {data,error}=await supabase.auth.getUser(token)
       return error?undefined:data.user?.id
     })
+    socket.on('telemetry_context', (context: unknown) => { gameTelemetry.setContext(socket.data.authUserId,context); authorityTelemetry.refreshMembership(socket.data.authUserId) })
     tierDOn('tier_d_start', async (data:{roomId:string;playerId:string})=>{ socket.join(data.roomId); await startTierDSolo(io,data.roomId,data.playerId) })
     // A fresh socket after an Expo reload must join before resumeTierDSolo emits
     // its room-scoped authoritative state. Without this, the resume ACK says

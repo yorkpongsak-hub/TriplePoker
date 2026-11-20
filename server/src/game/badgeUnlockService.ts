@@ -10,6 +10,7 @@
 // ============================================================
 
 import { supabaseAdmin } from '../config/supabase'
+import { authorityTelemetry } from '../telemetry/authority'
 import { TIER_ORDER, TierOrderKey } from './progressionGate'
 import { BADGE_CATALOG, BadgeKey, BadgeUnlockCondition } from './badgeConfig'
 
@@ -134,7 +135,7 @@ export async function buyBadge(userId: string, badgeKey: string): Promise<BuyBad
     p_badge_key: badgeKey,
     p_price: def.price,
   })
-  if (!error) return { success: true, newBalance: Number(data) }
+  if (!error) { authorityTelemetry.ledgerKey(`BADGE_PURCHASE:${userId}:${badgeKey}`); return { success: true, newBalance: Number(data) } }
 
   const message = String(error.message ?? '')
   if (message.includes('ALREADY_OWNED') || error.code === '23505') {

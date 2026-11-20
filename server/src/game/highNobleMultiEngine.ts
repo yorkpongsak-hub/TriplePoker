@@ -17,6 +17,7 @@
 // ============================================================
 
 import { Server } from 'socket.io'
+import { gameTelemetry } from '../telemetry/gameplay'
 import { finishSpectatorBroadcast, publishSpectatorEvent } from '../spectator/spectatorRuntime'
 import { dealCards } from './cardEngine'
 import { evaluateBestFive, evaluateHand, compareHands, handRankLabel, HandResult } from './handEvaluator'
@@ -654,6 +655,7 @@ export async function startHighNobleMultiMatch(
     missionsEnabled,
   }
   hnMatchStates.set(roomId, state)
+  gameTelemetry.startHighNoble(state)
 
   await startHNRound(io, roomId)
   return { ok: true }
@@ -1745,6 +1747,7 @@ function finalizeHNGrandFinale(
       })
 
       const winnerBestHand = state.bestHandThisMatch?.[finalWinner]
+      gameTelemetry.endHighNoble(state,finalWinner)
       io.to(roomId).emit('match_end', {
         roomId, finalWinner, tokenBalance: state.tokenBalance, results: state.results, totalRounds: state.totalRounds,
         buyInAmount: state.buyInAmount, finalStackByHuman, newTokenBalances,

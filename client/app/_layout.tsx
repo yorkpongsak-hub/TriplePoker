@@ -18,6 +18,8 @@ import { audio } from '../src/audio'
 import { adProvider } from '../src/ads/adProvider'
 import { io, Socket } from 'socket.io-client'
 import GlobalRoyalFlushVFX from '../src/components/vfx/GlobalRoyalFlushVFX'
+import { launchTelemetry } from '../src/telemetry/launch'
+import type { TelemetryContext } from '../src/telemetry/types'
 
 // Native Expo splash is deliberately short; the artwork-matched React splash follows it.
 void ExpoSplashScreen.preventAutoHideAsync().catch(() => undefined)
@@ -46,10 +48,22 @@ export default function RootLayout() {
   const [assetsReady, setAssetsReady] = useState(false)
   const [showGameSplash, setShowGameSplash] = useState(true)
   const authInitialized = useAuthStore(s => s.isInitialized)
+  const telemetryVipStatus = useAuthStore(s => s.profile?.vip_status)
   const [royalQueue, setRoyalQueue] = useState<GlobalRoyalFlushEvent[]>([])
   const [activeRoyal, setActiveRoyal] = useState<GlobalRoyalFlushEvent | null>(null)
   const segmentsRef = useRef(segments.join('/'))
   segmentsRef.current = segments.join('/')
+
+  useEffect(() => {
+    if (AppState.currentState === 'active' || Platform.OS === 'web') void launchTelemetry.active()
+    const listener = AppState.addEventListener('change', state => {
+      if (state === 'active') void launchTelemetry.active()
+      else if (state === 'background') void launchTelemetry.background()
+    })
+    return () => { listener.remove() }
+  }, [])
+  useEffect(() => { void launchTelemetry.route(segments.join('/')) }, [segments.join('/')])
+  useEffect(() => { void launchTelemetry.membershipStatus(telemetryVipStatus) }, [telemetryVipStatus])
 
   useEffect(() => {
     let mounted = true
@@ -102,12 +116,16 @@ export default function RootLayout() {
       auth: { accessToken: session.access_token }, transports: ['websocket'],
       reconnection: true, reconnectionDelay: 1000,
     })
+    let context: TelemetryContext | undefined
+    const sendContext = () => { if (royalSocket.connected && context) royalSocket.emit('telemetry_context', context) }
+    const unsubscribe = launchTelemetry.subscribeContext(value => { context = value; sendContext() })
+    royalSocket.on('connect', sendContext)
     const onRoyal = (event: GlobalRoyalFlushEvent) => {
       if (!event?.eventId || !GAME_TABLE_ROUTES.has(segmentsRef.current)) return
       setRoyalQueue(previous => previous.some(item => item.eventId === event.eventId) ? previous : [...previous.slice(-4), event])
     }
     royalSocket.on('royal_flush:global_celebration', onRoyal)
-    return () => { royalSocket.off('royal_flush:global_celebration', onRoyal); royalSocket.disconnect() }
+    return () => { unsubscribe(); royalSocket.off('connect', sendContext); royalSocket.off('royal_flush:global_celebration', onRoyal); royalSocket.disconnect() }
   }, [session?.access_token])
 
   // Never cover live play. The first queued moment begins after navigation has
@@ -133,9 +151,16 @@ export default function RootLayout() {
   const recoveryCheckedRef = useRef(false)
   const settlementCheckRunningRef = useRef(false)
   const settlementRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const wasOnGameRouteRef = useRef(GAME_TABLE_ROUTES.has(segments.join('/')))
 
   const scheduleSettlementRetry = (pending: PendingMatch) => {
     if (settlementRetryRef.current) clearTimeout(settlementRetryRef.current)
+    // A marker also represents the match currently being played. Never poll
+    // for its settlement while the player is still on a live table.
+    if (GAME_TABLE_ROUTES.has(segmentsRef.current)) {
+      settlementRetryRef.current = null
+      return
+    }
     // Covers the disconnect grace period and the small race between app resume and server settlement.
     if (Date.now() - Date.parse(pending.startedAt) > 2 * 60 * 1000) return
     settlementRetryRef.current = setTimeout(() => {
@@ -146,21 +171,15 @@ export default function RootLayout() {
 
   const checkPendingSettlement = async () => {
     if (!session?.access_token || settlementCheckRunningRef.current) return
+    if (GAME_TABLE_ROUTES.has(segmentsRef.current)) return
     const raw = await AsyncStorage.getItem(PENDING_MATCH_KEY)
     if (!raw) {
       console.log('[ESCROW] no pending match marker')
       return
     }
-  const wasOnGameRouteRef = useRef(GAME_TABLE_ROUTES.has(segments.join('/')))
 
     settlementCheckRunningRef.current = true
     let pending: PendingMatch | null = null
-    // A marker also represents the match currently being played. Never poll
-    // for its settlement while the player is still on a live table.
-    if (GAME_TABLE_ROUTES.has(segmentsRef.current)) {
-      settlementRetryRef.current = null
-      return
-    }
     try {
       pending = JSON.parse(raw) as PendingMatch
       console.log('[ESCROW] checking pending settlement:', pending.tier, pending.startedAt)
@@ -171,7 +190,6 @@ export default function RootLayout() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ since: pending.startedAt }),
-    if (GAME_TABLE_ROUTES.has(segmentsRef.current)) return
       })
       const result = await response.json()
       const settlement = result?.settlement
@@ -216,6 +234,18 @@ export default function RootLayout() {
       settlementRetryRef.current = null
     }
   }, [session?.access_token])
+
+  // If a match route was hiding settlement polling, check once after leaving
+  // the table. A normally completed match has already cleared its marker.
+  useEffect(() => {
+    const isOnGameRoute = GAME_TABLE_ROUTES.has(segments.join('/'))
+    const wasOnGameRoute = wasOnGameRouteRef.current
+    wasOnGameRouteRef.current = isOnGameRoute
+    if (!session?.access_token || !wasOnGameRoute || isOnGameRoute) return
+    void checkPendingSettlement()
+  // checkPendingSettlement intentionally reads the latest session/route refs.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [segments.join('/'), session?.access_token])
   useEffect(() => {
     if (authUser && authProfile) {
       setUser({
@@ -234,18 +264,6 @@ export default function RootLayout() {
           .then(res => res.json())
           .then(async (data: { recovered?: boolean }) => {
             if (data?.recovered) {
-
-  // If a match route was hiding settlement polling, check once after leaving
-  // the table. A normally completed match has already cleared its marker.
-  useEffect(() => {
-    const isOnGameRoute = GAME_TABLE_ROUTES.has(segments.join('/'))
-    const wasOnGameRoute = wasOnGameRouteRef.current
-    wasOnGameRouteRef.current = isOnGameRoute
-    if (!session?.access_token || !wasOnGameRoute || isOnGameRoute) return
-    void checkPendingSettlement()
-  // checkPendingSettlement intentionally reads the latest session/route refs.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [segments.join('/'), session?.access_token])
               await refreshProfile()
               Alert.alert('Tokens Returned', 'Tokens from your unfinished match have been returned.')
             }

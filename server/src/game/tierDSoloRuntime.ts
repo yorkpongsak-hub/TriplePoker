@@ -1,5 +1,6 @@
 import { tierDMissionAwareness } from './tierDMissionAwareness'
 import { randomUUID } from 'crypto'
+import { gameTelemetry } from '../telemetry/gameplay'
 import { automaticTierDArrangement, assertTierDCardConservation } from './tierDSolo'
 import { domainItem, itemPolicyError, newMatchItemState, resolveGameRules, type ItemRequestScope, type MatchItemState } from './unifiedTierRules'
 import { commitTierDItem, getTierDFreezeDurations } from './tierDItemPersistence'
@@ -215,7 +216,7 @@ export async function startTierDSolo(io:Server,roomId:string,userId:string) {
   const s:Session={gameId:randomUUID(),escrowId:escrow&&escrow.ok?escrow.escrowId:undefined,items:newMatchItemState(),itemRevision:0,freezeDurations:await getTierDFreezeDurations(userId).catch(()=>[]),matchFreezeDurations:[],roomId,userId,playerName:data?.display_name??userId,state,currentGame:1,matchNumber:1,cumulativeScores:Object.fromEntries(state.seats.map(seat=>[seat.id,0])),openChallengePassed:true,arranged:false,inventory,matchInventory:rollVipMatchItems(inventory,isVip,level),isVip,adGrantUsed:false,levelStartedAt:startedAt,matchStartedAt:startedAt,frozenMs:0,timerStarted:false,undoUsed:new Set(),doubledPiles:new Set(),autoResolving:false}
   s.matchFreezeDurations=Array.from({length:s.matchInventory.freeze},rollFreezeDuration)
     if(s.state.duel)s.matchNumber=1
-    sessions.set(roomId,s);emitState(io,s)
+    sessions.set(roomId,s);gameTelemetry.startTierD(s);emitState(io,s)
 }
 export async function resumeTierDSolo(io:Server,roomId:string,userId:string):Promise<'RESUMED'|'NOT_FOUND'|'ERROR'> {
   const live=sessions.get(roomId)
@@ -243,6 +244,7 @@ export async function resumeTierDSolo(io:Server,roomId:string,userId:string):Pro
     if(live){clearMatchTimer(live);clearRevealSafety(live);clearTimeout(live.freezeHandle)}
     if (s.state.level < 51) matchWinStreaks.set(userId, 0)
     sessions.set(roomId,s)
+    gameTelemetry.startTierD(s)
     if(s.timerPausedAt){if(!s.items.freezeExpiresAt)s.items.freezeExpiresAt=Date.now();armFreeze(io,s)}
     if(s.timerStarted&&!s.timerPausedAt&&!s.systemPausedAt&&!s.adPausedAt&&!s.autoResolving)startMatchTimer(io,s,s.timerRemainingMs)
     if(s.systemPausedAt)armRevealSafety(io,s,s.tripleSweepPending?9000:9000,!!s.tripleSweepPending)
@@ -447,6 +449,7 @@ async function finishMatch(io:Server,s:Session){
   const personalBestMs=playerWon?await recordTierDLevelClearPersonalBest(s.userId,s.state.level,elapsedMs).catch(()=>undefined):undefined
   const reward=playerWon?await grantTierDLevelRandomItem(s.userId,s.state.level,s.isVip).catch(error=>{console.warn('[TIER_D_SOLO] level reward reservation failed',error);return undefined}):undefined
   const profitableAdTicket=issueProfitableAiInterstitialTicket({tier:'tier_d',gameId:s.gameId,userId:s.userId,tokenDelta:duelPayout?.finalProfit??0})
+  gameTelemetry.endTierD(s,playerWon,highestAiScore,s.openChallengePassed)
   io.to(s.roomId).emit('tier_d_complete',{matchWinStreak:matchStreak,level:s.state.level,playerWon,scores:s.cumulativeScores,highestAiScore,openChallengePassed:s.openChallengePassed,duel:s.state.duel,duelPayout,profitableAdTicket,progress,reward,rewardEligible:!!reward,rewardReasons:reward?[s.state.level%10===0?'LEVEL_MILESTONE':'RANDOM_LEVEL_REWARD']:[],competition,elapsedMs,personalBestMs,tierCGraduation});discardSession(s)
 }
 

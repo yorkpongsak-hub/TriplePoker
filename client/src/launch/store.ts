@@ -1,9 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
-import { Match, Piles, clonePiles, lockHand } from './engine';
+import { Match, Piles, clonePiles, lockHand, totals } from './engine';
+import { launchTelemetry } from '../telemetry/launch';
+import type { TrainingTrace } from '../telemetry/producers';
 import { EMPTY_PROGRESS, Progress, recordMatch, practiceComplete } from './progress';
-export type Session = {match:Match; phase:'arrange'|'reveal'|'result'; revealed:number; draft:Piles; seal:number|null; matchNumber?:number; view?:'practice'|'table'};
+export type Session = {match:Match; phase:'arrange'|'reveal'|'result'; revealed:number; draft:Piles; seal:number|null; matchNumber?:number; view?:'practice'|'table'; telemetryTrace?:TrainingTrace};
 export const sessionNumber = (active:Session, completed:number) => active.matchNumber ?? Math.max(1,completed+(active.phase==='result'?0:1));
 export const tableAvailable = (active:Session, completed:number) => sessionNumber(active,completed)>=3;
 export const sessionView = (active:Session, completed:number) => active.view ?? (tableAvailable(active,completed)?'table':'practice');
@@ -28,14 +30,14 @@ export const useLaunchStore = create<LaunchStore>()(persist((set,get)=>({
   setView:view=>{const a=get().active;if(a&&(view==='practice'||tableAvailable(a,get().progress.matches)))set({active:{...a,view}});},
   dismissTableGuide:()=>set({tableGuideSeen:true}),
   ready:(error=false)=>set({hydrated:true,storageError:error}),
-  start:match=>set({active:{match,phase:'arrange',revealed:0,draft:clonePiles(match.hands[0].starter),seal:null,matchNumber:get().progress.matches+1,view:get().progress.matches>=2?'table':'practice'}}),
+  start:match=>{const active:Session={match,phase:'arrange',revealed:0,draft:clonePiles(match.hands[0].starter),seal:null,matchNumber:get().progress.matches+1,view:get().progress.matches>=2?'table':'practice'};const trace=launchTelemetry.trainingStart(get().progress.matches);set({active:{...active,...(trace?{telemetryTrace:trace}:{})}});},
   draft:piles=> {const a=get().active;if(a?.phase==='arrange') set({active:{...a,draft:piles}});},
   seal:pile=> {const a=get().active;if(a?.phase==='arrange' && !a.match.results.some(r=>r.seal!==null)) set({active:{...a,seal:pile}});},
   lock:()=> {const a=get().active;if(a?.phase==='arrange') set({active:{...a,match:lockHand(a.match,a.draft,a.seal),phase:'reveal',revealed:0}});},
   advance:()=> {
     const a=get().active;if(!a || a.phase!=='reveal') return;
     if(a.revealed<3) {set({active:{...a,revealed:a.revealed+1}});return;}
-    if(a.match.results.length===3) {set({active:{...a,phase:'result'},progress:recordMatch(get().progress,a.match)});return;}
+    if(a.match.results.length===3) {set({active:{...a,phase:'result'},progress:recordMatch(get().progress,a.match)});const score=totals(a.match.results);launchTelemetry.trainingEnd(a.telemetryTrace,score[0],score[1],a.match.results.filter(r=>r.sealWon).length);return;}
     set({active:{...a,phase:'arrange',revealed:0,draft:clonePiles(a.match.hands[a.match.results.length].starter),seal:null}});
   },
   passLessons:()=> {if(practiceComplete(get().progress))set({progress:{...get().progress,lessonsPassed:true}});},

@@ -5,7 +5,8 @@
 // หมายเหตุ: ข้อความทุก slide เป็น copy ที่ lock แล้ว ห้ามแก้คำ -- มีแค่แทนอักขระ
 // em dash / arrow ด้วย ASCII ("--" / "->") ตามกฎห้ามใช้ Unicode พิเศษใน .tsx
 
-import React, { useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
+import { launchTelemetry } from '../../src/telemetry/launch'
 import {
   View, Text, Pressable, ScrollView, StyleSheet, StatusBar, Image,
   NativeSyntheticEvent, NativeScrollEvent, LayoutChangeEvent,
@@ -121,6 +122,7 @@ const COMMUNITY_OVERLAP = -17 // ไพ่กองกลาง (community) ซ�
 const TOTAL_SLIDES = 6
 
 export default function OnboardingScreen() {
+  useEffect(() => { void launchTelemetry.tutorialStart('tier_d_guide'); void launchTelemetry.tutorialStep('tier_d_guide',1) }, [])
   const scrollRef = useRef<ScrollView>(null)
   const [index, setIndex] = useState(0)
 
@@ -136,14 +138,17 @@ export default function OnboardingScreen() {
   const goToSlide = (i: number) => {
     scrollRef.current?.scrollTo({ x: i * containerWidth, animated: true })
     setIndex(i)
+    if (i >= 0 && i < TOTAL_SLIDES) void launchTelemetry.tutorialStep('tier_d_guide',i+1)
   }
 
   const handleScrollEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const i = Math.round(e.nativeEvent.contentOffset.x / containerWidth)
     setIndex(i)
+    if (i >= 0 && i < TOTAL_SLIDES) void launchTelemetry.tutorialStep('tier_d_guide',i+1)
   }
 
   const handleFinish = () => {
+    if (index === TOTAL_SLIDES-1) void launchTelemetry.tutorialComplete('tier_d_guide')
     // This is a read-only guide. Leaving must return to the entrance door and
     // must not create a match, reset progress, or write an onboarding flag.
     router.replace('/game/tier-d/entry')

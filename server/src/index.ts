@@ -17,6 +17,7 @@ import { tierDMiniTournamentRoutes } from './routes/tierDMiniTournament'
 import { lockExpiredMiniTournaments } from './game/tierDMiniTournamentService'
 import { adRoutes } from './routes/ads'
 import { dailyStreakRoutes } from './routes/dailyStreak'
+import { telemetryRoutes } from './routes/telemetry'
 import { startSovereignLifecycleRuntime } from './arena/sovereign/sovereignLifecycleRuntime'
 import { registerGameSocket } from './sockets/gameSocket'
 import { registerArenaSocket } from './arena/realtime/arenaSocket'
@@ -85,6 +86,7 @@ app.register(tierDItemOfferRoutes)
 app.register(tierDMiniTournamentRoutes)
 app.register(adRoutes)
 app.register(dailyStreakRoutes)
+app.register(telemetryRoutes)
 
 // Health check
 app.get('/health', async () => ({

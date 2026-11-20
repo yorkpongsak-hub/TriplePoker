@@ -1,0 +1,1174 @@
+{
+  "tables": [
+    {
+      "creationMigration": "001_initial_schema.sql",
+      "name": "activity_log",
+      "sourceFiles": [
+        "server\\src\\game\\endOfMatch.ts"
+      ]
+    },
+    {
+      "creationMigration": "016_arena_settlement_and_match_log.sql",
+      "name": "arena_match_logs",
+      "sourceFiles": [
+        "server\\src\\arena\\settlement\\arenaSettlementPersistence.ts"
+      ]
+    },
+    {
+      "creationMigration": "001_initial_schema.sql",
+      "name": "bosses",
+      "sourceFiles": [
+        "server\\src\\utils\\nameValidator.ts"
+      ]
+    },
+    {
+      "creationMigration": "072_unified_ads_daily_streak_social_items.sql",
+      "name": "daily_streak_reward_claims",
+      "sourceFiles": [
+        "server\\src\\routes\\dailyStreak.ts",
+        "server\\src\\telemetry\\authority.ts"
+      ]
+    },
+    {
+      "creationMigration": "030_central_economy_schema.sql",
+      "name": "economy_ledger_entries",
+      "sourceFiles": [
+        "server\\src\\economy\\economyService.ts",
+        "server\\src\\telemetry\\authority.ts"
+      ]
+    },
+    {
+      "creationMigration": "030_central_economy_schema.sql",
+      "name": "economy_pool_accounts",
+      "sourceFiles": [
+        "server\\src\\economy\\economyService.ts"
+      ]
+    },
+    {
+      "creationMigration": "030_central_economy_schema.sql",
+      "name": "economy_transactions",
+      "sourceFiles": [
+        "server\\src\\telemetry\\authority.ts"
+      ]
+    },
+    {
+      "creationMigration": "001_initial_schema.sql",
+      "name": "games",
+      "sourceFiles": [
+        "server\\src\\game\\endOfMatch.ts"
+      ]
+    },
+    {
+      "creationMigration": "001_initial_schema.sql",
+      "name": "graveyard",
+      "sourceFiles": [
+        "server\\src\\utils\\nameValidator.ts"
+      ]
+    },
+    {
+      "creationMigration": "017_sovereign_foundation.sql",
+      "name": "last_boss_mandatory_renames",
+      "sourceFiles": [
+        "server\\src\\routes\\sovereign.ts"
+      ]
+    },
+    {
+      "creationMigration": "017_sovereign_foundation.sql",
+      "name": "last_boss_reigns",
+      "sourceFiles": [
+        "server\\src\\routes\\sovereign.ts"
+      ]
+    },
+    {
+      "creationMigration": "011_atomic_match_escrow.sql",
+      "name": "match_escrow",
+      "sourceFiles": [
+        "server\\src\\game\\gameLoop.ts",
+        "server\\src\\game\\highNobleMultiEngine.ts",
+        "server\\src\\game\\vipPlusMatchEngine.ts",
+        "server\\src\\routes\\profile.ts"
+      ]
+    },
+    {
+      "creationMigration": "009_match_wins.sql",
+      "name": "match_wins",
+      "sourceFiles": [
+        "server\\src\\game\\badgeUnlockService.ts",
+        "server\\src\\game\\matchWinsService.ts",
+        "server\\src\\routes\\stats.ts"
+      ]
+    },
+    {
+      "creationMigration": "026_merch_orders.sql",
+      "name": "merch_orders",
+      "sourceFiles": [
+        "server\\src\\game\\merchService.ts"
+      ]
+    },
+    {
+      "creationMigration": "013_boss_stats.sql",
+      "name": "player_boss_stats",
+      "sourceFiles": [
+        "server\\src\\routes\\stats.ts"
+      ]
+    },
+    {
+      "creationMigration": "048_player_countries.sql",
+      "name": "player_countries",
+      "sourceFiles": [
+        "server\\src\\game\\tierDMiniTournamentService.ts",
+        "server\\src\\routes\\country.ts"
+      ]
+    },
+    {
+      "creationMigration": "063_player_language_flags.sql",
+      "name": "player_language_preferences",
+      "sourceFiles": [
+        "server\\src\\routes\\country.ts"
+      ]
+    },
+    {
+      "creationMigration": "002_name_protection.sql",
+      "name": "reserved_names",
+      "sourceFiles": [
+        "server\\src\\utils\\nameValidator.ts"
+      ]
+    },
+    {
+      "creationMigration": "072_unified_ads_daily_streak_social_items.sql",
+      "name": "social_item_inventory",
+      "sourceFiles": [
+        "server\\src\\routes\\dailyStreak.ts"
+      ]
+    },
+    {
+      "creationMigration": "017_sovereign_foundation.sql",
+      "name": "sovereign_cycles",
+      "sourceFiles": [
+        "server\\src\\routes\\sovereign.ts"
+      ]
+    },
+    {
+      "creationMigration": "017_sovereign_foundation.sql",
+      "name": "sovereign_matches",
+      "sourceFiles": [
+        "server\\src\\arena\\sovereign\\sovereignLifecycleRuntime.ts",
+        "server\\src\\routes\\sovereign.ts"
+      ]
+    },
+    {
+      "creationMigration": "017_sovereign_foundation.sql",
+      "name": "sovereign_pool_memberships",
+      "sourceFiles": [
+        "server\\src\\routes\\sovereign.ts"
+      ]
+    },
+    {
+      "creationMigration": "017_sovereign_foundation.sql",
+      "name": "sovereign_public_events",
+      "sourceFiles": [
+        "server\\src\\routes\\sovereign.ts"
+      ]
+    },
+    {
+      "creationMigration": "017_sovereign_foundation.sql",
+      "name": "sovereign_ranking_snapshots",
+      "sourceFiles": [
+        "server\\src\\routes\\sovereign.ts"
+      ]
+    },
+    {
+      "creationMigration": "017_sovereign_foundation.sql",
+      "name": "sovereign_seats",
+      "sourceFiles": [
+        "server\\src\\routes\\sovereign.ts"
+      ]
+    },
+    {
+      "creationMigration": "017_sovereign_foundation.sql",
+      "name": "sovereign_standby_entries",
+      "sourceFiles": [
+        "server\\src\\routes\\sovereign.ts"
+      ]
+    },
+    {
+      "creationMigration": "065_tier_d_active_match_snapshots.sql",
+      "name": "tier_d_active_match_snapshots",
+      "sourceFiles": [
+        "server\\src\\game\\tierDSoloRuntime.ts"
+      ]
+    },
+    {
+      "creationMigration": "052_tier_d_bomb_inventory.sql",
+      "name": "tier_d_bomb_defuser_uses",
+      "sourceFiles": [
+        "server\\src\\telemetry\\authority.ts"
+      ]
+    },
+    {
+      "creationMigration": "071_tier_d_match_item_lifecycle.sql",
+      "name": "tier_d_item_action_receipts",
+      "sourceFiles": [
+        "server\\src\\telemetry\\authority.ts"
+      ]
+    },
+    {
+      "creationMigration": "052_tier_d_bomb_inventory.sql",
+      "name": "tier_d_item_inventory",
+      "sourceFiles": [
+        "server\\src\\game\\tierDItemPersistence.ts",
+        "server\\src\\game\\tierDRewardService.ts"
+      ]
+    },
+    {
+      "creationMigration": "076_tier_d_item_offers.sql",
+      "name": "tier_d_item_offers",
+      "sourceFiles": [
+        "server\\src\\game\\tierDItemOfferService.ts",
+        "server\\src\\telemetry\\authority.ts"
+      ]
+    },
+    {
+      "creationMigration": "051_tier_d_awards_rewards.sql",
+      "name": "tier_d_item_reward_grants",
+      "sourceFiles": [
+        "server\\src\\telemetry\\authority.ts"
+      ]
+    },
+    {
+      "creationMigration": "051_tier_d_awards_rewards.sql",
+      "name": "tier_d_league_awards",
+      "sourceFiles": [
+        "server\\src\\game\\tierDRecordsService.ts",
+        "server\\src\\game\\tierDRewardService.ts",
+        "server\\src\\telemetry\\authority.ts"
+      ]
+    },
+    {
+      "creationMigration": "054_tier_d_live_items_and_personal_best.sql",
+      "name": "tier_d_level_item_rewards",
+      "sourceFiles": [
+        "server\\src\\game\\tierDRewardService.ts",
+        "server\\src\\telemetry\\authority.ts"
+      ]
+    },
+    {
+      "creationMigration": "069_tier_d_records_boards.sql",
+      "name": "tier_d_level_personal_bests",
+      "sourceFiles": [
+        "server\\src\\game\\tierDRecordsService.ts"
+      ]
+    },
+    {
+      "creationMigration": "053_tier_d_level_500_unlock.sql",
+      "name": "tier_d_milestone_history",
+      "sourceFiles": [
+        "server\\src\\game\\tierDLevel250.ts",
+        "server\\src\\game\\tierDLevel500.ts"
+      ]
+    },
+    {
+      "creationMigration": "077_tier_d_mini_tournaments.sql",
+      "name": "tier_d_mini_tournament_entries",
+      "sourceFiles": [
+        "server\\src\\game\\tierDMiniTournamentService.ts"
+      ]
+    },
+    {
+      "creationMigration": "079_tier_d_mini_tournament_rewards.sql",
+      "name": "tier_d_mini_tournament_rewards",
+      "sourceFiles": [
+        "server\\src\\telemetry\\authority.ts"
+      ]
+    },
+    {
+      "creationMigration": "077_tier_d_mini_tournaments.sql",
+      "name": "tier_d_mini_tournaments",
+      "sourceFiles": [
+        "server\\src\\game\\tierDMiniTournamentService.ts"
+      ]
+    },
+    {
+      "creationMigration": "085_personal_top20_tournaments.sql",
+      "name": "tier_d_personal_tournament_rolls",
+      "sourceFiles": [
+        "server\\src\\game\\tierDMiniTournamentService.ts"
+      ]
+    },
+    {
+      "creationMigration": "084_tier_d_lifetime_ranking_score.sql",
+      "name": "tier_d_ranking_score_credits",
+      "sourceFiles": [
+        "server\\src\\game\\tierDMiniTournamentService.ts"
+      ]
+    },
+    {
+      "creationMigration": "084_tier_d_lifetime_ranking_score.sql",
+      "name": "tier_d_ranking_score_totals",
+      "sourceFiles": [
+        "server\\src\\game\\tierDMiniTournamentService.ts"
+      ]
+    },
+    {
+      "creationMigration": "058_tier_d_runtime_item_ad_claims.sql",
+      "name": "tier_d_runtime_item_ad_claims",
+      "sourceFiles": [
+        "server\\src\\telemetry\\authority.ts"
+      ]
+    },
+    {
+      "creationMigration": "072_unified_ads_daily_streak_social_items.sql",
+      "name": "user_ad_policy_state",
+      "sourceFiles": [
+        "server\\src\\game\\adPolicyService.ts"
+      ]
+    },
+    {
+      "creationMigration": "044_badge_shop.sql",
+      "name": "user_badges",
+      "sourceFiles": [
+        "server\\src\\game\\badgeUnlockService.ts"
+      ]
+    },
+    {
+      "creationMigration": "001_initial_schema.sql",
+      "name": "user_inventory",
+      "sourceFiles": [
+        "server\\src\\items\\shopAPI.ts"
+      ]
+    },
+    {
+      "creationMigration": "014_vip_table_skins.sql",
+      "name": "user_table_skins",
+      "sourceFiles": [
+        "server\\src\\game\\tableSkinService.ts"
+      ]
+    },
+    {
+      "creationMigration": "001_initial_schema.sql",
+      "name": "users",
+      "sourceFiles": [
+        "server\\src\\arena\\economy\\arenaCrestLedger.ts",
+        "server\\src\\arena\\realtime\\arenaSocket.ts",
+        "server\\src\\arena\\settlement\\arenaSettlementPersistence.ts",
+        "server\\src\\game\\adPolicyService.ts",
+        "server\\src\\game\\ascendantGate.ts",
+        "server\\src\\game\\badgeUnlockService.ts",
+        "server\\src\\game\\crownVaultService.ts",
+        "server\\src\\game\\endOfMatch.ts",
+        "server\\src\\game\\gameLoop.ts",
+        "server\\src\\game\\gameStats.ts",
+        "server\\src\\game\\highNobleMultiEngine.ts",
+        "server\\src\\game\\matchStatsService.ts",
+        "server\\src\\game\\merchService.ts",
+        "server\\src\\game\\monarchEngine.ts",
+        "server\\src\\game\\monarchSpawn.ts",
+        "server\\src\\game\\tableSkinService.ts",
+        "server\\src\\game\\tierDItemOfferService.ts",
+        "server\\src\\game\\tierDLevel250.ts",
+        "server\\src\\game\\tierDLevel500.ts",
+        "server\\src\\game\\tierDMiniTournamentService.ts",
+        "server\\src\\game\\tierDRecordsService.ts",
+        "server\\src\\game\\tierDRewardService.ts",
+        "server\\src\\game\\tierDSoloRuntime.ts",
+        "server\\src\\game\\tierUnlockService.ts",
+        "server\\src\\game\\vipPlusMatchEngine.ts",
+        "server\\src\\index.ts",
+        "server\\src\\items\\shopAPI.ts",
+        "server\\src\\middleware\\vipGuard.ts",
+        "server\\src\\routes\\auth.ts",
+        "server\\src\\routes\\crownVault.ts",
+        "server\\src\\routes\\dailyStreak.ts",
+        "server\\src\\routes\\profile.ts",
+        "server\\src\\routes\\rewards.ts",
+        "server\\src\\routes\\stats.ts",
+        "server\\src\\routes\\tierDRewards.ts",
+        "server\\src\\sockets\\gameSocket.ts",
+        "server\\src\\sockets\\lobbySocket.ts",
+        "server\\src\\sockets\\vipPlusSocket.ts",
+        "server\\src\\sockets\\vipPrivateCrewSocket.ts",
+        "server\\src\\telemetry\\authority.ts"
+      ]
+    },
+    {
+      "creationMigration": "024_vip_plus_match_results.sql",
+      "name": "vip_plus_match_results",
+      "sourceFiles": [
+        "server\\src\\game\\vipPlusMatchEngine.ts"
+      ]
+    },
+    {
+      "creationMigration": "087_vip_private_crews.sql",
+      "name": "vip_private_crew_invites",
+      "sourceFiles": [
+        "server\\src\\game\\vipPrivateCrewService.ts"
+      ]
+    },
+    {
+      "creationMigration": "087_vip_private_crews.sql",
+      "name": "vip_private_crew_match_results",
+      "sourceFiles": [
+        "server\\src\\game\\vipPrivateCrewService.ts"
+      ]
+    },
+    {
+      "creationMigration": "087_vip_private_crews.sql",
+      "name": "vip_private_crew_members",
+      "sourceFiles": [
+        "server\\src\\game\\vipPrivateCrewService.ts"
+      ]
+    },
+    {
+      "creationMigration": "087_vip_private_crews.sql",
+      "name": "vip_private_crew_score_ledger",
+      "sourceFiles": [
+        "server\\src\\game\\vipPrivateCrewService.ts"
+      ]
+    },
+    {
+      "creationMigration": "087_vip_private_crews.sql",
+      "name": "vip_private_crew_sessions",
+      "sourceFiles": [
+        "server\\src\\game\\vipPrivateCrewService.ts"
+      ]
+    },
+    {
+      "creationMigration": "087_vip_private_crews.sql",
+      "name": "vip_private_crews",
+      "sourceFiles": [
+        "server\\src\\game\\vipPrivateCrewService.ts"
+      ]
+    }
+  ],
+  "scope": "Static local literal from/rpc calls; includes gated/dormant references; not proof of reachability or complete SQL signature coverage. Storage bucket calls excluded. No database history queried.",
+  "rpcs": [
+    {
+      "definitionMigrations": [
+        "087_vip_private_crews.sql"
+      ],
+      "name": "accept_vip_private_crew_invite",
+      "sourceFiles": [
+        "server\\src\\game\\vipPrivateCrewService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "016_arena_settlement_and_match_log.sql",
+        "027_fix_arena_crest_batch_ambiguous_user_id.sql"
+      ],
+      "name": "arena_apply_crest_batch",
+      "sourceFiles": [
+        "server\\src\\arena\\settlement\\arenaSettlementPersistence.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "015_arena_crest_ledger.sql"
+      ],
+      "name": "arena_apply_crest_delta",
+      "sourceFiles": [
+        "server\\src\\arena\\economy\\arenaCrestLedger.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "086_personal_top20_final_rules.sql"
+      ],
+      "name": "award_tier_d_personal_tournament",
+      "sourceFiles": [
+        "server\\src\\game\\tierDMiniTournamentService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "011_atomic_match_escrow.sql"
+      ],
+      "name": "begin_match_escrow",
+      "sourceFiles": [
+        "server\\src\\game\\gameLoop.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "076_tier_d_item_offers.sql"
+      ],
+      "name": "claim_tier_d_item_offer",
+      "sourceFiles": [
+        "server\\src\\game\\tierDItemOfferService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "055_tier_d_vip_and_ad_reward_double.sql",
+        "062_tier_d_league_level_reward_sets.sql",
+        "068_tier_d_auto_sort_inventory.sql",
+        "070_tier_d_every_level_claimed_rewards.sql"
+      ],
+      "name": "claim_tier_d_level_ad_bonus",
+      "sourceFiles": [
+        "server\\src\\game\\tierDRewardService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "070_tier_d_every_level_claimed_rewards.sql"
+      ],
+      "name": "claim_tier_d_level_reward",
+      "sourceFiles": [
+        "server\\src\\game\\tierDRewardService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "058_tier_d_runtime_item_ad_claims.sql",
+        "068_tier_d_auto_sort_inventory.sql",
+        "073_runtime_item_ad_idempotent_receipt.sql"
+      ],
+      "name": "claim_tier_d_runtime_item_ad",
+      "sourceFiles": [
+        "server\\src\\game\\tierDRewardService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "072_unified_ads_daily_streak_social_items.sql"
+      ],
+      "name": "claim_unified_daily_streak_reward",
+      "sourceFiles": [
+        "server\\src\\routes\\dailyStreak.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "071_tier_d_match_item_lifecycle.sql"
+      ],
+      "name": "commit_tier_d_item_action",
+      "sourceFiles": [
+        "server\\src\\game\\tierDItemPersistence.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "084_tier_d_lifetime_ranking_score.sql"
+      ],
+      "name": "commit_tier_d_ranking_score",
+      "sourceFiles": [
+        "server\\src\\game\\tierDLeaderboardService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "052_tier_d_bomb_inventory.sql"
+      ],
+      "name": "consume_tier_d_bomb_defuser",
+      "sourceFiles": [
+        "server\\src\\game\\tierDBombService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "054_tier_d_live_items_and_personal_best.sql"
+      ],
+      "name": "consume_tier_d_runtime_item",
+      "sourceFiles": [
+        "server\\src\\game\\tierDRewardService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "010_ascendant_crown_vault.sql"
+      ],
+      "name": "credit_user_crown",
+      "sourceFiles": [
+        "server\\src\\game\\merchService.ts",
+        "server\\src\\items\\shopAPI.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "010_ascendant_crown_vault.sql"
+      ],
+      "name": "deduct_user_crown",
+      "sourceFiles": [
+        "server\\src\\items\\shopAPI.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "010_ascendant_crown_vault.sql"
+      ],
+      "name": "deduct_user_tokens",
+      "sourceFiles": [
+        "server\\src\\items\\shopAPI.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "030_central_economy_schema.sql",
+        "035_fix_economy_apply_transaction_counter_where.sql",
+        "036_fix_economy_apply_transaction_burn_override.sql",
+        "040_economy_apply_transaction_mint_override.sql"
+      ],
+      "name": "economy_apply_transaction",
+      "sourceFiles": [
+        "server\\src\\economy\\economyService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "030_central_economy_schema.sql"
+      ],
+      "name": "economy_reconciliation",
+      "sourceFiles": [
+        "server\\src\\economy\\economyService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "050_tier_d_league_leaderboard.sql"
+      ],
+      "name": "finalize_tier_d_league",
+      "sourceFiles": [
+        "server\\src\\game\\tierDLeaderboardService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "051_tier_d_awards_rewards.sql",
+        "052_tier_d_bomb_inventory.sql"
+      ],
+      "name": "fulfill_tier_d_item_reward",
+      "sourceFiles": [
+        "server\\src\\game\\tierDRewardService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "074_tier_d_configurable_ads_rewards_second_deal.sql"
+      ],
+      "name": "grant_second_deal_for_daily_cycle",
+      "sourceFiles": [
+        "server\\src\\routes\\dailyStreak.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "051_tier_d_awards_rewards.sql"
+      ],
+      "name": "grant_tier_d_league_awards",
+      "sourceFiles": [
+        "server\\src\\game\\tierDRewardService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "054_tier_d_live_items_and_personal_best.sql",
+        "055_tier_d_vip_and_ad_reward_double.sql",
+        "057_tier_d_canon_item_inventory.sql",
+        "062_tier_d_league_level_reward_sets.sql",
+        "068_tier_d_auto_sort_inventory.sql",
+        "070_tier_d_every_level_claimed_rewards.sql",
+        "074_tier_d_configurable_ads_rewards_second_deal.sql",
+        "075_tier_d_swap_reward_scarcity.sql",
+        "082_tier_d_level_reward_pair.sql"
+      ],
+      "name": "grant_tier_d_level_random_item",
+      "sourceFiles": [
+        "server\\src\\game\\tierDRewardService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "029_atomic_performance_score.sql"
+      ],
+      "name": "increment_performance_score",
+      "sourceFiles": [
+        "server\\src\\game\\psEngine.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "047_solo_endless_level.sql"
+      ],
+      "name": "increment_solo_endless_level",
+      "sourceFiles": [
+        "server\\src\\game\\soloEndlessLevel.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "046_atomic_progression_purchases.sql"
+      ],
+      "name": "purchase_ascendant_pass_atomic",
+      "sourceFiles": [
+        "server\\src\\game\\crownVaultService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "046_atomic_progression_purchases.sql"
+      ],
+      "name": "purchase_badge_atomic",
+      "sourceFiles": [
+        "server\\src\\game\\badgeUnlockService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "013_boss_stats.sql"
+      ],
+      "name": "record_boss_result",
+      "sourceFiles": [
+        "server\\src\\game\\bossStatsService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "066_tier_d_best_match_score.sql"
+      ],
+      "name": "record_tier_d_best_match_score",
+      "sourceFiles": [
+        "server\\src\\game\\tierDSoloRuntime.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "056_tier_d_level_clear_time.sql",
+        "069_tier_d_records_boards.sql"
+      ],
+      "name": "record_tier_d_level_clear_time",
+      "sourceFiles": [
+        "server\\src\\game\\tierDRewardService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "054_tier_d_live_items_and_personal_best.sql"
+      ],
+      "name": "record_tier_d_personal_best",
+      "sourceFiles": [
+        "server\\src\\game\\tierDRewardService.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "011_atomic_match_escrow.sql"
+      ],
+      "name": "refund_match_escrow",
+      "sourceFiles": [
+        "server\\src\\game\\gameLoop.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [],
+      "name": "set_user_tokens",
+      "sourceFiles": [
+        "server\\src\\game\\endOfMatch.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "011_atomic_match_escrow.sql"
+      ],
+      "name": "settle_match_escrow",
+      "sourceFiles": [
+        "server\\src\\game\\gameLoop.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "049_tier_d_solo_progress.sql",
+        "061_tier_d_required_table_progression.sql",
+        "067_tier_d_silver_streak_start.sql"
+      ],
+      "name": "settle_tier_d_solo_level",
+      "sourceFiles": [
+        "server\\src\\game\\tierDSoloProgress.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "019_last_boss_atomic_succession.sql"
+      ],
+      "name": "sovereign_complete_mandatory_rename",
+      "sourceFiles": [
+        "server\\src\\routes\\sovereign.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "018_sovereign_wallet_and_standby_rpc.sql"
+      ],
+      "name": "sovereign_release_crown_reservation",
+      "sourceFiles": [
+        "server\\src\\routes\\sovereign.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [
+        "018_sovereign_wallet_and_standby_rpc.sql"
+      ],
+      "name": "sovereign_reserve_crown",
+      "sourceFiles": [
+        "server\\src\\routes\\sovereign.ts"
+      ]
+    },
+    {
+      "definitionMigrations": [],
+      "name": "telemetry_ingest_events",
+      "sourceFiles": [
+        "server\\src\\telemetry\\store.ts"
+      ]
+    }
+  ],
+  "migrations": [
+    {
+      "file": "001_initial_schema.sql",
+      "sha256": "D45A1355FCD40A4CB873A3904935E933BC9F7E6C3CDF7E4BCB349B4ECCA38DA1"
+    },
+    {
+      "file": "002_name_protection.sql",
+      "sha256": "7561B96667CEC32AA1CCCE90A6A89843B86A2AFE194AD7ED5E784C0A64FBE843"
+    },
+    {
+      "file": "003_starting_token_3000.sql",
+      "sha256": "1F8F8EAE7ECED687B62C871945F4C59CD620FBC296094D1782638BEA8C9F733B"
+    },
+    {
+      "file": "004_add_streak_count.sql",
+      "sha256": "30FBAC919F390AB344E40E704A3A87E980A4440D66CD9E151545791E47892434"
+    },
+    {
+      "file": "005_nine_sentinels.sql",
+      "sha256": "4CAAA7F783F380A568AF2C95054DFFBA442B92A0291672313470B2B0359ABDE6"
+    },
+    {
+      "file": "006_monarch_spawn_reward.sql",
+      "sha256": "5002C545219E9C13807C554448F578FD0B3203CC4E62B5F7440C1E768C617CCE"
+    },
+    {
+      "file": "007_tier_unlock_celebrated.sql",
+      "sha256": "32A1B87D57358DB3A6F11CD506D974BC9B391B813B9400D3ED5B7C7E28D03FF6"
+    },
+    {
+      "file": "008_reserved_boss_names.sql",
+      "sha256": "DE0F3ABCC320B50EF5F8A74A25D26D04E0C619D052C80CBB986A441DCA6A3569"
+    },
+    {
+      "file": "009_match_wins.sql",
+      "sha256": "45979264F630A2D9B08CD687C65D083FC0FC20699BE9E52E29D61D1964B5A568"
+    },
+    {
+      "file": "010_ascendant_crown_vault.sql",
+      "sha256": "6B241106C8085AF2C145586B10AC66D1736DA0933C4C3A1F4D0FD35F6D833103"
+    },
+    {
+      "file": "011_atomic_match_escrow.sql",
+      "sha256": "8377B769D44DDEBDCF339A509723F6C58527EAD82BC5144C01B01168027DF27A"
+    },
+    {
+      "file": "012_monarch_relics.sql",
+      "sha256": "3FA082FE924722672DA143A0D916D7924A20759645B045BD968F213815F6927B"
+    },
+    {
+      "file": "013_boss_stats.sql",
+      "sha256": "0827A1734A59234DA9AE044A444E6CF3F831789CD944E5D4E3B6B6EE6809DF5E"
+    },
+    {
+      "file": "014_vip_table_skins.sql",
+      "sha256": "5A2DD36C10DBCB49CD4C191B02EE317BB8FC50A201FF4946F296D17F048D5AD6"
+    },
+    {
+      "file": "015_arena_crest_ledger.sql",
+      "sha256": "A6337292DE76442270A32408B1854C960F0D825D67FB4DDAC5A704B359627904"
+    },
+    {
+      "file": "016_arena_settlement_and_match_log.sql",
+      "sha256": "A141B72EA2B2BD29B440B670732D61D458FC8283FF500A852D3985D1E1CDCA17"
+    },
+    {
+      "file": "017_sovereign_foundation.sql",
+      "sha256": "CADD6EB2A2FC3407E76469A1D1ADC410CB8548DC548258608D77B0410DF66D8F"
+    },
+    {
+      "file": "018_sovereign_wallet_and_standby_rpc.sql",
+      "sha256": "D5A218F43844BD575E232E733E267AFCE17AA5BD32EB5E0815D50AF78B686E4E"
+    },
+    {
+      "file": "019_last_boss_atomic_succession.sql",
+      "sha256": "C27B87AD2F7DB9351542E9926369F9ADCB30EC985B5B57058F05C8151042750A"
+    },
+    {
+      "file": "020_unified_grandmaster_unlock.sql",
+      "sha256": "2E4B52C3C846EF671BAF571FECF6E9904E3CA5ED7E5DDF27CEF2EC40DBD4876A"
+    },
+    {
+      "file": "021_allow_default_table_skin.sql",
+      "sha256": "EA44469E288CDB822B7B526D30DFB2E7FF80761366D253714F44C2CA04B1785B"
+    },
+    {
+      "file": "022_beyond_path_choice.sql",
+      "sha256": "AA63932735782CD21614AAA29F79D75DCBC3F07B503A28F5FD6DACB0AB30C81C"
+    },
+    {
+      "file": "023_daily_play_streak_rewards.sql",
+      "sha256": "E57376982761728EF52E12BB5D795B68DAD69359D86BB4B170725EC71721DEA5"
+    },
+    {
+      "file": "024_vip_plus_match_results.sql",
+      "sha256": "3AF6C78CF4FC7DE5B0C1D1F4BE0FCCE27020A34D20CD21BDDAFEFF8849A13AB3"
+    },
+    {
+      "file": "025_normalize_last_login_column.sql",
+      "sha256": "981348885460A2CE87EE8DF91837473B1F93186A63FF4853566BE55CD0A34498"
+    },
+    {
+      "file": "026_merch_orders.sql",
+      "sha256": "DC0FBAEACDE5ECD636239C77F6C150336825D9D7AC9899BEE6198C83E561CF32"
+    },
+    {
+      "file": "027_fix_arena_crest_batch_ambiguous_user_id.sql",
+      "sha256": "1CA26F14EEEE1E9145BD445B5A5A024F01EA752C1687B9124A3CD0B052C66A71"
+    },
+    {
+      "file": "028_arena_entry_fee_reason.sql",
+      "sha256": "60555FAC04465EC0CA2BB6452A6CA68228295E44A05C8B53CA6152F23025722D"
+    },
+    {
+      "file": "029_atomic_performance_score.sql",
+      "sha256": "C161316C33D2BB913B19CA05A89527DFF7BBFE06F67BF300E8EA7ADA5ED07B1F"
+    },
+    {
+      "file": "030_central_economy_schema.sql",
+      "sha256": "4A9A81FC45224E715645A2C10E8BD2E636402C604A108D254CB45D41EEB0185B"
+    },
+    {
+      "file": "031_economy_clean_reset.sql",
+      "sha256": "E5B5F3AB23EF7EA1EE9E38072977BF215E8A8587FA2357888394758DE435C2DA"
+    },
+    {
+      "file": "032_economy_genesis.sql",
+      "sha256": "19E1823772C475426A60A7BEDDE5E42E5190B60AEADC9957F9D15F7DAA1454A7"
+    },
+    {
+      "file": "033_test_account_funding.sql",
+      "sha256": "04651197483574A7415A6BD94AB62D349C2A8BE415E00E8DF482FB4BFDF8AE19"
+    },
+    {
+      "file": "034_npc_pool_initial_funding.sql",
+      "sha256": "68706AC5C41B780D95D144A2A5ACD1153AA612BDD220D687CC756D6494FFA664"
+    },
+    {
+      "file": "035_fix_economy_apply_transaction_counter_where.sql",
+      "sha256": "25D1BAAA19C43BEFE7971DE9860426C157ADB311F1ECEC86CAE0F00DBAA64B66"
+    },
+    {
+      "file": "036_fix_economy_apply_transaction_burn_override.sql",
+      "sha256": "1441D372E246CBC2C594C6E4C402D2D9D9485E1B6D12C3DDC0D98FBF282CAE6E"
+    },
+    {
+      "file": "037_round3_mastermind_correction.sql",
+      "sha256": "C573756E88D78AF9FEC3B460FF8DE80A0794B85A13334D57EB35CEDABE287FDA"
+    },
+    {
+      "file": "038_round4_highnoble_correction.sql",
+      "sha256": "1F25A7E30F4351435D13EC669B88F1C56EDA359EC9F96BE1B5F72F13D71C19B5"
+    },
+    {
+      "file": "039_match_wins_rank_tracking.sql",
+      "sha256": "08603C2D898643CAD2C57965F55D42EAE661609259CA2A35284CA6E99723752C"
+    },
+    {
+      "file": "040_economy_apply_transaction_mint_override.sql",
+      "sha256": "600400A7DC329AB2DD83618695C92094963A0289AE20B44117D5A28E7C0C278F"
+    },
+    {
+      "file": "041_token_balance_default_zero.sql",
+      "sha256": "B2762DAE148591CB901F5151D8282215C2A52BD87115BBD70AB049323BED472E"
+    },
+    {
+      "file": "042_users_email_nullable_for_guest.sql",
+      "sha256": "2FD74482B1859A25BA43FDC7F0B01E5D68B52671AB37FD5F0CA849D15290E4C4"
+    },
+    {
+      "file": "043_streak_claimed_milestone.sql",
+      "sha256": "4CDCA7601C4E7ECF62E956C2277C61E71476DFB9AEFA0A0E9A0FC967FC8C75F5"
+    },
+    {
+      "file": "044_badge_shop.sql",
+      "sha256": "A6151B581D69C79984115B934FAB4164180829DB2A3B701C4281F23A9E4A16BB"
+    },
+    {
+      "file": "045_badge_equip.sql",
+      "sha256": "046B3A0CDEBD5D3A2ADFBA92647B86BBF42E5199E6901BB0498574BC08BF71E8"
+    },
+    {
+      "file": "046_atomic_progression_purchases.sql",
+      "sha256": "85DEDAE660CC3F274DAAE3FEB157AD028A461D2A661F76AC0C0BCC4431BAF587"
+    },
+    {
+      "file": "047_solo_endless_level.sql",
+      "sha256": "5110E04AF6EF8B3F4B54672ECF8A74D7A37AAEE9580ABEB4DA774573D2A72618"
+    },
+    {
+      "file": "048_player_countries.sql",
+      "sha256": "B46A813AFD9255E1E92AECA750C0FDE4CB2C2D9B5C5D9824F65F474C621EEA1B"
+    },
+    {
+      "file": "049_tier_d_solo_progress.sql",
+      "sha256": "5CB4AC6424C2582CF6BFF4EAE9AD1255FB0FC29815BA131EF1604074948DF2EA"
+    },
+    {
+      "file": "050_tier_d_league_leaderboard.sql",
+      "sha256": "6745CC2BF8D0E6450F2E28E07EA52FA1F0EAF9D0D38EE98A91B191DCF9BA8518"
+    },
+    {
+      "file": "051_tier_d_awards_rewards.sql",
+      "sha256": "9707B23926120967F4A61B2804CA70F050120B6477636CAFF3385E8FEEE0A0FA"
+    },
+    {
+      "file": "052_tier_d_bomb_inventory.sql",
+      "sha256": "C3F63D154644C75E63822D75573BC65630F73CACA5ACA86E7010F6D58F7CA005"
+    },
+    {
+      "file": "053_tier_d_level_500_unlock.sql",
+      "sha256": "D1631B724359C207EB8CFB4572D60B220DCD6619C317B44F2A6345536B3AD4F6"
+    },
+    {
+      "file": "054_tier_d_live_items_and_personal_best.sql",
+      "sha256": "A6B27A1E90242E120D54BBB944E37216574AE8B57106A0AFA1BAF10DC8178E03"
+    },
+    {
+      "file": "055_tier_d_vip_and_ad_reward_double.sql",
+      "sha256": "3DB650F5E00021F0017A45FB609A9CA72DBA63098C0DAED42A049FE88918AC76"
+    },
+    {
+      "file": "056_tier_d_level_clear_time.sql",
+      "sha256": "8E89210A08EB3AD0F414A658EED06C8A7EBE42C9481A2C19FD2BB9D177DCF474"
+    },
+    {
+      "file": "057_tier_d_canon_item_inventory.sql",
+      "sha256": "9B40BB0B779F1841D3F65EB44D3FEEA818B56A22A86F2164B8DF1163B59D3CD9"
+    },
+    {
+      "file": "058_tier_d_runtime_item_ad_claims.sql",
+      "sha256": "740EFAACC3AB48AE63224917496449559B2DB5C1E2A7B0434FD89FB15B9C3C2F"
+    },
+    {
+      "file": "059_tier_d_competition_cycles.sql",
+      "sha256": "8152E26E470F96F5515AEF514EB91D3A1A2B9C59EF865354476AB2E1DEB55AF3"
+    },
+    {
+      "file": "060_tier_d_match_win_streak.sql",
+      "sha256": "15821836A1277CE9E7A30E40F542C961A458A91DF9CBEA97020FBEF18127618C"
+    },
+    {
+      "file": "061_tier_d_required_table_progression.sql",
+      "sha256": "9CA41B8D3B40FFABDBA951582A3882E1B2DB947087E2F07C22537325A4F2098A"
+    },
+    {
+      "file": "062_tier_d_league_level_reward_sets.sql",
+      "sha256": "23FA4D8EBA441236806D39C91AC9ECFD67BF957457D807FF5C0245E167FACBAC"
+    },
+    {
+      "file": "063_player_language_flags.sql",
+      "sha256": "ADBFE3B9594BF78B611AFB00C56C2CFACAE5BA5FB80F1C64B23C8C50B3899CFC"
+    },
+    {
+      "file": "064_tier_d_reward_ledger_compatibility.sql",
+      "sha256": "AA1E8588E01EA9CA99D71FDF81FA7BE1E15DD6C9B29CD708B1E38398682C591F"
+    },
+    {
+      "file": "065_tier_d_active_match_snapshots.sql",
+      "sha256": "92202FF6F14C12E0F5E094EF306F7F8EA8BC552EBB498CA8849411852B3619BF"
+    },
+    {
+      "file": "066_tier_d_best_match_score.sql",
+      "sha256": "F5105CB51D171B0B3B15B99976C6AD5D6E2842AB300B0568FCC967AB870149FC"
+    },
+    {
+      "file": "067_tier_d_silver_streak_start.sql",
+      "sha256": "1B108399C277FE381883E6E9795C3F9C25C680578A7B4DFB9BB03D562EFFFE76"
+    },
+    {
+      "file": "068_tier_d_auto_sort_inventory.sql",
+      "sha256": "F4FE73523BFCD00A4DEE344AF91B85C1857F3190B922E8D41CD1BE5CAE3DBB26"
+    },
+    {
+      "file": "069_tier_d_records_boards.sql",
+      "sha256": "CB0205B7B3F82B4C04BFC221AD13E3E411E93D2A226869CA26ECA32AC6A99540"
+    },
+    {
+      "file": "070_tier_d_every_level_claimed_rewards.sql",
+      "sha256": "605636C5377534440CC329111FAA996843ABB39065C63F4E14DCC59D17BFCEE6"
+    },
+    {
+      "file": "071_tier_d_match_item_lifecycle.sql",
+      "sha256": "5170435A22FFC804794B1803DCAF8B1B2282FF94A52BAA01EA9860BE52392FC4"
+    },
+    {
+      "file": "072_unified_ads_daily_streak_social_items.sql",
+      "sha256": "8144AD5D581F20CF2DC68FB22ACA27C716801BED30F34C33BD3B43D5F7E4E52A"
+    },
+    {
+      "file": "073_runtime_item_ad_idempotent_receipt.sql",
+      "sha256": "A94057CE1E96DE513E6B01E689A8D89F4A3295E7B7903435DAD2AD56B04548B5"
+    },
+    {
+      "file": "074_tier_d_configurable_ads_rewards_second_deal.sql",
+      "sha256": "0820D3D95555BB200F8984DEF017CC6E1456A79D37FFD60FE0AF4540434C73E2"
+    },
+    {
+      "file": "075_tier_d_swap_reward_scarcity.sql",
+      "sha256": "13F57BDE7F9A1B2A3D16CC751CD7175C24AAD7891488E90B5708F18FAD218E55"
+    },
+    {
+      "file": "076_tier_d_item_offers.sql",
+      "sha256": "9EDE4F9969738B7223DEFEB88F254DC1BB915AF42C41B15336B0F85F869EF82E"
+    },
+    {
+      "file": "077_tier_d_mini_tournaments.sql",
+      "sha256": "DC73F982AC712780DCB7B1BF1E3B139C51499711C03560A52945FCCCC0688400"
+    },
+    {
+      "file": "078_tier_d_mini_tournament_points.sql",
+      "sha256": "DF288E82B34FF453A663D0794E5C6643AFF616CE68C36EAB327843BDC1085773"
+    },
+    {
+      "file": "079_tier_d_mini_tournament_rewards.sql",
+      "sha256": "4A0353BBC0EC037881620A047E84E964EA93E9AA7374E42D3ACD57454DCCF03A"
+    },
+    {
+      "file": "080_tier_d_mini_tournament_award.sql",
+      "sha256": "93C5CFA54BEA5E3957FDE4A9192138BA871EFAD299B263822F1A2980029B184F"
+    },
+    {
+      "file": "081_tier_d_personal_mini_tournaments.sql",
+      "sha256": "D4A3AB1F8259C6F4AFE91044EF1B60AE9DFF04A94A4A109355590800D9A705D7"
+    },
+    {
+      "file": "082_tier_d_level_reward_pair.sql",
+      "sha256": "2132A87B1F9002C7BF099C449858AE1EC9D9086BC13C4F7DA2298D85239F4C73"
+    },
+    {
+      "file": "083_tier_d_competition_score_idempotency.sql",
+      "sha256": "B38B80319C5530BAE1419B32B46379D01ABE78A8807E621507D6B23E42ECCEE0"
+    },
+    {
+      "file": "084_tier_d_lifetime_ranking_score.sql",
+      "sha256": "287D3823D738033239E1BA4A16FDA04921F1BD46318D376FE110A739F7F6B5F9"
+    },
+    {
+      "file": "085_personal_top20_tournaments.sql",
+      "sha256": "5B5D237E6ACDE67AFE1E5CBBE39AB5397E240ECFE4C0949325A150EA1B1C7B4E"
+    },
+    {
+      "file": "086_personal_top20_final_rules.sql",
+      "sha256": "E8F71E681F5758E49F6389842514EE33BB9155BC6B6EF33BC1774C63611A5EF3"
+    },
+    {
+      "file": "087_vip_private_crews.sql",
+      "sha256": "F3694DBD11F8E0D558D984448F859D06966801F41E1AD2A6D8689C5728F215EF"
+    }
+  ]
+}

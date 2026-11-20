@@ -7,16 +7,18 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
-      "env": { "EXPO_PUBLIC_AD_MODE": "google_test" }
+      "env": { "EXPO_PUBLIC_AD_MODE": "google_test", "EXPO_PUBLIC_TELEMETRY_ENABLED": "false", "EXPO_PUBLIC_TELEMETRY_ENV": "development" }
     },
     "preview": {
       "distribution": "internal",
-      "env": { "EXPO_PUBLIC_AD_MODE": "google_test" }
+      "env": { "EXPO_PUBLIC_AD_MODE": "google_test", "EXPO_PUBLIC_TELEMETRY_ENABLED": "false", "EXPO_PUBLIC_TELEMETRY_ENV": "development" }
     },
     "production": {
       "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_AD_MODE": "mock",
+        "EXPO_PUBLIC_TELEMETRY_ENABLED": "false",
+        "EXPO_PUBLIC_TELEMETRY_ENV": "production",
         "EXPO_PUBLIC_AD_RELEASE_GATE": "disabled",
         "EXPO_PUBLIC_ARENA_ENABLED": "false",
         "EXPO_PUBLIC_SOVEREIGN_ENABLED": "false",

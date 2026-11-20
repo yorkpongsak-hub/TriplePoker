@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '../config/supabase'
+import { authorityTelemetry } from '../telemetry/authority'
 import type { TierDRewardItem } from './tierDRewards'
 
 export async function getTierDFreezeDurations(userId: string): Promise<number[]> {
@@ -14,4 +15,8 @@ export async function commitTierDItem(input: { userId: string; roomId: string; i
   })
   if (error) throw error
   if (data !== true) throw new Error('Item transaction was rejected. Reconnect to restore authoritative state.')
+  try {
+    const snapshot=input.snapshot as {gameId:string;matchNumber:number}
+    authorityTelemetry.itemUse({userId:input.userId,gameId:snapshot.gameId,matchNumber:snapshot.matchNumber,requestId:input.requestId})
+  } catch {} // metadata/telemetry must never change a committed item's result
 }
