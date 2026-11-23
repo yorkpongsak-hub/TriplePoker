@@ -26,7 +26,7 @@ import {
   TextInput,
 } from 'react-native'
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated'
-import { router, useFocusEffect } from 'expo-router'
+import { useFocusEffect } from 'expo-router'
 import { Image } from 'expo-image'
 import { useAuthStore } from '../../store/authStore'
 import { ThemedBackground } from '../ui/ThemedBackground'
@@ -752,21 +752,6 @@ export default function ShopScreen({ onClose, initialTab = 'vip' }: ShopScreenPr
           ))}
         </View>
 
-        {/* Official Collectibles - ร้านสินค้าจริง จ่ายเงินบาทจริง คนละระบบกับ MERCH tab (จ่ายด้วย
-            Earned Crown ในเกม) ด้านบน ตั้งใจแยก route/ธีมให้ชัดกันผู้เล่นสับสนว่าเป็นร้านเดียวกัน */}
-        <TouchableOpacity
-          onPress={() => router.push('/(home)/collectibles' as any)}
-          activeOpacity={0.85}
-          style={s.collectiblesBanner}
-        >
-          <Text style={s.collectiblesBannerIcon}>🏆</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={s.collectiblesBannerTitle}>Official Collectibles</Text>
-            <Text style={s.collectiblesBannerSub}>Real merchandise. Real prices. Earned achievements.</Text>
-          </View>
-          <Text style={s.collectiblesBannerArrow}>›</Text>
-        </TouchableOpacity>
-
         {/* ═══════════════ CONTENT ═══════════════ */}
         <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 
@@ -1150,26 +1135,6 @@ function VaultConfirmModal({
 // ─── Styles ──────────────────────────────────────────────────────────
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: 'transparent' }, // ThemedBackground ครอบพื้นหลังแล้ว
-
-  // Official Collectibles banner - จงใจใช้สีดำ/ม่วงต่างจาก glassPanel เขียวเดิมทั้งหน้า
-  // ให้รู้สึกว่าเป็นร้านคนละแบบ (ของจริง จ่ายเงินบาทจริง) ไม่ใช่ tab ในร้านเดิม
-  collectiblesBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginHorizontal: 14,
-    marginBottom: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 14,
-    backgroundColor: 'rgba(20,16,26,0.85)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,215,106,0.45)',
-  },
-  collectiblesBannerIcon: { fontSize: 20 },
-  collectiblesBannerTitle: { color: C.gold, fontSize: 13, fontWeight: '800' },
-  collectiblesBannerSub: { color: C.textDim, fontSize: 10, marginTop: 1 },
-  collectiblesBannerArrow: { color: C.purple, fontSize: 20, fontWeight: '700' },
 
   // Header
   headerRow: {

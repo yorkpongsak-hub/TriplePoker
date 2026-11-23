@@ -1,5 +1,7 @@
 {
-  "compilerOptions": {},
+  "compilerOptions": {
+    "types": ["jest"]
+  },
   "extends": "expo/tsconfig.base",
   "exclude": ["_arena_drafts/**/*", "launch-preview/**/*", "launch-native/**/*"]
 }

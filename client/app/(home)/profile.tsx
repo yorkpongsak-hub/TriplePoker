@@ -28,7 +28,6 @@ import MatchHistoryList from '../../src/components/profile/MatchHistoryList'
 import BossStatsPanel from '../../src/components/profile/BossStatsPanel'
 import LorePanel from '../../src/components/profile/LorePanel'
 import { Image as ExpoImage } from 'expo-image'
-import MyCollectiblesPanel from '../../src/components/profile/MyCollectiblesPanel'
 import LeagueAwardsPanel from '../../src/components/profile/LeagueAwardsPanel'
 import MyBadgesPanel from '../../src/components/profile/MyBadgesPanel'
 import { BADGES } from '../../assets/badges/BADGE_MANIFEST'
@@ -569,7 +568,6 @@ export default function ProfileScreen() {
         {activeTab === 'stats' && (
           <>
             <StatsPanel streakDays={streakDays} longestWinStreak={longestWinStreak} streakShields={profile?.streak_shields ?? 0} gamesPlayed={profile?.games_played ?? 0} gamesWon={profile?.games_won ?? 0} bestHands={profile?.best_hands ?? null} />
-            <MyCollectiblesPanel userId={profile?.user_id ?? authUser?.id ?? ''} />
             <LeagueAwardsPanel />
             <MyBadgesPanel
               accessToken={session?.access_token}

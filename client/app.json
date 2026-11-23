@@ -27,7 +27,13 @@
       "expo-image",
       "expo-status-bar",
       ["expo-splash-screen", { "backgroundColor": "#0a0a0a", "resizeMode": "contain", "image": "./assets/images/splash_screen.png" }],
-      "expo-system-ui"
+      "expo-system-ui",
+      ["expo-build-properties", {
+        "android": {
+          "enableProguardInReleaseBuilds": true,
+          "enableShrinkResourcesInReleaseBuilds": true
+        }
+      }]
     ],
     "extra": {
       "router": {},
