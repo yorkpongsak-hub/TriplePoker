@@ -16,6 +16,7 @@ export default function Launch() {
   const {progress,active,hydrated,storageError,passLessons}=useLaunchStore();
   const [lesson,setLesson]=useState<number|null>(null),[answer,setAnswer]=useState<number|null>(null);
   const user=useAuthStore(state=>state.user);
+  const hasSession=useAuthStore(state=>!!state.session?.access_token);
   const routedUserId=useRef<string|null>(null);
   useEffect(()=>{
     const userId=user?.is_anonymous ? undefined : user?.id;
@@ -52,7 +53,9 @@ export default function Launch() {
       <Text style={s.body}>Discover the deeper tables by practicing the basics.</Text>
       <Text style={[s.body,{fontSize:12}]}>Advanced tables currently use English. Your learning screens keep your chosen language.</Text>
       <Text style={s.body}>{Math.min(progress.matches,2)} / 2 onboarding matches finished</Text>
-      {soloUnlocked&&<Button title="Play Tier D Solo" secondary onPress={()=>router.push('/game/tier-d/entry')}/>}
+      {/* Guest (ไม่มี session) กดแล้วจะ crash กลับ /login เหมือนที่เจอใน duel.tsx เพราะ /game/tier-d
+          ต้องมี access_token ถึงจะต่อ socket ได้ (tier-d/index.tsx) — ซ่อนปุ่มไว้ก่อนจนกว่าจะมี session จริง */}
+      {soloUnlocked&&hasSession&&<Button title="Play Tier D Solo" secondary onPress={()=>router.push('/game/tier-d/entry')}/>}
       <Text style={s.body}>{Math.min(progress.sealWins,2)} / 2 piles won with your seal</Text>
       <Text style={s.body}>{progress.lessonsPassed?'Complete':'Next'}: pass the four-question strategy check</Text>
       {practiceComplete(progress)&&!progress.lessonsPassed&&<Button title="Take the strategy check" secondary onPress={()=>{void launchTelemetry.tutorialStart('strategy_check');setLesson(0);setAnswer(null);}}/>}
