@@ -8,10 +8,12 @@ import { arrange, clonePiles, createMatch, Piles, rankName, scoreHand, Strategy,
 import { useLaunchStore, sessionView, tableAvailable } from '../src/launch/store';
 import TableDuel from '../src/launch/TableDuel';
 import { Button, C, PlayingCard, SoundToggle, s } from '../src/launch/ui';
+import { useAuthStore } from '../src/store/authStore';
 
 export default function Duel() {
   const {fresh}=useLocalSearchParams<{fresh?:string}>();
   const {active,hydrated,start,draft,seal,lock,advance,storageError,progress,setView,tableGuideSeen,dismissTableGuide}=useLaunchStore();
+  const authInitialized=useAuthStore(x=>x.isInitialized),hasSession=useAuthStore(x=>!!x.session?.access_token);
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[selected,setSelected]=useState<[number,number]|null>(null);
   const [help,setHelp]=useState(false),[review,setReview]=useState<number|null>(null),[reviewPiles,setReviewPiles]=useState<Piles|null>(null);
   const [reviewScore,setReviewScore]=useState<string|null>(null);
@@ -36,9 +38,13 @@ export default function Duel() {
   useEffect(()=>{const sub=BackHandler.addEventListener('hardwareBackPress',()=>{router.replace('/launch');return true;});return()=>sub.remove();},[]);
   useEffect(()=>{
     if(!hydrated||active?.phase!=='result'||progress.matches!==2||tierDTransitioned.current)return;
+    if(!authInitialized)return; // รอเช็ค session ให้เสร็จก่อน กันตัดสินผิดว่าเป็น guest ทั้งที่ auth ยัง init ไม่เสร็จ
+    // Guest (ไม่มี session) พาไปต่อไม่ได้ — /game/tier-d ต้องมี access_token ถึงจะต่อ socket ได้ (tier-d/index.tsx)
+    // ไม่งั้นจะเจอบั๊ก crash กลับ /login แบบไม่มีคำอธิบาย ปล่อยให้ค้างอยู่หน้าสรุปผลแมตช์แทน (เล่นฝึกต่อ/กลับ launch ได้ปกติ)
+    if(!hasSession)return;
     tierDTransitioned.current=true;
     router.replace('/game/tier-d/entry');
-  },[hydrated,active?.phase,progress.matches]);
+  },[hydrated,active?.phase,progress.matches,authInitialized,hasSession]);
   const index=active ? active.phase==='arrange'?active.match.results.length:active.match.results.length-1:0;
   const hand=active?.match.hands[review??index];
   const shown=reviewPiles&&review!==null?reviewPiles:active?.draft;
