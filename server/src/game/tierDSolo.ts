@@ -1,11 +1,11 @@
-import { AI_CONFIGS, type AIConfig } from './aiEngine'
+import { AI_CONFIGS, FOUR_GODS, type AIConfig } from './aiEngine'
 import { assertCardZones, evaluateSharedPile, isSharedArrangementFoul } from './sharedCardRules'
 import { createDeck, shuffleDeck, type Card } from './deck'
 import { compareHands, evaluateBestFive, evaluateSoloG2BestFive, type BestFiveResult } from './handEvaluator'
 import { TIER_D_PILE_BASE_SCORES, getCurrentLeague, tierDBotCountForLevel, type LeagueId } from './tierDLeague'
 import { comboBonus, comboKind, generateMissions, generateOpenChallenge, missionResult, pileWinScore, type Mission, type OpenChallenge } from './leagueGameplay'
 import { missionStreakBonus } from './tierCPlusScoring'
-import { TIER_D_RISE_SOLO_PERSONALITIES, TIER_D_RISE_SOLO_SEAT_PERSONALITIES, tierDRiseCandidateFraction, tierDRiseVisiblePileWeights, type TierDRiseSoloPersonality, type TierDRiseVisibleContext } from './tierDRiseSoloPersonality'
+import { TIER_D_RISE_SOLO_PERSONALITIES, tierDRiseCandidateFraction, tierDRiseSeatPersonalitiesForLevel, tierDRiseVisiblePileWeights, type TierDRiseSoloPersonality, type TierDRiseVisibleContext } from './tierDRiseSoloPersonality'
 import { createTierDDuelState, tierDDuelActive, tierDDuelRoster, tierDInitialHandStrength, type TierDDuelState } from './tierDRiseDuel'
 import { selectTierDRiseSuperCombo, type TierDRiseSuperComboId, type TierDRiseSuperComboDifficulty } from './tierDRiseSuperCombo'
 
@@ -49,6 +49,12 @@ export const TIER_D_AI_CANDIDATE_FRACTION_BY_LEAGUE: Readonly<Record<LeagueId, n
   legend: .30,
   mythic: .20,
 }
+
+// Below Lv.1000 the `personality` field only drives the bot's displayed name/emoji — see
+// tierDBotHandsUtility, which only reads personality-specific weights when `rise` is set (Lv.1000+).
+// A local roster (not the shared AI_CONFIGS, which many other Tiers index by exact position/length)
+// adds Cortex as a 4th face so Sub-1000 Solo isn't always the same 3 names on repeat.
+const TIER_D_SUB_1000_BOT_ROSTER: readonly AIConfig[] = [...AI_CONFIGS, FOUR_GODS.find(ai => ai.personality === 'cortex')!]
 
 // Tier D keeps the designated P3 opponent at full 11-card search strength.
 // Other seats receive at most ten percent of the same tier budget.
@@ -157,13 +163,14 @@ export function createTierDLevel(level: number, humanId: string, random: () => n
   const bots = tierDBotCount(level)
   const seats: TierDSeat[] = [{ id: humanId, isBot: false, difficulty }]
   const availableNames = [...TIER_D_ENGLISH_BOT_NAMES]
+  const riseSeatPersonalities = level >= 1000 ? tierDRiseSeatPersonalitiesForLevel(level) : undefined
   for (let index = 0; index < bots; index++) {
     // The personality remains from the established AI architecture; only its
     // display identity is a fresh English Solo opponent name. Splicing makes
     // duplicate names impossible when future configs add more bot seats.
-    const risePersonality = level >= 1000 ? TIER_D_RISE_SOLO_SEAT_PERSONALITIES[index] : undefined
+    const risePersonality = riseSeatPersonalities?.[index]
     const riseConfig = risePersonality ? TIER_D_RISE_SOLO_PERSONALITIES[risePersonality] : undefined
-    const base = AI_CONFIGS[(level + index) % AI_CONFIGS.length]
+    const base = TIER_D_SUB_1000_BOT_ROSTER[(level + index) % TIER_D_SUB_1000_BOT_ROSTER.length]
     const nameIndex = Math.floor(random() * availableNames.length)
     const name = availableNames.splice(nameIndex, 1)[0] ?? `Opponent ${index + 1}`
     const bot: AIConfig = { ...base, id: `${base.id}_tier_d_${level}_${index + 1}`, name: riseConfig?.displayName ?? name, personality: riseConfig?.aiPersonality ?? base.personality }

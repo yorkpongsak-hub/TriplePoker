@@ -73,6 +73,16 @@ export default function DoorEntryTransition({ onFinish, onHowToPlay, level }: { 
     onFinish()
   }
 
+  // ให้ผู้เล่นข้ามฉาก door-open 4.5 วิได้เอง (เดิมบังคับดูทุก 10 level ไม่มีทางข้ามเลย)
+  // ไม่ตัด animation ทิ้งหมด แค่กระโดดไปสถานะสุดท้ายแล้ว fade ออกเร็วแบบเดียวกับ reducedMotion
+  const skip = () => {
+    if (finished.current) return
+    timers.current.forEach(clearTimeout); timers.current = []
+    door.stopAnimation(); royal.stopAnimation()
+    door.setValue(1); royal.setValue(1)
+    Animated.timing(fade, { toValue: 0, duration: 150, useNativeDriver: true }).start(({ finished: done }) => { if (done) finish() })
+  }
+
   useEffect(() => {
     let active = true
     void getReduceMotion().then(value => { if (active) setReducedMotion(value) })
@@ -164,7 +174,11 @@ export default function DoorEntryTransition({ onFinish, onHowToPlay, level }: { 
       <Text style={styles.readyLevel}>{level ? t('entry.level', { level }, locale) : t('common.continue', {}, locale)}</Text>
       <View style={styles.readyArea}><GameActionButton size="large" label={t('entry.openDoor', {}, locale)} onPress={() => setStarted(true)} style={styles.entryAction}/>{onHowToPlay?<GameActionButton size="small" variant="secondary" animation="none" label={t('entry.howToPlay', {}, locale)} onPress={onHowToPlay} style={styles.guideAction}/>:null}</View>
     </> : null}
-    {started ? <><LeagueTrophyCabinet side="left"/><LeagueTrophyCabinet side="right"/></> : null}
+    {started ? <><LeagueTrophyCabinet side="left"/><LeagueTrophyCabinet side="right"/>
+      <Pressable accessibilityRole="button" accessibilityLabel="Skip" onPress={skip} style={styles.skipButton} hitSlop={12}>
+        <Text style={styles.skipText}>Skip ›</Text>
+      </Pressable>
+    </> : null}
     <Animated.View pointerEvents="none" style={[styles.brand, { opacity: entryCopyOpacity }]}>
       <Image source={APP_LOGO} resizeMode="contain" style={styles.appLogo}/>
       <Text style={styles.appName}>TriplePoker : Rise</Text>
@@ -371,6 +385,8 @@ const styles = StyleSheet.create({
   entryMessage: { marginTop: 8, color: '#e5d4a0', fontSize: 16, lineHeight: 21, fontWeight: '800', letterSpacing: .7, textAlign: 'left', textShadowColor: '#000', textShadowRadius: 7 },
   royalGlow: { position: 'absolute', width: 280, height: 120, borderRadius: 60, backgroundColor: 'rgba(255,213,102,.22)', shadowColor: '#ffe4a0', shadowOpacity: 0.95, shadowRadius: 28, elevation: 12 },
   card: { shadowColor: '#ffe6a3', shadowOpacity: 0.72, shadowRadius: 10, elevation: 12 },
+  skipButton: { position: 'absolute', top: '5%', right: 16, zIndex: 30, paddingHorizontal: 14, paddingVertical: 8 },
+  skipText: { color: 'rgba(255,241,187,.82)', fontSize: 13, fontWeight: '800', letterSpacing: 1, textShadowColor: '#000', textShadowRadius: 6 },
 })
 const ENTRY_MESSAGES = [
   'GOOD LUCK. PLAY YOUR BEST HAND.',

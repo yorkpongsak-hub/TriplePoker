@@ -1,10 +1,10 @@
 import type { Card } from './deck'
 
-export type TierDRiseSoloPersonality = 'reaper' | 'crag' | 'cypher'
+export type TierDRiseSoloPersonality = 'reaper' | 'crag' | 'cypher' | 'vertex'
 
 export interface TierDRiseSoloPersonalityConfig {
   displayName: string
-  aiPersonality: 'reaper' | 'crag' | 'cipher'
+  aiPersonality: 'reaper' | 'crag' | 'cipher' | 'cortex'
   pileWeights: readonly [number, number, number]
   ceilingWeight: number
   weakPileWeight: number
@@ -34,9 +34,23 @@ export const TIER_D_RISE_SOLO_PERSONALITIES: Readonly<Record<TierDRiseSoloPerson
     ceilingWeight: .8, weakPileWeight: .65, balanceWeight: .2, comboWeight: 1,
     candidateFraction: { start: .20, floor: .12 },
   },
+  // Blend of reaper/crag/cypher's six tuning numbers (simple average of each field) — a fourth
+  // Lv.1000+ face so the same exact trio doesn't repeat every single match from here to Lv.1500+.
+  vertex: {
+    displayName: 'Vertex', aiPersonality: 'cortex', pileWeights: [.99, 1.01, 1.12],
+    ceilingWeight: 1.15, weakPileWeight: .95, balanceWeight: .27, comboWeight: 1.06,
+    candidateFraction: { start: .20, floor: .12 },
+  },
 }
 
-export const TIER_D_RISE_SOLO_SEAT_PERSONALITIES: readonly TierDRiseSoloPersonality[] = ['reaper', 'crag', 'cypher']
+// Rotates which 3 of these 4 personalities sit at the table this Level — Lv.1000+ bot count is
+// always exactly 3 (Legend/Mythic leagues), so one name sits out on a 4-level cycle instead of
+// 'vertex' never appearing at all. Deterministic by level (same as the rest of this file's RNG use).
+const TIER_D_RISE_SOLO_ROSTER: readonly TierDRiseSoloPersonality[] = ['reaper', 'crag', 'cypher', 'vertex']
+export function tierDRiseSeatPersonalitiesForLevel(level: number): readonly TierDRiseSoloPersonality[] {
+  const sitOut = level % TIER_D_RISE_SOLO_ROSTER.length
+  return TIER_D_RISE_SOLO_ROSTER.filter((_, index) => index !== sitOut)
+}
 
 export interface TierDRiseVisibleContext {
   community: { pile1: readonly Card[]; pile2: readonly Card[]; pile3: readonly Card[] }
