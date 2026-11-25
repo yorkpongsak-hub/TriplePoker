@@ -4,6 +4,7 @@ import { router } from 'expo-router'
 import Card from './Card'
 import { getReduceMotion } from '../../utils/reduceMotion'
 import { useAuthStore } from '../../store/authStore'
+import { usePlayerStore } from '../../offline/playerStore'
 import AvatarFrame from './AvatarFrame'
 import { AvatarDisplay, PRESET_AVATARS } from '../profile/AvatarPicker'
 import { BADGES } from '../../../assets/badges/BADGE_MANIFEST'
@@ -56,6 +57,7 @@ export default function DoorEntryTransition({ onFinish, onHowToPlay, level }: { 
   const profile = useAuthStore(state => state.profile)
   const user = useAuthStore(state => state.user)
   const accessToken = useAuthStore(state => state.session?.access_token)
+  const tierDSolo = usePlayerStore(state => state.profile?.tierDSolo)
   const door = useRef(new Animated.Value(0)).current
   const royal = useRef(new Animated.Value(0)).current
   const fade = useRef(new Animated.Value(1)).current
@@ -157,9 +159,9 @@ export default function DoorEntryTransition({ onFinish, onHowToPlay, level }: { 
       </View>
       <View style={styles.personalBestBoard}>
         <Pressable accessibilityRole="button" accessibilityLabel={t('entry.personalBest', {}, locale)} style={styles.personalBestTitleRow} onPress={() => setRecordsBoard('pb')}><EntryIcon glyph="trophy" style={styles.boardIcon}/><Text style={styles.personalBestTitle}>{t('entry.personalBest', {}, locale)}</Text></Pressable>
-        <StatRow label={t('entry.fastestTime', {}, locale)} value={formatTime(profile?.tier_d_best_match_time_ms)}/>
-        <Pressable accessibilityRole="button" accessibilityLabel={t('entry.longestStreak', {}, locale)} style={styles.streakRow} onPress={() => setRecordsBoard('streak')}><StatRow label={t('entry.longestStreak', {}, locale)} value={String(profile?.tier_d_best_win_streak ?? 0)}/></Pressable>
-        <StatRow label={t('entry.bestMatchScore', {}, locale)} value={String(profile?.tier_d_best_match_score ?? 0)}/>
+        <StatRow label={t('entry.fastestTime', {}, locale)} value={formatTime(tierDSolo?.bestMatchTimeMs ?? null)}/>
+        <Pressable accessibilityRole="button" accessibilityLabel={t('entry.longestStreak', {}, locale)} style={styles.streakRow} onPress={() => setRecordsBoard('streak')}><StatRow label={t('entry.longestStreak', {}, locale)} value={String(tierDSolo?.bestWinStreak ?? 0)}/></Pressable>
+        <StatRow label={t('entry.bestMatchScore', {}, locale)} value={String(tierDSolo?.bestMatchScore ?? 0)}/>
       </View>
       <View style={styles.entryIconColumn}>
         <EntryNavButton label={t('entry.profile', {}, locale)} glyph="profile" onPress={() => router.push('/(home)/profile')}/>

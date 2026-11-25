@@ -82,7 +82,7 @@ describe('rollDailyPs', () => {
 })
 
 describe('migrateProfile', () => {
-  test('migrate จาก version 0 (ไม่มี dailyPs/streak/ad) เติม default ให้ครบ', () => {
+  test('migrate จาก version 0 (ไม่มี dailyPs/streak/ad/tierDSolo) เติม default ให้ครบ', () => {
     const old = { displayName: 'Old Name', tokens: 500, handsPlayed: 12 }
     const migrated = migrateProfile(old, 0)
     expect(migrated.schemaVersion).toBe(CURRENT_SCHEMA_VERSION)
@@ -92,11 +92,34 @@ describe('migrateProfile', () => {
     expect(migrated.dailyPs.value).toBe(0)
     expect(migrated.streak.streakCount).toBe(0)
     expect(migrated.ad.handsSinceInstall).toBe(0)
+    expect(migrated.tierDSolo).toEqual({
+      level: 1,
+      items: { shuffle: 0, swap: 0, double_pile: 0, freeze: 0, auto_sort: 0, undo: 0 },
+      bestMatchTimeMs: null, currentWinStreak: 0, bestWinStreak: 0, bestMatchScore: 0, milestonesClaimed: [],
+    })
   })
 
   test('migrate จาก shape ว่างเปล่าสนิท (undefined) ไม่ throw ได้ default ล้วน', () => {
     const migrated = migrateProfile(undefined, 0)
     expect(migrated).toEqual(createDefaultProfile(migrated.dailyPs.date))
+  })
+
+  test('migrate จาก version 1 (มี dailyPs/streak/ad จริงแล้ว แต่ไม่มี tierDSolo) ต้องรักษาของเดิมไว้ ไม่รีเซ็ต', () => {
+    const v1Profile = {
+      schemaVersion: 1, displayName: 'Real Player', avatarId: 'preset_3', tokens: 7_500, careerPs: 42,
+      dailyPs: { date: '2026-11-22', value: 10 },
+      streak: { streakCount: 9, bestStreakCount: 12, lastPlayedDate: '2026-11-22', claimedMilestone: 7 },
+      handsPlayed: 300,
+      ad: { handsSinceInstall: 300, lastInterstitialAt: 1234567890 },
+    }
+    const migrated = migrateProfile(v1Profile, 1)
+    expect(migrated.schemaVersion).toBe(CURRENT_SCHEMA_VERSION)
+    expect(migrated.displayName).toBe('Real Player')
+    expect(migrated.tokens).toBe(7_500)
+    expect(migrated.dailyPs).toEqual({ date: '2026-11-22', value: 10 }) // ต้องไม่ถูกรีเซ็ต
+    expect(migrated.streak).toEqual(v1Profile.streak) // ต้องไม่ถูกรีเซ็ต
+    expect(migrated.ad).toEqual(v1Profile.ad)
+    expect(migrated.tierDSolo.level).toBe(1) // field ใหม่ล้วน ไม่เคยมีมาก่อนจริงๆ
   })
 
   test('fromVersion >= CURRENT_SCHEMA_VERSION (ดาวน์เกรด) ต้อง throw ไม่เดาข้อมูล', () => {
@@ -194,5 +217,58 @@ describe('usePlayerStore hydration', () => {
     const ok = usePlayerStore.getState().spendTokens(100)
     expect(ok).toBe(false)
     expect(usePlayerStore.getState().profile?.tokens).toBe(50)
+  })
+
+  test('setTierDSoloProgress เขียนทับ level/streak ตรงๆ (ไม่มี business logic — ผู้เรียกต้องคำนวณมาเอง)', async () => {
+    const AsyncStorage = require('@react-native-async-storage/async-storage')
+    await AsyncStorage.clear()
+    const { usePlayerStore } = require('./playerStore')
+    await waitForHydration(usePlayerStore)
+    usePlayerStore.getState().setTierDSoloProgress({ level: 5, currentWinStreak: 2, bestWinStreak: 2 })
+    expect(usePlayerStore.getState().profile?.tierDSolo).toMatchObject({ level: 5, currentWinStreak: 2, bestWinStreak: 2 })
+    // เขียนทับได้ตรงๆ แม้จะดูเหมือน "ย้อนกลับ" เพราะ engine's applyTierDLevelOutcome() เป็นคนคุมว่าเลขถูกต้องแล้วก่อนเรียก
+    usePlayerStore.getState().setTierDSoloProgress({ level: 3, currentWinStreak: 0, bestWinStreak: 2 })
+    expect(usePlayerStore.getState().profile?.tierDSolo).toMatchObject({ level: 3, currentWinStreak: 0, bestWinStreak: 2 })
+  })
+
+  test('grantTierDItem/spendTierDItem คุมสต็อกถูกต้อง ใช้ไม่เกินของที่มี', async () => {
+    const AsyncStorage = require('@react-native-async-storage/async-storage')
+    await AsyncStorage.clear()
+    const { usePlayerStore } = require('./playerStore')
+    await waitForHydration(usePlayerStore)
+    expect(usePlayerStore.getState().spendTierDItem('shuffle')).toBe(false) // ยังไม่มีของเลย
+    usePlayerStore.getState().grantTierDItem('shuffle', 2)
+    expect(usePlayerStore.getState().profile?.tierDSolo.items.shuffle).toBe(2)
+    expect(usePlayerStore.getState().spendTierDItem('shuffle')).toBe(true)
+    expect(usePlayerStore.getState().profile?.tierDSolo.items.shuffle).toBe(1)
+  })
+
+  test('recordTierDLevelResult: เก็บ best เฉพาะตอนชนะ และ best ไม่มีวันแย่ลง (level/streak ไม่ใช่หน้าที่ฟังก์ชันนี้แล้ว)', async () => {
+    const AsyncStorage = require('@react-native-async-storage/async-storage')
+    await AsyncStorage.clear()
+    const { usePlayerStore } = require('./playerStore')
+    await waitForHydration(usePlayerStore)
+    usePlayerStore.getState().recordTierDLevelResult({ won: true, matchTimeMs: 90_000, matchScore: 10 })
+    usePlayerStore.getState().recordTierDLevelResult({ won: true, matchTimeMs: 60_000, matchScore: 20 })
+    let solo = usePlayerStore.getState().profile!.tierDSolo
+    expect(solo.bestMatchTimeMs).toBe(60_000) // เร็วกว่า เก็บค่าที่ดีกว่า
+    expect(solo.bestMatchScore).toBe(20)
+    usePlayerStore.getState().recordTierDLevelResult({ won: false, matchTimeMs: 10_000, matchScore: 999 })
+    solo = usePlayerStore.getState().profile!.tierDSolo
+    expect(solo.bestMatchTimeMs).toBe(60_000) // แพ้ไม่นับแม้ตัวเลขจะดีกว่าเดิม
+    expect(solo.bestMatchScore).toBe(20)
+  })
+
+  test('claimTierDMilestone แจก token ครั้งเดียวต่อ level เท่านั้น', async () => {
+    const AsyncStorage = require('@react-native-async-storage/async-storage')
+    await AsyncStorage.clear()
+    const { usePlayerStore } = require('./playerStore')
+    await waitForHydration(usePlayerStore)
+    expect(usePlayerStore.getState().claimTierDMilestone(250, 10_000)).toBe(true)
+    expect(usePlayerStore.getState().profile?.tokens).toBe(10_000)
+    expect(usePlayerStore.getState().claimTierDMilestone(250, 10_000)).toBe(false) // เคลมซ้ำ level เดิมไม่ได้
+    expect(usePlayerStore.getState().profile?.tokens).toBe(10_000) // ไม่แจกซ้ำ
+    expect(usePlayerStore.getState().claimTierDMilestone(500, 10_000)).toBe(true) // level ใหม่เคลมได้
+    expect(usePlayerStore.getState().profile?.tokens).toBe(20_000)
   })
 })

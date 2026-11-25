@@ -1,0 +1,95 @@
+import type { HandRank } from './handEvaluator'
+import { getCurrentLeague, TIER_D_PILE_BASE_SCORES, type LeagueId } from './tierDLeague'
+
+export type Pile = 1 | 2 | 3
+export type MissionRank = Extract<HandRank, 'high_card' | 'one_pair' | 'two_pair' | 'three_of_a_kind' | 'straight' | 'flush' | 'full_house' | 'four_of_a_kind' | 'straight_flush' | 'royal_flush'>
+export type Mission = { pile: Pile; rank: MissionRank; negative?: boolean; penalty?: number; superComboChallenge?: boolean }
+export type OpenChallenge = { revealedPiles: Pile[] }
+
+const rankValue: Record<MissionRank, number> = { high_card: 0, one_pair: 1, two_pair: 2, three_of_a_kind: 3, straight: 4, flush: 5, full_house: 6, four_of_a_kind: 7, straight_flush: 8, royal_flush: 9 }
+const missionBonus: Record<MissionRank, number> = { high_card: 1, one_pair: 2, two_pair: 3, three_of_a_kind: 4, straight: 6, flush: 8, full_house: 10, four_of_a_kind: 14, straight_flush: 18, royal_flush: 24 }
+const pools: Record<Pile, readonly MissionRank[]> = { 1: ['high_card', 'one_pair'], 2: ['one_pair', 'two_pair', 'three_of_a_kind'], 3: ['two_pair', 'three_of_a_kind', 'straight', 'flush'] }
+const negativeChance: Record<LeagueId, number> = { bronze: 0, silver: .03, gold: .05, platinum: .08, diamond: .12, elite: .16, master: .20, grandmaster: .25, legend: .30, mythic: 1 / 3 }
+// Starts at Gold (Lv.101): 10%, then +5% at every higher League.
+const superComboChallengeChance: Record<LeagueId, number> = { bronze: 0, silver: 0, gold: .10, platinum: .15, diamond: .20, elite: .25, master: .30, grandmaster: .35, legend: .40, mythic: .45 }
+const openChance: Record<LeagueId, number> = { bronze: 0, silver: .03, gold: .05, platinum: .08, diamond: .10, elite: .12, master: .15, grandmaster: .18, legend: .20, mythic: .25 }
+
+export function generateMissions(level: number, random: () => number = Math.random): Mission[] {
+  const league = getCurrentLeague(level)
+  if (league.id === 'bronze') return []
+  if (level >= 101 && random() < superComboChallengeChance[league.id]) return [
+    { pile: 1, rank: 'three_of_a_kind', superComboChallenge: true },
+    { pile: 2, rank: 'straight', superComboChallenge: true },
+    { pile: 3, rank: 'four_of_a_kind', superComboChallenge: true },
+  ]
+  // Every mission-enabled match deals one objective for every pile. Keeping
+  // Bronze mission-free preserves its introductory rules.
+  const count = 3
+  const selected: Pile[] = [1, 2, 3]
+  const missions = chooseOrderedMissions(selected, random)
+  if (count === 3 && random() < negativeChance[league.id]) {
+    const index = Math.floor(random() * missions.length)
+    missions[index] = { ...missions[index], negative: true, penalty: -(5 + Math.floor(random() * 6)) }
+  }
+  return missions
+}
+
+/** Random reveal information for Silver+; undefined means a normal hidden round. */
+export function generateOpenChallenge(level: number, random: () => number = Math.random): OpenChallenge | undefined {
+  // Open Challenge is an endgame-only pass condition; it must never block Lv. 1–1000.
+  if (level <= 1000) return undefined
+  const league = getCurrentLeague(level)
+  if (random() >= openChance[league.id]) return undefined
+  const roll = random(); const count = roll < .40 ? 1 : roll < .75 ? 2 : 3
+  if (count === 3) return { revealedPiles: [1, 2, 3] }
+  const choices: Pile[][] = count === 1 ? [[1], [2], [3]] : [[1, 2], [1, 3], [2, 3]]
+  return { revealedPiles: choices[Math.floor(random() * choices.length)] }
+}
+
+export function missionResult(mission: Mission, hand: HandRank): { complete: boolean; score: number; penalty: number } {
+  const handValue = handRankValue(hand)
+  const targetValue = rankValue[mission.rank]
+  // Straight and Flush are the two endgame objectives: a stronger hand may still
+  // complete them. Earlier objectives teach precise strength allocation, so they
+  // require the requested rank exactly.
+  const higherRankAllowed = mission.rank === 'straight' || mission.rank === 'flush' || mission.rank === 'four_of_a_kind'
+  // The lowest forced mission is deliberately strict: HIGH CARD means exactly
+  // High Card. Building a Pair or anything stronger wastes too much strength
+  // in that pile and therefore fails the forced objective with its penalty.
+  const complete = mission.negative
+    ? mission.rank === 'high_card' ? handValue === targetValue : handValue >= targetValue
+    : handValue === targetValue || (higherRankAllowed && handValue > targetValue)
+  if (mission.negative) return { complete, score: 0, penalty: complete ? 0 : mission.penalty! }
+  if (!complete) return { complete, score: 0, penalty: 0 }
+  const full = missionBonus[mission.rank]
+  return { complete, score: handValue === targetValue ? full : Math.ceil(full / 2), penalty: 0 }
+}
+
+export function handMultiplier(level: number, hand: HandRank): number {
+  if (getCurrentLeague(level).id === 'bronze') return 1
+  return ['flush', 'full_house'].includes(hand) ? 1.5 : ['four_of_a_kind', 'straight_flush', 'royal_flush'].includes(hand) ? 2 : 1
+}
+export function pileWinScore(level: number, pile: Pile, hand: HandRank, doubled = false): number { return Math.ceil(TIER_D_PILE_BASE_SCORES[pile] * handMultiplier(level, hand) * (doubled ? 2 : 1)) }
+export function comboBonus(missions: readonly Mission[], completed: readonly boolean[], random: () => number = Math.random): number {
+  const completedCount = completed.filter(Boolean).length
+  if (missions.length === 3 && missions.every(mission => mission.superComboChallenge) && completedCount === 3) return 20 + Math.floor(random() * 6)
+  if (completedCount === 3) return 10 + Math.floor(random() * 6)
+  if (completedCount === 2) return 5 + Math.floor(random() * 3)
+  return 0
+}
+
+export function comboKind(completed: readonly boolean[]): 'COMBO' | 'SUPER_COMBO' | undefined {
+  const completedCount = completed.filter(Boolean).length
+  return completedCount === 3 ? 'SUPER_COMBO' : completedCount === 2 ? 'COMBO' : undefined
+}
+
+function chooseOrderedMissions(selected: readonly Pile[], random: () => number): Mission[] {
+  const visit = (index: number, previous: number, current: Mission[]): Mission[] | undefined => {
+    if (index === selected.length) return current
+    const pile = selected[index]; const choices = pools[pile].filter(rank => rankValue[rank] > previous)
+    for (const rank of shuffle(choices, random)) { const found = visit(index + 1, rankValue[rank], [...current, { pile, rank }]); if (found) return found }
+  }
+  return visit(0, -1, []) ?? []
+}
+function shuffle<T>(values: readonly T[], random: () => number): T[] { const copy = [...values]; for (let i = copy.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [copy[i], copy[j]] = [copy[j], copy[i]] } return copy }
+function handRankValue(rank: HandRank): number { return ({ high_card: 0, one_pair: 1, two_pair: 2, three_of_a_kind: 3, straight: 4, flush: 5, full_house: 6, four_of_a_kind: 7, straight_flush: 8, royal_flush: 9 })[rank] }

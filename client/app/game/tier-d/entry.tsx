@@ -1,11 +1,11 @@
 import React from 'react'
 import { router } from 'expo-router'
 import DoorEntryTransition from '../../../src/components/game/DoorEntryTransition'
-import { useAuthStore } from '../../../src/store/authStore'
+import { usePlayerStore } from '../../../src/offline/playerStore'
 
-// Keep the real table unmounted until the cinematic ends: its existing socket
-// resume/start effect remains the sole source of Tier D game state.
+// Keep the real table unmounted until the cinematic ends — Tier D Solo เล่นออฟไลน์ล้วนแล้ว
+// level มาจาก playerStore (local) ไม่ใช่ Supabase profile อีกต่อไป
 export default function TierDEntry() {
-  const level = useAuthStore(state => state.profile?.tier_d_solo_level ?? undefined)
+  const level = usePlayerStore(state => state.profile?.tierDSolo.level ?? 1)
   return <DoorEntryTransition level={level} onFinish={() => router.replace('/game/tier-d')} onHowToPlay={() => router.push('/(auth)/onboarding')} />
 }

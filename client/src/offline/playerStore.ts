@@ -15,7 +15,7 @@ import { create } from 'zustand'
 import { persist, type PersistStorage, type StorageValue } from 'zustand/middleware'
 import { getTierFromToken, type TierKey } from '../config/tierConfig'
 
-export const CURRENT_SCHEMA_VERSION = 1
+export const CURRENT_SCHEMA_VERSION = 2
 const STORAGE_KEY = 'triplepoker.player.v1'
 
 export type HydrationStatus = 'new' | 'ok' | 'error'
@@ -37,6 +37,19 @@ export type AdState = {
   lastInterstitialAt: number | null // epoch ms (เวลาเครื่อง) ครั้งล่าสุดที่โชว์ interstitial
 }
 
+// ต้องตรงกับ ItemKey ใน client/app/game/tier-d/index.tsx เป๊ะ (ขั้นถัดไปจะเปลี่ยนมา import จากที่นี่แทน)
+export type TierDItemKey = 'shuffle' | 'swap' | 'double_pile' | 'freeze' | 'auto_sort' | 'undo'
+
+export type TierDSoloState = {
+  level: number // level สูงสุดที่ไต่ถึง (ceiling model เดียวกับ tokens — ไม่มีทางลดลง)
+  items: Record<TierDItemKey, number>
+  bestMatchTimeMs: number | null
+  currentWinStreak: number // จำนวน level ที่ชนะติดกันล่าสุด (คนละอย่างกับ StreakState ที่นับวันเล่นต่อเนื่อง)
+  bestWinStreak: number
+  bestMatchScore: number
+  milestonesClaimed: number[] // level ที่เคยแจก token milestone ไปแล้ว (เช่น 250, 500) กันแจกซ้ำ
+}
+
 export type PlayerProfile = {
   schemaVersion: number
   displayName: string | null
@@ -47,6 +60,21 @@ export type PlayerProfile = {
   streak: StreakState
   handsPlayed: number
   ad: AdState
+  tierDSolo: TierDSoloState
+}
+
+export const TIER_D_ITEM_KEYS: readonly TierDItemKey[] = ['shuffle', 'swap', 'double_pile', 'freeze', 'auto_sort', 'undo']
+
+function createDefaultTierDSoloState(): TierDSoloState {
+  return {
+    level: 1,
+    items: { shuffle: 0, swap: 0, double_pile: 0, freeze: 0, auto_sort: 0, undo: 0 },
+    bestMatchTimeMs: null,
+    currentWinStreak: 0,
+    bestWinStreak: 0,
+    bestMatchScore: 0,
+    milestonesClaimed: [],
+  }
 }
 
 // ─── Pure helpers (เทสตรงๆ ได้โดยไม่ต้องยุ่งกับ Zustand/AsyncStorage) ──────────────────────
@@ -81,6 +109,7 @@ export function createDefaultProfile(today: string = todayLocalDateString()): Pl
     streak: { streakCount: 0, bestStreakCount: 0, lastPlayedDate: null, claimedMilestone: 0 },
     handsPlayed: 0,
     ad: { handsSinceInstall: 0, lastInterstitialAt: null },
+    tierDSolo: createDefaultTierDSoloState(),
   }
 }
 
@@ -124,6 +153,7 @@ function isValidCurrentProfile(x: unknown): x is PlayerProfile {
   if (!isPlainObject(x.dailyPs) || typeof x.dailyPs.date !== 'string' || typeof x.dailyPs.value !== 'number') return false
   if (!isPlainObject(x.streak)) return false
   if (!isPlainObject(x.ad)) return false
+  if (!isPlainObject(x.tierDSolo) || typeof x.tierDSolo.level !== 'number' || !isPlainObject(x.tierDSolo.items) || !Array.isArray(x.tierDSolo.milestonesClaimed)) return false
   return true
 }
 
@@ -134,27 +164,60 @@ export class PlayerDataCorruptError extends Error {
   }
 }
 
-// migrate ข้อมูลเก่า (schemaVersion < CURRENT_SCHEMA_VERSION) ให้เป็น shape ปัจจุบัน แบบ defensive
-// (ใช้ typeof guard ทุก field ไม่ throw แม้ shape เก่าจะขาดบาง field ไป) — ตัวอย่างไว้สำหรับ v0 → v1
-// เพิ่ม branch ใหม่ทุกครั้งที่ขยับ CURRENT_SCHEMA_VERSION ในอนาคต ห้ามลบ branch เก่าทิ้ง
-export function migrateProfile(persisted: unknown, fromVersion: number): PlayerProfile {
-  const today = todayLocalDateString()
-  if (fromVersion < 1) {
-    const old = isPlainObject(persisted) ? persisted : {}
-    return {
-      schemaVersion: CURRENT_SCHEMA_VERSION,
-      displayName: typeof old.displayName === 'string' ? old.displayName : null,
-      avatarId: typeof old.avatarId === 'string' ? old.avatarId : null,
-      tokens: typeof old.tokens === 'number' ? old.tokens : 0,
-      careerPs: typeof old.careerPs === 'number' ? old.careerPs : 0,
-      dailyPs: { date: today, value: 0 },
-      streak: { streakCount: 0, bestStreakCount: 0, lastPlayedDate: null, claimedMilestone: 0 },
-      handsPlayed: typeof old.handsPlayed === 'number' ? old.handsPlayed : 0,
-      ad: { handsSinceInstall: 0, lastInterstitialAt: null },
-    }
+// migrate ข้อมูลเก่าแบบไล่ทีละขั้น (v0→v1→v2→...) แทนที่จะรวมเป็นฟังก์ชันเดียว — แต่ละขั้นรับผิดชอบ
+// แค่ delta ของตัวเอง ใช้ typeof guard ทุก field ไม่ throw แม้ shape เก่าจะขาดบาง field ไป
+// เพิ่มขั้นใหม่ทุกครั้งที่ขยับ CURRENT_SCHEMA_VERSION ในอนาคต ห้ามลบขั้นเก่าทิ้ง
+
+// v0 (ไม่มี schemaVersion เลย) → v1: ยังไม่เคยมี dailyPs/streak จริงจึงรีเซ็ตเป็น default ได้ปลอดภัย
+function migrateV0ToV1(persisted: unknown) {
+  const old = isPlainObject(persisted) ? persisted : {}
+  return {
+    schemaVersion: 1,
+    displayName: typeof old.displayName === 'string' ? old.displayName : null,
+    avatarId: typeof old.avatarId === 'string' ? old.avatarId : null,
+    tokens: typeof old.tokens === 'number' ? old.tokens : 0,
+    careerPs: typeof old.careerPs === 'number' ? old.careerPs : 0,
+    dailyPs: { date: todayLocalDateString(), value: 0 },
+    streak: { streakCount: 0, bestStreakCount: 0, lastPlayedDate: null, claimedMilestone: 0 },
+    handsPlayed: typeof old.handsPlayed === 'number' ? old.handsPlayed : 0,
+    ad: { handsSinceInstall: 0, lastInterstitialAt: null },
   }
-  // fromVersion >= CURRENT_SCHEMA_VERSION ไม่ควรเกิดขึ้นจริง (ดาวน์เกรดแอป) — ปฏิเสธแทนการเดา
-  throw new PlayerDataCorruptError(`unsupported schema version ${fromVersion}`)
+}
+
+// v1 → v2: เพิ่ม tierDSolo เป็น field ใหม่ล้วนๆ ของเดิม (dailyPs/streak/ad ของจริงจาก v1) ต้องรักษาไว้ ไม่ใช่รีเซ็ต
+function migrateV1ToV2(persisted: unknown): PlayerProfile {
+  const old = isPlainObject(persisted) ? persisted : {}
+  const dailyPsOld = isPlainObject(old.dailyPs) ? old.dailyPs : undefined
+  const streakOld = isPlainObject(old.streak) ? old.streak : undefined
+  const adOld = isPlainObject(old.ad) ? old.ad : undefined
+  return {
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    displayName: typeof old.displayName === 'string' ? old.displayName : null,
+    avatarId: typeof old.avatarId === 'string' ? old.avatarId : null,
+    tokens: typeof old.tokens === 'number' ? old.tokens : 0,
+    careerPs: typeof old.careerPs === 'number' ? old.careerPs : 0,
+    dailyPs: dailyPsOld && typeof dailyPsOld.date === 'string' && typeof dailyPsOld.value === 'number'
+      ? { date: dailyPsOld.date, value: dailyPsOld.value } : { date: todayLocalDateString(), value: 0 },
+    streak: {
+      streakCount: typeof streakOld?.streakCount === 'number' ? streakOld.streakCount : 0,
+      bestStreakCount: typeof streakOld?.bestStreakCount === 'number' ? streakOld.bestStreakCount : 0,
+      lastPlayedDate: typeof streakOld?.lastPlayedDate === 'string' ? streakOld.lastPlayedDate : null,
+      claimedMilestone: typeof streakOld?.claimedMilestone === 'number' ? streakOld.claimedMilestone : 0,
+    },
+    handsPlayed: typeof old.handsPlayed === 'number' ? old.handsPlayed : 0,
+    ad: {
+      handsSinceInstall: typeof adOld?.handsSinceInstall === 'number' ? adOld.handsSinceInstall : 0,
+      lastInterstitialAt: typeof adOld?.lastInterstitialAt === 'number' ? adOld.lastInterstitialAt : null,
+    },
+    tierDSolo: createDefaultTierDSoloState(), // v1 ไม่เคยมี field นี้มาก่อนแน่ๆ ไม่มีอะไรให้กู้
+  }
+}
+
+export function migrateProfile(persisted: unknown, fromVersion: number): PlayerProfile {
+  // fromVersion > ปัจจุบัน = ดาวน์เกรดแอป ไม่ควรเกิดขึ้นจริง — ปฏิเสธแทนการเดา
+  if (fromVersion > CURRENT_SCHEMA_VERSION) throw new PlayerDataCorruptError(`unsupported schema version ${fromVersion}`)
+  const afterV1 = fromVersion < 1 ? migrateV0ToV1(persisted) : persisted
+  return migrateV1ToV2(afterV1)
 }
 
 // เขียนเรียงตามลำดับ ป้องกัน snapshot เก่าเขียนทับผลใหม่ (pattern เดียวกับ launch/store.ts)
@@ -220,6 +283,13 @@ type PlayerStore = {
   recordHandPlayed: () => void
   markInterstitialShown: () => void
   addCareerPs: (amount: number) => void
+  // เขียนทับ level/currentWinStreak/bestWinStreak ตรงๆ — ไม่มี business logic ที่นี่ (ผู้เรียกต้องคำนวณ
+  // ค่าที่ถูกต้องมาเองผ่าน engine/tierDSolo.ts's applyTierDLevelOutcome() ก่อนเสมอ)
+  setTierDSoloProgress: (progress: { level: number; currentWinStreak: number; bestWinStreak: number }) => void
+  grantTierDItem: (item: TierDItemKey, amount: number) => void
+  spendTierDItem: (item: TierDItemKey) => boolean // false = ไม่มีของเหลือให้ใช้
+  recordTierDLevelResult: (result: { won: boolean; matchTimeMs?: number; matchScore?: number }) => void
+  claimTierDMilestone: (level: number, tokenReward: number) => boolean // false = เคยเคลมไปแล้ว ไม่แจกซ้ำ
 }
 
 export const usePlayerStore = create<PlayerStore>()(
@@ -272,6 +342,47 @@ export const usePlayerStore = create<PlayerStore>()(
         const { profile, status } = get()
         if (status === 'error' || !profile || amount <= 0) return
         set({ profile: { ...profile, careerPs: profile.careerPs + amount, dailyPs: rollDailyPs(profile.dailyPs, amount) } })
+      },
+      setTierDSoloProgress: (progress) => {
+        const { profile, status } = get()
+        if (status === 'error' || !profile) return
+        set({ profile: { ...profile, tierDSolo: { ...profile.tierDSolo, ...progress } } })
+      },
+      grantTierDItem: (item, amount) => {
+        const { profile, status } = get()
+        if (status === 'error' || !profile || amount <= 0) return
+        set({ profile: { ...profile, tierDSolo: { ...profile.tierDSolo, items: { ...profile.tierDSolo.items, [item]: profile.tierDSolo.items[item] + amount } } } })
+      },
+      spendTierDItem: (item) => {
+        const { profile, status } = get()
+        if (status === 'error' || !profile || profile.tierDSolo.items[item] <= 0) return false
+        set({ profile: { ...profile, tierDSolo: { ...profile.tierDSolo, items: { ...profile.tierDSolo.items, [item]: profile.tierDSolo.items[item] - 1 } } } })
+        return true
+      },
+      // level/currentWinStreak/bestWinStreak ไม่ได้คำนวณที่นี่แล้ว — ของจริง (รวมข้อยกเว้น Bronze
+      // ที่ level<51 ห้ามนับ streak) อยู่ใน engine/tierDSolo.ts's applyTierDLevelOutcome() ตัวเดียว
+      // ฟังก์ชันนี้เหลือหน้าที่แค่ bestMatchTimeMs/bestMatchScore ที่ engine ไม่ได้คุม (ดู setTierDSoloProgress)
+      recordTierDLevelResult: ({ won, matchTimeMs, matchScore }) => {
+        const { profile, status } = get()
+        if (status === 'error' || !profile) return
+        const prev = profile.tierDSolo
+        const bestMatchTimeMs = won && typeof matchTimeMs === 'number'
+          ? (prev.bestMatchTimeMs === null ? matchTimeMs : Math.min(prev.bestMatchTimeMs, matchTimeMs))
+          : prev.bestMatchTimeMs
+        const bestMatchScore = won && typeof matchScore === 'number' ? Math.max(prev.bestMatchScore, matchScore) : prev.bestMatchScore
+        set({ profile: { ...profile, tierDSolo: { ...prev, bestMatchTimeMs, bestMatchScore } } })
+      },
+      claimTierDMilestone: (level, tokenReward) => {
+        const { profile, status } = get()
+        if (status === 'error' || !profile || profile.tierDSolo.milestonesClaimed.includes(level)) return false
+        set({
+          profile: {
+            ...profile,
+            tokens: profile.tokens + tokenReward,
+            tierDSolo: { ...profile.tierDSolo, milestonesClaimed: [...profile.tierDSolo.milestonesClaimed, level] },
+          },
+        })
+        return true
       },
     }),
     {
