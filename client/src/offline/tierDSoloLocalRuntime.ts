@@ -30,6 +30,7 @@ import {
   type TierDGameResolution,
 } from './engine/tierDSolo'
 import { isSharedArrangementFoul } from './engine/sharedCardRules'
+import { TIER_D_DUEL_MIN_LEVEL } from './engine/tierDRiseDuel'
 import { levelRewardSchedule, tierDLevelRewardPlan } from './engine/tierDRewards'
 import { resolveGameRules, itemPolicyError, newMatchItemState, domainItem, type MatchItemState } from './engine/unifiedTierRules'
 import { usePlayerStore, TIER_D_ITEM_KEYS, type TierDItemKey } from './playerStore'
@@ -151,10 +152,14 @@ function completeLevel(level: number, playerWon: boolean, elapsedMs: number, fin
   // (คุม Bronze exception ไว้แล้ว: level<51 ชนะก็ไม่นับ streak) ไม่คำนวณเองซ้ำที่นี่ — อ่านสดอีกรอบ
   // หลัง recordTierDLevelResult (ไม่พึ่ง snapshot เดิมที่ถืออยู่ก่อนหน้า กันพังถ้าใครเพิ่ม logic ทีหลัง)
   const prevSolo = usePlayerStore.getState().profile!.tierDSolo
-  const nextProgress = applyTierDLevelOutcome(
+  const rawNextProgress = applyTierDLevelOutcome(
     { level: prevSolo.level, currentWinStreak: prevSolo.currentWinStreak, bestWinStreak: prevSolo.bestWinStreak },
     playerWon
   )
+  // Duel mode (level >= 1000) ยังไม่ได้พอร์ตเข้า offline runtime นี้เลย (ดูคอมเมนต์หัวไฟล์) — engine
+  // เองสลับ state ไปโหมด duel อัตโนมัติถ้า level ถึง 1000 ซึ่งหน้าจอนี้อ่านไม่รู้จัก กันไว้ก่อนด้วยการ
+  // ล็อกไม่ให้ไต่เกิน 999 จนกว่าจะพอร์ต Duel mode จริง (ของเดิมที่ล็อกเอาไว้ชั่วคราวเท่านั้น)
+  const nextProgress = { ...rawNextProgress, level: Math.min(rawNextProgress.level, TIER_D_DUEL_MIN_LEVEL - 1) }
   store.setTierDSoloProgress(nextProgress)
 
   // Submit เฉพาะตอนทำสถิติใหม่จริงๆ (ไม่ใช่ทุกจบเลเวล) ขึ้น Play Games — ไม่มี tournament/reward
