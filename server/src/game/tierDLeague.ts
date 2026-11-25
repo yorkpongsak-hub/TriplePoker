@@ -1,7 +1,6 @@
 /** Canonical League Mode progression. This module deliberately contains no
  * leaderboard, seasonal, auction, or Ranked/Relax mechanics. */
 export type LeagueId = 'bronze' | 'silver' | 'gold' | 'platinum' | 'diamond' | 'elite' | 'master' | 'grandmaster' | 'legend' | 'mythic'
-export type TierUnlock = 'C' | 'B' | 'A' | 'A+'
 
 export interface TierDLeagueDefinition {
   id: LeagueId
@@ -11,19 +10,21 @@ export interface TierDLeagueDefinition {
   aiOpponents: 1 | 2 | 3
   arrangeSeconds: number | null
   trophyLevel: number | null
-  unlocksTier?: TierUnlock
 }
 
+// หมายเหตุ: Tier C (ของเกมหลัก C/B/A/A+) ปลดจริงที่ Level 250 ผ่าน
+// grantTierCGraduationReward() ใน tierDLevel250.ts เท่านั้น — league ด้านล่างนี้
+// ไม่มี field ผูก Tier unlock แล้ว (เคยมี unlocksTier ที่เลขไม่ตรงกับของจริงและไม่มีใครเรียกใช้เลย ลบทิ้งกันสับสน)
 const LEAGUES: readonly TierDLeagueDefinition[] = [
   { id: 'bronze', name: 'Bronze', startLevel: 1, endLevel: 50, aiOpponents: 1, arrangeSeconds: null, trophyLevel: 50 },
   { id: 'silver', name: 'Silver', startLevel: 51, endLevel: 100, aiOpponents: 1, arrangeSeconds: 330, trophyLevel: 100 },
   { id: 'gold', name: 'Gold', startLevel: 101, endLevel: 150, aiOpponents: 1, arrangeSeconds: 270, trophyLevel: 150 },
   { id: 'platinum', name: 'Platinum', startLevel: 151, endLevel: 200, aiOpponents: 2, arrangeSeconds: 240, trophyLevel: 200 },
   { id: 'diamond', name: 'Diamond', startLevel: 201, endLevel: 250, aiOpponents: 2, arrangeSeconds: 210, trophyLevel: 250 },
-  { id: 'elite', name: 'Elite', startLevel: 251, endLevel: 350, aiOpponents: 2, arrangeSeconds: 195, trophyLevel: 350, unlocksTier: 'C' },
-  { id: 'master', name: 'Master', startLevel: 351, endLevel: 500, aiOpponents: 3, arrangeSeconds: 180, trophyLevel: 500, unlocksTier: 'B' },
-  { id: 'grandmaster', name: 'Grandmaster', startLevel: 501, endLevel: 700, aiOpponents: 3, arrangeSeconds: 170, trophyLevel: 700, unlocksTier: 'A' },
-  { id: 'legend', name: 'Legend', startLevel: 701, endLevel: 1000, aiOpponents: 3, arrangeSeconds: 160, trophyLevel: 1000, unlocksTier: 'A+' },
+  { id: 'elite', name: 'Elite', startLevel: 251, endLevel: 350, aiOpponents: 2, arrangeSeconds: 195, trophyLevel: 350 },
+  { id: 'master', name: 'Master', startLevel: 351, endLevel: 500, aiOpponents: 3, arrangeSeconds: 180, trophyLevel: 500 },
+  { id: 'grandmaster', name: 'Grandmaster', startLevel: 501, endLevel: 700, aiOpponents: 3, arrangeSeconds: 170, trophyLevel: 700 },
+  { id: 'legend', name: 'Legend', startLevel: 701, endLevel: 1000, aiOpponents: 3, arrangeSeconds: 160, trophyLevel: 1000 },
   { id: 'mythic', name: 'Mythic', startLevel: 1001, endLevel: null, aiOpponents: 3, arrangeSeconds: 150, trophyLevel: 1500 },
 ]
 
@@ -37,5 +38,4 @@ export function getArrangeTimerSeconds(level: number): number | null { return ge
 export function hasHandMultiplier(level: number): boolean { return level >= 51 }
 export function hasMissions(level: number): boolean { return level >= 51 }
 export function isLeagueFinalLevel(level: number): boolean { return getCurrentLeague(level).trophyLevel === level }
-export function tierUnlockForLevel(level: number): TierUnlock | undefined { return isLeagueFinalLevel(level) ? getCurrentLeague(level).unlocksTier : undefined }
 function assertLevel(level: number): void { if (!Number.isInteger(level) || level < 1) throw new Error('Tier D level must be a positive integer') }

@@ -1,4 +1,4 @@
-import { getArrangeTimerSeconds, getCurrentLeague, hasHandMultiplier, hasMissions, isLeagueFinalLevel, tierDBotCountForLevel, tierUnlockForLevel } from '../../src/game/tierDLeague'
+import { getArrangeTimerSeconds, getCurrentLeague, hasHandMultiplier, hasMissions, isLeagueFinalLevel, tierDBotCountForLevel } from '../../src/game/tierDLeague'
 
 describe('League Mode canon progression', () => {
   test.each([
@@ -8,5 +8,5 @@ describe('League Mode canon progression', () => {
     expect(tierDBotCountForLevel(level)).toBe(bots); expect(getArrangeTimerSeconds(level)).toBe(seconds)
   })
   test('Bronze alone disables missions and hand multipliers', () => { expect(hasMissions(50)).toBe(false); expect(hasHandMultiplier(50)).toBe(false); expect(hasMissions(51)).toBe(true); expect(hasHandMultiplier(51)).toBe(true) })
-  test('trophies and Tier unlocks occur at approved final levels', () => { expect(isLeagueFinalLevel(50)).toBe(true); expect(tierUnlockForLevel(350)).toBe('C'); expect(tierUnlockForLevel(500)).toBe('B'); expect(tierUnlockForLevel(700)).toBe('A'); expect(tierUnlockForLevel(1000)).toBe('A+'); expect(isLeagueFinalLevel(1500)).toBe(true); expect(isLeagueFinalLevel(1501)).toBe(false) })
+  test('trophies occur at approved final levels', () => { expect(isLeagueFinalLevel(50)).toBe(true); expect(isLeagueFinalLevel(350)).toBe(true); expect(isLeagueFinalLevel(500)).toBe(true); expect(isLeagueFinalLevel(700)).toBe(true); expect(isLeagueFinalLevel(1000)).toBe(true); expect(isLeagueFinalLevel(1500)).toBe(true); expect(isLeagueFinalLevel(1501)).toBe(false) })
 })
