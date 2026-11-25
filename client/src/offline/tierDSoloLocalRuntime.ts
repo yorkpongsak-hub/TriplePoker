@@ -33,6 +33,7 @@ import { isSharedArrangementFoul } from './engine/sharedCardRules'
 import { levelRewardSchedule, tierDLevelRewardPlan } from './engine/tierDRewards'
 import { resolveGameRules, itemPolicyError, newMatchItemState, domainItem, type MatchItemState } from './engine/unifiedTierRules'
 import { usePlayerStore, TIER_D_ITEM_KEYS, type TierDItemKey } from './playerStore'
+import { submitFastestTime, submitLongestStreak } from '../services/playGamesService'
 
 export const TIER_D_SOLO_HUMAN_ID = 'local-player'
 
@@ -143,6 +144,7 @@ export function finishMatch(session: TierDSoloSession, random: () => number = Ma
 function completeLevel(level: number, playerWon: boolean, elapsedMs: number, finalScore: number, random: () => number): TierDSoloMatchOutcome {
   const store = usePlayerStore.getState()
   if (!store.profile) return { kind: 'level_complete', playerWon, rewardedItems: [], milestoneTokensGranted: 0 } // status!=='ok' — ไม่มี profile ให้เขียนลง ถือว่าจบ level แบบไม่มีผลข้างเคียงใดๆ
+  const beforeSolo = store.profile.tierDSolo
   store.recordTierDLevelResult({ won: playerWon, matchTimeMs: elapsedMs, matchScore: finalScore })
 
   // level/currentWinStreak/bestWinStreak ของจริงมาจาก applyTierDLevelOutcome() ของ engine เอง
@@ -154,6 +156,12 @@ function completeLevel(level: number, playerWon: boolean, elapsedMs: number, fin
     playerWon
   )
   store.setTierDSoloProgress(nextProgress)
+
+  // Submit เฉพาะตอนทำสถิติใหม่จริงๆ (ไม่ใช่ทุกจบเลเวล) ขึ้น Play Games — ไม่มี tournament/reward
+  // ใดๆ ผูกอยู่แล้ว แค่คะแนนเทียบกับผู้เล่นคนอื่นผ่าน native leaderboard UI
+  const afterSolo = usePlayerStore.getState().profile!.tierDSolo
+  if (afterSolo.bestMatchTimeMs !== null && afterSolo.bestMatchTimeMs !== beforeSolo.bestMatchTimeMs) submitFastestTime(afterSolo.bestMatchTimeMs)
+  if (afterSolo.bestWinStreak > beforeSolo.bestWinStreak) submitLongestStreak(afterSolo.bestWinStreak)
 
   const rewardedItems: { item: TierDItemKey; quantity: number }[] = []
   let milestoneTokensGranted = 0

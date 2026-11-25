@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Animated, Easing, Image, ImageSourcePropType, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
+import { Animated, Easing, Image, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
 import { router } from 'expo-router'
 import Card from './Card'
 import { getReduceMotion } from '../../utils/reduceMotion'
@@ -8,8 +8,7 @@ import { usePlayerStore } from '../../offline/playerStore'
 import AvatarFrame from './AvatarFrame'
 import { AvatarDisplay, PRESET_AVATARS } from '../profile/AvatarPicker'
 import { BADGES } from '../../../assets/badges/BADGE_MANIFEST'
-import { TierDLeagueLeaderboard } from './TierDLeagueLeaderboard'
-import { TierDRecordsBoard } from './TierDRecordsBoard'
+import { initPlayGamesSession, showFastestTimeLeaderboard, showLongestStreakLeaderboard } from '../../services/playGamesService'
 import { GameActionButton } from '../ui/GameActionButton'
 import { t } from '../../i18n'
 import { useI18n } from '../../i18n/store'
@@ -17,29 +16,6 @@ import Svg, { Circle, Path, Rect } from 'react-native-svg'
 
 const DOOR_IMAGE = require('../../../assets/images/game_entrance.png')
 const APP_LOGO = require('../../../assets/images/triple_poker_icon.png')
-const TROPHY_SHOWCASE = require('../../../assets/images/trophy_showcase.png')
-const LEAGUE_MEDAL = require('../../../assets/images/triplepoker_coin.png')
-const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3001'
-type LeagueAward = { league_id: string; award_type: 'medal' | 'trophy' }
-type TrophyLeague = { id: string; trophy: ImageSourcePropType }
-const TROPHY_LEAGUES: TrophyLeague[] = [
-  { id: 'bronze', trophy: require('../../../assets/league/Bronze League Trophy.png') },
-  { id: 'silver', trophy: require('../../../assets/league/Silver League Trophy.png') },
-  { id: 'gold', trophy: require('../../../assets/league/Gold League Trophy.png') },
-  { id: 'platinum', trophy: require('../../../assets/league/Platinum League Trophy.png') },
-  { id: 'diamond', trophy: require('../../../assets/league/Diamond League Trophy.png') },
-  { id: 'elite', trophy: require('../../../assets/league/Elite League Trophy.png') },
-  { id: 'master', trophy: require('../../../assets/league/Master League Trophy.png') },
-  { id: 'grandmaster', trophy: require('../../../assets/league/Grandmaster League Trophy.png') },
-  { id: 'legend', trophy: require('../../../assets/league/Legend League Trophy.png') },
-  { id: 'mythic', trophy: require('../../../assets/league/Champion League Trophy.png') },
-]
-const TROPHY_CASES = [
-  [0.16, 0.765], [0.50, 0.765], [0.84, 0.765],
-  [0.16, 0.595], [0.50, 0.595], [0.84, 0.595],
-  [0.16, 0.425], [0.50, 0.425], [0.84, 0.425],
-  [0.16, 0.255],
-] as const
 const ROYAL_FLUSH = [
   { value: '10', rotate: '-10deg', offsetY: 12 },
   { value: 'j', rotate: '-5deg', offsetY: 5 },
@@ -56,7 +32,6 @@ export default function DoorEntryTransition({ onFinish, onHowToPlay, level }: { 
   const { width, height } = useWindowDimensions()
   const profile = useAuthStore(state => state.profile)
   const user = useAuthStore(state => state.user)
-  const accessToken = useAuthStore(state => state.session?.access_token)
   const tierDSolo = usePlayerStore(state => state.profile?.tierDSolo)
   const door = useRef(new Animated.Value(0)).current
   const royal = useRef(new Animated.Value(0)).current
@@ -64,10 +39,10 @@ export default function DoorEntryTransition({ onFinish, onHowToPlay, level }: { 
   const timers = useRef<ReturnType<typeof setTimeout>[]>([])
   const [reducedMotion, setReducedMotion] = useState(false)
   const [started, setStarted] = useState(false)
-  const [leaderboardOpen, setLeaderboardOpen] = useState(false)
-  const [recordsBoard, setRecordsBoard] = useState<'pb'|'streak'|null>(null)
   const [entryMessage] = useState(() => ENTRY_MESSAGES[Math.floor(Math.random() * ENTRY_MESSAGES.length)])
   const finished = useRef(false)
+
+  useEffect(() => { void initPlayGamesSession() }, [])
 
   const finish = () => {
     if (finished.current) return
@@ -144,9 +119,6 @@ export default function DoorEntryTransition({ onFinish, onHowToPlay, level }: { 
       ? <AvatarDisplay config={{ type: 'preset', presetKey: avatarPreset.key, frameKey: profile?.vip_status !== 'none' ? 'gold' : 'default' }} size={56} showFrame={false}/>
       : <View style={styles.profileInitial}><Text style={styles.profileInitialText}>{profile?.display_name?.slice(0,1).toUpperCase() ?? '?'}</Text></View>
 
-  if (leaderboardOpen && accessToken && user?.id) return <TierDLeagueLeaderboard serverUrl={SERVER_URL} accessToken={accessToken} userId={user.id} level={level ?? 1} previousRank={null} onClose={() => setLeaderboardOpen(false)}/>
-  if (recordsBoard && accessToken) return <TierDRecordsBoard serverUrl={SERVER_URL} accessToken={accessToken} board={recordsBoard} onClose={() => setRecordsBoard(null)}/>
-
   return <Animated.View style={[styles.root, { opacity: fade }]} pointerEvents="auto">
     <View style={styles.casino}><View style={styles.tableGlow}/></View>
     {!started ? <>
@@ -158,9 +130,9 @@ export default function DoorEntryTransition({ onFinish, onHowToPlay, level }: { 
         <View style={styles.playerIdentity}><Text numberOfLines={1} style={styles.playerName}>{profile?.display_name ?? 'PLAYER'}</Text><Text numberOfLines={1} style={styles.honorLabel}>{profile?.equipped_badge_key ? profile.equipped_badge_key.replaceAll('_',' ').toUpperCase() : 'HONOR FRAME'}</Text></View>
       </View>
       <View style={styles.personalBestBoard}>
-        <Pressable accessibilityRole="button" accessibilityLabel={t('entry.personalBest', {}, locale)} style={styles.personalBestTitleRow} onPress={() => setRecordsBoard('pb')}><EntryIcon glyph="trophy" style={styles.boardIcon}/><Text style={styles.personalBestTitle}>{t('entry.personalBest', {}, locale)}</Text></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel={t('entry.personalBest', {}, locale)} style={styles.personalBestTitleRow} onPress={() => void showFastestTimeLeaderboard()}><EntryIcon glyph="trophy" style={styles.boardIcon}/><Text style={styles.personalBestTitle}>{t('entry.personalBest', {}, locale)}</Text></Pressable>
         <StatRow label={t('entry.fastestTime', {}, locale)} value={formatTime(tierDSolo?.bestMatchTimeMs ?? null)}/>
-        <Pressable accessibilityRole="button" accessibilityLabel={t('entry.longestStreak', {}, locale)} style={styles.streakRow} onPress={() => setRecordsBoard('streak')}><StatRow label={t('entry.longestStreak', {}, locale)} value={String(tierDSolo?.bestWinStreak ?? 0)}/></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel={t('entry.longestStreak', {}, locale)} style={styles.streakRow} onPress={() => void showLongestStreakLeaderboard()}><StatRow label={t('entry.longestStreak', {}, locale)} value={String(tierDSolo?.bestWinStreak ?? 0)}/></Pressable>
         <StatRow label={t('entry.bestMatchScore', {}, locale)} value={String(tierDSolo?.bestMatchScore ?? 0)}/>
       </View>
       <View style={styles.entryIconColumn}>
@@ -176,11 +148,9 @@ export default function DoorEntryTransition({ onFinish, onHowToPlay, level }: { 
       <Text style={styles.readyLevel}>{level ? t('entry.level', { level }, locale) : t('common.continue', {}, locale)}</Text>
       <View style={styles.readyArea}><GameActionButton size="large" label={t('entry.openDoor', {}, locale)} onPress={() => setStarted(true)} style={styles.entryAction}/>{onHowToPlay?<GameActionButton size="small" variant="secondary" animation="none" label={t('entry.howToPlay', {}, locale)} onPress={onHowToPlay} style={styles.guideAction}/>:null}</View>
     </> : null}
-    {started ? <><LeagueTrophyCabinet side="left"/><LeagueTrophyCabinet side="right"/>
-      <Pressable accessibilityRole="button" accessibilityLabel="Skip" onPress={skip} style={styles.skipButton} hitSlop={12}>
-        <Text style={styles.skipText}>Skip ›</Text>
-      </Pressable>
-    </> : null}
+    {started ? <Pressable accessibilityRole="button" accessibilityLabel="Skip" onPress={skip} style={styles.skipButton} hitSlop={12}>
+      <Text style={styles.skipText}>Skip ›</Text>
+    </Pressable> : null}
     <Animated.View pointerEvents="none" style={[styles.brand, { opacity: entryCopyOpacity }]}>
       <Image source={APP_LOGO} resizeMode="contain" style={styles.appLogo}/>
       <Text style={styles.appName}>TriplePoker : Rise</Text>
@@ -280,54 +250,6 @@ function EntryIcon({ glyph, style }: { glyph: EntryGlyph; style?: any }) {
     {glyph === 'chart' ? <><Path d="M11 37h27M14 32l8-9 6 5 8-12" {...stroke}/><Path d="M31 16h5v5" {...stroke}/></> : null}
   </Svg></View>
 }
-
-function LeagueTrophyCabinet({ side }: { side: 'left' | 'right' }) {
-  const accessToken = useAuthStore(state => state.session?.access_token)
-  const [awards, setAwards] = useState<LeagueAward[]>([])
-
-  useEffect(() => {
-    if (!accessToken) return
-    let active = true
-    void fetch(`${SERVER_URL}/tier-d/awards`, { headers: { Authorization: `Bearer ${accessToken}` } })
-      .then(response => response.ok ? response.json() : { awards: [] })
-      .then(payload => { if (active) setAwards(payload.awards ?? []) })
-      .catch(() => { if (active) setAwards([]) })
-    return () => { active = false }
-  }, [accessToken])
-
-  const earned = new Map<string, Set<LeagueAward['award_type']>>()
-  for (const award of awards) {
-    const types = earned.get(award.league_id) ?? new Set<LeagueAward['award_type']>()
-    types.add(award.award_type)
-    earned.set(award.league_id, types)
-  }
-
-  return <View pointerEvents="none" accessibilityElementsHidden style={[cabinetStyles.cabinet, side === 'left' ? cabinetStyles.leftCabinet : cabinetStyles.rightCabinet]}>
-    <Image source={TROPHY_SHOWCASE} resizeMode="stretch" style={[cabinetStyles.showcase, side === 'right' && cabinetStyles.mirroredShowcase]}/>
-    {TROPHY_LEAGUES.map((league, index) => {
-      const prize = earned.get(league.id)
-      if (!prize) return null
-      const [left, top] = TROPHY_CASES[index]
-      const mirroredLeft = side === 'right' ? 1 - left : left
-      return <View key={league.id} style={[cabinetStyles.casePrize, { left: `${mirroredLeft * 100}%`, top: `${top * 100}%` }]}>
-        {prize.has('trophy') ? <Image source={league.trophy} resizeMode="contain" style={cabinetStyles.trophy}/> : null}
-        {prize.has('medal') ? <Image source={LEAGUE_MEDAL} resizeMode="contain" style={cabinetStyles.medal}/> : null}
-      </View>
-    })}
-  </View>
-}
-
-const cabinetStyles = StyleSheet.create({
-  // Keep the cabinet beneath the player card, with its top edge below the central door emblem.
-  cabinet: { position: 'absolute', top: '43%', width: 62, height: 126, transform: [{ translateY: -20 }], zIndex: 2 },
-  leftCabinet: { right: '50%', marginRight: 50 },
-  rightCabinet: { left: '50%', marginLeft: 50 },
-  showcase: { ...StyleSheet.absoluteFill },
-  mirroredShowcase: { transform: [{ scaleX: -1 }] },
-  casePrize: { position: 'absolute', width: 19, height: 20, marginLeft: -9.5, marginTop: -10, alignItems: 'center', justifyContent: 'center' },
-  trophy: { width: 17, height: 17 },
-  medal: { position: 'absolute', right: -2, bottom: -2, width: 8, height: 8 },
-})
 
 const styles = StyleSheet.create({
   root: { ...StyleSheet.absoluteFill, zIndex: 1000, overflow: 'hidden', backgroundColor: '#030705' },
